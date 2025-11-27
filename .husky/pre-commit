@@ -6,5 +6,5 @@ pnpm exec lint-staged --config lint-staged.config.ts
 pushd src-tauri >/dev/null 2>&1
 cargo sort
 cargo fmt --all
-cargo clippy --all --fix --allow-dirty --allow-staged
+cargo clippy --all --fix --allow-dirty --allow-staged -- -D warnings
 popd >/dev/null 2>&1
