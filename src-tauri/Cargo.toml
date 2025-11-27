@@ -17,11 +17,13 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 base64 = { version = "0.22.1", default-features = false, features = ["std"] }
 
 core-foundation = { version = "0.10.1", default-features = false }
+core-foundation-sys = { version = "0.8.7", default-features = false }
 core-graphics = { version = "0.25.0", default-features = false }
 image = { version = "0.25.9", default-features = false, features = [
     "jpeg",
     "png",
 ] }
+keepawake = "0.6"
 objc = { version = "0.2.7", features = ["exception"] }
 serde = { version = "1.0.228", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0.145", default-features = false, features = [

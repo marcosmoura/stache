@@ -13,6 +13,7 @@ pub fn run() {
     let (should_launch_ui, cli_exit_code) = launch::get_launch_mode();
 
     tauri::Builder::default()
+        .manage(bar::components::keepawake::KeepAwakeController::default())
         .plugin(tauri_plugin_cli::init())
         .plugin({
             Builder::new("helper")
@@ -36,6 +37,8 @@ pub fn run() {
             bar::components::hyprspace::get_hyprspace_focused_workspace,
             bar::components::hyprspace::get_hyprspace_workspaces,
             bar::components::hyprspace::go_to_hyprspace_workspace,
+            bar::components::keepawake::is_system_awake,
+            bar::components::keepawake::toggle_system_awake,
             bar::components::media::get_current_media_info,
         ])
         .setup(move |app| {

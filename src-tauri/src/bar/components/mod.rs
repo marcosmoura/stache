@@ -4,6 +4,10 @@ pub mod apps;
 pub mod battery;
 pub mod cpu;
 pub mod hyprspace;
+pub mod keepawake;
 pub mod media;
 
-pub fn init(window: &WebviewWindow) { media::init(window); }
+pub fn init(window: &WebviewWindow) {
+    keepawake::init(window);
+    media::init(window);
+}
