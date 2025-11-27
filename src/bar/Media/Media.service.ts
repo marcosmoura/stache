@@ -35,7 +35,7 @@ export const fetchCurrentMedia = async (): Promise<MediaPayload | null> => {
   }
 };
 
-export const transformMediaPayload = (media: MediaPayload): TransformedMediaPayload => {
+export const parseMediaPayload = (media: MediaPayload): TransformedMediaPayload => {
   const { artist, title, artwork, playing, bundleIdentifier } = media;
 
   const separator = ' - ';

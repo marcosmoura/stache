@@ -12,7 +12,7 @@ import {
   getPlayerIcon,
   loadMediaArtwork,
   openMediaApp,
-  transformMediaPayload,
+  parseMediaPayload,
 } from './Media.service';
 import * as styles from './Media.styles';
 import type { MediaPayload, TransformedMediaPayload } from './Media.types';
@@ -20,7 +20,7 @@ import type { MediaPayload, TransformedMediaPayload } from './Media.types';
 export const Media = () => {
   const { data: media } = useTauriEventQuery<MediaPayload, TransformedMediaPayload>({
     eventName: 'tauri_media_changed',
-    transformFn: (payload) => transformMediaPayload(payload),
+    transformFn: (payload) => parseMediaPayload(payload),
     initialFetch: fetchCurrentMedia,
     queryOptions: {
       refetchOnMount: true,
