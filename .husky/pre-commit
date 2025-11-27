@@ -1,3 +1,10 @@
+## Run lint-staged for staged files
 export NODE_OPTIONS="--experimental-strip-types"
-
 pnpm exec lint-staged --config lint-staged.config.ts
+
+## Format and lint Rust code in src-tauri directory
+pushd src-tauri >/dev/null 2>&1
+cargo sort
+cargo fmt --all
+cargo clippy --all --fix --allow-dirty --allow-staged
+popd >/dev/null 2>&1
