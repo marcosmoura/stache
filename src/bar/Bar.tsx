@@ -4,6 +4,7 @@ import { useDisableRightClick, useTauriEventQuery } from '@/hooks';
 
 import { Media } from './Media';
 import { Spaces } from './Spaces';
+import { Status } from './Status';
 
 import * as styles from './Bar.styles';
 
@@ -21,6 +22,7 @@ export const Bar = () => {
     <div className={cx(styles.bar, menuHidden ? styles.barHidden : '')}>
       <Spaces />
       <Media />
+      <Status />
     </div>
   );
 };
