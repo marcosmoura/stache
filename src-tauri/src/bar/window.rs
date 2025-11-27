@@ -119,15 +119,14 @@ pub fn set_window_below_menu(window: &WebviewWindow) {
     }
 }
 
-pub fn set_window_position(
-    webview_window: &tauri::WebviewWindow,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let (logical_width, _) = get_screen_size(webview_window)?;
+pub fn set_window_position(webview_window: &tauri::WebviewWindow) {
+    let Ok((logical_width, _)) = get_screen_size(webview_window) else {
+        eprintln!("Failed to get screen size for window positioning");
+        return;
+    };
     let (x, y, width, height) = calculate_window_frame(logical_width);
 
     set_position(webview_window, x, y, width, height);
-
-    Ok(())
 }
 
 fn get_screen_size(window: &WebviewWindow) -> Result<(f64, f64), Box<dyn std::error::Error>> {
@@ -263,4 +262,124 @@ fn non_activating_panel_class() -> &'static Class {
         );
         decl.register()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn calculate_window_frame_returns_correct_dimensions() {
+        let logical_width = 1920.0;
+        let (x, y, width, height) = calculate_window_frame(logical_width);
+
+        // x should be PADDING
+        assert!((x - PADDING).abs() < f64::EPSILON);
+
+        // y should be PADDING
+        assert!((y - PADDING).abs() < f64::EPSILON);
+
+        // width should be logical_width - 2 * PADDING
+        let expected_width = logical_width - 2.0 * PADDING;
+        assert!((width - expected_width).abs() < f64::EPSILON);
+
+        // height should be BAR_HEIGHT
+        assert!((height - BAR_HEIGHT).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn calculate_window_frame_with_small_screen() {
+        let logical_width = 800.0;
+        let (x, y, width, height) = calculate_window_frame(logical_width);
+
+        assert!((x - PADDING).abs() < f64::EPSILON);
+        assert!((y - PADDING).abs() < f64::EPSILON);
+        assert!((width - (800.0 - 2.0 * PADDING)).abs() < f64::EPSILON);
+        assert!((height - BAR_HEIGHT).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn calculate_window_frame_with_4k_screen() {
+        let logical_width = 3840.0;
+        let (x, y, width, height) = calculate_window_frame(logical_width);
+
+        assert!((x - PADDING).abs() < f64::EPSILON);
+        assert!((y - PADDING).abs() < f64::EPSILON);
+        assert!((width - (3840.0 - 2.0 * PADDING)).abs() < f64::EPSILON);
+        assert!((height - BAR_HEIGHT).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn zero_rect_has_all_zero_values() {
+        let rect = zero_rect();
+
+        assert!((rect.origin.x).abs() < f64::EPSILON);
+        assert!((rect.origin.y).abs() < f64::EPSILON);
+        assert!((rect.size.width).abs() < f64::EPSILON);
+        assert!((rect.size.height).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn ns_point_can_be_created() {
+        let point = NSPoint { x: 10.0, y: 20.0 };
+        assert!((point.x - 10.0).abs() < f64::EPSILON);
+        assert!((point.y - 20.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn ns_size_can_be_created() {
+        let size = NSSize { width: 100.0, height: 50.0 };
+        assert!((size.width - 100.0).abs() < f64::EPSILON);
+        assert!((size.height - 50.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn ns_rect_can_be_created() {
+        let rect = NSRect {
+            origin: NSPoint { x: 5.0, y: 10.0 },
+            size: NSSize { width: 200.0, height: 100.0 },
+        };
+        assert!((rect.origin.x - 5.0).abs() < f64::EPSILON);
+        assert!((rect.origin.y - 10.0).abs() < f64::EPSILON);
+        assert!((rect.size.width - 200.0).abs() < f64::EPSILON);
+        assert!((rect.size.height - 100.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn ns_rect_can_be_copied() {
+        let rect1 = NSRect {
+            origin: NSPoint { x: 1.0, y: 2.0 },
+            size: NSSize { width: 3.0, height: 4.0 },
+        };
+        let rect2 = rect1;
+        assert!((rect2.origin.x - 1.0).abs() < f64::EPSILON);
+        assert!((rect2.origin.y - 2.0).abs() < f64::EPSILON);
+        assert!((rect2.size.width - 3.0).abs() < f64::EPSILON);
+        assert!((rect2.size.height - 4.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn window_style_mask_constants_are_valid() {
+        assert_eq!(NS_WINDOW_STYLE_MASK_NONACTIVATING_PANEL, 1 << 7);
+        assert_eq!(NS_WINDOW_COLLECTION_BEHAVIOR_CAN_JOIN_ALL_SPACES, 1 << 0);
+        assert_eq!(NS_WINDOW_COLLECTION_BEHAVIOR_STATIONARY, 1 << 4);
+    }
+
+    #[test]
+    fn tracking_area_constants_are_valid() {
+        assert_eq!(NSTRACKING_MOUSE_ENTERED_AND_EXITED, 0x1);
+        assert_eq!(NSTRACKING_MOUSE_MOVED, 0x2);
+        assert_eq!(NSTRACKING_ACTIVE_ALWAYS, 0x80);
+        assert_eq!(NSTRACKING_IN_VISIBLE_RECT, 0x200);
+    }
+
+    #[test]
+    fn event_type_constant_is_valid() {
+        assert_eq!(NS_EVENT_TYPE_LEFT_MOUSE_DOWN, 1);
+    }
+
+    #[test]
+    fn objc_association_constant_is_valid() {
+        assert_eq!(OBJC_ASSOCIATION_RETAIN_NONATOMIC, 0x301);
+    }
 }
