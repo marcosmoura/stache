@@ -40,7 +40,15 @@ export default defineConfig({
     esbuildOptions: {
       target: WEBKIT_TARGET_LIST,
     },
-    include: ['@tauri-apps/api/webviewWindow', 'react-dom', 'react', 'vitest-browser-react'],
+    include: [
+      '@hugeicons/core-free-icons',
+      '@hugeicons/react',
+      '@tanstack/react-query',
+      '@tauri-apps/api/webviewWindow',
+      'react-dom',
+      'react',
+      'vitest-browser-react',
+    ],
   },
   clearScreen: false,
   server: {

@@ -17,11 +17,18 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 core-foundation = { version = "0.10.1", default-features = false }
 core-graphics = { version = "0.25.0", default-features = false }
 objc = { version = "0.2.7", features = ["exception"] }
+serde = { version = "1.0.228", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0.145", default-features = false, features = [
+    "std",
+] }
 tauri = { version = "2.9.3", default-features = false, features = [
     "macos-private-api",
     "unstable",
     "wry",
 ] }
+tauri-plugin-cli = "2.4.1"
+tauri-plugin-shell = "2.3.3"
+tauri-plugin-single-instance = "2.3.6"
 
 [build-dependencies]
 tauri-build = { version = "2.5.2", features = [] }

@@ -69,5 +69,30 @@
     "macOS": {
       "minimumSystemVersion": "10.15"
     }
+  },
+  "plugins": {
+    "cli": {
+      "description": "Dispatches events to the running Barba instance.",
+      "subcommands": {
+        "focus-changed": {
+          "description": "Notify Barba that the focused window changed.",
+          "longDescription": "Use when your automation detects a window-focus change. Triggers Hyprspace queries to refresh current workspace and app state.",
+          "args": []
+        },
+        "workspace-changed": {
+          "description": "Notify Barba that the active workspace changed.",
+          "longDescription": "Requires the new workspace name so Barba can update its Hyprspace view and trigger a window refresh.",
+          "args": [
+            {
+              "name": "name",
+              "description": "Workspace identifier reported by hyprspace (e.g. coding).",
+              "index": 1,
+              "takesValue": true,
+              "required": true
+            }
+          ]
+        }
+      }
+    }
   }
 }

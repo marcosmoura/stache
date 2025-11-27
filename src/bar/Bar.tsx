@@ -2,6 +2,8 @@ import { cx } from '@linaria/core';
 
 import { useDisableRightClick, useTauriEventQuery } from '@/hooks';
 
+import { Spaces } from './Spaces';
+
 import * as styles from './Bar.styles';
 
 export const Bar = () => {
@@ -14,5 +16,9 @@ export const Bar = () => {
 
   useDisableRightClick();
 
-  return <div className={cx(styles.bar, menuHidden ? styles.barHidden : '')}>Hey!</div>;
+  return (
+    <div className={cx(styles.bar, menuHidden ? styles.barHidden : '')}>
+      <Spaces />
+    </div>
+  );
 };

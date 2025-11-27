@@ -1,3 +1,4 @@
+pub mod components;
 mod constants;
 mod menubar;
 mod screen;
