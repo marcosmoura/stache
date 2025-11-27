@@ -10,6 +10,7 @@ export interface MediaPayload {
 
 export interface TransformedMediaPayload {
   label: string;
+  prefix: string;
   artwork?: string | null;
   bundleIdentifier: string;
 }

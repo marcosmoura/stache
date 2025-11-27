@@ -36,17 +36,17 @@ export const fetchCurrentMedia = async (): Promise<MediaPayload | null> => {
 };
 
 export const transformMediaPayload = (media: MediaPayload): TransformedMediaPayload => {
-  const { artwork, playing, bundleIdentifier } = media;
+  const { artist, title, artwork, playing, bundleIdentifier } = media;
 
+  const separator = ' - ';
   const prefix = playing ? '' : 'Paused: ';
+  const label = artist ? title + separator + artist : title;
 
   return {
     artwork,
     bundleIdentifier,
-    label:
-      prefix +
-      'lorem ipsum dolor sit amet consectetur adipiscing elit duis aute irure dolor in reprehenderit', // `${artist}${separator}${title}`,
-    // label: prefix + label,
+    prefix,
+    label,
   };
 };
 

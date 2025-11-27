@@ -15,9 +15,16 @@ export const media = css`
   grid-auto-flow: column;
   row-gap: 4px;
 
-  max-width: 480px;
   height: 100%;
   padding-left: 1px;
+`;
+
+export const labelWrapper = css`
+  position: relative;
+
+  overflow: hidden;
+
+  max-width: 480px;
 
   ${laptopMediaQuery} {
     max-width: 300px;
@@ -25,9 +32,25 @@ export const media = css`
 `;
 
 export const label = css`
-  overflow: hidden;
+  display: inline-block;
 
   white-space: nowrap;
+`;
+
+export const scrollingLabel = css`
+  animation: scroll-text var(--scroll-duration, 5s) linear infinite alternate;
+
+  @keyframes scroll-text {
+    0%,
+    20% {
+      transform: translateX(0);
+    }
+
+    80%,
+    100% {
+      transform: translateX(var(--scroll-distance, 0px));
+    }
+  }
 `;
 
 export const artwork = css`
