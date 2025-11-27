@@ -4,7 +4,7 @@ mod window;
 
 use tauri::{App, Manager};
 
-pub fn init(app: &App) -> Result<(), Box<dyn std::error::Error>> {
+pub fn init(app: &App) {
     let app_handle = app.app_handle().clone();
     let webview_window = app_handle.get_webview_window("bar").unwrap();
 
@@ -26,6 +26,4 @@ pub fn init(app: &App) -> Result<(), Box<dyn std::error::Error>> {
     {
         webview_window.open_devtools();
     }
-
-    Ok(())
 }

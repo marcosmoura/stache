@@ -280,7 +280,7 @@ mod tests {
         assert!((y - PADDING).abs() < f64::EPSILON);
 
         // width should be logical_width - 2 * PADDING
-        let expected_width = logical_width - 2.0 * PADDING;
+        let expected_width = 2.0f64.mul_add(-PADDING, logical_width);
         assert!((width - expected_width).abs() < f64::EPSILON);
 
         // height should be BAR_HEIGHT
@@ -294,7 +294,7 @@ mod tests {
 
         assert!((x - PADDING).abs() < f64::EPSILON);
         assert!((y - PADDING).abs() < f64::EPSILON);
-        assert!((width - (800.0 - 2.0 * PADDING)).abs() < f64::EPSILON);
+        assert!((width - 2.0f64.mul_add(-PADDING, 800.0)).abs() < f64::EPSILON);
         assert!((height - BAR_HEIGHT).abs() < f64::EPSILON);
     }
 
@@ -305,7 +305,7 @@ mod tests {
 
         assert!((x - PADDING).abs() < f64::EPSILON);
         assert!((y - PADDING).abs() < f64::EPSILON);
-        assert!((width - (3840.0 - 2.0 * PADDING)).abs() < f64::EPSILON);
+        assert!((width - 2.0f64.mul_add(-PADDING, 3840.0)).abs() < f64::EPSILON);
         assert!((height - BAR_HEIGHT).abs() < f64::EPSILON);
     }
 
