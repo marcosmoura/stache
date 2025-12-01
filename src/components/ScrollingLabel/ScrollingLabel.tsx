@@ -8,7 +8,7 @@ import type { ScrollingLabelProps } from './ScrollingLabel.types';
 export const ScrollingLabel = ({
   children,
   className,
-  scrollSpeed = 30,
+  scrollSpeed = 60,
   ...props
 }: ScrollingLabelProps) => {
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -52,7 +52,11 @@ export const ScrollingLabel = ({
   }, [scrollDistance, scrollSpeed]);
 
   return (
-    <div ref={wrapperRef} className={cx(styles.wrapper, className)} {...props}>
+    <div
+      ref={wrapperRef}
+      className={cx(styles.wrapper, isScrolling && styles.scrollingWrapper, className)}
+      {...props}
+    >
       <span
         ref={labelRef}
         className={cx(styles.label, isScrolling && styles.scrollingLabel)}

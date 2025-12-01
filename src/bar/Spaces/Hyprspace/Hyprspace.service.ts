@@ -1,13 +1,13 @@
 import {
   AppleFinderIcon,
   AppleReminderIcon,
-  BrowserIcon,
+  AiBrowserIcon,
   CircleIcon,
-  CodeSquareIcon,
+  SourceCodeIcon,
   ComputerTerminal01Icon,
   DashboardCircleIcon,
   FigmaIcon,
-  Mail01Icon,
+  Mail02Icon,
   SlackIcon,
   SpotifyIcon,
 } from '@hugeicons/core-free-icons';
@@ -28,11 +28,11 @@ const defaultWorkspaces = [
   },
   {
     name: 'coding',
-    icon: CodeSquareIcon,
+    icon: SourceCodeIcon,
   },
   {
     name: 'browser',
-    icon: BrowserIcon,
+    icon: AiBrowserIcon,
   },
   {
     name: 'music',
@@ -56,7 +56,7 @@ const defaultWorkspaces = [
   },
   {
     name: 'mail',
-    icon: Mail01Icon,
+    icon: Mail02Icon,
   },
   {
     name: 'tasks',
