@@ -158,7 +158,7 @@ main() {
 	run_with_privilege rm -rf "${INSTALL_PATH}"
 	run_with_privilege ditto "${BUNDLE_PATH}" "${INSTALL_PATH}"
 
-	succeed "Release complete! ${APP_NAME} is available in ${APPLICATIONS_DIR}."
+	succeed "Release complete!"
 }
 
 main "$@"
