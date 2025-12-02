@@ -3,6 +3,8 @@ use tauri::{Manager, Wry};
 
 mod bar;
 mod cli;
+mod config;
+mod hotkey;
 mod launch;
 mod utils;
 
@@ -10,9 +12,13 @@ mod utils;
 ///
 /// # Panics
 pub fn run() {
+    // Initialize the configuration system early
+    config::init();
+
     let (should_launch_ui, cli_exit_code) = launch::get_launch_mode();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_process::init())
         .manage(bar::components::keepawake::KeepAwakeController::default())
         .plugin(tauri_plugin_cli::init())
         .plugin({
@@ -28,6 +34,7 @@ pub fn run() {
             cli::handle_cli_invocation(app, &args);
         }))
         .plugin(tauri_plugin_shell::init())
+        .plugin(hotkey::create_hotkey_plugin())
         .invoke_handler(tauri::generate_handler![
             bar::components::apps::open_app,
             bar::components::battery::get_battery_info,
@@ -53,6 +60,9 @@ pub fn run() {
 
                 return Ok(());
             }
+
+            // Start watching the config file for changes
+            config::watch_config_file(app.handle().clone());
 
             bar::init(app);
             Ok(())

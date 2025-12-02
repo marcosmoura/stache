@@ -9,6 +9,10 @@
     "macOS"
   ],
   "permissions": [
-    "core:default"
+    "core:default",
+    "global-shortcut:allow-register",
+    "global-shortcut:allow-unregister",
+    "global-shortcut:allow-is-registered",
+    "process:allow-restart"
   ]
 }
