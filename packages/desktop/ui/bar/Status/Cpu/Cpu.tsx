@@ -29,7 +29,7 @@ export const Cpu = () => {
     <Surface as={Button} onClick={onCpuClick}>
       <Icon icon={icon} color={color} />
       <span>{usage}%</span>
-      <span>{temperature}°C</span>
+      {temperature && <span>{temperature}°C</span>}
     </Surface>
   );
 };

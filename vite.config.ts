@@ -23,6 +23,7 @@ const UI_DIR = './packages/desktop/ui';
 
 export default defineConfig({
   root: UI_DIR,
+  envDir: __dirname,
   envPrefix: ['VITE_', 'API_'],
   plugins: [
     wyw({

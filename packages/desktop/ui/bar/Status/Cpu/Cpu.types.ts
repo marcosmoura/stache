@@ -1,4 +1,4 @@
 export type CPUInfo = {
   usage: number;
-  temperature: number;
+  temperature: number | null;
 };
