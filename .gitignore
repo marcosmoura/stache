@@ -30,3 +30,8 @@ Cargo.lock
 .env
 coverage
 test-results
+
+# Sidecar binaries and resources (downloaded, not committed)
+packages/desktop/tauri/binaries/*
+!packages/desktop/tauri/binaries/.gitkeep
+packages/desktop/tauri/resources/lib/

@@ -13,6 +13,16 @@
     "global-shortcut:allow-register",
     "global-shortcut:allow-unregister",
     "global-shortcut:allow-is-registered",
-    "process:allow-restart"
+    "process:allow-restart",
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [
+        {
+          "name": "binaries/media-control",
+          "sidecar": true,
+          "args": ["stream", "--no-diff"]
+        }
+      ]
+    }
   ]
 }

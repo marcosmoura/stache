@@ -1,6 +1,6 @@
 //! Media playback component.
 //!
-//! Monitors currently playing media using the `media-control` CLI utility.
+//! Monitors currently playing media using the bundled `media-control` sidecar.
 //! Streams media metadata changes and processes artwork for display in the frontend.
 //! Artwork is resized to 128x128, cached to disk, and sent as base64-encoded PNG data.
 
@@ -10,7 +10,6 @@ use std::collections::hash_map::DefaultHasher;
 use std::fs::{File, create_dir_all};
 use std::hash::{Hash, Hasher};
 use std::io::{self, Read, Write};
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
@@ -22,13 +21,10 @@ use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::CommandEvent;
 
-use crate::utils::command::resolve_binary;
 use crate::utils::thread::spawn_named_thread;
 
 /// Event name for media state changes.
 const EVENT_NAME: &str = "tauri_media_changed";
-
-static MEDIA_CONTROL_PATH: OnceLock<PathBuf> = OnceLock::new();
 
 /// Resize the provided image to 128x128 and encode it as PNG.
 ///
@@ -301,38 +297,20 @@ fn process_stream_output(line: &str, state: &mut Map<String, Value>, window: &We
     }
 }
 
-fn media_control_binary() -> Result<&'static PathBuf, String> {
-    if let Some(path) = MEDIA_CONTROL_PATH.get() {
-        return Ok(path);
-    }
-
-    let resolved = resolve_binary("media-control")
-        .map_err(|err| format!("Unable to resolve media-control binary: {err}"))?;
-    let _ = MEDIA_CONTROL_PATH.set(resolved);
-
-    MEDIA_CONTROL_PATH
-        .get()
-        .ok_or_else(|| "Unable to cache media-control binary path".to_string())
-}
-
 #[allow(clippy::needless_pass_by_value)]
 fn start_streaming(app: AppHandle, window: WebviewWindow) {
     let args = ["stream", "--no-diff"];
-    let binary = match media_control_binary() {
-        Ok(path) => path,
+    let sidecar = match app.shell().sidecar("media-control") {
+        Ok(cmd) => cmd.args(args),
         Err(err) => {
-            eprintln!("{err}");
+            eprintln!("Failed to create media-control sidecar: {err}");
             return;
         }
     };
-    let command = app.shell().command(binary.as_os_str()).args(args);
-    let spawn_result = command.spawn();
+    let spawn_result = sidecar.spawn();
     let Ok((mut rx, child)) = spawn_result else {
         if let Err(err) = spawn_result {
-            eprintln!(
-                "Failed to spawn media-control stream ({}): {err}",
-                binary.display()
-            );
+            eprintln!("Failed to spawn media-control sidecar: {err}");
         }
         return;
     };

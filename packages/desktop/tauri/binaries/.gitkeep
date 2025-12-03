@@ -1,0 +1,8 @@
+# This directory contains the media-control sidecar binary.
+# The binary must be named with the target triple suffix:
+#   - media-control-aarch64-apple-darwin (Apple Silicon)
+#   - media-control-x86_64-apple-darwin (Intel Mac)
+#
+# To download media-control:
+#   brew install media-control
+#   cp $(which media-control) ./media-control-$(rustc -vV | grep host | cut -f2 -d' ')
