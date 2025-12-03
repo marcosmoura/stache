@@ -122,12 +122,13 @@ See `packages/desktop/ui/bar/Status/Battery/` as a reference implementation.
 The standalone CLI (`barba`) provides:
 
 ```bash
-barba reload                    # Reload configuration
-barba focus-changed             # Notify focus change (for window manager integration)
-barba workspace-changed <name>  # Notify workspace change
-barba wallpaper set <action>    # Set wallpaper (next/previous/random/index)
-barba wallpaper generate-all    # Pre-generate all wallpapers
-barba generate-schema           # Output JSON schema for config
+barba reload                        # Reload configuration
+barba focus-changed                 # Notify focus change (for window manager integration)
+barba workspace-changed <name>      # Notify workspace change
+barba wallpaper set <action>        # Set wallpaper (next/previous/random)
+barba wallpaper set --f <filename>  # Set wallpaper by filename
+barba wallpaper generate-all        # Pre-generate all wallpapers
+barba generate-schema               # Output JSON schema for config
 ```
 
 ## Development Commands
@@ -162,6 +163,8 @@ pnpm format             # Prettier + cargo fmt
 - `packages/shared/src/config.rs` - Shared config types and schema generation
 - `Cargo.toml` - Workspace root defining all Rust packages
 
-```
+## Additional Notes
 
-```
+- The app is macOS-only due to dependencies on macOS-specific features (e.g., wallpaper management, status bar integration).
+- Follow existing code patterns closely for consistency.
+- After any iteration, run `pnpm lint` and `pnpm format` to ensure code quality.

@@ -165,10 +165,10 @@ fn handle_client(mut stream: UnixStream, app_handle: &AppHandle) {
                             None
                         };
 
-                        if let Some(action) = wallpaper_action {
-                            if let Err(err) = crate::wallpaper::perform_action(action) {
-                                eprintln!("barba: wallpaper error: {err}");
-                            }
+                        if let Some(ref action) = wallpaper_action
+                            && let Err(err) = crate::wallpaper::perform_action(action)
+                        {
+                            eprintln!("barba: wallpaper error: {err}");
                         }
                     }
                     Err(err) => {

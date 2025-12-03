@@ -1,5 +1,6 @@
 //! Wallpaper manager for handling wallpaper selection, processing, and cycling.
 
+use std::fmt::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -210,7 +211,7 @@ impl WallpaperManager {
     }
 
     /// Performs a wallpaper action.
-    pub fn perform_action(&self, action: WallpaperAction) -> Result<(), WallpaperManagerError> {
+    pub fn perform_action(&self, action: &WallpaperAction) -> Result<(), WallpaperManagerError> {
         let index = match action {
             WallpaperAction::Next => {
                 let current = self.current_index.load(Ordering::SeqCst);
@@ -228,7 +229,7 @@ impl WallpaperManager {
                 let mut rng = rand::rng();
                 rng.random_range(0..self.wallpapers.len())
             }
-            WallpaperAction::File(ref filename) => self.find_wallpaper_index(filename)?,
+            WallpaperAction::File(filename) => self.find_wallpaper_index(filename)?,
         };
 
         self.set_wallpaper_at_index(index)
@@ -361,7 +362,7 @@ pub fn get_manager() -> Option<&'static Arc<WallpaperManager>> { MANAGER.get() }
 /// Performs a wallpaper action using the global manager.
 ///
 /// This is the main entry point for CLI commands.
-pub fn perform_action(action: WallpaperAction) -> Result<(), WallpaperManagerError> {
+pub fn perform_action(action: &WallpaperAction) -> Result<(), WallpaperManagerError> {
     let manager = get_manager().ok_or(WallpaperManagerError::NotInitialized)?;
 
     manager.perform_action(action)?;
@@ -405,10 +406,10 @@ pub fn generate_all() -> Result<String, WallpaperManagerError> {
             Ok(cached_path) => {
                 let cached_name =
                     cached_path.file_name().and_then(|n| n.to_str()).unwrap_or("cached");
-                output.push_str(&format!("{GREEN}✓{RESET} {name} -> {cached_name}\n"));
+                let _ = writeln!(output, "{GREEN}✓{RESET} {name} -> {cached_name}");
             }
             Err(err) => {
-                output.push_str(&format!("{RED}⨉{RESET} {name} -> error: {err}\n"));
+                let _ = writeln!(output, "{RED}⨉{RESET} {name} -> error: {err}");
             }
         }
     }
