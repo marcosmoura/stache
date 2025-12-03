@@ -24,6 +24,14 @@
         "path": "",
         "radius": 0
       }
+    },
+    "weather": {
+      "description": "Weather status bar configuration.\n\nExample:\n```json\n{\n  \"weather\": {\n    \"visualCrossingApiKey\": \"YOUR_API_KEY\",\n    \"defaultLocation\": \"Prague\"\n  }\n}\n```",
+      "$ref": "#/$defs/WeatherConfig",
+      "default": {
+        "defaultLocation": "",
+        "visualCrossingApiKey": ""
+      }
     }
   },
   "$defs": {
@@ -102,6 +110,22 @@
           "const": "sequential"
         }
       ]
+    },
+    "WeatherConfig": {
+      "description": "Weather configuration for the status bar.\n\nExample:\n```json\n{\n  \"weather\": {\n    \"visualCrossingApiKey\": \"YOUR_API_KEY\",\n    \"defaultLocation\": \"Prague\"\n  }\n}\n```",
+      "type": "object",
+      "properties": {
+        "defaultLocation": {
+          "description": "Default location for weather data when geolocation fails.\nCan be a city name, address, or coordinates.",
+          "type": "string",
+          "default": ""
+        },
+        "visualCrossingApiKey": {
+          "description": "API key for Visual Crossing Weather API.\nGet one at <https://www.visualcrossing.com/>",
+          "type": "string",
+          "default": ""
+        }
+      }
     }
   }
 }
