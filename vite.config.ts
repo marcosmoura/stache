@@ -18,11 +18,15 @@ const hmr = {
   port: 1421,
 };
 
+// Path to the UI source directory
+const UI_DIR = './packages/desktop/ui';
+
 export default defineConfig({
+  root: UI_DIR,
   envPrefix: ['VITE_', 'API_'],
   plugins: [
     wyw({
-      include: ['./src/**/*.styles.ts'],
+      include: [`${UI_DIR}/**/*.styles.ts`],
     }),
     react({
       babel: {
@@ -32,7 +36,7 @@ export default defineConfig({
   ],
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, './src'),
+      '@': path.resolve(__dirname, UI_DIR),
     },
     conditions: ['module', 'production'],
   },
@@ -57,7 +61,7 @@ export default defineConfig({
     host: host || false,
     hmr: host ? hmr : undefined,
     watch: {
-      ignored: ['**/src-tauri/**', '**/coverage/**'],
+      ignored: ['**/packages/desktop/tauri/**', '**/coverage/**'],
     },
   },
   experimental: {
@@ -73,6 +77,7 @@ export default defineConfig({
     modulePreload: { polyfill: false },
     reportCompressedSize: true,
     chunkSizeWarningLimit: 200,
+    outDir: path.resolve(__dirname, `${UI_DIR}/dist`),
     rolldownOptions: {
       output: {
         advancedChunks: {
@@ -94,18 +99,19 @@ export default defineConfig({
   },
   test: {
     css: true,
-    setupFiles: ['./src/tests/setup.ts'],
-    include: ['./src/**/*.test.{ts,tsx}'],
+    root: path.resolve(__dirname, UI_DIR),
+    setupFiles: ['./tests/setup.ts'],
+    include: ['./**/*.test.{ts,tsx}'],
     coverage: {
       provider: 'istanbul',
       reporter: ['text', 'json', 'html'],
-      include: ['src/**/*.{ts,tsx}'],
+      include: ['./**/*.{ts,tsx}'],
       exclude: [
-        'src/**/*.test.{ts,tsx}',
-        'src/**/*.styles.ts',
-        'src/main.tsx',
-        'src/test/**',
-        'src/vite-env.d.ts',
+        './**/*.test.{ts,tsx}',
+        './**/*.styles.ts',
+        './main.tsx',
+        './test/**',
+        './vite-env.d.ts',
       ],
       thresholds: {
         lines: 80,

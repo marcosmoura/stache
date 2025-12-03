@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = ["packages/cli", "packages/desktop/tauri"]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/marcosmoura/barba"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+multiple_crate_versions = "allow"
+
+[workspace.lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = [
+  'cfg(feature, values("cargo-clippy"))',
+] }
+
+[profile.release]
+debug = 1
+codegen-units = 1
+panic = "abort"
+incremental = true

@@ -1,11 +1,11 @@
 [package]
-name = "barba"
-version = "0.1.0"
-description = "A Tauri App"
-edition = "2024"
-license = "MIT"
-repository = "https://github.com/marcosmoura/barba"
-readme = "../README.md"
+name = "barba-app"
+version.workspace = true
+description = "Barba Shell - A macOS status bar with tiling window manager integration"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "../../../README.md"
 keywords = ["tauri", "desktop", "bar", "gui", "macos"]
 categories = ["gui", "macos"]
 
@@ -47,7 +47,6 @@ tauri = { version = "2.9.4", default-features = false, features = [
     "unstable",
     "wry",
 ] }
-tauri-plugin-cli = "2.4.1"
 tauri-plugin-global-shortcut = "2.3.1"
 tauri-plugin-process = "2.3.1"
 tauri-plugin-shell = "2.3.3"
@@ -58,20 +57,5 @@ wallpaper = "3.2"
 serde_json = "1.0.145"
 tauri-build = { version = "2.5.3", features = [] }
 
-[profile.release]
-debug = 1
-codegen-units = 1
-panic = "abort"
-incremental = true
-
-[lints.clippy]
-all = { level = "deny", priority = -1 }
-nursery = { level = "warn", priority = -1 }
-cargo = { level = "warn", priority = -1 }
-pedantic = { level = "warn", priority = -1 }
-multiple_crate_versions = "allow"
-
-[lints.rust]
-unexpected_cfgs = { level = "allow", check-cfg = [
-    'cfg(feature, values("cargo-clippy"))',
-] }
+[lints]
+workspace = true

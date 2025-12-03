@@ -9,7 +9,7 @@ import globals from 'globals';
 import { configs as tseslintConfigs } from 'typescript-eslint';
 
 export default defineConfig([
-  globalIgnores(['dist', 'src-tauri', 'node_modules']),
+  globalIgnores(['**/dist', 'packages/desktop/tauri', 'packages/cli', 'node_modules', 'target']),
   reactHooks.configs.flat['recommended-latest'],
   ...pluginQuery.configs['flat/recommended'],
   {

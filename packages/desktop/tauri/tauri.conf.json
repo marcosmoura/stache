@@ -1,0 +1,73 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Barba",
+  "version": "0.2.0",
+  "identifier": "com.marcosmoura.barba",
+  "build": {
+    "beforeDevCommand": { "script": "pnpm dev", "cwd": "../../.." },
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": { "script": "pnpm build", "cwd": "../../.." },
+    "frontendDist": "../ui/dist"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "width": 0,
+        "minWidth": 0,
+        "height": 0,
+        "maxHeight": 0,
+        "minHeight": 0,
+        "x": 0,
+        "y": 0,
+        "title": "Bar",
+        "label": "bar",
+        "url": "#/bar",
+        "acceptFirstMouse": true,
+        "alwaysOnTop": true,
+        "browserExtensionsEnabled": false,
+        "closable": false,
+        "create": true,
+        "decorations": false,
+        "dragDropEnabled": false,
+        "focus": false,
+        "focusable": false,
+        "fullscreen": false,
+        "hiddenTitle": true,
+        "maximizable": false,
+        "maximized": false,
+        "minimizable": false,
+        "resizable": false,
+        "shadow": false,
+        "skipTaskbar": true,
+        "theme": "Dark",
+        "titleBarStyle": "Transparent",
+        "transparent": true,
+        "visible": false,
+        "visibleOnAllWorkspaces": true,
+        "windowEffects": null,
+        "zoomHotkeysEnabled": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/64x64.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.png"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    }
+  }
+}

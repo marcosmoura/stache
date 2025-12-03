@@ -1,5 +1,7 @@
 # Add files here to ignore them from prettier formatting
-/dist
+**/dist
 /coverage
 /node_modules
-/src-tauri
+/packages/desktop/tauri
+/packages/cli
+/target

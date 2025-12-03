@@ -11,4 +11,4 @@ mod macos;
 mod manager;
 mod processing;
 
-pub use manager::{WallpaperAction, generate_all, init, parse_action, perform_action, start};
+pub use manager::{generate_all, init, parse_action, perform_action, start};

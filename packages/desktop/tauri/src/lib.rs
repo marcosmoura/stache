@@ -1,12 +1,8 @@
-use tauri::Wry;
-use tauri::plugin::{Builder, PluginApi};
-
 mod bar;
-mod cli;
 mod config;
 mod constants;
 mod hotkey;
-mod launch;
+mod ipc;
 mod utils;
 mod wallpaper;
 
@@ -20,23 +16,12 @@ pub fn run() {
     // Initialize wallpaper manager early so CLI commands can use it
     wallpaper::init();
 
-    let (is_cli_mode, cli_exit_code) = launch::get_launch_mode();
-
     tauri::Builder::default()
         .plugin(tauri_plugin_process::init())
         .manage(bar::components::keepawake::KeepAwakeController::default())
-        .plugin(tauri_plugin_cli::init())
-        .plugin({
-            Builder::new("helper")
-                .setup(|app, _api: PluginApi<Wry, ()>| {
-                    cli::handle_cli_invocation(app, &std::env::args().collect::<Vec<String>>());
-
-                    Ok(())
-                })
-                .build()
-        })
-        .plugin(tauri_plugin_single_instance::init(|app, args, _| {
-            cli::handle_cli_invocation(app, &args);
+        .plugin(tauri_plugin_single_instance::init(|_app, _args, _| {
+            // Single instance plugin ensures only one instance runs
+            // CLI communication is handled via IPC socket
         }))
         .plugin(tauri_plugin_shell::init())
         .plugin(hotkey::create_hotkey_plugin())
@@ -54,14 +39,11 @@ pub fn run() {
             bar::components::media::get_current_media_info,
         ])
         .setup(move |app| {
-            if is_cli_mode {
-                launch::quit_app_with_code(app.handle(), cli_exit_code);
-
-                return Ok(());
-            }
-
             // Start watching the config file for changes
             config::watch_config_file(app.handle().clone());
+
+            // Start IPC server for CLI communication
+            ipc::start_ipc_server(app.handle().clone());
 
             // Initialize Bar components
             bar::init(app);

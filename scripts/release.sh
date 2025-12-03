@@ -11,16 +11,18 @@ set -euo pipefail
 # What happens:
 # 1. Dependencies are installed with pnpm (locked).
 # 2. The Tauri bundle is produced (release by default, override via BUNDLE_PROFILE).
-# 3. The Rust binary is installed with `cargo install --path ./src-tauri`.
-# 4. The resulting .app bundle is copied into /Applications (sudo only if needed).
+# 3. The CLI binary is built with cargo.
+# 4. The Rust binaries are installed with `cargo install --path`.
+# 5. The resulting .app bundle is copied into /Applications (sudo only if needed).
 ###############################################################################
 
 APP_NAME="Barba"
 APPLICATIONS_DIR="/Applications"
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TAURI_DIR="${PROJECT_ROOT}/src-tauri"
+TAURI_DIR="${PROJECT_ROOT}/packages/desktop/tauri"
+CLI_DIR="${PROJECT_ROOT}/packages/cli"
 BUNDLE_PROFILE="${BUNDLE_PROFILE:-release}" # Accepts "release" or "debug"
-BUNDLE_DIR="${TAURI_DIR}/target/${BUNDLE_PROFILE}/bundle/macos"
+BUNDLE_DIR="${PROJECT_ROOT}/target/${BUNDLE_PROFILE}/bundle/macos"
 BUNDLE_NAME="${APP_NAME}.app"
 BUNDLE_PATH=""
 INSTALL_PATH="${APPLICATIONS_DIR}/${APP_NAME}.app"
@@ -126,7 +128,7 @@ tauri_build() {
 	if [[ "${BUNDLE_PROFILE}" != "release" ]]; then
 		args+=(--debug)
 	fi
-	pnpm tauri build "${args[@]}"
+	pnpm tauri build --config "${TAURI_DIR}/tauri.conf.json" "${args[@]}"
 }
 
 main() {
@@ -149,8 +151,11 @@ main() {
 	progress "Building Tauri bundle (profile=${BUNDLE_PROFILE})"
 	tauri_build
 
-	progress "Installing ${APP_NAME} binary via Cargo"
-	cargo install --path "${TAURI_DIR}"
+	progress "Building CLI binary"
+	cargo build --package barba-cli --release
+
+	progress "Installing ${APP_NAME} CLI binary via Cargo"
+	cargo install --path "${CLI_DIR}" --force
 
 	discover_bundle
 
