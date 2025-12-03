@@ -38,8 +38,8 @@ serde = { version = "1.0.228", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0.145", default-features = false, features = [
     "std",
 ] }
-starship-battery = { version = "0.10.3", default-features = false }
 smc = "0.2.4"
+starship-battery = { version = "0.10.3", default-features = false }
 sysinfo = { version = "0.37.2", default-features = false, features = ["system"] }
 tauri = { version = "2.9.4", default-features = false, features = [
     "macos-private-api",

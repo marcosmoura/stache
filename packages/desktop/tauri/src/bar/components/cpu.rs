@@ -26,7 +26,7 @@ static SYS: LazyLock<Mutex<System>> = LazyLock::new(|| Mutex::new(System::new_al
 #[allow(clippy::needless_pass_by_value)]
 pub fn get_cpu_info(app: tauri::AppHandle) -> CpuInfo {
     let usage = get_cpu_usage().round();
-    let temperature = get_cpu_temperature(&app).map(|t| t.round());
+    let temperature = get_cpu_temperature(&app).map(f32::round);
 
     CpuInfo { usage, temperature }
 }
@@ -56,7 +56,7 @@ fn get_cpu_temperature(app: &tauri::AppHandle) -> Option<f32> {
 }
 
 /// Read CPU temperature directly from SMC using the smc crate.
-#[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 fn get_smc_cpu_temperature() -> Option<f32> {
     let smc = smc::SMC::new().ok()?;
 
@@ -100,19 +100,19 @@ fn get_smc_cpu_temperature() -> Option<f32> {
 #[allow(clippy::cast_possible_truncation)]
 fn get_shell_cpu_temperature(app: &tauri::AppHandle) -> Option<f32> {
     // Try ismc first (outputs JSON with detailed sensor data)
-    if let Ok(output) = run_shell_command(app, "ismc", &["temp", "-o", "json"]) {
-        if let Some(temp) = parse_ismc_cpu_temps(&output) {
-            return Some(temp);
-        }
+    if let Ok(output) = run_shell_command(app, "ismc", &["temp", "-o", "json"])
+        && let Some(temp) = parse_ismc_cpu_temps(&output)
+    {
+        return Some(temp);
     }
 
     // Fall back to smctemp (outputs just the temperature value)
-    if let Ok(output) = run_shell_command(app, "smctemp", &["-c"]) {
-        if let Ok(temp) = output.trim().parse::<f32>() {
-            if temp > 0.0 && temp < 150.0 {
-                return Some(temp);
-            }
-        }
+    if let Ok(output) = run_shell_command(app, "smctemp", &["-c"])
+        && let Ok(temp) = output.trim().parse::<f32>()
+        && temp > 0.0
+        && temp < 150.0
+    {
+        return Some(temp);
     }
 
     None
@@ -142,7 +142,7 @@ fn run_shell_command(
 
 /// Parse CPU temperature readings from ismc JSON output.
 /// Returns the average temperature of all CPU-related sensors.
-#[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 fn parse_ismc_cpu_temps(json_str: &str) -> Option<f32> {
     use serde_json::Value;
 
@@ -152,10 +152,10 @@ fn parse_ismc_cpu_temps(json_str: &str) -> Option<f32> {
     if let Some(obj) = data.as_object() {
         for (key, value) in obj {
             // Match CPU-related temperature sensors
-            if key.starts_with("CPU") {
-                if let Some(quantity) = value.get("quantity").and_then(serde_json::Value::as_f64) {
-                    temps.push(quantity as f32);
-                }
+            if key.starts_with("CPU")
+                && let Some(quantity) = value.get("quantity").and_then(serde_json::Value::as_f64)
+            {
+                temps.push(quantity as f32);
             }
         }
     }
