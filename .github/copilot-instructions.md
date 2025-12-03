@@ -7,7 +7,7 @@ Barba Shell is a **macOS-only** Tauri 2.x desktop application providing a status
 
 - **Desktop App** (`packages/desktop/`): React 19 + TypeScript frontend with Tauri 2.x Rust backend
 - **CLI** (`packages/cli/`): Standalone Rust CLI built with Clap for controlling the desktop app
-- **Shared** (`packages/shared/`): Shared code between packages (if needed)
+- **Shared** (`packages/shared/`): Shared Rust types (config, schema generation) used by both CLI and desktop
 
 ## Repository Structure
 
@@ -28,14 +28,17 @@ barba/
 │ │ │ ├── lib.rs # Tauri app entry, command registration
 │ │ │ ├── ipc.rs # IPC server for CLI communication
 │ │ │ ├── bar/ # Bar components
-│ │ │ ├── config/ # Configuration management
+│ │ │ ├── config/ # Configuration (wraps shared types)
 │ │ │ └── wallpaper/ # Wallpaper management
 │ │ └── 📁 ui/ # React frontend
 │ │ ├── main.tsx # React app entry
 │ │ ├── bar/ # Bar UI components
 │ │ ├── hooks/ # React hooks (useTauriEventQuery, etc.)
 │ │ └── design-system/ # Styling tokens and utilities
-│ └── 📁 shared/ # Shared code (if needed)
+│ └── 📁 shared/ # Shared Rust crate
+│ └── 📁 src/
+│ ├── lib.rs # Crate entry, re-exports
+│ └── config.rs # Config types, schema generation
 ├── Cargo.toml # Workspace root
 ├── package.json # pnpm workspace root
 └── vite.config.ts # Vite configuration
@@ -156,6 +159,7 @@ pnpm format             # Prettier + cargo fmt
 - `packages/desktop/tauri/src/ipc.rs` - IPC server for CLI communication
 - `packages/desktop/ui/hooks/useTauriEventQuery.ts` - Core pattern for Tauri-React integration
 - `packages/cli/src/main.rs` - CLI entry point with Clap
+- `packages/shared/src/config.rs` - Shared config types and schema generation
 - `Cargo.toml` - Workspace root defining all Rust packages
 
 ```

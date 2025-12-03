@@ -141,11 +141,10 @@ impl Cli {
             }
 
             Commands::GenerateSchema => {
-                let payload = CliEventPayload {
-                    name: "generate-schema".to_string(),
-                    data: None,
-                };
-                ipc::send_to_desktop_app(&payload)?;
+                // Generate schema locally using the shared config types
+                // This doesn't require the desktop app to be running
+                let schema = barba_shared::generate_schema_json();
+                println!("{schema}");
             }
         }
 

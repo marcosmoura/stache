@@ -148,9 +148,10 @@ fn handle_client(mut stream: UnixStream, app_handle: &AppHandle) {
         "wallpaper-set" => {
             if let Some(action) = &payload.data
                 && let Some(parsed_action) = crate::wallpaper::parse_action(action)
-                    && let Err(err) = crate::wallpaper::perform_action(parsed_action) {
-                        eprintln!("barba: wallpaper error: {err}");
-                    }
+                && let Err(err) = crate::wallpaper::perform_action(parsed_action)
+            {
+                eprintln!("barba: wallpaper error: {err}");
+            }
             stream.write_all(b"1").ok();
             return;
         }

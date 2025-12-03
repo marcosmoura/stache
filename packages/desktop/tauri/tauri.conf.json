@@ -4,9 +4,9 @@
   "version": "0.2.0",
   "identifier": "com.marcosmoura.barba",
   "build": {
-    "beforeDevCommand": { "script": "pnpm dev", "cwd": "../../.." },
+    "beforeDevCommand": { "script": "./scripts/generate-schema.sh && pnpm dev", "cwd": "../../.." },
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": { "script": "pnpm build", "cwd": "../../.." },
+    "beforeBuildCommand": { "script": "./scripts/generate-schema.sh && pnpm build", "cwd": "../../.." },
     "frontendDist": "../ui/dist"
   },
   "app": {

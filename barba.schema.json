@@ -1,0 +1,107 @@
+{
+  "$id": "https://raw.githubusercontent.com/marcosmoura/barba-shell/main/barba.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BarbaConfig",
+  "description": "Root configuration structure for Barba Shell.\n\nThis structure is designed to be extended with additional sections\nas new features are added to the application.",
+  "type": "object",
+  "properties": {
+    "shortcuts": {
+      "description": "Global keyboard shortcuts configuration.\n\nThe key is the shortcut string (e.g., \"Command+Control+R\").\nThe value is either a single command string or an array of commands.\n\nExample:\n```json\n{\n  \"shortcuts\": {\n    \"Command+Control+R\": [\"barba reload\", \"hyprspace reload-config\"],\n    \"Command+Option+Control+1\": \"barba workspace-changed terminal\"\n  }\n}\n```",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/ShortcutCommands"
+      },
+      "default": {}
+    },
+    "wallpapers": {
+      "description": "Dynamic wallpaper configuration.\n\nExample:\n```json\n{\n  \"wallpapers\": {\n    \"path\": \"/path/to/wallpapers\",\n    \"list\": [\"wallpaper1.jpg\", \"wallpaper2.png\"],\n    \"interval\": 300,\n    \"mode\": \"random\",\n    \"radius\": 10,\n    \"blur\": 5\n  }\n}\n```",
+      "$ref": "#/$defs/WallpaperConfig",
+      "default": {
+        "blur": 0,
+        "interval": 0,
+        "list": [],
+        "mode": "random",
+        "path": "",
+        "radius": 0
+      }
+    }
+  },
+  "$defs": {
+    "ShortcutCommands": {
+      "description": "Commands to execute for a keyboard shortcut.\n\nCan be either a single command string or an array of commands\nthat will be executed sequentially.",
+      "anyOf": [
+        {
+          "description": "A single command to execute.",
+          "type": "string"
+        },
+        {
+          "description": "Multiple commands to execute sequentially (never in parallel).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "WallpaperConfig": {
+      "description": "Wallpaper configuration for dynamic wallpaper management.\n\nExample:\n```json\n{\n  \"wallpapers\": {\n    \"path\": \"/path/to/wallpapers\",\n    \"list\": [\"wallpaper1.jpg\", \"wallpaper2.png\"],\n    \"interval\": 300,\n    \"mode\": \"random\",\n    \"radius\": 10,\n    \"blur\": 5\n  }\n}\n```",
+      "type": "object",
+      "properties": {
+        "blur": {
+          "description": "Blur level in pixels for Gaussian blur effect.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
+        },
+        "interval": {
+          "description": "Time in seconds between wallpaper changes.\nIf set to 0, the wallpaper will not change after the initial setting.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "list": {
+          "description": "List of wallpaper filenames to use.\nIf `path` is specified, this list is ignored.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "mode": {
+          "description": "Wallpaper selection mode: \"random\" or \"sequential\".",
+          "$ref": "#/$defs/WallpaperMode",
+          "default": "random"
+        },
+        "path": {
+          "description": "Directory containing wallpaper images.\nIf specified, all image files in this directory will be used,\noverriding the `list` field.",
+          "type": "string",
+          "default": ""
+        },
+        "radius": {
+          "description": "Radius in pixels for rounded corners.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
+        }
+      }
+    },
+    "WallpaperMode": {
+      "description": "Wallpaper cycling mode.",
+      "oneOf": [
+        {
+          "description": "Select a random wallpaper each time.",
+          "type": "string",
+          "const": "random"
+        },
+        {
+          "description": "Cycle through wallpapers in order.",
+          "type": "string",
+          "const": "sequential"
+        }
+      ]
+    }
+  }
+}

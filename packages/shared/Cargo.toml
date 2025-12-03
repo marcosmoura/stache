@@ -1,0 +1,22 @@
+[package]
+name = "barba-shared"
+version.workspace = true
+description = "Shared types and utilities for Barba Shell"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "../../../README.md"
+keywords = ["barba", "config", "types"]
+categories = ["config"]
+
+[dependencies]
+dirs = "6.0"
+json_comments = "0.2.2"
+schemars = { version = "1.1.0", default-features = true }
+serde = { version = "1.0.228", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0.145", default-features = false, features = [
+  "std",
+] }
+
+[lints]
+workspace = true

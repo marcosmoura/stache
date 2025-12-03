@@ -1,13 +1,7 @@
-pushd scripts >/dev/null 2>&1
-./generate-schema.sh
-popd >/dev/null 2>&1
-
-## Format and lint Rust code in src-tauri directory
-pushd src-tauri >/dev/null 2>&1
-cargo sort
+## Format and lint Rust code (workspace root)
+cargo sort --workspace
 cargo fmt --all
-cargo clippy --all --fix --allow-dirty --allow-staged -- -D warnings
-popd >/dev/null 2>&1
+cargo clippy --workspace --fix --allow-dirty --allow-staged -- -D warnings
 
 ## Run lint-staged for staged files
 export NODE_OPTIONS="--experimental-strip-types"

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Generate the Barba configuration JSON schema and save it to the repository root.
-# This script requires the Barba desktop app to be running.
+# This script uses the CLI binary which can generate the schema without the desktop app running.
 
 set -e
 
@@ -19,17 +19,8 @@ if [ ! -f "$CLI_BINARY" ]; then
 	cargo build --package barba-cli --release
 fi
 
-# Check if the desktop app is running by looking for the socket
-SOCKET_PATH="${XDG_RUNTIME_DIR:-$HOME/.local/run}/barba.sock"
-if [ ! -S "$SOCKET_PATH" ]; then
-	echo "Error: Barba desktop app is not running."
-	echo "Please start the desktop app first, then run this script."
-	echo "(Looking for socket at: $SOCKET_PATH)"
-	exit 1
-fi
-
-# Generate the schema by sending command to running app
-# The schema is printed to stdout by the desktop app
+# Generate the schema using the CLI
+# The CLI can generate the schema without the desktop app running
 "$CLI_BINARY" generate-schema >"$SCHEMA_FILE"
 
 echo "Schema saved to $SCHEMA_FILE"

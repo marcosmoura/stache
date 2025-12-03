@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["packages/cli", "packages/desktop/tauri"]
+members = ["packages/cli", "packages/desktop/tauri", "packages/shared"]
 
 [workspace.package]
 version = "0.2.0"
