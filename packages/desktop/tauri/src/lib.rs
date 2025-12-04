@@ -5,6 +5,7 @@ mod config;
 mod constants;
 mod hotkey;
 mod ipc;
+mod notunes;
 mod utils;
 mod wallpaper;
 
@@ -56,6 +57,9 @@ pub fn run() {
 
             // Initialize audio device manager
             audio::init();
+
+            // Initialize noTunes (prevent Apple Music from auto-launching)
+            notunes::init();
 
             // Initialize hold-to-quit (⌘Q) handler
             cmd_q::init(app.handle().clone());
