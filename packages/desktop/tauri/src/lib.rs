@@ -1,5 +1,6 @@
 mod audio;
 mod bar;
+mod cmd_q;
 mod config;
 mod constants;
 mod hotkey;
@@ -55,6 +56,9 @@ pub fn run() {
 
             // Initialize audio device manager
             audio::init();
+
+            // Initialize hold-to-quit (⌘Q) handler
+            cmd_q::init(app.handle().clone());
 
             Ok(())
         })
