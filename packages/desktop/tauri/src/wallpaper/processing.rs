@@ -409,7 +409,7 @@ fn apply_effects(img: DynamicImage, radius: u32, blur: u32) -> DynamicImage {
 
     // Apply rounded corners if specified
     if radius > 0 {
-        result = apply_rounded_corners(&result, radius * 2);
+        result = apply_rounded_corners(&result, radius);
     }
 
     result
@@ -609,7 +609,7 @@ mod tests {
             DynamicImage::ImageRgb8(RgbImage::from_fn(100, 100, |_, _| Rgb([255u8, 255, 255])));
 
         // Apply rounded corners with radius 16
-        let result = apply_rounded_corners(&white_img, 16 * 2);
+        let result = apply_rounded_corners(&white_img, 16);
         let rgb = result.to_rgb8();
 
         // Top-left corner (0,0) should be black (outside the rounded corner)

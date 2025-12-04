@@ -98,17 +98,15 @@ fn send_message(mut stream: &UnixStream, payload: &CliEventPayload) -> Result<()
         .flush()
         .map_err(|err| CliError::SendFailed(format!("Failed to flush stream: {err}")))?;
 
-    // Read response - could be simple ack or output with 'O' prefix
-    let mut response = Vec::new();
-    match stream.read_to_end(&mut response) {
-        Ok(_) if response.is_empty() => Ok(()),
-        Ok(_) => {
-            if response[0] == b'O' {
-                // Output follows - print it
-                let output = String::from_utf8_lossy(&response[1..]);
-                println!("{output}");
+    // Read the first byte to determine response type
+    let mut first_byte = [0u8; 1];
+    match stream.read_exact(&mut first_byte) {
+        Ok(()) => {
+            if first_byte[0] == b'O' {
+                // Streaming output - read and print incrementally
+                read_streaming_output(stream);
                 Ok(())
-            } else if response[0] == b'1' {
+            } else if first_byte[0] == b'1' {
                 Ok(())
             } else {
                 Err(CliError::SendFailed("Command was not acknowledged".to_string()))
@@ -119,6 +117,33 @@ fn send_message(mut stream: &UnixStream, payload: &CliEventPayload) -> Result<()
             Ok(())
         }
         Err(err) => Err(CliError::SendFailed(format!("Failed to read response: {err}"))),
+    }
+}
+
+/// Reads streaming output from the socket and prints it incrementally.
+fn read_streaming_output(stream: &UnixStream) {
+    use std::io::{BufRead, BufReader};
+
+    let reader = BufReader::new(stream);
+
+    for line in reader.lines() {
+        match line {
+            Ok(content) => {
+                println!("{content}");
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                // Timeout - end of stream
+                break;
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => {
+                // Connection closed - end of stream
+                break;
+            }
+            Err(_) => {
+                // Other errors - just stop reading
+                break;
+            }
+        }
     }
 }
 

@@ -1,6 +1,6 @@
 //! Wallpaper manager for handling wallpaper selection, processing, and cycling.
 
-use std::fmt::Write;
+use std::io::Write as IoWrite;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -427,20 +427,18 @@ pub fn perform_action(action: &WallpaperAction) -> Result<(), WallpaperManagerEr
     Ok(())
 }
 
-/// Generates all wallpapers and stores them in the cache directory.
+/// Generates all wallpapers and streams output to the provided writer.
 ///
 /// This pre-processes all wallpapers so they're ready for instant switching.
 /// Useful for pre-caching wallpapers to avoid delays when cycling.
 ///
-/// # Returns
-///
-/// A tuple of (`output_string`, success) where `output_string` contains the
-/// generation log and success indicates if all wallpapers were processed.
+/// Streams progress line by line, flushing after each write
+/// for real-time feedback during long-running generation operations.
 ///
 /// # Errors
 ///
 /// Returns an error if the manager is not initialized.
-pub fn generate_all() -> Result<String, WallpaperManagerError> {
+pub fn generate_all_streaming<W: IoWrite>(mut writer: W) -> Result<(), WallpaperManagerError> {
     // ANSI color codes
     const GREEN: &str = "\x1b[32m";
     const RED: &str = "\x1b[31m";
@@ -450,12 +448,17 @@ pub fn generate_all() -> Result<String, WallpaperManagerError> {
 
     let screen_count = macos::screen_count();
     let total = manager.wallpapers.len();
-    let mut output = format!(
-        "Generating wallpapers for {screen_count} screen(s), {total} wallpaper(s) each.\n\n"
+
+    // Write header and flush immediately
+    let _ = writeln!(
+        writer,
+        "Generating wallpapers for {screen_count} screen(s), {total} wallpaper(s) each.\n"
     );
+    let _ = writer.flush();
 
     for screen_index in 0..screen_count {
-        let _ = writeln!(output, "Screen {screen_index}:");
+        let _ = writeln!(writer, "Screen {screen_index}:");
+        let _ = writer.flush();
 
         for wallpaper in &manager.wallpapers {
             let name = wallpaper.file_name().and_then(|n| n.to_str()).unwrap_or("unknown");
@@ -464,18 +467,20 @@ pub fn generate_all() -> Result<String, WallpaperManagerError> {
                 Ok(cached_path) => {
                     let cached_name =
                         cached_path.file_name().and_then(|n| n.to_str()).unwrap_or("cached");
-                    let _ = writeln!(output, "  {GREEN}✓{RESET} {name} -> {cached_name}");
+                    let _ = writeln!(writer, "  {GREEN}✓{RESET} {name} -> {cached_name}");
                 }
                 Err(err) => {
-                    let _ = writeln!(output, "  {RED}⨉{RESET} {name} -> error: {err}");
+                    let _ = writeln!(writer, "  {RED}⨉{RESET} {name} -> error: {err}");
                 }
             }
+            let _ = writer.flush();
         }
 
-        let _ = writeln!(output);
+        let _ = writeln!(writer);
+        let _ = writer.flush();
     }
 
-    Ok(output)
+    Ok(())
 }
 
 #[cfg(test)]

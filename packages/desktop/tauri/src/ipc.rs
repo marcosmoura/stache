@@ -248,15 +248,14 @@ fn handle_client(mut stream: UnixStream, app_handle: &AppHandle) {
             return;
         }
         "wallpaper-generate-all" => {
-            match crate::wallpaper::generate_all() {
-                Ok(output) => {
-                    let response = format!("O{output}");
-                    stream.write_all(response.as_bytes()).ok();
-                }
-                Err(err) => {
-                    eprintln!("barba: wallpaper generation error: {err}");
-                    stream.write_all(b"0").ok();
-                }
+            // Write the 'O' prefix to indicate streaming output
+            if stream.write_all(b"O").is_err() {
+                return;
+            }
+            stream.flush().ok();
+
+            if let Err(err) = crate::wallpaper::generate_all_streaming(&mut stream) {
+                eprintln!("barba: wallpaper generation error: {err}");
             }
             return;
         }
