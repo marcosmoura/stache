@@ -8,7 +8,7 @@ import * as styles from './Status.styles';
 
 export const Status = () => {
   return (
-    <div className={styles.status}>
+    <div className={styles.status} data-test-id="status-container">
       <Weather />
       <KeepAwake />
       <Cpu />

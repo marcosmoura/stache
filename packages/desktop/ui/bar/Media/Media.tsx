@@ -47,7 +47,12 @@ export const Media = () => {
   const { svg, color } = getPlayerIcon(media?.bundleIdentifier || '');
 
   return (
-    <Surface className={styles.media} as={Button} onClick={onMediaClick}>
+    <Surface
+      className={styles.media}
+      as={Button}
+      onClick={onMediaClick}
+      data-test-id="media-container"
+    >
       {loadedArtwork && <img className={styles.artwork} src={loadedArtwork} alt={media.label} />}
       <Icon icon={svg} fill={color} color={colors.crust} size={22} />
       {media.prefix && <span>{media.prefix}</span>}

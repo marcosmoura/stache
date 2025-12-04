@@ -1,9 +1,8 @@
-import type { ReactNode } from 'react';
-
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { listen, type Event } from '@tauri-apps/api/event';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { renderHook } from 'vitest-browser-react';
+
+import { createQueryClientWrapper, createTestQueryClient } from '@/tests/utils';
 
 import { useTauriEventQuery } from './useTauriEventQuery';
 
@@ -12,22 +11,6 @@ vi.mock('@tauri-apps/api/event', () => ({
 }));
 
 const listenMock = vi.mocked(listen);
-
-const createQueryClient = () =>
-  new QueryClient({
-    defaultOptions: {
-      queries: {
-        retry: false,
-        gcTime: 0,
-      },
-    },
-  });
-
-const createWrapper = (queryClient: QueryClient) => {
-  return ({ children }: { children: ReactNode }) => (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-  );
-};
 
 describe('useTauriEventQuery', () => {
   beforeEach(() => {
@@ -39,8 +22,8 @@ describe('useTauriEventQuery', () => {
     const unlisten = vi.fn();
     listenMock.mockResolvedValue(unlisten);
 
-    const queryClient = createQueryClient();
-    const wrapper = createWrapper(queryClient);
+    const queryClient = createTestQueryClient();
+    const wrapper = createQueryClientWrapper(queryClient);
 
     const { unmount } = await renderHook(() => useTauriEventQuery<{ foo: string }>({ eventName }), {
       wrapper,
@@ -67,8 +50,8 @@ describe('useTauriEventQuery', () => {
       return unlisten;
     });
 
-    const queryClient = createQueryClient();
-    const wrapper = createWrapper(queryClient);
+    const queryClient = createTestQueryClient();
+    const wrapper = createQueryClientWrapper(queryClient);
 
     const { result, unmount } = await renderHook(() => useTauriEventQuery<Payload>({ eventName }), {
       wrapper,
@@ -101,8 +84,8 @@ describe('useTauriEventQuery', () => {
 
     const transformFn = vi.fn((payload: Payload) => payload.value * 2);
 
-    const queryClient = createQueryClient();
-    const wrapper = createWrapper(queryClient);
+    const queryClient = createTestQueryClient();
+    const wrapper = createQueryClientWrapper(queryClient);
 
     const { result, unmount } = await renderHook(
       () =>

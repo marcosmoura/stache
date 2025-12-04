@@ -32,7 +32,11 @@ export const KeepAwake = () => {
   }
 
   return (
-    <Surface as={Button} onClick={onKeepAwakeClick}>
+    <Surface
+      as={Button}
+      onClick={onKeepAwakeClick}
+      data-test-state={isSystemAwake ? 'awake' : 'sleep'}
+    >
       <Icon
         className={styles.icon}
         icon={Coffee02Icon}
