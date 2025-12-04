@@ -14,8 +14,7 @@ dist-ssr
 
 # Rust build artifacts
 target/
-Cargo.lock
-!packages/desktop/tauri/Cargo.lock
+
 
 # Editor directories and files
 .idea
