@@ -277,7 +277,10 @@
               "minimum": 0
             }
           },
-          "required": ["horizontal", "vertical"]
+          "required": [
+            "horizontal",
+            "vertical"
+          ]
         }
       ]
     },
@@ -384,7 +387,12 @@
               "minimum": 0
             }
           },
-          "required": ["top", "right", "bottom", "left"]
+          "required": [
+            "top",
+            "right",
+            "bottom",
+            "left"
+          ]
         }
       ]
     },
@@ -404,7 +412,10 @@
         },
         "screen": {
           "description": "The screen this configuration applies to.\nUse \"main\" for the primary screen, or the screen name/identifier.\nIf not specified, applies to all screens.",
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },
@@ -583,23 +594,38 @@
       "properties": {
         "app-id": {
           "description": "Match by application bundle identifier (e.g., \"com.apple.Safari\").\nSupports both exact match and substring match.",
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "class": {
           "description": "Match by window class name (substring match).",
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "name": {
           "description": "Match by application name (e.g., \"Safari\").\nSupports both exact match and substring match (case-insensitive).",
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "title": {
           "description": "Match by window title (substring match, case-insensitive).",
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "workspace": {
           "description": "Target workspace for global rules.\nThis field is only used when the rule is defined in `TilingConfig.rules`.\nFor per-workspace rules, this field is ignored.",
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },
@@ -619,7 +645,10 @@
         },
         "preset-on-open": {
           "description": "Name of a floating preset to automatically apply when a window is opened in this workspace.\nOnly applies when the workspace layout is set to floating.",
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "rules": {
           "description": "Window rules for automatically assigning windows to this workspace.",
