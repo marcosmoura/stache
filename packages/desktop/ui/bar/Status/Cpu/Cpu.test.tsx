@@ -10,10 +10,6 @@ import { Cpu } from './Cpu';
 import { fetchCpu, getCPUElements, openActivityMonitor } from './Cpu.service';
 import type { CPUInfo } from './Cpu.types';
 
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(),
-}));
-
 const invokeMock = vi.mocked(invoke);
 
 describe('Cpu Service', () => {

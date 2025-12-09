@@ -80,7 +80,7 @@ const getAppIcon = (name: string) => {
 export const Spaces = () => {
   const queryClient = useQueryClient();
 
-  const { data: workspaceData } = useQuery<Workspaces>({
+  const { data: workspaces } = useQuery<Workspaces>({
     queryKey: ['workspaces'],
     queryFn: fetchWorkspaceList,
     refetchOnMount: true,
@@ -91,19 +91,19 @@ export const Spaces = () => {
   });
 
   const focusedApp = useMemo(() => {
-    return workspaceData?.find((workspace) => workspace.isFocused)?.focusedApp;
-  }, [workspaceData]);
+    return workspaces?.find((workspace) => workspace.isFocused)?.focusedApp;
+  }, [workspaces]);
 
   const onSpaceClick = useCallback((name: string) => () => onWorkspaceClick(name), []);
 
-  if (!workspaceData) {
+  if (!workspaces) {
     return null;
   }
 
   return (
     <div className={styles.spaces} data-test-id="spaces-container">
       <Surface className={styles.workspaces}>
-        {workspaceData.map(({ name, isFocused }) => {
+        {workspaces.map(({ name, isFocused }) => {
           const capitalizedName = name.charAt(0).toUpperCase() + name.slice(1);
 
           return (

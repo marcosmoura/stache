@@ -19,10 +19,6 @@ import {
   openWeatherApp,
 } from './Weather.service';
 
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(),
-}));
-
 const invokeMock = vi.mocked(invoke);
 
 // Common mock data

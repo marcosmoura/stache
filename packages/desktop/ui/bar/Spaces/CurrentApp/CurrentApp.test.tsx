@@ -8,14 +8,6 @@ import { CurrentApp } from './CurrentApp';
 
 import { fetchCurrentHyprspaceWindow, getAppIcon, onCLIEvent } from './CurrentApp.service';
 
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(),
-}));
-
-vi.mock('@tauri-apps/api/event', () => ({
-  listen: vi.fn().mockResolvedValue(() => {}),
-}));
-
 const invokeMock = vi.mocked(invoke);
 
 describe('CurrentApp Service', () => {

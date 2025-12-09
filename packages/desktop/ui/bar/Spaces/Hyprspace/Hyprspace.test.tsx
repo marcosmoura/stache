@@ -14,14 +14,6 @@ import {
   onWorkspaceClick,
 } from './Hyprspace.service';
 
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(),
-}));
-
-vi.mock('@tauri-apps/api/event', () => ({
-  listen: vi.fn().mockResolvedValue(() => {}),
-}));
-
 const invokeMock = vi.mocked(invoke);
 
 describe('Hyprspace Service', () => {

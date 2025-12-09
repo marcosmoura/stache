@@ -8,10 +8,6 @@ import { Clock } from './Clock';
 
 import { getClockInfo, openClockApp } from './Clock.service';
 
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(),
-}));
-
 const invokeMock = vi.mocked(invoke);
 
 describe('Clock Service', () => {

@@ -15,10 +15,6 @@ import {
 } from './Battery.service';
 import type { BatteryState } from './Battery.types';
 
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(),
-}));
-
 const invokeMock = vi.mocked(invoke);
 
 describe('Battery Service', () => {
