@@ -13,6 +13,8 @@ pub enum CliError {
     SendFailed(String),
     /// Invalid command arguments.
     InvalidArguments(String),
+    /// Cache operation failed.
+    CacheError(String),
     /// IO error.
     Io(std::io::Error),
 }
@@ -31,6 +33,9 @@ impl fmt::Display for CliError {
             }
             Self::InvalidArguments(msg) => {
                 write!(f, "{msg}")
+            }
+            Self::CacheError(msg) => {
+                write!(f, "Cache error: {msg}")
             }
             Self::Io(err) => write!(f, "IO error: {err}"),
         }
@@ -97,5 +102,13 @@ mod tests {
         let err = CliError::DesktopAppNotRunning;
         let debug_str = format!("{err:?}");
         assert!(debug_str.contains("DesktopAppNotRunning"));
+    }
+
+    #[test]
+    fn test_cache_error_display() {
+        let err = CliError::CacheError("Failed to remove directory".to_string());
+        let msg = err.to_string();
+        assert!(msg.contains("Cache error"));
+        assert!(msg.contains("Failed to remove directory"));
     }
 }

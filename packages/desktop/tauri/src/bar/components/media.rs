@@ -21,6 +21,7 @@ use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::CommandEvent;
 
+use crate::utils::cache::get_cache_subdir_str;
 use crate::utils::thread::spawn_named_thread;
 
 /// Event name for media state changes.
@@ -120,23 +121,8 @@ fn get_cache_path(state: &Map<String, Value>, extension: &str) -> String {
 /// Uses `~/Library/Caches/{APP_BUNDLE_ID}/media_artwork/` on macOS for persistence.
 /// Falls back to `/tmp/{APP_BUNDLE_ID}/media_artwork/` if cache directory unavailable.
 fn get_cache_dir() -> &'static str {
-    use crate::constants::APP_BUNDLE_ID;
     static CACHE_DIR: OnceLock<String> = OnceLock::new();
-    CACHE_DIR.get_or_init(|| {
-        dirs::cache_dir().map_or_else(
-            || format!("/tmp/{APP_BUNDLE_ID}/media_artwork/"),
-            |cache| {
-                let path = cache.join(format!("{APP_BUNDLE_ID}/media_artwork/"));
-                // Ensure the path ends with a separator for string concatenation
-                let path_str = path.to_string_lossy().into_owned();
-                if path_str.ends_with('/') {
-                    path_str
-                } else {
-                    format!("{path_str}/")
-                }
-            },
-        )
-    })
+    CACHE_DIR.get_or_init(|| get_cache_subdir_str("media_artwork"))
 }
 
 /// Maps MIME types to image formats.

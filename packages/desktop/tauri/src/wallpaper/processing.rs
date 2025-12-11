@@ -14,6 +14,7 @@ use objc::runtime::{Class, Object};
 use objc::{msg_send, sel, sel_impl};
 
 use crate::config::WallpaperConfig;
+use crate::utils::cache::get_cache_subdir;
 
 /// Supported image file extensions.
 const SUPPORTED_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp"];
@@ -178,13 +179,7 @@ pub fn get_screen_count() -> usize {
 ///
 /// Uses `~/Library/Caches/{APP_BUNDLE_ID}/wallpapers` on macOS for persistence across reboots.
 /// Falls back to `/tmp/{APP_BUNDLE_ID}/wallpapers` if the home directory cannot be determined.
-pub fn cache_dir() -> PathBuf {
-    use crate::constants::APP_BUNDLE_ID;
-    dirs::cache_dir().map_or_else(
-        || PathBuf::from(format!("/tmp/{APP_BUNDLE_ID}/wallpapers")),
-        |cache| cache.join(format!("{APP_BUNDLE_ID}/wallpapers")),
-    )
-}
+pub fn cache_dir() -> PathBuf { get_cache_subdir("wallpapers") }
 
 /// Generates a unique cache filename based on the source file, processing parameters, and screen size.
 /// Always uses JPEG format for fast saving.

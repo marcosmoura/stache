@@ -49,6 +49,12 @@ pub enum Commands {
     #[command(subcommand)]
     Window(WindowCommands),
 
+    /// Cache management commands.
+    ///
+    /// Manage the application's cache directory.
+    #[command(subcommand)]
+    Cache(CacheCommands),
+
     /// Reload Barba configuration.
     ///
     /// Reloads the configuration file and applies changes without restarting
@@ -454,6 +460,29 @@ pub enum WallpaperCommands {
     List,
 }
 
+// ============================================================================
+// Cache Commands
+// ============================================================================
+
+/// Cache subcommands for managing the application's cache.
+#[derive(Subcommand, Debug)]
+pub enum CacheCommands {
+    /// Clear the application's cache directory.
+    ///
+    /// Removes all cached files including processed wallpapers and media artwork.
+    /// This can help resolve issues with stale data or free up disk space.
+    #[command(after_long_help = r#"Examples:
+  barba cache clear   # Clear all cached data"#)]
+    Clear,
+
+    /// Show the cache directory location.
+    ///
+    /// Displays the path to the application's cache directory.
+    #[command(after_long_help = r#"Examples:
+  barba cache path    # Print the cache directory path"#)]
+    Path,
+}
+
 /// Payload for CLI events sent to the desktop app.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CliEventPayload {
@@ -559,6 +588,7 @@ impl Cli {
             Commands::Query(query_cmd) => Self::execute_query(query_cmd)?,
             Commands::Workspace(workspace_cmd) => Self::execute_workspace(workspace_cmd)?,
             Commands::Window(window_cmd) => Self::execute_window(window_cmd)?,
+            Commands::Cache(cache_cmd) => Self::execute_cache(cache_cmd)?,
 
             Commands::Reload => {
                 let payload = CliEventPayload {
@@ -585,6 +615,34 @@ impl Cli {
     fn print_completions<G: Generator>(generator: G) {
         let mut cmd = Self::command();
         generate(generator, &mut cmd, "barba", &mut io::stdout());
+    }
+
+    /// Execute cache subcommands.
+    fn execute_cache(cmd: &CacheCommands) -> Result<(), CliError> {
+        match cmd {
+            CacheCommands::Clear => {
+                let cache_dir = barba_shared::get_cache_dir();
+                if !cache_dir.exists() {
+                    println!("Cache directory does not exist. Nothing to clear.");
+                    return Ok(());
+                }
+
+                match barba_shared::clear_cache() {
+                    Ok(bytes_freed) => {
+                        let formatted = barba_shared::format_bytes(bytes_freed);
+                        println!("Cache cleared successfully. Freed {formatted}.");
+                    }
+                    Err(err) => {
+                        return Err(CliError::CacheError(format!("Failed to clear cache: {err}")));
+                    }
+                }
+            }
+            CacheCommands::Path => {
+                let cache_dir = barba_shared::get_cache_dir();
+                println!("{}", cache_dir.display());
+            }
+        }
+        Ok(())
     }
 
     /// Execute wallpaper subcommands.
