@@ -6,17 +6,9 @@
   "type": "object",
   "properties": {
     "bar": {
-      "description": "Bar configuration for status bar UI components.\n\nContains settings for wallpapers and weather.\n\nExample:\n```json\n{\n  \"bar\": {\n    \"wallpapers\": {\n      \"path\": \"/path/to/wallpapers\",\n      \"mode\": \"random\"\n    },\n    \"weather\": {\n      \"visualCrossingApiKey\": \"YOUR_API_KEY\"\n    }\n  }\n}\n```",
+      "description": "Bar configuration for status bar UI components.\n\nContains settings for weather.\n\nExample:\n```json\n{\n  \"bar\": {\n    \"weather\": {\n      \"visualCrossingApiKey\": \"YOUR_API_KEY\"\n    }\n  }\n}\n```",
       "$ref": "#/$defs/BarConfig",
       "default": {
-        "wallpapers": {
-          "blur": 0,
-          "interval": 0,
-          "list": [],
-          "mode": "random",
-          "path": "",
-          "radius": 0
-        },
         "weather": {
           "defaultLocation": "",
           "visualCrossingApiKey": ""
@@ -49,6 +41,18 @@
           "max-masters": 1,
           "ratio": 60
         }
+      }
+    },
+    "wallpapers": {
+      "description": "Desktop wallpaper configuration.\n\nControls dynamic wallpaper rotation, effects, and display.\n\nExample:\n```json\n{\n  \"wallpapers\": {\n    \"path\": \"/path/to/wallpapers\",\n    \"mode\": \"random\",\n    \"interval\": 300,\n    \"radius\": 12,\n    \"blur\": 8\n  }\n}\n```",
+      "$ref": "#/$defs/WallpaperConfig",
+      "default": {
+        "blur": 0,
+        "interval": 0,
+        "list": [],
+        "mode": "random",
+        "path": "",
+        "radius": 0
       }
     }
   },
@@ -85,21 +89,9 @@
       }
     },
     "BarConfig": {
-      "description": "Bar configuration for the status bar UI components.\n\nContains settings for bar-specific features like wallpapers and weather.\n\nExample:\n```json\n{\n  \"bar\": {\n    \"wallpapers\": {\n      \"path\": \"/path/to/wallpapers\",\n      \"mode\": \"random\"\n    },\n    \"weather\": {\n      \"visualCrossingApiKey\": \"YOUR_API_KEY\",\n      \"defaultLocation\": \"Prague\"\n    }\n  }\n}\n```",
+      "description": "Bar configuration for the status bar UI components.\n\nContains settings for bar-specific features like weather.\n\nExample:\n```json\n{\n  \"bar\": {\n    \"weather\": {\n      \"visualCrossingApiKey\": \"YOUR_API_KEY\",\n      \"defaultLocation\": \"Prague\"\n    }\n  }\n}\n```",
       "type": "object",
       "properties": {
-        "wallpapers": {
-          "description": "Dynamic wallpaper configuration.",
-          "$ref": "#/$defs/WallpaperConfig",
-          "default": {
-            "blur": 0,
-            "interval": 0,
-            "list": [],
-            "mode": "random",
-            "path": "",
-            "radius": 0
-          }
-        },
         "weather": {
           "description": "Weather status bar configuration.",
           "$ref": "#/$defs/WeatherConfig",

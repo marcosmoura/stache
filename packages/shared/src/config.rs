@@ -109,16 +109,12 @@ impl WeatherConfig {
 
 /// Bar configuration for the status bar UI components.
 ///
-/// Contains settings for bar-specific features like wallpapers and weather.
+/// Contains settings for bar-specific features like weather.
 ///
 /// Example:
 /// ```json
 /// {
 ///   "bar": {
-///     "wallpapers": {
-///       "path": "/path/to/wallpapers",
-///       "mode": "random"
-///     },
 ///     "weather": {
 ///       "visualCrossingApiKey": "YOUR_API_KEY",
 ///       "defaultLocation": "Prague"
@@ -129,9 +125,6 @@ impl WeatherConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct BarConfig {
-    /// Dynamic wallpaper configuration.
-    pub wallpapers: WallpaperConfig,
-
     /// Weather status bar configuration.
     pub weather: WeatherConfig,
 }
@@ -145,16 +138,12 @@ pub struct BarConfig {
 pub struct BarbaConfig {
     /// Bar configuration for status bar UI components.
     ///
-    /// Contains settings for wallpapers and weather.
+    /// Contains settings for weather.
     ///
     /// Example:
     /// ```json
     /// {
     ///   "bar": {
-    ///     "wallpapers": {
-    ///       "path": "/path/to/wallpapers",
-    ///       "mode": "random"
-    ///     },
     ///     "weather": {
     ///       "visualCrossingApiKey": "YOUR_API_KEY"
     ///     }
@@ -162,6 +151,24 @@ pub struct BarbaConfig {
     /// }
     /// ```
     pub bar: BarConfig,
+
+    /// Desktop wallpaper configuration.
+    ///
+    /// Controls dynamic wallpaper rotation, effects, and display.
+    ///
+    /// Example:
+    /// ```json
+    /// {
+    ///   "wallpapers": {
+    ///     "path": "/path/to/wallpapers",
+    ///     "mode": "random",
+    ///     "interval": 300,
+    ///     "radius": 12,
+    ///     "blur": 8
+    ///   }
+    /// }
+    /// ```
+    pub wallpapers: WallpaperConfig,
 
     /// Global keyboard keybindings configuration.
     ///
@@ -437,6 +444,7 @@ mod tests {
         );
         let config = BarbaConfig {
             bar: BarConfig::default(),
+            wallpapers: WallpaperConfig::default(),
             keybindings,
             tiling: TilingConfig::default(),
         };

@@ -79,9 +79,9 @@ mod tests {
         let schema_json = generate_schema_json();
         let parsed: serde_json::Value = serde_json::from_str(&schema_json).unwrap();
 
-        // Wallpapers is now under BarConfig, referenced in $defs
-        let bar_config = &parsed["$defs"]["BarConfig"];
-        assert!(bar_config.is_object());
+        // WallpaperConfig is at the root level of BarbaConfig, referenced in $defs
+        let wallpaper_config = &parsed["$defs"]["WallpaperConfig"];
+        assert!(wallpaper_config.is_object());
     }
 
     #[test]

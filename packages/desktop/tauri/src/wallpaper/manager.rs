@@ -361,7 +361,7 @@ impl WallpaperManager {
 ///
 /// If wallpapers are disabled or initialization fails, logs a warning and returns.
 pub fn init() {
-    let config = &crate::config::get_config().bar.wallpapers;
+    let config = &crate::config::get_config().wallpapers;
 
     if !config.is_enabled() {
         return;
