@@ -41,6 +41,10 @@ pub struct TilingManager {
     /// This survives across workspace switches even when window IDs change.
     workspace_pids: HashMap<String, HashSet<i32>>,
 
+    /// Tracks which workspaces have had their `preset_on_open` applied.
+    /// This ensures the preset is only applied once when first switching to a workspace.
+    preset_applied_workspaces: HashSet<String>,
+
     /// App handle for emitting events to the frontend.
     app_handle: Option<AppHandle>,
 }
@@ -63,6 +67,7 @@ impl TilingManager {
             workspace_manager,
             config: config.clone(),
             workspace_pids: HashMap::new(),
+            preset_applied_workspaces: HashSet::new(),
             app_handle,
         };
 
@@ -212,6 +217,9 @@ impl TilingManager {
             if let Err(e) = self.apply_preset_to_window(window_id, &preset_name) {
                 eprintln!("barba: failed to apply preset-on-open: {e}");
             }
+            // Mark the workspace as having had preset applied
+            // This prevents re-applying when switching workspaces later
+            self.preset_applied_workspaces.insert(workspace_name.clone());
         }
 
         // Only apply layout for truly new windows on the focused workspace

@@ -472,6 +472,39 @@ impl TilingManager {
             }
         }
 
+        // Apply preset-on-open for floating workspaces when switching for the first time
+        // This ensures windows get the preset applied when you first switch to a workspace
+        // that was populated before the app started or via another mechanism
+        if !self.preset_applied_workspaces.contains(workspace_name) {
+            let workspace_config =
+                self.config.workspaces.iter().find(|wc| wc.name == workspace_name);
+
+            if let Some(wc) = workspace_config
+                && wc.layout == barba_shared::LayoutMode::Floating
+                && let Some(ref preset_name) = wc.preset_on_open
+            {
+                // Get windows in this workspace
+                let window_ids: Vec<u64> = self
+                    .workspace_manager
+                    .state()
+                    .get_workspace(workspace_name)
+                    .map(|ws| ws.windows.to_vec())
+                    .unwrap_or_default();
+
+                // Apply preset to each window
+                let preset_name = preset_name.clone();
+                for window_id in window_ids {
+                    if let Err(e) = self.apply_preset_to_window(window_id, &preset_name) {
+                        eprintln!("barba: failed to apply preset-on-open during switch: {e}");
+                    }
+                }
+            }
+
+            // Mark as applied regardless of whether we had a preset
+            // This ensures we only try once per workspace
+            self.preset_applied_workspaces.insert(workspace_name.to_string());
+        }
+
         // Apply layout now that we have discovered windows
         let _ = self.apply_layout(workspace_name);
 

@@ -238,6 +238,7 @@ mod tests {
             config,
             workspace_manager,
             workspace_pids: std::collections::HashMap::new(),
+            preset_applied_workspaces: std::collections::HashSet::new(),
             app_handle: None,
         }
     }
