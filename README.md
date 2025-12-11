@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD033 MD041 MD024 -->
 <p align="center">
   <img src="packages/desktop/tauri/icons/icon.png" alt="Barba Shell Logo" width="128" height="128">
 </p>
@@ -129,7 +130,7 @@ Download the latest release from the [Releases](https://github.com/marcosmoura/b
 2. **Build the application:**
 
    ```bash
-   pnpm tauri:build
+   pnpm release
    ```
 
 3. **Install the CLI (optional):**
@@ -145,9 +146,7 @@ Download the latest release from the [Releases](https://github.com/marcosmoura/b
 
 Barba Shell uses a JSONC configuration file located at:
 
-```
-~/.config/barba/config.json
-```
+`~/.config/barba/config.json`
 
 > **Tip:** JSONC supports comments! Use `//` for single-line and `/* */` for multi-line comments.
 
@@ -320,10 +319,7 @@ The CLI binary (`barba`) communicates with the running desktop app via Unix sock
 
 ```bash
 # Build the CLI
-pnpm build:cli
-
-# Add to PATH (optional)
-ln -s $(pwd)/target/release/barba /usr/local/bin/barba
+cargo install --path packages/cli
 ```
 
 ### Shell Completions
@@ -454,7 +450,7 @@ barba query windows --workspace coding
 
 ### Project Structure
 
-```
+```text
 barba-shell/
 ├── packages/
 │   ├── cli/              # Rust CLI application
@@ -501,7 +497,7 @@ barba-shell/
 
 ### Architecture
 
-```
+```text
 ┌─────────────┐     Unix Socket     ┌──────────────────────────────────────┐
 │   CLI       │ ──────────────────► │         Desktop App                  │
 │  (barba)    │                     │  ┌─────────────┐   ┌───────────────┐ │
