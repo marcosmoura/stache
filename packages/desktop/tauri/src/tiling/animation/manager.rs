@@ -332,9 +332,12 @@ impl AnimationManager {
     fn tick_animations_fallback(&self) {
         use std::time::Duration;
 
-        // Use a tight loop with short sleeps for smooth animation
-        // Target ~240fps for smooth interpolation
-        let frame_duration = Duration::from_micros(4167); // ~240fps
+        use crate::tiling::screen::get_max_refresh_rate;
+
+        // Get the maximum refresh rate from all connected displays
+        // and target that FPS for smooth interpolation
+        let max_refresh_rate = get_max_refresh_rate();
+        let frame_duration = Duration::from_micros(1_000_000 / u64::from(max_refresh_rate));
 
         loop {
             let mut state = self.state.lock();

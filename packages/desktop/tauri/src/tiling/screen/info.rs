@@ -3,7 +3,8 @@
 //! This module provides functions to query connected displays.
 
 use core_graphics::display::{
-    CGDirectDisplayID, CGDisplay, CGDisplayBounds, CGGetActiveDisplayList, CGMainDisplayID,
+    CGDirectDisplayID, CGDisplay, CGDisplayBounds, CGDisplayCopyDisplayMode,
+    CGDisplayModeGetRefreshRate, CGDisplayModeRelease, CGGetActiveDisplayList, CGMainDisplayID,
 };
 use objc2::MainThreadMarker;
 use objc2_app_kit::NSScreen;
@@ -195,6 +196,62 @@ fn get_display_ids() -> ScreenResult<Vec<CGDirectDisplayID>> {
     Ok(display_ids)
 }
 
+/// Gets the maximum refresh rate across all connected displays.
+///
+/// Returns the highest refresh rate in Hz. Falls back to 60Hz if no displays
+/// are found or if the refresh rate cannot be determined.
+///
+/// This is useful for determining animation frame timing when `CVDisplayLink`
+/// is not available.
+#[must_use]
+pub fn get_max_refresh_rate() -> u32 {
+    const DEFAULT_REFRESH_RATE: u32 = 120;
+
+    let Ok(display_ids) = get_display_ids() else {
+        return DEFAULT_REFRESH_RATE;
+    };
+
+    if display_ids.is_empty() {
+        return DEFAULT_REFRESH_RATE;
+    }
+
+    let mut max_rate: f64 = 0.0;
+
+    for display_id in display_ids {
+        // Get the current display mode
+        let mode = unsafe { CGDisplayCopyDisplayMode(display_id) };
+        if mode.is_null() {
+            continue;
+        }
+
+        // Get the refresh rate from the display mode
+        let rate = unsafe { CGDisplayModeGetRefreshRate(mode) };
+
+        // Release the display mode
+        unsafe { CGDisplayModeRelease(mode) };
+
+        // Some displays report 0 Hz (e.g., LCD panels with variable refresh)
+        // In this case, assume 120 Hz
+        let effective_rate = if rate > 0.0 {
+            rate
+        } else {
+            f64::from(DEFAULT_REFRESH_RATE)
+        };
+
+        if effective_rate > max_rate {
+            max_rate = effective_rate;
+        }
+    }
+
+    // Return at least the default rate
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    if max_rate > 0.0 {
+        max_rate.round() as u32
+    } else {
+        DEFAULT_REFRESH_RATE
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,5 +266,19 @@ mod tests {
         let screens = get_all_screens().unwrap();
         assert!(!screens.is_empty());
         assert!(screens.iter().any(|s| s.is_main));
+    }
+
+    #[test]
+    fn test_get_max_refresh_rate() {
+        // This test requires a display, skip in headless CI
+        if std::env::var("CI").is_ok() {
+            return;
+        }
+
+        let rate = get_max_refresh_rate();
+        // Refresh rate should be at least 60Hz
+        assert!(rate >= 60, "Expected refresh rate >= 60Hz, got {rate}Hz");
+        // And at most 240Hz (current high-end displays)
+        assert!(rate <= 240, "Expected refresh rate <= 240Hz, got {rate}Hz");
     }
 }
