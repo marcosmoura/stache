@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 // Re-export shared types for use throughout the desktop app
 pub use barba_shared::{
@@ -13,6 +14,10 @@ pub use barba_shared::{
 };
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use tauri::AppHandle;
+
+/// Debounce duration for config file changes.
+/// Some editors trigger multiple events per save (write to temp, rename, etc.).
+const CONFIG_DEBOUNCE_MS: u64 = 200;
 
 /// Global configuration instance, loaded once at startup.
 static CONFIG: OnceLock<BarbaConfig> = OnceLock::new();
@@ -91,6 +96,10 @@ pub fn watch_config_file<R: tauri::Runtime>(app_handle: AppHandle<R>) {
             return;
         }
 
+        // Track last event time for debouncing (None = no previous event)
+        let mut last_event_time: Option<Instant> = None;
+        let debounce_duration = Duration::from_millis(CONFIG_DEBOUNCE_MS);
+
         loop {
             match rx.recv() {
                 Ok(Ok(event)) => {
@@ -103,6 +112,15 @@ pub fn watch_config_file<R: tauri::Runtime>(app_handle: AppHandle<R>) {
                     if !affects_config {
                         continue;
                     }
+
+                    // Debounce: ignore events that occur within the debounce window
+                    // This prevents multiple restarts when editors trigger several events per save
+                    if let Some(last_time) = last_event_time
+                        && last_time.elapsed() < debounce_duration
+                    {
+                        continue;
+                    }
+                    last_event_time = Some(Instant::now());
 
                     // In debug mode, just log a message since restart kills the dev server.
                     // In release mode, restart the app to apply the new configuration.
