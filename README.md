@@ -436,18 +436,6 @@ barba query windows --focused-workspace
 barba query windows --workspace coding
 ```
 
-#### Event Notifications
-
-Used for integration with external tools:
-
-```bash
-# Notify focus change (triggers state refresh)
-barba focus-changed
-
-# Notify workspace change
-barba workspace-changed terminal
-```
-
 ---
 
 ## Development

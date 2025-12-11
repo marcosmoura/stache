@@ -1,1 +1,0 @@
-export { CurrentApp } from './CurrentApp';

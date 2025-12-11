@@ -34,9 +34,6 @@ vi.mock('@hugeicons/react', () => ({
 
 // Default mock implementations for Tauri invoke commands
 const defaultInvokeMocks: Record<string, unknown> = {
-  get_hyprspace_workspaces: [{ workspace: 'terminal' }],
-  get_hyprspace_focused_workspace: { workspace: 'terminal' },
-  get_hyprspace_focused_window: [{ appName: 'Ghostty', title: 'zsh' }],
   get_workspaces: [
     {
       name: 'coding',

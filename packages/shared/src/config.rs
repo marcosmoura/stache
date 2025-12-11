@@ -179,8 +179,8 @@ pub struct BarbaConfig {
     /// ```json
     /// {
     ///   "keybindings": {
-    ///     "Command+Control+R": ["barba reload", "hyprspace reload-config"],
-    ///     "Command+Option+Control+1": "barba workspace-changed terminal"
+    ///     "Command+Control+R": "barba reload",
+    ///     "Command+Option+Control+1": "barba workspace focus terminal"
     ///   }
     /// }
     /// ```
@@ -381,7 +381,7 @@ mod tests {
     fn test_config_deserializes_single_command() {
         let json = r#"{
             "keybindings": {
-                "Ctrl+Shift+S": "barba workspace-changed coding"
+                "Ctrl+Shift+S": "barba workspace focus coding"
             }
         }"#;
 
@@ -389,7 +389,7 @@ mod tests {
         assert_eq!(config.keybindings.len(), 1);
 
         let commands = config.keybindings.get("Ctrl+Shift+S").unwrap();
-        assert_eq!(commands.get_commands(), vec!["barba workspace-changed coding"]);
+        assert_eq!(commands.get_commands(), vec!["barba workspace focus coding"]);
     }
 
     #[test]
@@ -398,7 +398,7 @@ mod tests {
             "keybindings": {
                 "Command+Control+R": [
                     "barba reload",
-                    "hyprspace reload-config"
+                    "open -a Terminal"
                 ]
             }
         }"#;
@@ -407,18 +407,15 @@ mod tests {
         assert_eq!(config.keybindings.len(), 1);
 
         let commands = config.keybindings.get("Command+Control+R").unwrap();
-        assert_eq!(commands.get_commands(), vec![
-            "barba reload",
-            "hyprspace reload-config"
-        ]);
+        assert_eq!(commands.get_commands(), vec!["barba reload", "open -a Terminal"]);
     }
 
     #[test]
     fn test_config_deserializes_mixed_format() {
         let json = r#"{
             "keybindings": {
-                "Command+Control+R": ["barba reload", "hyprspace reload-config"],
-                "Command+Option+Control+1": "barba workspace-changed terminal"
+                "Command+Control+R": ["barba reload", "open -a Terminal"],
+                "Command+Option+Control+1": "barba workspace focus terminal"
             }
         }"#;
 
@@ -431,7 +428,7 @@ mod tests {
         let single_command = config.keybindings.get("Command+Option+Control+1").unwrap();
         assert_eq!(
             single_command.commands_display(),
-            "barba workspace-changed terminal"
+            "barba workspace focus terminal"
         );
     }
 

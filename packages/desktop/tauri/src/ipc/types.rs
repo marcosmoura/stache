@@ -95,20 +95,20 @@ mod tests {
 
     #[test]
     fn test_ipc_payload_with_data_deserialization() {
-        let json = r#"{"name":"workspace-changed","data":"coding"}"#;
+        let json = r#"{"name":"wallpaper-set","data":"/path/to/image.jpg"}"#;
         let payload: IpcPayload = serde_json::from_str(json).unwrap();
-        assert_eq!(payload.name, "workspace-changed");
-        assert_eq!(payload.data, Some("coding".to_string()));
+        assert_eq!(payload.name, "wallpaper-set");
+        assert_eq!(payload.data, Some("/path/to/image.jpg".to_string()));
     }
 
     #[test]
     fn test_cli_event_payload_serialization() {
         let payload = CliEventPayload {
-            name: "focus-changed".to_string(),
+            name: "reload".to_string(),
             data: None,
         };
         let json = serde_json::to_string(&payload).unwrap();
-        assert!(json.contains("focus-changed"));
+        assert!(json.contains("reload"));
     }
 
     #[test]

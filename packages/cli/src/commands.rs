@@ -27,23 +27,6 @@ pub struct Cli {
 /// Available CLI commands.
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Notify Barba that the focused window changed.
-    ///
-    /// Use when your automation detects a window-focus change.
-    /// Triggers Hyprspace queries to refresh current workspace and app state.
-    #[command(name = "focus-changed")]
-    FocusChanged,
-
-    /// Notify Barba that the active workspace changed.
-    ///
-    /// Requires the new workspace name so Barba can update its Hyprspace view
-    /// and trigger a window refresh.
-    #[command(name = "workspace-changed")]
-    WorkspaceChanged {
-        /// Workspace identifier reported by hyprspace (e.g. coding).
-        name: String,
-    },
-
     /// Wallpaper management commands.
     #[command(subcommand)]
     Wallpaper(WallpaperCommands),
@@ -572,22 +555,6 @@ impl Cli {
     /// Execute the CLI command.
     pub fn execute(&self) -> Result<(), CliError> {
         match &self.command {
-            Commands::FocusChanged => {
-                let payload = CliEventPayload {
-                    name: "focus-changed".to_string(),
-                    data: None,
-                };
-                ipc::send_to_desktop_app(&payload)?;
-            }
-
-            Commands::WorkspaceChanged { name } => {
-                let payload = CliEventPayload {
-                    name: "workspace-changed".to_string(),
-                    data: Some(name.clone()),
-                };
-                ipc::send_to_desktop_app(&payload)?;
-            }
-
             Commands::Wallpaper(wallpaper_cmd) => Self::execute_wallpaper(wallpaper_cmd)?,
             Commands::Query(query_cmd) => Self::execute_query(query_cmd)?,
             Commands::Workspace(workspace_cmd) => Self::execute_workspace(workspace_cmd)?,

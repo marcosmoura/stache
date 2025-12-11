@@ -6,7 +6,7 @@ import { createQueryClientWrapper, createTestQueryClient } from '@/tests/utils';
 import { Spaces } from './Spaces';
 
 describe('Spaces Component', () => {
-  test('renders Hyprspace and CurrentApp components', async () => {
+  test('renders workspace and current app components', async () => {
     const queryClient = createTestQueryClient();
     const { container } = await render(<Spaces />, {
       wrapper: createQueryClientWrapper(queryClient),

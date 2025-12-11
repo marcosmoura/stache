@@ -159,10 +159,6 @@ barba reload                              # Reload configuration
 barba generate-schema                     # Output JSON schema for config
 barba completions --shell <shell>         # Generate shell completions (bash, zsh, fish)
 
-# Event Notifications (for external integrations)
-barba focus-changed                       # Notify focus change
-barba workspace-changed <name>            # Notify workspace change
-
 # Query State (returns JSON)
 barba query screens                       # List all connected screens
 barba query workspaces [--name <name>|--focused|--focused-screen|--screen <screen>]
