@@ -24,13 +24,14 @@ use std::ffi::c_void;
 use std::ptr;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use core_foundation::base::TCFType;
 use core_foundation::string::CFString;
 use parking_lot::RwLock;
 use tauri::{AppHandle, Emitter};
 
+use crate::tiling::debouncer::{Debouncer, KeyDebouncer};
 use crate::tiling::error::TilingError;
 use crate::tiling::{try_get_manager, window};
 
@@ -294,27 +295,18 @@ fn current_time_ms() -> u64 {
 // Pending Resize Tracking
 // ============================================================================
 
-/// Tracks a pending resize that needs to settle before being applied.
-#[derive(Debug, Clone)]
-struct PendingResize {
-    window_id: u64,
-    width: u32,
-    height: u32,
-    last_changed_ms: u64,
-}
-
-/// Tracks a pending move operation that is waiting to settle.
-#[derive(Clone)]
-struct PendingMove {
-    window_id: u64,
-    last_changed_ms: u64,
-}
-
 /// How long (ms) the window must be stable before applying resize.
 const RESIZE_SETTLE_TIME_MS: u64 = 200;
 
 /// How long (ms) the window must be stable before snapping back after move.
 const MOVE_SETTLE_TIME_MS: u64 = 100;
+
+/// Data stored for pending resize operations.
+#[derive(Debug, Clone)]
+struct ResizeData {
+    width: u32,
+    height: u32,
+}
 
 // ============================================================================
 // Thread-Safe Wrappers for Observer Pointers
@@ -378,10 +370,10 @@ pub struct ObserverManager {
     observers: HashMap<i32, AppObserver>,
     /// Known window IDs for tracking creation/destruction.
     known_windows: HashSet<u64>,
-    /// Pending resize operations waiting to settle.
-    pending_resizes: Vec<PendingResize>,
-    /// Pending move operations waiting to settle.
-    pending_moves: Vec<PendingMove>,
+    /// Pending resize operations waiting to settle (window_id -> resize data).
+    pending_resizes: Debouncer<u64, ResizeData>,
+    /// Pending move operations waiting to settle (window_id only).
+    pending_moves: KeyDebouncer<u64>,
     /// Run loop reference for the observer thread.
     run_loop: Option<SendSyncRunLoop>,
 }
@@ -394,8 +386,8 @@ impl ObserverManager {
             app_handle: None,
             observers: HashMap::new(),
             known_windows: HashSet::new(),
-            pending_resizes: Vec::new(),
-            pending_moves: Vec::new(),
+            pending_resizes: Debouncer::new(Duration::from_millis(RESIZE_SETTLE_TIME_MS)),
+            pending_moves: Debouncer::new(Duration::from_millis(MOVE_SETTLE_TIME_MS)),
             run_loop: None,
         }
     }
@@ -487,11 +479,23 @@ impl ObserverManager {
     }
 
     /// Removes the observer for a specific PID.
-    pub fn remove_observer_for_pid(&mut self, pid: i32) { self.observers.remove(&pid); }
+    pub fn remove_observer_for_pid(&mut self, pid: i32) {
+        use crate::tiling::window::invalidate_app;
+
+        self.observers.remove(&pid);
+
+        // Invalidate cached AX elements for this app
+        invalidate_app(pid);
+    }
 
     /// Syncs window list to detect new/destroyed windows.
     /// Called when we receive an event but couldn't identify the specific window.
     fn sync_windows(&mut self) {
+        use crate::tiling::window::invalidate_window_list_cache;
+
+        // Invalidate the cache to get fresh window list from the system
+        invalidate_window_list_cache();
+
         if let Ok(windows) = window::get_all_windows() {
             let current_window_ids: HashSet<u64> = windows.iter().map(|w| w.id).collect();
 
@@ -520,32 +524,22 @@ impl ObserverManager {
 
     /// Processes pending resizes that have settled.
     pub fn process_pending_resizes(&mut self) {
-        let now = current_time_ms();
+        use crate::tiling::command_queue::{TilingCommand, flush_commands, queue_command};
 
-        let settled: Vec<PendingResize> = self
-            .pending_resizes
-            .iter()
-            .filter(|p| now.saturating_sub(p.last_changed_ms) >= RESIZE_SETTLE_TIME_MS)
-            .cloned()
-            .collect();
+        // Drain all settled resize operations from the debouncer
+        let settled = self.pending_resizes.drain_settled();
 
-        self.pending_resizes
-            .retain(|p| now.saturating_sub(p.last_changed_ms) < RESIZE_SETTLE_TIME_MS);
-
+        // Queue all settled resizes
         if !is_in_switch_cooldown() {
-            for resize in settled {
-                if let Some(manager) = try_get_manager() {
-                    let mut guard = manager.write();
-                    if let Err(e) =
-                        guard.handle_user_resize(resize.window_id, resize.width, resize.height)
-                    {
-                        eprintln!(
-                            "barba: failed to handle user resize for {}: {e}",
-                            resize.window_id
-                        );
-                    }
-                }
+            for (window_id, resize_data) in settled {
+                queue_command(TilingCommand::WindowResized {
+                    window_id,
+                    width: resize_data.width,
+                    height: resize_data.height,
+                });
             }
+            // Flush all queued commands in a single batch
+            flush_commands();
         }
 
         // If there are still pending resizes that haven't settled, schedule another timer
@@ -558,6 +552,12 @@ impl ObserverManager {
 
     /// Handles a window created notification.
     fn handle_window_created(&mut self, window_id: u64) {
+        use crate::tiling::command_queue::{TilingCommand, flush_commands, queue_command};
+        use crate::tiling::window::invalidate_window_list_cache;
+
+        // Invalidate window list cache since a new window was created
+        invalidate_window_list_cache();
+
         // Try to get window info and potentially add observer for new app
         if let Ok(window) = window::get_window_by_id(window_id) {
             // If this is from an app we don't have an observer for, add one
@@ -579,17 +579,21 @@ impl ObserverManager {
             }
         }
 
-        // Handle in tiling manager
-        if let Some(manager) = try_get_manager() {
-            let mut guard = manager.write();
-            guard.handle_new_window(window_id);
-        }
+        // Queue command for batched processing
+        queue_command(TilingCommand::WindowCreated { window_id });
+        flush_commands();
 
         self.known_windows.insert(window_id);
     }
 
     /// Handles a window destroyed notification.
     fn handle_window_destroyed(&mut self, window_id: u64) {
+        use crate::tiling::command_queue::{TilingCommand, flush_commands, queue_command};
+        use crate::tiling::window::{invalidate_window, invalidate_window_list_cache};
+
+        // Invalidate window list cache since a window was destroyed
+        invalidate_window_list_cache();
+
         if let Some(ref app_handle) = self.app_handle {
             let _ = app_handle.emit(events::WINDOW_DESTROYED, WindowEventPayload {
                 window_id,
@@ -598,16 +602,18 @@ impl ObserverManager {
             });
         }
 
-        // Handle in tiling manager
-        if let Some(manager) = try_get_manager() {
-            let mut guard = manager.write();
-            guard.handle_window_destroyed(window_id);
-        }
+        // Queue command for batched processing
+        queue_command(TilingCommand::WindowDestroyed { window_id });
+        flush_commands();
 
         self.known_windows.remove(&window_id);
 
-        // Remove pending resizes for this window
-        self.pending_resizes.retain(|p| p.window_id != window_id);
+        // Remove pending resizes/moves for this window
+        self.pending_resizes.remove(&window_id);
+        self.pending_moves.remove(&window_id);
+
+        // Invalidate the AX element cache for this window
+        invalidate_window(window_id);
     }
 
     /// Handles a window moved notification.
@@ -626,9 +632,8 @@ impl ObserverManager {
         };
 
         // Debounce moves to avoid flickering during drag
-        let now = current_time_ms();
         let had_pending = !self.pending_moves.is_empty();
-        let is_new_move = !self.pending_moves.iter().any(|p| p.window_id == window_id);
+        let is_new_move = !self.pending_moves.contains(&window_id);
 
         // When a window starts being moved, focus should follow to it
         // This happens on the first move notification for this window
@@ -645,15 +650,8 @@ impl ObserverManager {
             self.handle_focus_changed(window_id);
         }
 
-        // Update or create pending move
-        if let Some(pending) = self.pending_moves.iter_mut().find(|p| p.window_id == window_id) {
-            pending.last_changed_ms = now;
-        } else {
-            self.pending_moves.push(PendingMove {
-                window_id,
-                last_changed_ms: now,
-            });
-        }
+        // Update or insert pending move (touch updates timestamp automatically)
+        self.pending_moves.touch(window_id);
 
         // Schedule a timer to process the move after settle time
         if !had_pending && let Some(run_loop) = self.run_loop {
@@ -663,29 +661,17 @@ impl ObserverManager {
 
     /// Processes pending moves that have settled.
     pub fn process_pending_moves(&mut self) {
-        let now = current_time_ms();
+        use crate::tiling::command_queue::{TilingCommand, flush_commands, queue_command};
 
-        let settled: Vec<PendingMove> = self
-            .pending_moves
-            .iter()
-            .filter(|p| now.saturating_sub(p.last_changed_ms) >= MOVE_SETTLE_TIME_MS)
-            .cloned()
-            .collect();
+        // Drain all settled move operations from the debouncer
+        let settled = self.pending_moves.drain_settled_keys();
 
-        self.pending_moves
-            .retain(|p| now.saturating_sub(p.last_changed_ms) < MOVE_SETTLE_TIME_MS);
-
-        for move_op in settled {
-            if let Some(manager) = try_get_manager() {
-                let mut guard = manager.write();
-                if let Err(e) = guard.handle_window_moved(move_op.window_id) {
-                    eprintln!(
-                        "barba: failed to handle window move for {}: {e}",
-                        move_op.window_id
-                    );
-                }
-            }
+        // Queue all settled moves
+        for window_id in settled {
+            queue_command(TilingCommand::WindowMoved { window_id });
         }
+        // Flush all queued commands in a single batch
+        flush_commands();
 
         // If there are still pending moves, schedule another timer
         if !self.pending_moves.is_empty()
@@ -709,24 +695,10 @@ impl ObserverManager {
 
         // If not in layout cooldown, this is a user-initiated resize
         if !is_in_layout_cooldown() {
-            let now = current_time_ms();
             let had_pending = !self.pending_resizes.is_empty();
 
-            // Update or create pending resize
-            if let Some(pending) =
-                self.pending_resizes.iter_mut().find(|p| p.window_id == window_id)
-            {
-                pending.width = width;
-                pending.height = height;
-                pending.last_changed_ms = now;
-            } else {
-                self.pending_resizes.push(PendingResize {
-                    window_id,
-                    width,
-                    height,
-                    last_changed_ms: now,
-                });
-            }
+            // Update or insert pending resize (update method handles both cases)
+            self.pending_resizes.update(window_id, ResizeData { width, height });
 
             // Schedule a timer to process the resize after settle time
             // Only schedule if we didn't already have pending resizes (to avoid duplicate timers)
@@ -859,15 +831,9 @@ impl ObserverManager {
             return;
         };
 
-        let matching_window = windows
-            .iter()
-            .find(|w| {
-                (w.frame.x - frame.x).abs() <= 5
-                    && (w.frame.y - frame.y).abs() <= 5
-                    && w.frame.width.abs_diff(frame.width) <= 5
-                    && w.frame.height.abs_diff(frame.height) <= 5
-            })
-            .cloned();
+        let matching_window =
+            window::find_window_by_frame(&windows, &frame, window::DEFAULT_FRAME_TOLERANCE)
+                .cloned();
 
         if let Some(window) = matching_window {
             let window_id = window.id;
@@ -951,8 +917,12 @@ impl ObserverManager {
 
         // Ensure we have an observer for this app - this is important for apps
         // that were hidden/minimized at startup and are now being activated
-        if !self.observers.contains_key(&pid) {
+        let was_new_observer = !self.observers.contains_key(&pid);
+        if was_new_observer {
             let _ = self.add_observer_for_pid(pid);
+            // Also sync windows since we might have missed window creation events
+            // from this app before we had an observer
+            self.sync_windows();
         }
 
         // First try to get the focused window via accessibility API
@@ -972,13 +942,12 @@ impl ObserverManager {
         // Try to find this window in our known windows (may be on current space)
         let windows = window::get_all_windows().unwrap_or_default();
 
-        let matching_window = windows.iter().find(|w| {
-            w.pid == pid
-                && (w.frame.x - frame.x).abs() <= 5
-                && (w.frame.y - frame.y).abs() <= 5
-                && (w.frame.width as i32 - frame.width as i32).abs() <= 5
-                && (w.frame.height as i32 - frame.height as i32).abs() <= 5
-        });
+        let matching_window = window::find_window_by_frame_and_pid(
+            &windows,
+            &frame,
+            pid,
+            window::DEFAULT_FRAME_TOLERANCE,
+        );
 
         if let Some(window) = matching_window {
             let window_id = window.id;
@@ -1111,8 +1080,6 @@ impl ObserverManager {
             if !is_tracked {
                 // Find workspace for this window based on rules
                 if let Some(workspace_name) = guard.find_workspace_for_window(&window) {
-                    // Adding window to workspace
-
                     // Add to state with workspace assignment
                     let mut window = window;
                     window.workspace = workspace_name.clone();
@@ -1124,6 +1091,23 @@ impl ObserverManager {
                         && !ws.windows.contains(&window_id)
                     {
                         ws.windows.push(window_id);
+                    }
+
+                    // Apply layout to this workspace if it's focused
+                    let is_focused =
+                        guard.workspace_manager.state().get_workspace(&workspace_name).is_some_and(
+                            |ws| {
+                                guard
+                                    .workspace_manager
+                                    .state()
+                                    .focused_workspace_per_screen
+                                    .get(&ws.screen)
+                                    == Some(&workspace_name)
+                            },
+                        );
+
+                    if is_focused {
+                        let _ = guard.apply_layout(&workspace_name);
                     }
                 }
             }
@@ -1183,6 +1167,14 @@ unsafe extern "C" fn ax_observer_callback(
             } else {
                 // New window but couldn't get ID - sync window list
                 guard.sync_windows();
+
+                // Schedule delayed syncs because some apps (Electron/VSCode) take time
+                // for new windows to appear in CGWindowListCopyWindowInfo
+                if let Some(run_loop) = guard.run_loop {
+                    schedule_sync_timer(run_loop.0, 50); // Try after 50ms
+                    schedule_sync_timer(run_loop.0, 150); // Try after 150ms
+                    schedule_sync_timer(run_loop.0, 300); // Try after 300ms
+                }
             }
         }
         notifications::UI_ELEMENT_DESTROYED => {
@@ -1190,7 +1182,14 @@ unsafe extern "C" fn ax_observer_callback(
                 guard.handle_window_destroyed(window_id);
             } else {
                 // Element destroyed but couldn't identify - sync window list
+                // The window may still be in the system list briefly, so schedule delayed syncs
                 guard.sync_windows();
+
+                // Schedule delayed syncs because macOS may not have removed the window yet
+                if let Some(run_loop) = guard.run_loop {
+                    schedule_sync_timer(run_loop.0, 50); // Try after 50ms
+                    schedule_sync_timer(run_loop.0, 150); // Try after 150ms
+                }
             }
         }
         notifications::WINDOW_MOVED => {
@@ -1256,18 +1255,9 @@ fn get_window_info_from_element(element: AXUIElementRef) -> Option<(u64, u32, u3
         return None;
     };
 
-    // Find window matching position/size
-    for win in windows {
-        if (win.frame.x - frame.x).abs() <= 5
-            && (win.frame.y - frame.y).abs() <= 5
-            && win.frame.width.abs_diff(frame.width) <= 5
-            && win.frame.height.abs_diff(frame.height) <= 5
-        {
-            return Some((win.id, frame.width, frame.height));
-        }
-    }
-
-    None
+    // Use the unified frame matching utility
+    window::find_window_match_by_frame(&windows, &frame, window::DEFAULT_FRAME_TOLERANCE)
+        .map(|result| (result.window_id, result.width, result.height))
 }
 
 // ============================================================================
@@ -1332,6 +1322,44 @@ fn schedule_move_timer(run_loop: CFRunLoopRef) {
             0,           // flags
             0,           // order
             move_timer_callback,
+            ptr::null_mut(), // context
+        )
+    };
+
+    if !timer.is_null() {
+        unsafe {
+            CFRunLoopAddTimer(run_loop, timer, cf_run_loop_common_modes());
+            // Timer will be automatically released after firing (one-shot)
+        }
+    }
+}
+
+// ============================================================================
+// Sync Timer Callback
+// ============================================================================
+
+/// Timer callback for delayed window sync.
+///
+/// This is called to retry sync_windows after a delay, to catch windows
+/// that don't appear in CGWindowListCopyWindowInfo immediately.
+unsafe extern "C" fn sync_timer_callback(_timer: CFRunLoopTimerRef, _info: *mut c_void) {
+    let manager = get_observer_manager();
+    let mut guard = manager.write();
+    guard.sync_windows();
+}
+
+/// Schedules a timer to sync windows after a delay.
+fn schedule_sync_timer(run_loop: CFRunLoopRef, delay_ms: u64) {
+    let fire_date = unsafe { CFAbsoluteTimeGetCurrent() } + (delay_ms as f64 / 1000.0);
+
+    let timer = unsafe {
+        CFRunLoopTimerCreate(
+            ptr::null(), // allocator (default)
+            fire_date,   // fire date
+            0.0,         // interval (0 = one-shot)
+            0,           // flags
+            0,           // order
+            sync_timer_callback,
             ptr::null_mut(), // context
         )
     };
@@ -1489,21 +1517,30 @@ pub fn setup_app_activation_observer() {
         let workspace: *mut Object = msg_send![class!(NSWorkspace), sharedWorkspace];
         let notification_center: *mut Object = msg_send![workspace, notificationCenter];
 
-        // Create the notification name for app activation
-        let notification_name = nsstring("NSWorkspaceDidActivateApplicationNotification");
-
-        // Create an observer object
+        // Create an observer object (handles both activation and launch)
         let observer = create_app_activation_observer_object();
 
+        // Observe app activation (Cmd+Tab, dock clicks, etc.)
+        let activation_name = nsstring("NSWorkspaceDidActivateApplicationNotification");
         let _: () = msg_send![
             notification_center,
             addObserver: observer
             selector: sel!(handleAppActivated:)
-            name: notification_name
+            name: activation_name
             object: null_mut::<Object>()
         ];
 
-        // NSWorkspace app activation observer set up successfully
+        // Observe app launch (new apps starting)
+        let launch_name = nsstring("NSWorkspaceDidLaunchApplicationNotification");
+        let _: () = msg_send![
+            notification_center,
+            addObserver: observer
+            selector: sel!(handleAppLaunched:)
+            name: launch_name
+            object: null_mut::<Object>()
+        ];
+
+        // NSWorkspace app activation and launch observer set up successfully
     }
 }
 
@@ -1538,15 +1575,24 @@ unsafe fn create_app_activation_observer_object() -> *mut objc::runtime::Object 
         let mut decl = ClassDecl::new(class_name, superclass)
             .expect("Failed to create TilingAppActivationObserver class");
 
-        // Add the handler method
+        // Add the handler method for app activation
         extern "C" fn handle_app_activated(_this: &Object, _sel: Sel, notification: *mut Object) {
             handle_nsworkspace_app_activated(notification);
+        }
+
+        // Add the handler method for app launch
+        extern "C" fn handle_app_launched(_this: &Object, _sel: Sel, notification: *mut Object) {
+            handle_nsworkspace_app_launched(notification);
         }
 
         unsafe {
             decl.add_method(
                 sel!(handleAppActivated:),
                 handle_app_activated as extern "C" fn(&Object, Sel, *mut Object),
+            );
+            decl.add_method(
+                sel!(handleAppLaunched:),
+                handle_app_launched as extern "C" fn(&Object, Sel, *mut Object),
             );
         }
 
@@ -1587,6 +1633,54 @@ fn handle_nsworkspace_app_activated(notification: *mut objc::runtime::Object) {
         let manager = get_observer_manager();
         let mut guard = manager.write();
         guard.handle_app_activated_by_pid(pid);
+    }
+}
+
+/// Handles the NSWorkspaceDidLaunchApplicationNotification.
+/// This is called when a new app is launched, before it has windows.
+fn handle_nsworkspace_app_launched(notification: *mut objc::runtime::Object) {
+    use objc::runtime::Object;
+    use objc::{msg_send, sel, sel_impl};
+
+    unsafe {
+        // Get the userInfo dictionary
+        let user_info: *mut Object = msg_send![notification, userInfo];
+        if user_info.is_null() {
+            return;
+        }
+
+        // Get the NSWorkspaceApplicationKey
+        let app_key = nsstring("NSWorkspaceApplicationKey");
+        let app: *mut Object = msg_send![user_info, objectForKey: app_key];
+        if app.is_null() {
+            return;
+        }
+
+        // Get the PID of the launched app
+        let pid: i32 = msg_send![app, processIdentifier];
+
+        // Add an observer for the new app immediately so we can catch window creation events
+        let manager = get_observer_manager();
+        let mut guard = manager.write();
+
+        // Add observer if we don't have one yet
+        if !guard.observers.contains_key(&pid) {
+            let _ = guard.add_observer_for_pid(pid);
+        }
+
+        // Always schedule delayed syncs for newly launched apps
+        // Apps often take time to create windows after launch
+        drop(guard); // Release lock before spawning thread
+
+        // Do multiple delayed syncs to catch windows at different stages of app startup
+        for delay_ms in [300, 600, 1000] {
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                let manager = get_observer_manager();
+                let mut guard = manager.write();
+                guard.sync_windows();
+            });
+        }
     }
 }
 

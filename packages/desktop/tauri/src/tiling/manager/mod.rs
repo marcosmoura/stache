@@ -87,6 +87,9 @@ impl TilingManager {
         // Focus the first window on the focused workspace
         manager.focus_initial_window();
 
+        // Ensure the focused window is on top after we unhid all apps during discovery
+        manager.send_non_focused_windows_to_back();
+
         Ok(manager)
     }
 
@@ -134,16 +137,22 @@ impl TilingManager {
             return;
         }
 
-        // During a workspace switch cooldown, don't process "new" windows.
-        // These are likely windows reappearing after being unhidden, not truly new windows.
-        if is_in_switch_cooldown() {
-            return;
-        }
-
-        // Get the window info
+        // Get the window info early - we need the PID for cooldown check
         let Ok(win) = window::get_window_by_id(window_id) else {
             return;
         };
+
+        // During a workspace switch cooldown, only skip windows from apps we're already managing.
+        // New apps launching should always be processed, even during cooldown.
+        if is_in_switch_cooldown() {
+            // Check if this PID is already tracked in any workspace
+            let pid_is_managed = self.workspace_pids.values().any(|pids| pids.contains(&win.pid));
+            if pid_is_managed {
+                // This is likely a window reappearing after being unhidden, skip it
+                return;
+            }
+            // Otherwise, this is a genuinely new app - process it
+        }
 
         // Skip dialogs, sheets, and other non-tileable window types
         if window::is_dialog_or_sheet(&win) {
@@ -207,7 +216,28 @@ impl TilingManager {
 
         // Only apply layout for truly new windows on the focused workspace
         if is_workspace_focused {
-            let _ = self.apply_layout(&workspace_name);
+            let ws_name = workspace_name.clone();
+
+            // Invalidate window list cache to get fresh data
+            crate::tiling::window::invalidate_window_list_cache();
+
+            // Apply layout immediately (will use managed state for windows not yet in CGWindowList)
+            let _ = self.apply_layout(&ws_name);
+
+            // Schedule a delayed layout to ensure window is properly positioned
+            // after macOS has fully registered it
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                crate::tiling::window::invalidate_window_list_cache();
+                if let Some(manager) = crate::tiling::try_get_manager() {
+                    let mut guard = manager.write();
+                    let _ = guard.apply_layout(&ws_name);
+                }
+            });
+        } else {
+            // Window appeared for a non-focused workspace - switch to that workspace
+            // so the user sees the newly launched app
+            let _ = self.switch_workspace(&workspace_name);
         }
 
         // Notify frontend about the new window
@@ -235,15 +265,15 @@ impl TilingManager {
         if let Some(ref ws_name) = workspace_name
             && let Some(ws) = self.workspace_manager.state_mut().get_workspace_mut(ws_name)
         {
-            ws.windows.retain(|&id| id != window_id);
+            ws.windows.retain(|id| *id != window_id);
         }
 
         // Remove from state
         self.workspace_manager.state_mut().windows.remove(&window_id);
 
         // Re-apply layout if we found the workspace
-        if let Some(ws_name) = workspace_name {
-            let _ = self.apply_layout(&ws_name);
+        if let Some(ref ws_name) = workspace_name {
+            let _ = self.apply_layout(ws_name);
         }
 
         // Notify frontend about the window removal
@@ -255,6 +285,13 @@ impl TilingManager {
     /// This reinitializes screens and workspaces while preserving window state,
     /// then reapplies layouts to all visible workspaces.
     pub fn handle_screen_change(&mut self) {
+        use crate::tiling::window::{clear_cache, invalidate_window_list_cache};
+
+        // Clear the AX element cache as screen changes may affect window references
+        clear_cache();
+        // Also invalidate window list cache
+        invalidate_window_list_cache();
+
         if let Err(e) = self.workspace_manager.reinitialize_screens() {
             eprintln!("barba: failed to reinitialize screens: {e}");
             return;

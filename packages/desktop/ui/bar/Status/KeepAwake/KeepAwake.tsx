@@ -8,6 +8,7 @@ import { Icon } from '@/components/Icon';
 import { Surface } from '@/components/Surface';
 import { colors } from '@/design-system';
 import { useTauriEvent } from '@/hooks';
+import { KeepAwakeEvents } from '@/types';
 
 import { fetchKeepAwake, onKeepAwakeChanged, toggleKeepAwake } from './KeepAwake.service';
 import * as styles from './KeepAwake.styles';
@@ -21,7 +22,7 @@ export const KeepAwake = () => {
     refetchOnWindowFocus: true,
   });
 
-  useTauriEvent<boolean>('keep_awake_changed', ({ payload }) => {
+  useTauriEvent<boolean>(KeepAwakeEvents.STATE_CHANGED, ({ payload }) => {
     onKeepAwakeChanged(payload, queryClient);
   });
 

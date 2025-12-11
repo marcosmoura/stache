@@ -21,7 +21,8 @@ static MENU_VISIBILITY_WATCHER_RUNNING: AtomicBool = AtomicBool::new(false);
 static MENU_BAR_VISIBLE: AtomicBool = AtomicBool::new(false);
 
 /// Event name for menubar state changes.
-const VISIBILITY_EVENT: &str = "menubar_visibility_changed";
+/// Follows the pattern: `module:event-name`
+const VISIBILITY_EVENT: &str = "menubar:visibility-changed";
 
 fn emit_menubar_visibility_event(
     app_handle: &AppHandle,
@@ -177,7 +178,7 @@ mod tests {
 
     #[test]
     fn visibility_event_constant_is_correct() {
-        assert_eq!(VISIBILITY_EVENT, "menubar_visibility_changed");
+        assert_eq!(VISIBILITY_EVENT, "menubar:visibility-changed");
     }
 
     #[test]

@@ -1,6 +1,10 @@
 //! Window information and querying.
 //!
 //! This module provides functions to discover and query windows.
+//! Includes a short-lived TTL cache to avoid redundant `CGWindowList` calls.
+
+use std::sync::LazyLock;
+use std::time::{Duration, Instant};
 
 use core_foundation::array::CFArray;
 use core_foundation::base::{CFType, TCFType};
@@ -11,6 +15,7 @@ use core_graphics::window::{
     CGWindowListCopyWindowInfo, kCGNullWindowID, kCGWindowListExcludeDesktopElements,
     kCGWindowListOptionOnScreenOnly,
 };
+use parking_lot::RwLock;
 
 use crate::tiling::accessibility::is_accessibility_enabled;
 use crate::tiling::error::TilingError;
@@ -18,6 +23,102 @@ use crate::tiling::state::{ManagedWindow, WindowFrame};
 
 /// Result type for window operations.
 pub type WindowResult<T> = Result<T, TilingError>;
+
+// ============================================================================
+// Window List Cache
+// ============================================================================
+
+/// How long the window list cache is valid.
+/// This is very short (one frame at 60fps) to ensure freshness while avoiding
+/// redundant `CGWindowList` calls within the same frame.
+const WINDOW_CACHE_TTL: Duration = Duration::from_millis(16);
+
+/// Cached window list with TTL.
+struct WindowListCache {
+    /// Cached on-screen windows.
+    on_screen: Option<CachedWindowList>,
+    /// Cached all windows (including hidden).
+    all_windows: Option<CachedWindowList>,
+}
+
+/// A cached window list entry.
+struct CachedWindowList {
+    /// The cached windows.
+    windows: Vec<ManagedWindow>,
+    /// When this entry was cached.
+    cached_at: Instant,
+}
+
+impl CachedWindowList {
+    /// Creates a new cached entry.
+    fn new(windows: Vec<ManagedWindow>) -> Self {
+        Self {
+            windows,
+            cached_at: Instant::now(),
+        }
+    }
+
+    /// Checks if this cache entry is still valid.
+    fn is_valid(&self) -> bool { self.cached_at.elapsed() < WINDOW_CACHE_TTL }
+}
+
+impl WindowListCache {
+    /// Creates a new empty cache.
+    const fn new() -> Self {
+        Self {
+            on_screen: None,
+            all_windows: None,
+        }
+    }
+
+    /// Gets the on-screen window list, using cache if valid.
+    fn get_on_screen(&mut self) -> WindowResult<Vec<ManagedWindow>> {
+        if let Some(ref cached) = self.on_screen
+            && cached.is_valid()
+        {
+            return Ok(cached.windows.clone());
+        }
+
+        // Cache miss - fetch and cache
+        let windows = fetch_windows_from_system(true)?;
+        self.on_screen = Some(CachedWindowList::new(windows.clone()));
+        Ok(windows)
+    }
+
+    /// Gets all windows (including hidden), using cache if valid.
+    fn get_all(&mut self) -> WindowResult<Vec<ManagedWindow>> {
+        if let Some(ref cached) = self.all_windows
+            && cached.is_valid()
+        {
+            return Ok(cached.windows.clone());
+        }
+
+        // Cache miss - fetch and cache
+        let windows = fetch_windows_from_system(false)?;
+        self.all_windows = Some(CachedWindowList::new(windows.clone()));
+        Ok(windows)
+    }
+
+    /// Invalidates all cached entries.
+    fn invalidate(&mut self) {
+        self.on_screen = None;
+        self.all_windows = None;
+    }
+}
+
+/// Global window list cache.
+static WINDOW_LIST_CACHE: LazyLock<RwLock<WindowListCache>> =
+    LazyLock::new(|| RwLock::new(WindowListCache::new()));
+
+/// Invalidates the window list cache.
+///
+/// This should be called when windows are created, destroyed, or moved
+/// to ensure fresh data on the next query.
+pub fn invalidate_window_list_cache() { WINDOW_LIST_CACHE.write().invalidate(); }
+
+// ============================================================================
+// Public Window Query Functions
+// ============================================================================
 
 /// Keys for window info dictionary.
 mod keys {
@@ -50,7 +151,12 @@ const EXCLUDED_APPS: &[&str] = &[
 ];
 
 /// Gets all visible windows on screen.
-pub fn get_all_windows() -> WindowResult<Vec<ManagedWindow>> { get_windows_with_options(true) }
+///
+/// This function uses a short-lived cache to avoid redundant `CGWindowList`
+/// calls within the same frame. The cache TTL is approximately one frame (16ms).
+pub fn get_all_windows() -> WindowResult<Vec<ManagedWindow>> {
+    WINDOW_LIST_CACHE.write().get_on_screen()
+}
 
 /// Gets the PID of the frontmost (focused) application.
 /// This captures just the PID without needing to query window details,
@@ -62,8 +168,7 @@ pub fn get_frontmost_app_pid() -> Option<i32> {
 
     // Try using system-wide element to get the focused application
     let system_element = AccessibilityElement::system_wide();
-    if let Ok(app_element) = system_element
-        .get_element_attribute(crate::tiling::accessibility::attributes::FOCUSED_APPLICATION)
+    if let Ok(app_element) = system_element.get_focused_application()
         && let Ok(pid) = app_element.pid()
         && pid > 0
     {
@@ -76,13 +181,111 @@ pub fn get_frontmost_app_pid() -> Option<i32> {
 }
 
 /// Gets all windows including hidden/off-screen ones.
+///
 /// This is useful after unhiding apps when their windows may not yet be "on screen".
+/// This function uses a short-lived cache to avoid redundant `CGWindowList` calls.
 pub fn get_all_windows_including_hidden() -> WindowResult<Vec<ManagedWindow>> {
-    get_windows_with_options(false)
+    WINDOW_LIST_CACHE.write().get_all()
 }
 
-/// Gets windows with configurable on-screen filtering.
-fn get_windows_with_options(on_screen_only: bool) -> WindowResult<Vec<ManagedWindow>> {
+// ============================================================================
+// Window Frame Matching Utilities
+// ============================================================================
+
+/// Default tolerance for frame matching (in pixels).
+/// This accounts for minor differences between `CGWindowList` and AX reported frames.
+pub const DEFAULT_FRAME_TOLERANCE: i32 = 5;
+
+/// Strict tolerance for precise frame matching (in pixels).
+pub const STRICT_FRAME_TOLERANCE: i32 = 2;
+
+/// Checks if two window frames match within the given tolerance.
+///
+/// This is a low-level utility used by higher-level matching functions.
+/// The tolerance must be non-negative for correct behavior.
+#[inline]
+#[must_use]
+#[allow(clippy::cast_sign_loss)]
+pub const fn frames_match(frame1: &WindowFrame, frame2: &WindowFrame, tolerance: i32) -> bool {
+    positions_match(frame1, frame2, tolerance) && sizes_match(frame1, frame2, tolerance)
+}
+
+/// Checks if two window positions match within the given tolerance.
+#[inline]
+#[must_use]
+pub const fn positions_match(frame1: &WindowFrame, frame2: &WindowFrame, tolerance: i32) -> bool {
+    (frame1.x - frame2.x).abs() <= tolerance && (frame1.y - frame2.y).abs() <= tolerance
+}
+
+/// Checks if two window sizes match within the given tolerance.
+#[inline]
+#[must_use]
+#[allow(clippy::cast_sign_loss)]
+pub const fn sizes_match(frame1: &WindowFrame, frame2: &WindowFrame, tolerance: i32) -> bool {
+    frame1.width.abs_diff(frame2.width) <= tolerance as u32
+        && frame1.height.abs_diff(frame2.height) <= tolerance as u32
+}
+
+/// Finds a window in the list that matches the given frame.
+///
+/// Returns a reference to the first matching window, or `None` if no match is found.
+#[must_use]
+pub fn find_window_by_frame<'a>(
+    windows: &'a [ManagedWindow],
+    frame: &WindowFrame,
+    tolerance: i32,
+) -> Option<&'a ManagedWindow> {
+    windows.iter().find(|w| frames_match(&w.frame, frame, tolerance))
+}
+
+/// Finds a window in the list that matches the given frame and PID.
+///
+/// This is more precise than `find_window_by_frame` as it also filters by process.
+#[must_use]
+pub fn find_window_by_frame_and_pid<'a>(
+    windows: &'a [ManagedWindow],
+    frame: &WindowFrame,
+    pid: i32,
+    tolerance: i32,
+) -> Option<&'a ManagedWindow> {
+    windows
+        .iter()
+        .find(|w| w.pid == pid && frames_match(&w.frame, frame, tolerance))
+}
+
+/// Result of a window frame match operation with additional metadata.
+#[derive(Debug, Clone)]
+pub struct FrameMatchResult {
+    /// The matched window ID.
+    pub window_id: u64,
+    /// The frame width (from the search frame, not the matched window).
+    pub width: u32,
+    /// The frame height (from the search frame, not the matched window).
+    pub height: u32,
+}
+
+/// Finds a window matching the given frame and returns match result with metadata.
+///
+/// This is useful when you need the frame dimensions along with the window ID.
+#[must_use]
+pub fn find_window_match_by_frame(
+    windows: &[ManagedWindow],
+    frame: &WindowFrame,
+    tolerance: i32,
+) -> Option<FrameMatchResult> {
+    find_window_by_frame(windows, frame, tolerance).map(|w| FrameMatchResult {
+        window_id: w.id,
+        width: frame.width,
+        height: frame.height,
+    })
+}
+
+/// Fetches windows directly from the system (bypasses cache).
+///
+/// This is the low-level function that actually calls `CGWindowListCopyWindowInfo`.
+/// Most callers should use `get_all_windows()` or `get_all_windows_including_hidden()`
+/// which use the cache.
+fn fetch_windows_from_system(on_screen_only: bool) -> WindowResult<Vec<ManagedWindow>> {
     use core_graphics::window::kCGWindowListOptionAll;
 
     let options = if on_screen_only {
@@ -146,7 +349,7 @@ pub fn get_focused_window() -> WindowResult<ManagedWindow> {
     let frontmost_pid: i32 = {
         let system_element = AccessibilityElement::system_wide();
         system_element
-            .get_element_attribute(crate::tiling::accessibility::attributes::FOCUSED_APPLICATION)
+            .get_focused_application()
             .map_or(-1, |app_element| app_element.pid().unwrap_or(-1))
     };
 
@@ -182,10 +385,8 @@ pub fn get_focused_window() -> WindowResult<ManagedWindow> {
     if let Some(ref title) = focused_title {
         for window in &app_windows {
             let title_matches = &window.title == title;
-            let frame_matches = (window.frame.x - focused_frame.x).abs() <= 5
-                && (window.frame.y - focused_frame.y).abs() <= 5
-                && window.frame.width.abs_diff(focused_frame.width) <= 5
-                && window.frame.height.abs_diff(focused_frame.height) <= 5;
+            let frame_matches =
+                frames_match(&window.frame, &focused_frame, DEFAULT_FRAME_TOLERANCE);
 
             if title_matches && frame_matches {
                 return Ok(window.clone());
@@ -201,14 +402,10 @@ pub fn get_focused_window() -> WindowResult<ManagedWindow> {
     }
 
     // Fallback: find window matching the focused window's frame
-    for window in &app_windows {
-        if (window.frame.x - focused_frame.x).abs() <= 5
-            && (window.frame.y - focused_frame.y).abs() <= 5
-            && window.frame.width.abs_diff(focused_frame.width) <= 5
-            && window.frame.height.abs_diff(focused_frame.height) <= 5
-        {
-            return Ok(window.clone());
-        }
+    if let Some(window) =
+        find_window_by_frame(&app_windows, &focused_frame, DEFAULT_FRAME_TOLERANCE)
+    {
+        return Ok(window.clone());
     }
 
     // Final fallback: return any window from the frontmost app

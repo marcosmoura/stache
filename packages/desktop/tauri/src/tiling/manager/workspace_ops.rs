@@ -120,6 +120,25 @@ impl TilingManager {
         }
     }
 
+    /// Sends all windows except the focused one to the back.
+    ///
+    /// This is called after initialization to ensure that when we unhide all apps
+    /// to discover windows, only the focused window remains in front.
+    /// All other windows on the focused workspace(s) are sent to the back.
+    pub(super) fn send_non_focused_windows_to_back(&self) {
+        let state = self.workspace_manager.state();
+        let focused_window_id = state.focused_window;
+
+        // If we have a focused window, re-raise it to ensure it's on top of any
+        // windows that were just unhidden during discovery
+        if let Some(focused_id) = focused_window_id
+            && let Some(focused_win) = state.get_window(focused_id).cloned()
+        {
+            // Re-focus the focused window to ensure it's on top
+            let _ = window::focus_window_fast(&focused_win);
+        }
+    }
+
     /// Hides all windows on workspaces that are not currently focused on their screen.
     pub(super) fn hide_non_focused_workspaces(&mut self) {
         let state = self.workspace_manager.state();
@@ -295,6 +314,7 @@ impl TilingManager {
     }
 
     /// Internal implementation of workspace switching.
+    #[allow(clippy::too_many_lines)]
     fn switch_workspace_internal(
         &mut self,
         workspace_name: &str,
@@ -337,6 +357,13 @@ impl TilingManager {
         // the state may be out of sync with reality (e.g., after app restart).
 
         // Get PIDs from the old workspace from our persistent tracking
+        // Also track PIDs that have PiP windows - we cannot hide those apps because
+        // hiding is app-level (AXHidden) and would hide the PiP too. As a trade-off,
+        // all windows from apps with PiP will remain visible across workspaces.
+        let all_windows = window::get_all_windows().unwrap_or_default();
+        let pids_with_pip: HashSet<i32> =
+            all_windows.iter().filter(|w| window::is_pip_window(w)).map(|w| w.pid).collect();
+
         let old_workspace_pids: HashSet<i32> =
             if let Some(ref current_ws_name) = current_workspace_name {
                 self.workspace_pids
@@ -345,6 +372,8 @@ impl TilingManager {
                     .unwrap_or_default()
                     .into_iter()
                     .filter(|pid| !new_workspace_pids.contains(pid))
+                    // Don't hide apps that have PiP windows
+                    .filter(|pid| !pids_with_pip.contains(pid))
                     .collect()
             } else {
                 HashSet::new()
@@ -386,6 +415,7 @@ impl TilingManager {
             window_to_focus.and_then(|wid| self.workspace_manager.state().get_window(wid).cloned());
 
         // First: unhide all new workspace apps, then hide old workspace apps
+        // For apps with PiP windows, minimize/restore individual windows instead
         // Wait for all to complete before proceeding
         std::thread::scope(|s| {
             for pid in &new_workspace_pids {
@@ -480,6 +510,12 @@ impl TilingManager {
         };
 
         // Collect unique PIDs from windows in this workspace
+        // Also track PIDs that have PiP windows (we must not hide those apps)
+        // Check ALL windows including those not tracked in state (use fresh window list)
+        let all_windows = window::get_all_windows().unwrap_or_default();
+        let pids_with_pip: HashSet<i32> =
+            all_windows.iter().filter(|w| window::is_pip_window(w)).map(|w| w.pid).collect();
+
         let pids_to_hide: HashSet<i32> = {
             let workspace = self
                 .workspace_manager
@@ -495,6 +531,8 @@ impl TilingManager {
                 })
                 // Only hide if this PID has no windows on any focused workspace
                 .filter(|pid| !pids_on_focused_workspaces.contains(pid))
+                // Don't hide apps that have PiP windows
+                .filter(|pid| !pids_with_pip.contains(pid))
                 .collect()
         };
 
@@ -508,7 +546,7 @@ impl TilingManager {
             self.workspace_manager
                 .state()
                 .get_workspace(workspace_name)
-                .map(|ws| ws.windows.clone())
+                .map(|ws| ws.windows.to_vec())
                 .unwrap_or_default()
         };
 

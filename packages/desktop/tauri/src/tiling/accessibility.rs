@@ -85,6 +85,77 @@ pub mod actions {
     pub const RAISE: &str = "AXRaise";
 }
 
+/// Cached `CFString` constants for common AX attributes and actions.
+///
+/// These are lazily initialized on first use and reused thereafter,
+/// avoiding repeated allocations in hot paths.
+///
+/// # Thread Safety
+///
+/// Core Foundation strings are immutable after creation and thread-safe.
+/// We use a wrapper type to safely store the raw `CFStringRef` in statics.
+pub mod cf_strings {
+    use std::sync::LazyLock;
+
+    use core_foundation::base::TCFType;
+    use core_foundation::string::{CFString, CFStringRef};
+
+    use super::{actions, attributes};
+
+    /// A thread-safe wrapper around `CFStringRef`.
+    ///
+    /// # Safety
+    ///
+    /// This is safe because:
+    /// 1. `CFString` is immutable after creation
+    /// 2. Core Foundation objects are reference-counted and thread-safe
+    /// 3. We never mutate the string after initialization
+    pub struct SyncCFString(CFStringRef);
+
+    // SAFETY: CFString is immutable and Core Foundation types are thread-safe
+    unsafe impl Send for SyncCFString {}
+    unsafe impl Sync for SyncCFString {}
+
+    impl SyncCFString {
+        /// Creates a new `SyncCFString` from a string literal.
+        fn new(s: &str) -> Self {
+            let cf = CFString::new(s);
+            // Retain the string so it lives forever in the static
+            let ptr = cf.as_concrete_TypeRef();
+            std::mem::forget(cf); // Prevent drop from releasing
+            Self(ptr)
+        }
+
+        /// Returns the underlying `CFStringRef` for use with AX APIs.
+        #[inline]
+        pub const fn as_ref(&self) -> CFStringRef { self.0 }
+    }
+
+    // Attribute CFStrings
+    pub static AX_WINDOWS: LazyLock<SyncCFString> =
+        LazyLock::new(|| SyncCFString::new(attributes::WINDOWS));
+    pub static AX_FOCUSED_WINDOW: LazyLock<SyncCFString> =
+        LazyLock::new(|| SyncCFString::new(attributes::FOCUSED_WINDOW));
+    pub static AX_SUBROLE: LazyLock<SyncCFString> =
+        LazyLock::new(|| SyncCFString::new(attributes::SUBROLE));
+    pub static AX_POSITION: LazyLock<SyncCFString> =
+        LazyLock::new(|| SyncCFString::new(attributes::POSITION));
+    pub static AX_SIZE: LazyLock<SyncCFString> =
+        LazyLock::new(|| SyncCFString::new(attributes::SIZE));
+    pub static AX_MAIN: LazyLock<SyncCFString> =
+        LazyLock::new(|| SyncCFString::new(attributes::MAIN));
+    pub static AX_TITLE: LazyLock<SyncCFString> =
+        LazyLock::new(|| SyncCFString::new(attributes::TITLE));
+    pub static AX_HIDDEN: LazyLock<SyncCFString> =
+        LazyLock::new(|| SyncCFString::new(attributes::HIDDEN));
+    pub static AX_FOCUSED_APPLICATION: LazyLock<SyncCFString> =
+        LazyLock::new(|| SyncCFString::new(attributes::FOCUSED_APPLICATION));
+
+    // Action CFStrings
+    pub static AX_RAISE: LazyLock<SyncCFString> =
+        LazyLock::new(|| SyncCFString::new(actions::RAISE));
+}
+
 /// Converts an AX error code to a `TilingError`.
 fn ax_error_to_result(code: i32) -> AXResult<()> {
     match code {
@@ -163,6 +234,13 @@ impl AccessibilityElement {
     #[must_use]
     pub const unsafe fn from_raw(element: AXUIElementRef) -> Self { Self { element } }
 
+    /// Returns the raw `AXUIElementRef` pointer.
+    ///
+    /// This is useful for caching the element. The returned pointer is
+    /// only valid as long as this `AccessibilityElement` is alive.
+    #[must_use]
+    pub const fn as_raw(&self) -> AXUIElementRef { self.element }
+
     /// Gets the process ID of this element's application.
     pub fn pid(&self) -> AXResult<i32> {
         let mut pid: i32 = 0;
@@ -195,15 +273,33 @@ impl AccessibilityElement {
         Ok(cf_string.to_string())
     }
 
+    /// Gets a string attribute value using a pre-cached `CFStringRef`.
+    ///
+    /// This is an optimization for hot paths where the attribute string is known at compile time.
+    fn get_string_attribute_cached(&self, attr_ref: CFStringRef) -> AXResult<String> {
+        let mut value: CFTypeRef = ptr::null_mut();
+
+        let result =
+            unsafe { AXUIElementCopyAttributeValue(self.element, attr_ref, &raw mut value) };
+
+        ax_error_to_result(result)?;
+
+        if value.is_null() {
+            return Err(TilingError::OperationFailed("Null value returned".to_string()));
+        }
+
+        let cf_string: CFString = unsafe { CFString::wrap_under_get_rule(value.cast()) };
+        Ok(cf_string.to_string())
+    }
+
     /// Gets the position of this element.
     pub fn get_position(&self) -> AXResult<(f64, f64)> {
-        let attr_cf = CFString::new(attributes::POSITION);
         let mut value: CFTypeRef = ptr::null_mut();
 
         let result = unsafe {
             AXUIElementCopyAttributeValue(
                 self.element,
-                attr_cf.as_concrete_TypeRef(),
+                cf_strings::AX_POSITION.as_ref(),
                 &raw mut value,
             )
         };
@@ -232,13 +328,12 @@ impl AccessibilityElement {
 
     /// Gets the size of this element.
     pub fn get_size(&self) -> AXResult<(f64, f64)> {
-        let attr_cf = CFString::new(attributes::SIZE);
         let mut value: CFTypeRef = ptr::null_mut();
 
         let result = unsafe {
             AXUIElementCopyAttributeValue(
                 self.element,
-                attr_cf.as_concrete_TypeRef(),
+                cf_strings::AX_SIZE.as_ref(),
                 &raw mut value,
             )
         };
@@ -291,9 +386,8 @@ impl AccessibilityElement {
             ));
         }
 
-        let attr_cf = CFString::new(attributes::POSITION);
         let result = unsafe {
-            AXUIElementSetAttributeValue(self.element, attr_cf.as_concrete_TypeRef(), value)
+            AXUIElementSetAttributeValue(self.element, cf_strings::AX_POSITION.as_ref(), value)
         };
 
         unsafe { CFRelease(value) };
@@ -312,9 +406,8 @@ impl AccessibilityElement {
             ));
         }
 
-        let attr_cf = CFString::new(attributes::SIZE);
         let result = unsafe {
-            AXUIElementSetAttributeValue(self.element, attr_cf.as_concrete_TypeRef(), value)
+            AXUIElementSetAttributeValue(self.element, cf_strings::AX_SIZE.as_ref(), value)
         };
 
         unsafe { CFRelease(value) };
@@ -323,17 +416,85 @@ impl AccessibilityElement {
     }
 
     /// Sets the frame (position and size) of this element.
+    ///
+    /// This method is optimized to minimize redundant AX calls:
+    /// - Skips entirely if already at target frame
+    /// - Only sets position if position changed
+    /// - Only sets size if size changed
+    /// - Re-applies size after position only when needed (for constrained windows)
     pub fn set_frame(&self, frame: &WindowFrame) -> AXResult<()> {
-        // First set size, then position - this order works better for some apps
-        // because reducing size first ensures the window can fit at the target position
+        use crate::tiling::window::{STRICT_FRAME_TOLERANCE, positions_match, sizes_match};
+
+        // Get current frame to determine what needs to change
+        let current = self.get_frame()?;
+
+        let position_matches = positions_match(&current, frame, STRICT_FRAME_TOLERANCE);
+        let size_matches = sizes_match(&current, frame, STRICT_FRAME_TOLERANCE);
+
+        // Already at target - nothing to do
+        if position_matches && size_matches {
+            return Ok(());
+        }
+
+        // Only position changed
+        if size_matches {
+            return self.set_position(f64::from(frame.x), f64::from(frame.y));
+        }
+
+        // Only size changed
+        if position_matches {
+            return self.set_size(f64::from(frame.width), f64::from(frame.height));
+        }
+
+        // Both changed - use the full sequence:
+        // 1. Set size first (reducing size ensures window can fit at target position)
+        // 2. Set position
+        // 3. Re-apply size (in case window was constrained during move)
         self.set_size(f64::from(frame.width), f64::from(frame.height))?;
         self.set_position(f64::from(frame.x), f64::from(frame.y))?;
-        // Set size again after position in case the window was constrained
-        self.set_size(f64::from(frame.width), f64::from(frame.height))?;
+
+        // Only re-apply size if the window might have been constrained
+        // (i.e., we're moving to a different position that might have different constraints)
+        if let Some(ref after) = self.get_frame().ok()
+            && !sizes_match(after, frame, STRICT_FRAME_TOLERANCE)
+        {
+            self.set_size(f64::from(frame.width), f64::from(frame.height))?;
+        }
+
         Ok(())
     }
 
+    /// Gets a boolean attribute value.
+    ///
+    /// Returns `false` if the attribute is not set or cannot be read.
+    pub fn get_bool_attribute(&self, attribute: &str) -> AXResult<bool> {
+        let attr_cf = CFString::new(attribute);
+        let mut value: CFTypeRef = ptr::null_mut();
+
+        let result = unsafe {
+            AXUIElementCopyAttributeValue(
+                self.element,
+                attr_cf.as_concrete_TypeRef(),
+                &raw mut value,
+            )
+        };
+
+        ax_error_to_result(result)?;
+
+        if value.is_null() {
+            return Ok(false);
+        }
+
+        // Extract boolean value from CFBoolean
+        let cf_bool = unsafe { CFBoolean::wrap_under_get_rule(value.cast()) };
+        Ok(cf_bool.into())
+    }
+
     /// Sets a boolean attribute value.
+    ///
+    /// For frequently-used attributes, prefer the specialized methods like `set_hidden()`
+    /// which use cached `CFString` constants for better performance.
+    #[allow(dead_code)]
     pub fn set_bool_attribute(&self, attribute: &str, value: bool) -> AXResult<()> {
         let attr_cf = CFString::new(attribute);
         let cf_bool = if value {
@@ -353,6 +514,34 @@ impl AccessibilityElement {
         ax_error_to_result(result)
     }
 
+    /// Sets a boolean attribute using a pre-cached `CFStringRef`.
+    ///
+    /// This is an optimization for hot paths where the attribute string is known at compile time.
+    pub fn set_bool_attribute_cached(&self, attr_ref: CFStringRef, value: bool) -> AXResult<()> {
+        let cf_bool = if value {
+            CFBoolean::true_value()
+        } else {
+            CFBoolean::false_value()
+        };
+
+        let result = unsafe {
+            AXUIElementSetAttributeValue(
+                self.element,
+                attr_ref,
+                cf_bool.as_concrete_TypeRef().cast::<c_void>().cast_mut(),
+            )
+        };
+
+        ax_error_to_result(result)
+    }
+
+    /// Sets the hidden state of this application element.
+    ///
+    /// Equivalent to pressing Cmd+H to hide an app.
+    pub fn set_hidden(&self, hidden: bool) -> AXResult<()> {
+        self.set_bool_attribute_cached(cf_strings::AX_HIDDEN.as_ref(), hidden)
+    }
+
     /// Performs an action on this element.
     pub fn perform_action(&self, action: &str) -> AXResult<()> {
         let action_cf = CFString::new(action);
@@ -362,11 +551,15 @@ impl AccessibilityElement {
     }
 
     /// Raises this window to the front.
-    pub fn raise(&self) -> AXResult<()> { self.perform_action(actions::RAISE) }
+    pub fn raise(&self) -> AXResult<()> {
+        let result =
+            unsafe { AXUIElementPerformAction(self.element, cf_strings::AX_RAISE.as_ref()) };
+        ax_error_to_result(result)
+    }
 
     /// Focuses this window.
     pub fn focus(&self) -> AXResult<()> {
-        self.set_bool_attribute(attributes::MAIN, true)?;
+        self.set_bool_attribute_cached(cf_strings::AX_MAIN.as_ref(), true)?;
         self.raise()
     }
 
@@ -393,21 +586,45 @@ impl AccessibilityElement {
         Ok(unsafe { Self::from_raw(value) })
     }
 
+    /// Gets an element attribute using a pre-cached `CFStringRef`.
+    ///
+    /// This is an optimization for hot paths where the attribute string is known at compile time.
+    pub fn get_element_attribute_cached(&self, attr_ref: CFStringRef) -> AXResult<Self> {
+        let mut value: CFTypeRef = ptr::null_mut();
+
+        let result =
+            unsafe { AXUIElementCopyAttributeValue(self.element, attr_ref, &raw mut value) };
+
+        ax_error_to_result(result)?;
+
+        if value.is_null() {
+            return Err(TilingError::OperationFailed("Null element returned".to_string()));
+        }
+
+        Ok(unsafe { Self::from_raw(value) })
+    }
+
+    /// Gets the focused application element from the system-wide element.
+    ///
+    /// This should be called on a system-wide element.
+    pub fn get_focused_application(&self) -> AXResult<Self> {
+        self.get_element_attribute_cached(cf_strings::AX_FOCUSED_APPLICATION.as_ref())
+    }
+
     /// Gets the focused window of an application element.
     pub fn get_focused_window(&self) -> AXResult<Self> {
-        self.get_element_attribute(attributes::FOCUSED_WINDOW)
+        self.get_element_attribute_cached(cf_strings::AX_FOCUSED_WINDOW.as_ref())
             .map_err(|_| TilingError::WindowNotFound(0))
     }
 
     /// Gets all windows of an application element.
     pub fn get_windows(&self) -> AXResult<Vec<Self>> {
-        let attr_cf = CFString::new(attributes::WINDOWS);
         let mut value: CFTypeRef = ptr::null_mut();
 
         let result = unsafe {
             AXUIElementCopyAttributeValue(
                 self.element,
-                attr_cf.as_concrete_TypeRef(),
+                cf_strings::AX_WINDOWS.as_ref(),
                 &raw mut value,
             )
         };
@@ -440,11 +657,13 @@ impl AccessibilityElement {
 
     /// Gets the subrole of this element (e.g., `AXDialog`, `AXFloatingWindow`, `AXSheet`).
     pub fn get_subrole(&self) -> Option<String> {
-        self.get_string_attribute(attributes::SUBROLE).ok()
+        self.get_string_attribute_cached(cf_strings::AX_SUBROLE.as_ref()).ok()
     }
 
     /// Gets the title of this element.
-    pub fn get_title(&self) -> Option<String> { self.get_string_attribute(attributes::TITLE).ok() }
+    pub fn get_title(&self) -> Option<String> {
+        self.get_string_attribute_cached(cf_strings::AX_TITLE.as_ref()).ok()
+    }
 
     /// Checks if this element is a dialog, sheet, or other non-tileable window type.
     ///
@@ -461,5 +680,58 @@ impl AccessibilityElement {
 
         self.get_subrole()
             .is_some_and(|subrole| NON_TILEABLE_SUBROLES.iter().any(|&s| subrole == s))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cf_strings_are_valid() {
+        // Test that static CFStrings can be accessed without panicking
+        // This verifies the lazy initialization works correctly
+        let position_ref = cf_strings::AX_POSITION.as_ref();
+        assert!(!position_ref.is_null());
+
+        let size_ref = cf_strings::AX_SIZE.as_ref();
+        assert!(!size_ref.is_null());
+
+        let windows_ref = cf_strings::AX_WINDOWS.as_ref();
+        assert!(!windows_ref.is_null());
+
+        let raise_ref = cf_strings::AX_RAISE.as_ref();
+        assert!(!raise_ref.is_null());
+    }
+
+    #[test]
+    fn test_cf_strings_are_consistent() {
+        // Test that multiple accesses return the same pointer (proving caching works)
+        let first = cf_strings::AX_POSITION.as_ref();
+        let second = cf_strings::AX_POSITION.as_ref();
+        assert_eq!(
+            first, second,
+            "CFString should return same pointer on multiple accesses"
+        );
+    }
+
+    #[test]
+    fn test_all_attribute_cfstrings_initialized() {
+        // Verify all attribute CFStrings can be initialized
+        assert!(!cf_strings::AX_WINDOWS.as_ref().is_null());
+        assert!(!cf_strings::AX_FOCUSED_WINDOW.as_ref().is_null());
+        assert!(!cf_strings::AX_SUBROLE.as_ref().is_null());
+        assert!(!cf_strings::AX_POSITION.as_ref().is_null());
+        assert!(!cf_strings::AX_SIZE.as_ref().is_null());
+        assert!(!cf_strings::AX_MAIN.as_ref().is_null());
+        assert!(!cf_strings::AX_TITLE.as_ref().is_null());
+        assert!(!cf_strings::AX_HIDDEN.as_ref().is_null());
+        assert!(!cf_strings::AX_FOCUSED_APPLICATION.as_ref().is_null());
+    }
+
+    #[test]
+    fn test_action_cfstrings_initialized() {
+        // Verify action CFStrings can be initialized
+        assert!(!cf_strings::AX_RAISE.as_ref().is_null());
     }
 }

@@ -1,1 +1,1 @@
-export * from './app.types';
+export * from './tauri-events';

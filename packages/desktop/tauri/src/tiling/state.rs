@@ -6,6 +6,19 @@
 use std::collections::HashMap;
 
 use barba_shared::{FocusedAppInfo, LayoutMode, ScreenInfo, WindowInfo, WorkspaceInfo};
+use smallvec::SmallVec;
+
+/// Type alias for window ID lists that are typically small.
+///
+/// Most workspaces have fewer than 8 windows, so we use `SmallVec` to avoid
+/// heap allocations for the common case. This reduces memory allocations
+/// in hot paths like layout computation.
+pub type WindowIdList = SmallVec<[u64; 8]>;
+
+/// Type alias for split ratio lists that are typically small.
+///
+/// Split ratios rarely exceed 4 levels deep, so we stack-allocate for the common case.
+pub type SplitRatioList = SmallVec<[f64; 4]>;
 
 /// A managed window tracked by the tiling manager.
 #[derive(Debug, Clone)]
@@ -111,24 +124,26 @@ pub struct Workspace {
     pub intended_screen: Option<barba_shared::ScreenTarget>,
 
     /// Window IDs in this workspace (in layout order).
-    pub windows: Vec<u64>,
+    /// Uses `SmallVec` to avoid heap allocation for typical workspaces with < 8 windows.
+    pub windows: WindowIdList,
 
     /// Split ratios for tiling layout (BSP tree representation).
     /// Each value is the ratio for the split at that level.
-    pub split_ratios: Vec<f64>,
+    /// Uses `SmallVec` to avoid heap allocation for typical layouts with < 4 splits.
+    pub split_ratios: SplitRatioList,
 }
 
 impl Workspace {
     /// Creates a new workspace with default settings.
     #[must_use]
-    pub const fn new(name: String, layout: LayoutMode, screen: String) -> Self {
+    pub fn new(name: String, layout: LayoutMode, screen: String) -> Self {
         Self {
             name,
             layout,
             screen,
             intended_screen: None,
-            windows: Vec::new(),
-            split_ratios: Vec::new(),
+            windows: SmallVec::new(),
+            split_ratios: SmallVec::new(),
         }
     }
 
@@ -137,7 +152,7 @@ impl Workspace {
     /// The workspace will be created on the given screen but remembers its
     /// intended screen target for migration when that screen becomes available.
     #[must_use]
-    pub const fn new_with_fallback(
+    pub fn new_with_fallback(
         name: String,
         layout: LayoutMode,
         screen: String,
@@ -148,8 +163,8 @@ impl Workspace {
             layout,
             screen,
             intended_screen: Some(intended_screen),
-            windows: Vec::new(),
-            split_ratios: Vec::new(),
+            windows: SmallVec::new(),
+            split_ratios: SmallVec::new(),
         }
     }
 

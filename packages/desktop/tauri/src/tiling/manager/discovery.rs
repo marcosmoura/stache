@@ -7,9 +7,8 @@
 
 use std::collections::HashSet;
 
-use barba_shared::WindowRule;
-
 use super::TilingManager;
+use crate::tiling::rules::RuleMatcher;
 use crate::tiling::state::ManagedWindow;
 use crate::tiling::window;
 
@@ -95,46 +94,18 @@ impl TilingManager {
     pub(super) fn find_workspace_for_app(&self, app: &window::RunningApp) -> Option<String> {
         // First check global rules (with workspace target)
         for rule in &self.config.rules {
-            if let Some(ref workspace) = rule.workspace {
-                // Match by app_id (bundle ID)
-                if let Some(ref rule_app_id) = rule.app_id
-                    && let Some(ref bundle_id) = app.bundle_id
-                    && (bundle_id.contains(rule_app_id) || bundle_id == rule_app_id)
-                {
-                    return Some(workspace.clone());
-                }
-                // Match by name (app name)
-                if let Some(ref rule_name) = rule.name {
-                    let rule_name_lower = rule_name.to_lowercase();
-                    let app_name_lower = app.name.to_lowercase();
-                    if app_name_lower.contains(&rule_name_lower)
-                        || app_name_lower == rule_name_lower
-                    {
-                        return Some(workspace.clone());
-                    }
-                }
+            if let Some(ref workspace) = rule.workspace
+                && rule.matches_app(app)
+            {
+                return Some(workspace.clone());
             }
         }
 
         // Then check per-workspace rules
         for ws_config in &self.config.workspaces {
             for rule in &ws_config.rules {
-                // Match by app_id (bundle ID)
-                if let Some(ref rule_app_id) = rule.app_id
-                    && let Some(ref bundle_id) = app.bundle_id
-                    && (bundle_id.contains(rule_app_id) || bundle_id == rule_app_id)
-                {
+                if rule.matches_app(app) {
                     return Some(ws_config.name.clone());
-                }
-                // Match by name (app name)
-                if let Some(ref rule_name) = rule.name {
-                    let rule_name_lower = rule_name.to_lowercase();
-                    let app_name_lower = app.name.to_lowercase();
-                    if app_name_lower.contains(&rule_name_lower)
-                        || app_name_lower == rule_name_lower
-                    {
-                        return Some(ws_config.name.clone());
-                    }
                 }
             }
         }
@@ -153,7 +124,7 @@ impl TilingManager {
         // First, check global rules (with workspace target)
         for rule in &self.config.rules {
             if let Some(ref workspace) = rule.workspace
-                && self.window_matches_rule(win, rule)
+                && rule.matches_window(win)
             {
                 return Some(workspace.clone());
             }
@@ -162,7 +133,7 @@ impl TilingManager {
         // Then, check per-workspace rules
         for ws_config in &self.config.workspaces {
             for rule in &ws_config.rules {
-                if self.window_matches_rule(win, rule) {
+                if rule.matches_window(win) {
                     return Some(ws_config.name.clone());
                 }
             }
@@ -214,108 +185,12 @@ impl TilingManager {
         screens.iter().find(|s| s.is_main).map(|s| s.id.clone())
     }
 
-    /// Checks if a window matches a rule.
-    #[allow(clippy::unused_self)]
-    pub(super) fn window_matches_rule(&self, win: &ManagedWindow, rule: &WindowRule) -> bool {
-        // All specified criteria must match (AND logic)
-        if let Some(ref app_id) = rule.app_id {
-            if let Some(ref bundle_id) = win.bundle_id {
-                let matches = bundle_id.contains(app_id) || bundle_id == app_id;
-                if !matches {
-                    return false;
-                }
-            } else {
-                return false;
-            }
-        }
-
-        if let Some(ref name) = rule.name {
-            let name_lower = name.to_lowercase();
-            let app_name_lower = win.app_name.to_lowercase();
-            if !app_name_lower.contains(&name_lower) && app_name_lower != name_lower {
-                return false;
-            }
-        }
-
-        if let Some(ref title) = rule.title
-            && !win.title.to_lowercase().contains(&title.to_lowercase())
-        {
-            return false;
-        }
-
-        if let Some(ref class) = rule.class {
-            if let Some(ref window_class) = win.class {
-                if !window_class.contains(class) && window_class != class {
-                    return false;
-                }
-            } else {
-                return false;
-            }
-        }
-
-        // If no criteria specified, the rule doesn't match anything
-        !rule.is_empty()
-    }
-
     /// Checks if a window should be ignored based on the ignore rules.
     ///
     /// Returns `true` if the window matches any ignore rule and should not be tracked.
     /// Ignore rules have higher priority than workspace rules.
-    #[allow(clippy::unused_self)]
     pub fn should_ignore_window(&self, win: &ManagedWindow) -> bool {
-        for rule in &self.config.ignore {
-            if self.window_matches_ignore_rule(win, rule) {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Checks if a window matches an ignore rule.
-    #[allow(clippy::unused_self)]
-    fn window_matches_ignore_rule(
-        &self,
-        win: &ManagedWindow,
-        rule: &barba_shared::IgnoreRule,
-    ) -> bool {
-        // All specified criteria must match (AND logic)
-        if let Some(ref app_id) = rule.app_id {
-            if let Some(ref bundle_id) = win.bundle_id {
-                let matches = bundle_id.contains(app_id) || bundle_id == app_id;
-                if !matches {
-                    return false;
-                }
-            } else {
-                return false;
-            }
-        }
-
-        if let Some(ref name) = rule.name {
-            let name_lower = name.to_lowercase();
-            let app_name_lower = win.app_name.to_lowercase();
-            if !app_name_lower.contains(&name_lower) && app_name_lower != name_lower {
-                return false;
-            }
-        }
-
-        if let Some(ref title) = rule.title
-            && !win.title.to_lowercase().contains(&title.to_lowercase())
-        {
-            return false;
-        }
-
-        if let Some(ref class) = rule.class {
-            if let Some(ref window_class) = win.class {
-                if !window_class.contains(class) && window_class != class {
-                    return false;
-                }
-            } else {
-                return false;
-            }
-        }
-
-        // If no criteria specified, the rule doesn't match anything
-        !rule.is_empty()
+        self.config.ignore.iter().any(|rule| rule.matches_window(win))
     }
 }
 
@@ -324,6 +199,7 @@ mod tests {
     use barba_shared::{ScreenTarget, TilingConfig, WindowRule, WorkspaceConfig};
 
     use super::super::TilingManager;
+    use crate::tiling::rules::RuleMatcher;
     use crate::tiling::state::{ManagedWindow, WindowFrame};
     use crate::tiling::workspace::WorkspaceManager;
 
@@ -367,14 +243,11 @@ mod tests {
     }
 
     // =========================================================================
-    // window_matches_rule tests
+    // RuleMatcher tests (rule.matches_window)
     // =========================================================================
 
     #[test]
     fn test_rule_match_by_app_id_exact() {
-        let config = TilingConfig::default();
-        let manager = create_test_manager(config);
-
         let window = create_test_window(1, "Safari", Some("com.apple.Safari"), None);
 
         let rule = WindowRule {
@@ -382,14 +255,11 @@ mod tests {
             ..Default::default()
         };
 
-        assert!(manager.window_matches_rule(&window, &rule));
+        assert!(rule.matches_window(&window));
     }
 
     #[test]
     fn test_rule_match_by_app_id_substring() {
-        let config = TilingConfig::default();
-        let manager = create_test_manager(config);
-
         let window = create_test_window(1, "Safari", Some("com.apple.Safari"), None);
 
         // Substring match
@@ -398,14 +268,11 @@ mod tests {
             ..Default::default()
         };
 
-        assert!(manager.window_matches_rule(&window, &rule));
+        assert!(rule.matches_window(&window));
     }
 
     #[test]
     fn test_rule_match_by_app_id_no_match() {
-        let config = TilingConfig::default();
-        let manager = create_test_manager(config);
-
         let window = create_test_window(1, "Safari", Some("com.apple.Safari"), None);
 
         let rule = WindowRule {
@@ -413,14 +280,11 @@ mod tests {
             ..Default::default()
         };
 
-        assert!(!manager.window_matches_rule(&window, &rule));
+        assert!(!rule.matches_window(&window));
     }
 
     #[test]
     fn test_rule_match_by_title_case_insensitive() {
-        let config = TilingConfig::default();
-        let manager = create_test_manager(config);
-
         let window = create_test_window(1, "My Document - Firefox", None, None);
 
         let rule = WindowRule {
@@ -428,14 +292,11 @@ mod tests {
             ..Default::default()
         };
 
-        assert!(manager.window_matches_rule(&window, &rule));
+        assert!(rule.matches_window(&window));
     }
 
     #[test]
     fn test_rule_match_by_title_substring() {
-        let config = TilingConfig::default();
-        let manager = create_test_manager(config);
-
         let window = create_test_window(1, "Project - Visual Studio Code", None, None);
 
         let rule = WindowRule {
@@ -443,14 +304,11 @@ mod tests {
             ..Default::default()
         };
 
-        assert!(manager.window_matches_rule(&window, &rule));
+        assert!(rule.matches_window(&window));
     }
 
     #[test]
     fn test_rule_match_by_class() {
-        let config = TilingConfig::default();
-        let manager = create_test_manager(config);
-
         let window = create_test_window(1, "Terminal", None, Some("NSWindow"));
 
         let rule = WindowRule {
@@ -458,14 +316,11 @@ mod tests {
             ..Default::default()
         };
 
-        assert!(manager.window_matches_rule(&window, &rule));
+        assert!(rule.matches_window(&window));
     }
 
     #[test]
     fn test_rule_match_multiple_criteria_and_logic() {
-        let config = TilingConfig::default();
-        let manager = create_test_manager(config);
-
         let window =
             create_test_window(1, "Safari - Google", Some("com.apple.Safari"), Some("NSWindow"));
 
@@ -476,7 +331,7 @@ mod tests {
             class: Some("NSWindow".to_string()),
             ..Default::default()
         };
-        assert!(manager.window_matches_rule(&window, &rule));
+        assert!(rule.matches_window(&window));
 
         // One criterion doesn't match (title)
         let rule = WindowRule {
@@ -485,25 +340,19 @@ mod tests {
             class: Some("NSWindow".to_string()),
             ..Default::default()
         };
-        assert!(!manager.window_matches_rule(&window, &rule));
+        assert!(!rule.matches_window(&window));
     }
 
     #[test]
     fn test_rule_empty_doesnt_match() {
-        let config = TilingConfig::default();
-        let manager = create_test_manager(config);
-
         let window = create_test_window(1, "Any Window", Some("com.any.app"), None);
 
         let empty_rule = WindowRule::default();
-        assert!(!manager.window_matches_rule(&window, &empty_rule));
+        assert!(!empty_rule.matches_window(&window));
     }
 
     #[test]
     fn test_rule_match_window_without_bundle_id() {
-        let config = TilingConfig::default();
-        let manager = create_test_manager(config);
-
         let window = create_test_window(1, "Unknown App", None, None);
 
         // Rule requires app_id but window doesn't have one
@@ -511,14 +360,14 @@ mod tests {
             app_id: Some("com.some.app".to_string()),
             ..Default::default()
         };
-        assert!(!manager.window_matches_rule(&window, &rule));
+        assert!(!rule.matches_window(&window));
 
         // But title-only rule should work
         let rule = WindowRule {
             title: Some("Unknown".to_string()),
             ..Default::default()
         };
-        assert!(manager.window_matches_rule(&window, &rule));
+        assert!(rule.matches_window(&window));
     }
 
     // =========================================================================

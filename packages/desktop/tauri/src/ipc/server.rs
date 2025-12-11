@@ -18,7 +18,8 @@ use super::types::{CliEventPayload, IpcPayload};
 const SOCKET_NAME: &str = "barba.sock";
 
 /// Event channel for CLI events.
-const CLI_EVENT_CHANNEL: &str = "cli_event";
+/// Follows the pattern: `module:event-name`
+const CLI_EVENT_CHANNEL: &str = "cli:command-received";
 
 /// Gets the path to the IPC socket.
 pub fn get_socket_path() -> PathBuf {
@@ -199,6 +200,6 @@ mod tests {
 
     #[test]
     fn test_cli_event_channel_constant() {
-        assert_eq!(CLI_EVENT_CHANNEL, "cli_event");
+        assert_eq!(CLI_EVENT_CHANNEL, "cli:command-received");
     }
 }

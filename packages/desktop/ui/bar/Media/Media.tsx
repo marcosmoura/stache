@@ -10,6 +10,7 @@ import { ScrollingLabel } from '@/components/ScrollingLabel';
 import { Surface } from '@/components/Surface';
 import { colors } from '@/design-system';
 import { useTauriEventQuery } from '@/hooks';
+import { MediaEvents } from '@/types';
 
 import {
   fetchCurrentMedia,
@@ -23,7 +24,7 @@ import type { MediaPayload, TransformedMediaPayload } from './Media.types';
 
 export const Media = () => {
   const { data: media } = useTauriEventQuery<MediaPayload, TransformedMediaPayload>({
-    eventName: 'media_changed',
+    eventName: MediaEvents.PLAYBACK_CHANGED,
     transformFn: (payload) => parseMediaPayload(payload),
     initialFetch: fetchCurrentMedia,
     queryOptions: {

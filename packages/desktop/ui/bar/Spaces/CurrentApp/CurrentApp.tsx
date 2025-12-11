@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Icon } from '@/components/Icon';
 import { Surface } from '@/components/Surface';
 import { useTauriEvent } from '@/hooks';
-import type { CLIEventPayload } from '@/types';
+import { CliEvents, type CLIEventPayload } from '@/types';
 
 import { fetchCurrentHyprspaceWindow, getAppIcon, onCLIEvent } from './CurrentApp.service';
 import * as styles from './CurrentApp.styles';
@@ -16,7 +16,9 @@ export const CurrentApp = () => {
     refetchOnMount: true,
   });
 
-  useTauriEvent<CLIEventPayload>('cli_event', ({ payload }) => onCLIEvent(payload, queryClient));
+  useTauriEvent<CLIEventPayload>(CliEvents.COMMAND_RECEIVED, ({ payload }) =>
+    onCLIEvent(payload, queryClient),
+  );
 
   if (!focusedWindow || focusedWindow.length === 0) {
     return null;

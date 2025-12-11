@@ -148,6 +148,9 @@ main() {
 	progress "Running tests"
 	pnpm run test || fail "Tests failed. Aborting release."
 
+	progress "Formatting code"
+	pnpm run format
+
 	progress "Building Tauri bundle (profile=${BUNDLE_PROFILE})"
 	tauri_build
 

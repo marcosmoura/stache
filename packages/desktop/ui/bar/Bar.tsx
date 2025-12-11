@@ -1,6 +1,7 @@
 import { cx } from '@linaria/core';
 
 import { useDisableRightClick, useTauriEventQuery } from '@/hooks';
+import { MenubarEvents } from '@/types';
 
 import { Media } from './Media';
 import { Spaces } from './Spaces';
@@ -10,7 +11,7 @@ import * as styles from './Bar.styles';
 
 export const Bar = () => {
   const { data: menuHidden } = useTauriEventQuery<boolean>({
-    eventName: 'menubar_visibility_changed',
+    eventName: MenubarEvents.VISIBILITY_CHANGED,
     queryOptions: {
       refetchOnMount: true,
     },

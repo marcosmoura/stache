@@ -74,11 +74,10 @@ impl TilingManager {
         // Get the currently focused window and ensure it's tracked
         let (focused_window, workspace_name) = self.get_focused_window_and_workspace()?;
 
-        // For next/previous, ensure all visible windows in this workspace are tracked
-        // This handles windows that were never focused since app startup
-        if matches!(direction, "next" | "previous") {
-            self.ensure_workspace_windows_tracked(&workspace_name);
-        }
+        // Ensure all visible windows in this workspace are tracked.
+        // This handles windows that were never focused since app startup.
+        // Required for ALL directions so find_window_in_direction can locate neighbors.
+        self.ensure_workspace_windows_tracked(&workspace_name);
 
         // Get the window list for this workspace
         let window_ids = {
@@ -96,30 +95,39 @@ impl TilingManager {
 
         match direction {
             "next" | "previous" => {
-                // Get fresh window info for all windows in this workspace
-                let windows: Vec<_> =
-                    window_ids.iter().filter_map(|&id| window::get_window_by_id(id).ok()).collect();
+                // Filter out PiP windows from the cycle - they should never be focused
+                let focusable_ids: Vec<u64> = {
+                    let state = self.workspace_manager.state();
+                    window_ids
+                        .iter()
+                        .filter(|&&id| {
+                            state.get_window(id).is_none_or(|w| !window::is_pip_window(w))
+                        })
+                        .copied()
+                        .collect()
+                };
 
-                // Group windows by PID to identify same-app windows
-                let current_pid = focused_window.pid;
-                let same_app_count = windows.iter().filter(|w| w.pid == current_pid).count();
-
-                // If there are multiple windows from the same app in this workspace,
-                // use AX z-order cycling which is more reliable
-                if same_app_count > 1 {
-                    return window::cycle_app_window(current_pid, direction);
+                if focusable_ids.len() < 2 {
+                    return Ok(()); // Nothing to cycle if only one focusable window
                 }
 
-                // For different apps, use the workspace window order
+                // Always cycle through ALL focusable windows in the workspace in layout order.
+                // This ensures focus moves between different apps, not just within the same app.
                 let current_index =
-                    window_ids.iter().position(|&id| id == focused_window.id).unwrap_or(0);
+                    focusable_ids.iter().position(|&id| id == focused_window.id).unwrap_or(0);
                 let new_index = if direction == "next" {
-                    (current_index + 1) % window_ids.len()
+                    (current_index + 1) % focusable_ids.len()
                 } else {
-                    (current_index + window_ids.len() - 1) % window_ids.len()
+                    (current_index + focusable_ids.len() - 1) % focusable_ids.len()
                 };
-                let target_id = window_ids[new_index];
-                window::focus_window(target_id)?;
+                let target_id = focusable_ids[new_index];
+
+                // Get fresh window info for the target window to focus it properly
+                if let Ok(target_window) = window::get_window_by_id(target_id) {
+                    window::focus_window_fast(&target_window)?;
+                } else {
+                    window::focus_window(target_id)?;
+                }
             }
             "left" | "right" | "up" | "down" => {
                 let target_id = self
@@ -215,16 +223,13 @@ impl TilingManager {
                 continue;
             }
 
-            // Get the actual window position from the system
+            // Get the actual window position from the system.
+            // If the window is in actual_windows (from get_all_windows), it's visible.
+            // get_all_windows already filters out hidden windows, so no need to check
+            // our potentially stale state for hidden/minimized status.
             let Some(win) = actual_windows.iter().find(|w| w.id == window_id) else {
                 continue;
             };
-
-            // Also check our state for hidden/minimized status
-            let state_window = state.get_window(window_id);
-            if state_window.is_some_and(|w| w.is_hidden || w.is_minimized) {
-                continue;
-            }
 
             let window_center_x = win.frame.x + win.frame.width as i32 / 2;
             let window_center_y = win.frame.y + win.frame.height as i32 / 2;
@@ -259,6 +264,11 @@ impl TilingManager {
     pub fn swap_window_in_direction(&mut self, direction: &str) -> Result<(), TilingError> {
         // Get the currently focused window and ensure it's tracked
         let (focused_window, workspace_name) = self.get_focused_window_and_workspace()?;
+
+        // Ensure all visible windows in this workspace are tracked.
+        // This handles windows that were never focused since app startup.
+        // Required for ALL directions so find_window_in_direction can locate neighbors.
+        self.ensure_workspace_windows_tracked(&workspace_name);
 
         // Find the target window
         let target_id = match direction {
@@ -296,6 +306,15 @@ impl TilingManager {
         };
 
         // Swap the windows in the workspace's window list
+        let source_window_id = focused_window.id;
+        let are_same_app = {
+            if let Ok(target_window) = window::get_window_by_id(target_id) {
+                target_window.pid == focused_window.pid
+            } else {
+                false
+            }
+        };
+
         {
             let workspace =
                 self.workspace_manager
@@ -303,7 +322,7 @@ impl TilingManager {
                     .get_workspace_mut(&workspace_name)
                     .ok_or_else(|| TilingError::WorkspaceNotFound(workspace_name.clone()))?;
 
-            let source_idx = workspace.windows.iter().position(|&id| id == focused_window.id);
+            let source_idx = workspace.windows.iter().position(|&id| id == source_window_id);
             let target_idx = workspace.windows.iter().position(|&id| id == target_id);
 
             if let (Some(s), Some(t)) = (source_idx, target_idx) {
@@ -314,8 +333,16 @@ impl TilingManager {
         // Re-apply the layout
         self.apply_layout(&workspace_name)?;
 
-        // Keep focus on the original window (which is now in the new position)
-        window::focus_window_fast(&focused_window)?;
+        // For same-app windows, add a small delay to let the animation settle
+        // before refocusing. This prevents flickering caused by position-based
+        // AX element matching getting confused during rapid position changes.
+        if are_same_app {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        // Get fresh window info after layout application and focus by window ID
+        // This ensures we focus the correct window even after positions changed
+        window::focus_window(source_window_id)?;
 
         Ok(())
     }
@@ -366,7 +393,7 @@ impl TilingManager {
                 .state_mut()
                 .get_workspace_mut(&current_workspace_name)
                 .ok_or_else(|| TilingError::WorkspaceNotFound(current_workspace_name.clone()))?;
-            workspace.windows.retain(|&id| id != focused_window.id);
+            workspace.windows.retain(|id| *id != focused_window.id);
         }
 
         // Add window to target workspace
@@ -442,7 +469,7 @@ impl TilingManager {
                 .state_mut()
                 .get_workspace_mut(&current_workspace_name)
                 .ok_or_else(|| TilingError::WorkspaceNotFound(current_workspace_name.clone()))?;
-            workspace.windows.retain(|&id| id != focused_window.id);
+            workspace.windows.retain(|id| *id != focused_window.id);
         }
 
         // Add to target workspace
@@ -479,7 +506,8 @@ impl TilingManager {
             window::focus_window_fast(&focused_window)?;
         } else {
             // If target workspace is not focused, hide the window
-            if !is_target_focused {
+            // But don't hide apps that have PiP windows
+            if !is_target_focused && !window::is_pip_window(&focused_window) {
                 let _ = window::hide_app(focused_window.pid);
                 if let Some(win) =
                     self.workspace_manager.state_mut().get_window_mut(focused_window.id)

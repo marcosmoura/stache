@@ -333,8 +333,8 @@ impl AnimationManager {
         use std::time::Duration;
 
         // Use a tight loop with short sleeps for smooth animation
-        // Target ~120fps for smooth interpolation
-        let frame_duration = Duration::from_micros(8333); // ~120fps
+        // Target ~240fps for smooth interpolation
+        let frame_duration = Duration::from_micros(4167); // ~240fps
 
         loop {
             let mut state = self.state.lock();

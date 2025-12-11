@@ -7,7 +7,7 @@ import { Button } from '@/components/Button';
 import { Icon } from '@/components/Icon';
 import { Surface } from '@/components/Surface';
 import { useTauriEvent } from '@/hooks';
-import type { CLIEventPayload } from '@/types';
+import { CliEvents, type CLIEventPayload } from '@/types';
 
 import {
   fetchCurrentHyprspaceWorkspace,
@@ -32,7 +32,7 @@ export const Hyprspace = () => {
     refetchOnMount: true,
   });
 
-  useTauriEvent<CLIEventPayload>('cli_event', ({ payload }) => {
+  useTauriEvent<CLIEventPayload>(CliEvents.COMMAND_RECEIVED, ({ payload }) => {
     onCLIEvent(payload, queryClient);
   });
 

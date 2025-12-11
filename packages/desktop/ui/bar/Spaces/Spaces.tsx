@@ -31,6 +31,7 @@ import { Button } from '@/components/Button';
 import { Icon } from '@/components/Icon';
 import { Surface } from '@/components/Surface';
 import { useTauriEvent } from '@/hooks';
+import { TilingEvents } from '@/types';
 
 import { fetchWorkspaceList, onWorkspaceChange, onWorkspaceClick } from './Spaces.service';
 import * as styles from './Spaces.styles';
@@ -86,7 +87,7 @@ export const Spaces = () => {
     refetchOnMount: true,
   });
 
-  useTauriEvent<Workspaces>('tiling:workspaces-changed', ({ payload }) => {
+  useTauriEvent<Workspaces>(TilingEvents.WORKSPACES_CHANGED, ({ payload }) => {
     onWorkspaceChange(payload, queryClient);
   });
 

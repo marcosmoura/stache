@@ -24,11 +24,15 @@ struct KeepAwakeChangedPayload {
     desired_awake: bool,
 }
 
+/// Event name for keep awake state changes.
+/// Follows the pattern: `module:event-name`
+const EVENT_NAME: &str = "keepawake:state-changed";
+
 fn emit_keep_awake_changed(
     app_handle: &tauri::AppHandle,
     payload: KeepAwakeChangedPayload,
 ) -> Result<(), String> {
-    app_handle.emit("keep_awake_changed", payload).map_err(|err| err.to_string())
+    app_handle.emit(EVENT_NAME, payload).map_err(|err| err.to_string())
 }
 
 #[derive(Default)]

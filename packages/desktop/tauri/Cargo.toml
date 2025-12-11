@@ -58,18 +58,20 @@ rand = { version = "0.9.2", default-features = false, features = [
     "std_rng",
     "thread_rng",
 ] }
+rayon = { version = "1.11.0", default-features = false }
 schemars = { version = "1.1.0", default-features = true }
 serde = { version = "1.0.228", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0.145", default-features = false, features = [
     "std",
 ] }
 simple-easing = { version = "1.0.1", default-features = false }
+smallvec = { version = "1.15.1", default-features = false }
 smc = "0.2.4"
 starship-battery = { version = "0.10.3", default-features = false }
 sysinfo = { version = "0.37.2", default-features = false, features = [
     "system",
 ] }
-tauri = { version = "2.9.4", default-features = false, features = [
+tauri = { version = "2.9.5", default-features = false, features = [
     "macos-private-api",
     "unstable",
     "wry",
