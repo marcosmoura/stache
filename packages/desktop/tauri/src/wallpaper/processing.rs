@@ -16,7 +16,7 @@ use objc::{msg_send, sel, sel_impl};
 use crate::config::WallpaperConfig;
 
 /// Supported image file extensions.
-const SUPPORTED_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png"];
+const SUPPORTED_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp"];
 
 /// Errors that can occur during image processing.
 #[derive(Debug)]
@@ -154,6 +154,26 @@ pub fn get_screen_size(screen_index: usize) -> ScreenSize {
     }
 }
 
+/// Returns the number of available screens.
+///
+/// Returns 1 as fallback if screen detection fails.
+#[must_use]
+pub fn get_screen_count() -> usize {
+    unsafe {
+        let Some(screen_class) = Class::get("NSScreen") else {
+            return 1;
+        };
+
+        let screens: *mut Object = msg_send![screen_class, screens];
+        if screens.is_null() {
+            return 1;
+        }
+
+        let count: usize = msg_send![screens, count];
+        if count == 0 { 1 } else { count }
+    }
+}
+
 /// Returns the cache directory for processed wallpapers.
 ///
 /// Uses `~/Library/Caches/{APP_BUNDLE_ID}/wallpapers` on macOS for persistence across reboots.
@@ -245,25 +265,16 @@ pub fn list_images_in_directory(dir: &Path) -> Vec<PathBuf> {
     images
 }
 
-/// Processes an image with the specified rounded corners and blur effects.
+/// Internal image processing implementation.
 ///
-/// The image is resized to match the primary monitor dimensions, then
-/// effects (blur, rounded corners) are applied.
-///
-/// # Arguments
-///
-/// * `source` - Path to the source image
-/// * `config` - Wallpaper configuration containing radius and blur settings
-///
-/// # Returns
-///
-/// The path to the processed image in the cache directory.
-pub fn process_image(source: &Path, config: &WallpaperConfig) -> Result<PathBuf, ProcessingError> {
-    ensure_cache_dir()?;
-
-    let screen = get_primary_screen_size();
-    let cache_path = cached_path(source, config);
-
+/// Loads, resizes, applies effects, and saves the processed image to the cache.
+/// This is the common logic shared by `process_image` and `process_image_for_screen`.
+fn process_image_internal(
+    source: &Path,
+    config: &WallpaperConfig,
+    cache_path: PathBuf,
+    screen: ScreenSize,
+) -> Result<PathBuf, ProcessingError> {
     // Return cached version if it exists
     if cache_path.exists() {
         return Ok(cache_path);
@@ -294,6 +305,28 @@ pub fn process_image(source: &Path, config: &WallpaperConfig) -> Result<PathBuf,
     Ok(cache_path)
 }
 
+/// Processes an image with the specified rounded corners and blur effects.
+///
+/// The image is resized to match the primary monitor dimensions, then
+/// effects (blur, rounded corners) are applied.
+///
+/// # Arguments
+///
+/// * `source` - Path to the source image
+/// * `config` - Wallpaper configuration containing radius and blur settings
+///
+/// # Returns
+///
+/// The path to the processed image in the cache directory.
+pub fn process_image(source: &Path, config: &WallpaperConfig) -> Result<PathBuf, ProcessingError> {
+    ensure_cache_dir()?;
+
+    let screen = get_primary_screen_size();
+    let cache_path = cached_path(source, config);
+
+    process_image_internal(source, config, cache_path, screen)
+}
+
 /// Processes an image for a specific screen.
 ///
 /// The image is resized to match the specified screen's dimensions, then
@@ -318,34 +351,7 @@ pub fn process_image_for_screen(
     let screen = get_screen_size(screen_index);
     let cache_path = cached_path_for_screen(source, config, screen_index);
 
-    // Return cached version if it exists
-    if cache_path.exists() {
-        return Ok(cache_path);
-    }
-
-    // Load the source image
-    let img = ImageReader::open(source)
-        .map_err(|_| ProcessingError::ImageRead(source.display().to_string()))?
-        .decode()
-        .map_err(|_| ProcessingError::ImageRead(source.display().to_string()))?;
-
-    // Resize to screen dimensions
-    let resized = resize_to_screen(&img, screen);
-
-    // Apply processing (blur, rounded corners)
-    let processed = apply_effects(resized, config.radius, config.blur);
-
-    // Save as JPEG with high quality (much faster than PNG)
-    let file = File::create(&cache_path)
-        .map_err(|_| ProcessingError::ImageSave(cache_path.display().to_string()))?;
-    let writer = BufWriter::new(file);
-    let encoder = JpegEncoder::new_with_quality(writer, 95);
-    processed
-        .to_rgb8()
-        .write_with_encoder(encoder)
-        .map_err(|_| ProcessingError::ImageSave(cache_path.display().to_string()))?;
-
-    Ok(cache_path)
+    process_image_internal(source, config, cache_path, screen)
 }
 
 /// Resizes an image to cover the screen dimensions while maintaining aspect ratio.
@@ -424,15 +430,19 @@ fn apply_fast_blur(img: &DynamicImage, blur_radius: u32) -> DynamicImage {
     let small_width = (width / scale_factor).max(1);
     let small_height = (height / scale_factor).max(1);
 
-    // Downscale
-    let small = img.resize_exact(small_width, small_height, image::imageops::FilterType::Triangle);
+    // Downscale using CatmullRom for better quality
+    let small = img.resize_exact(
+        small_width,
+        small_height,
+        image::imageops::FilterType::CatmullRom,
+    );
 
     // Apply blur at smaller size (blur radius also scaled down)
     let blur_at_scale = (blur_radius / scale_factor).max(1);
     let blurred_small = small.blur(blur_at_scale as f32);
 
-    // Upscale back
-    blurred_small.resize_exact(width, height, image::imageops::FilterType::Triangle)
+    // Upscale back using CatmullRom for smoother result
+    blurred_small.resize_exact(width, height, image::imageops::FilterType::CatmullRom)
 }
 
 /// Number of samples per axis for supersampling anti-aliasing.
@@ -539,7 +549,7 @@ mod tests {
         assert!(is_supported_image(Path::new("test.jpg")));
         assert!(is_supported_image(Path::new("test.JPEG")));
         assert!(is_supported_image(Path::new("test.png")));
-        assert!(!is_supported_image(Path::new("test.webp")));
+        assert!(is_supported_image(Path::new("test.webp")));
         assert!(!is_supported_image(Path::new("test.tiff")));
         assert!(!is_supported_image(Path::new("test.bmp")));
         assert!(!is_supported_image(Path::new("test.txt")));

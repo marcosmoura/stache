@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use rand::Rng;
+use rayon::prelude::*;
 
 use super::macos;
 use super::processing::{self, ProcessingError};
@@ -432,11 +433,19 @@ pub fn list_wallpapers() -> Result<Vec<String>, WallpaperManagerError> {
     Ok(manager.list_wallpapers())
 }
 
+/// Result of processing a single wallpaper.
+struct ProcessResult {
+    name: String,
+    cached_name: Option<String>,
+    error: Option<String>,
+}
+
 /// Generates all wallpapers and streams output to the provided writer.
 ///
 /// This pre-processes all wallpapers so they're ready for instant switching.
 /// Useful for pre-caching wallpapers to avoid delays when cycling.
 ///
+/// Uses parallel processing via rayon for significant speedups on multi-core systems.
 /// Streams progress line by line, flushing after each write
 /// for real-time feedback during long-running generation operations.
 ///
@@ -457,7 +466,7 @@ pub fn generate_all_streaming<W: IoWrite>(mut writer: W) -> Result<(), Wallpaper
     // Write header and flush immediately
     let _ = writeln!(
         writer,
-        "Generating wallpapers for {screen_count} screen(s), {total} wallpaper(s) each.\n"
+        "Generating wallpapers for {screen_count} screen(s), {total} wallpaper(s) each (parallel processing enabled).\n"
     );
     let _ = writer.flush();
 
@@ -465,21 +474,46 @@ pub fn generate_all_streaming<W: IoWrite>(mut writer: W) -> Result<(), Wallpaper
         let _ = writeln!(writer, "Screen {screen_index}:");
         let _ = writer.flush();
 
-        for wallpaper in &manager.wallpapers {
-            let name = wallpaper.file_name().and_then(|n| n.to_str()).unwrap_or("unknown");
+        // Process all wallpapers for this screen in parallel
+        let results: Vec<ProcessResult> = manager
+            .wallpapers
+            .par_iter()
+            .map(|wallpaper| {
+                let name =
+                    wallpaper.file_name().and_then(|n| n.to_str()).unwrap_or("unknown").to_string();
 
-            match processing::process_image_for_screen(wallpaper, &manager.config, screen_index) {
-                Ok(cached_path) => {
-                    let cached_name =
-                        cached_path.file_name().and_then(|n| n.to_str()).unwrap_or("cached");
-                    let _ = writeln!(writer, "  {GREEN}✓{RESET} {name} -> {cached_name}");
+                match processing::process_image_for_screen(wallpaper, &manager.config, screen_index)
+                {
+                    Ok(cached_path) => {
+                        let cached_name = cached_path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("cached")
+                            .to_string();
+                        ProcessResult {
+                            name,
+                            cached_name: Some(cached_name),
+                            error: None,
+                        }
+                    }
+                    Err(err) => ProcessResult {
+                        name,
+                        cached_name: None,
+                        error: Some(err.to_string()),
+                    },
                 }
-                Err(err) => {
-                    let _ = writeln!(writer, "  {RED}⨉{RESET} {name} -> error: {err}");
-                }
+            })
+            .collect();
+
+        // Output results in order (after parallel processing completes)
+        for result in results {
+            if let Some(cached_name) = result.cached_name {
+                let _ = writeln!(writer, "  {GREEN}✓{RESET} {} -> {cached_name}", result.name);
+            } else if let Some(err) = result.error {
+                let _ = writeln!(writer, "  {RED}⨉{RESET} {} -> error: {err}", result.name);
             }
-            let _ = writer.flush();
         }
+        let _ = writer.flush();
 
         let _ = writeln!(writer);
         let _ = writer.flush();

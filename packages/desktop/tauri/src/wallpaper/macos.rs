@@ -7,6 +7,8 @@ use std::path::Path;
 use objc::runtime::{Class, Object};
 use objc::{msg_send, sel, sel_impl};
 
+use super::processing;
+
 /// Errors that can occur when setting the wallpaper.
 #[derive(Debug)]
 pub enum WallpaperError {
@@ -31,22 +33,11 @@ impl std::fmt::Display for WallpaperError {
 impl std::error::Error for WallpaperError {}
 
 /// Returns the number of available screens.
+///
+/// Delegates to the shared screen detection in processing module.
 #[must_use]
-pub fn screen_count() -> usize {
-    unsafe {
-        let Some(screen_class) = Class::get("NSScreen") else {
-            return 1;
-        };
-
-        let screens: *mut Object = msg_send![screen_class, screens];
-        if screens.is_null() {
-            return 1;
-        }
-
-        let count: usize = msg_send![screens, count];
-        if count == 0 { 1 } else { count }
-    }
-}
+#[inline]
+pub fn screen_count() -> usize { processing::get_screen_count() }
 
 /// Sets the desktop wallpaper for all screens.
 ///
