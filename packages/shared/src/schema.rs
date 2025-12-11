@@ -26,7 +26,7 @@ pub fn generate_schema() -> schemars::Schema {
 /// Returns a pretty-printed JSON string that can be saved to a file
 /// or used for validation.
 #[must_use]
-pub fn generate_schema_json() -> String {
+pub fn print_schema() -> String {
     let schema = generate_schema();
     serde_json::to_string_pretty(&schema).unwrap_or_default()
 }
@@ -37,7 +37,7 @@ mod tests {
 
     #[test]
     fn test_generate_schema_produces_valid_json() {
-        let schema_json = generate_schema_json();
+        let schema_json = print_schema();
         assert!(!schema_json.is_empty());
 
         let parsed: serde_json::Value = serde_json::from_str(&schema_json).unwrap();
@@ -65,7 +65,7 @@ mod tests {
 
     #[test]
     fn test_schema_id_is_correct_url() {
-        let schema_json = generate_schema_json();
+        let schema_json = print_schema();
         let parsed: serde_json::Value = serde_json::from_str(&schema_json).unwrap();
         let id = parsed["$id"].as_str().unwrap();
 
@@ -76,7 +76,7 @@ mod tests {
 
     #[test]
     fn test_schema_contains_wallpapers_config() {
-        let schema_json = generate_schema_json();
+        let schema_json = print_schema();
         let parsed: serde_json::Value = serde_json::from_str(&schema_json).unwrap();
 
         // WallpaperConfig is at the root level of BarbaConfig, referenced in $defs
@@ -86,7 +86,7 @@ mod tests {
 
     #[test]
     fn test_schema_contains_weather_config() {
-        let schema_json = generate_schema_json();
+        let schema_json = print_schema();
         let parsed: serde_json::Value = serde_json::from_str(&schema_json).unwrap();
 
         // Weather is now under BarConfig, referenced in $defs
@@ -96,7 +96,7 @@ mod tests {
 
     #[test]
     fn test_schema_json_is_pretty_printed() {
-        let schema_json = generate_schema_json();
+        let schema_json = print_schema();
         // Pretty-printed JSON should have newlines
         assert!(schema_json.contains('\n'));
     }

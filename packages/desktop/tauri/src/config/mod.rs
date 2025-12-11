@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 // Re-export shared types for use throughout the desktop app
 pub use barba_shared::{
     BarbaConfig, ConfigError, ShortcutCommands, WallpaperConfig, WallpaperMode, WeatherConfig,
-    generate_schema_json, load_config as load_config_with_path,
+    load_config as load_config_with_path, print_schema,
 };
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use tauri::AppHandle;
@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn test_generate_schema_works() {
-        let schema = generate_schema_json();
+        let schema = print_schema();
         assert!(!schema.is_empty());
         assert!(schema.contains("BarbaConfig"));
     }

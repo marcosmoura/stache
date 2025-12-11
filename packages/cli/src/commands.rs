@@ -62,13 +62,12 @@ pub enum Commands {
     /// the application.
     Reload,
 
-    /// Generate JSON schema for the configuration file.
+    /// Output Barba configuration JSON Schema.
     ///
     /// Outputs a JSON Schema to stdout that describes the structure of the
     /// Barba configuration file. Can be redirected to a file for use with
     /// editors that support JSON Schema validation.
-    #[command(name = "generate-schema")]
-    GenerateSchema,
+    Schema,
 
     /// Generate shell completions.
     ///
@@ -604,8 +603,8 @@ impl Cli {
                 ipc::send_to_desktop_app(&payload)?;
             }
 
-            Commands::GenerateSchema => {
-                let schema = barba_shared::generate_schema_json();
+            Commands::Schema => {
+                let schema = barba_shared::print_schema();
                 println!("{schema}");
             }
 

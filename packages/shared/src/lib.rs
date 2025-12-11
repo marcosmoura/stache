@@ -12,7 +12,7 @@ pub use config::{
     BarConfig, BarbaConfig, ConfigError, ShortcutCommands, WallpaperConfig, WallpaperMode,
     WeatherConfig, load_config,
 };
-pub use schema::{generate_schema, generate_schema_json};
+pub use schema::{generate_schema, print_schema};
 pub use tiling::{
     AnimationConfig, AnimationSettings, DimensionValue, EasingFunction, FloatingConfig,
     FloatingDefaultPosition, FloatingPreset, FocusedAppInfo, GapsConfig, IgnoreRule, InnerGaps,

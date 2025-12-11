@@ -12,7 +12,7 @@ use crate::config;
 ///
 /// Generates and prints the JSON schema for the configuration file.
 pub fn handle_generate_schema(stream: &mut UnixStream) {
-    let schema = config::generate_schema_json();
+    let schema = config::print_schema();
     println!("{schema}");
     stream.write_all(b"1").ok();
 }
