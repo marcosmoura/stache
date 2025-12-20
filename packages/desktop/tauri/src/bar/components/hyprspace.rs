@@ -33,6 +33,13 @@ pub fn get_hyprspace_focused_window(app: tauri::AppHandle) -> Result<Vec<Value>,
     run_hyprspace_json(&app, &["list-windows", "--focused", "--json"])
 }
 
+/// Focus window by window ID.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub fn focus_window_by_window_id(app: tauri::AppHandle, window_id: String) {
+    let _ = run_hyprspace_json(&app, &["focus", "--window-id", &window_id]);
+}
+
 /// Retrieve metadata for the focused workspace only.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]

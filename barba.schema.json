@@ -16,7 +16,7 @@
       }
     },
     "keybindings": {
-      "description": "Global keyboard keybindings configuration.\n\nThe key is the shortcut string (e.g., \"Command+Control+R\").\nThe value is either a single command string or an array of commands.\n\nExample:\n```json\n{\n  \"keybindings\": {\n    \"Command+Control+R\": \"barba reload\",\n    \"Command+Option+Control+1\": \"barba workspace focus terminal\"\n  }\n}\n```",
+      "description": "Global keyboard keybindings configuration.\n\nThe key is the shortcut string (e.g., \"Command+Control+R\").\nThe value is either a single command string or an array of commands.\n\nExample:\n```json\n{\n  \"keybindings\": {\n    \"Command+Control+R\": \"barba reload\",\n  }\n}\n```",
       "type": "object",
       "additionalProperties": {
         "$ref": "#/$defs/ShortcutCommands"

@@ -1,15 +1,12 @@
 import { css } from '@linaria/core';
 
+import { colors, motion } from '@/design-system';
+
 export const spaces = css`
   position: fixed;
   top: 0;
   bottom: 0;
   left: 0;
-
-  display: grid;
-  grid-auto-flow: column;
-  column-gap: 4px;
-  align-items: center;
 `;
 
 export const workspaces = css`
@@ -20,10 +17,14 @@ export const workspaces = css`
 
 export const workspace = css`
   padding: 0 8px;
+
+  transition: ${motion.easing} ${motion.duration};
+  /* stylelint-disable-next-line plugin/no-low-performance-animation-properties */
+  transition-property: padding;
 `;
 
 export const workspaceActive = css`
-  padding: 0 10px;
+  padding: 0 12px;
 `;
 
 export const app = css`
@@ -34,4 +35,8 @@ export const app = css`
 
   height: 100%;
   padding: 0 10px;
+`;
+
+export const appFocused = css`
+  background-color: ${colors.surface1};
 `;

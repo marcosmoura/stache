@@ -18,3 +18,9 @@ export type Workspaces = {
   name: string;
   isFocused: boolean;
 }[];
+
+export type WorkspaceWindows = {
+  appName: string;
+  windowId: number;
+  windowTitle: string;
+}[];

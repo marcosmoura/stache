@@ -5,8 +5,4 @@ export const status = css`
   top: 0;
   right: 0;
   bottom: 0;
-
-  display: grid;
-  grid-auto-flow: column;
-  gap: 4px;
 `;

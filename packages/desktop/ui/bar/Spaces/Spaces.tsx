@@ -1,23 +1,32 @@
 import {
-  ComputerTerminal01Icon,
-  SourceCodeIcon,
   AiBrowserIcon,
-  SpotifyIcon,
-  FigmaIcon,
-  SlackIcon,
-  DashboardCircleIcon,
+  Analytics01Icon,
   AppleFinderIcon,
-  Mail02Icon,
   AppleReminderIcon,
   AppStoreIcon,
+  ArcBrowserIcon,
   BrowserIcon,
-  Mail01Icon,
-  UserMultiple02Icon,
-  HardDriveIcon,
-  SecurityPasswordIcon,
-  SourceCodeCircleIcon,
-  VisualStudioCodeIcon,
+  CheckListIcon,
+  CodeSimpleIcon,
+  CodeSquareIcon,
+  ComputerTerminal01Icon,
+  DashboardCircleIcon,
   DiscordIcon,
+  FigmaIcon,
+  Folder01Icon,
+  HardDriveIcon,
+  Mail01Icon,
+  MailAtSign01Icon,
+  MessageMultiple01Icon,
+  MusicNote02Icon,
+  MusicNote03Icon,
+  SafariIcon,
+  SecurityPasswordIcon,
+  Settings01Icon,
+  SlackIcon,
+  SpotifyIcon,
+  UserMultiple02Icon,
+  VisualStudioCodeIcon,
   WhatsappIcon,
   ZoomIcon,
 } from '@hugeicons/core-free-icons';
@@ -26,6 +35,7 @@ import { cx } from '@linaria/core';
 
 import { Button } from '@/components/Button';
 import { Icon } from '@/components/Icon';
+import { Stack } from '@/components/Stack';
 import { Surface } from '@/components/Surface';
 
 import { useSpaces } from './Spaces.state';
@@ -33,31 +43,39 @@ import * as styles from './Spaces.styles';
 
 const workspaceIcons: Record<string, IconSvgElement> = {
   terminal: ComputerTerminal01Icon,
-  coding: SourceCodeIcon,
+  coding: CodeSimpleIcon,
   browser: AiBrowserIcon,
-  music: SpotifyIcon,
+  music: MusicNote03Icon,
   design: FigmaIcon,
-  communication: SlackIcon,
+  communication: MessageMultiple01Icon,
   misc: DashboardCircleIcon,
-  files: AppleFinderIcon,
-  mail: Mail02Icon,
-  tasks: AppleReminderIcon,
+  files: Folder01Icon,
+  mail: MailAtSign01Icon,
+  tasks: CheckListIcon,
 };
 
 const appIcons = {
+  'Activity Monitor': Analytics01Icon,
   'App Store': AppStoreIcon,
+  'Archetype Gojira X': MusicNote02Icon,
+  'Archetype John Mayer X': MusicNote02Icon,
+  'Archetype Nolly X': MusicNote02Icon,
+  'Fortin Nameless Suite X': MusicNote02Icon,
   'Microsoft Edge Dev': BrowserIcon,
   'Microsoft Outlook': Mail01Icon,
   'Microsoft Teams': UserMultiple02Icon,
   'Proton Drive': HardDriveIcon,
   'Proton Pass': SecurityPasswordIcon,
-  'Zed Preview': SourceCodeCircleIcon,
+  'Zed Preview': CodeSquareIcon,
   Code: VisualStudioCodeIcon,
+  Dia: ArcBrowserIcon,
   Discord: DiscordIcon,
   Figma: FigmaIcon,
   Finder: AppleFinderIcon,
   Ghostty: ComputerTerminal01Icon,
   Reminders: AppleReminderIcon,
+  Safari: SafariIcon,
+  Settings: Settings01Icon,
   Slack: SlackIcon,
   Spotify: SpotifyIcon,
   WhatsApp: WhatsappIcon,
@@ -73,34 +91,46 @@ const getAppIcon = (name: string) => {
 };
 
 export const Spaces = () => {
-  const { workspaces, focusedApp, onSpaceClick } = useSpaces();
+  const { workspaces, focusedApp, apps, isLaptopScreen, onSpaceClick, onAppClick } = useSpaces();
 
   if (!workspaces) {
     return null;
   }
 
   return (
-    <div className={styles.spaces} data-test-id="spaces-container">
+    <Stack className={styles.spaces} data-test-id="spaces-container">
       <Surface className={styles.workspaces}>
         {workspaces.map(({ key, name, isFocused }) => (
           <Button
             key={key}
             className={cx(styles.workspace, isFocused && styles.workspaceActive)}
             active={isFocused}
-            onClick={onSpaceClick(key)}
+            onClick={onSpaceClick(name)}
           >
-            <Icon icon={workspaceIcons[key]} />
-            {isFocused && <span>{name}</span>}
+            <Icon icon={workspaceIcons[name]} />
           </Button>
         ))}
       </Surface>
 
-      {focusedApp && (
-        <Surface className={styles.app}>
-          <Icon icon={getAppIcon(focusedApp)} />
-          <span>{focusedApp}</span>
-        </Surface>
-      )}
-    </div>
+      {apps.map(({ key, appName, windowId }) => {
+        const isFocused = focusedApp?.windowId === windowId;
+
+        if (isLaptopScreen && !isFocused) {
+          return null;
+        }
+
+        return (
+          <Surface
+            as={Button}
+            key={key}
+            className={cx(styles.app, isFocused && styles.appFocused)}
+            onClick={!isFocused ? onAppClick(windowId) : undefined}
+          >
+            <Icon icon={getAppIcon(appName)} />
+            {isFocused && <span>{appName}</span>}
+          </Surface>
+        );
+      })}
+    </Stack>
   );
 };

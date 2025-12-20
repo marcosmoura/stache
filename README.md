@@ -159,14 +159,6 @@ A JSON Schema is provided for editor autocompletion and validation:
   // Global keybindings
   "keybindings": {
     "Command+Control+R": "barba reload",
-    "Command+Option+1": "barba workspace focus 1",
-    "Command+Option+2": "barba workspace focus 2",
-    "Command+Option+Left": "barba workspace focus previous",
-    "Command+Option+Right": "barba workspace focus next",
-    "Command+Shift+H": "barba window move left",
-    "Command+Shift+L": "barba window move right",
-    "Command+Shift+J": "barba window move down",
-    "Command+Shift+K": "barba window move up",
   },
 }
 ```
@@ -234,56 +226,6 @@ barba completions --shell fish > ~/.config/fish/completions/barba.fish
 | `barba schema`                      | Output JSON schema to stdout         |
 | `barba completions --shell <SHELL>` | Generate shell completions           |
 
-#### Workspace Management
-
-```bash
-# Focus workspace by name
-barba workspace focus coding
-
-# Focus workspace by direction
-barba workspace focus next
-barba workspace focus previous
-
-# Change layout
-barba workspace layout monocle
-barba workspace layout master
-
-# Send workspace to another screen
-barba workspace send-to-screen secondary
-
-# Balance window sizes
-barba workspace balance
-```
-
-#### Window Management
-
-```bash
-# Move/swap window
-barba window move left
-barba window move up
-
-# Focus adjacent window
-barba window focus right
-barba window focus next
-
-# Send to workspace
-barba window send-to-workspace 2
-barba window send-to-workspace coding --focus=false
-
-# Send to screen
-barba window send-to-screen main
-
-# Resize window
-barba window resize width 100
-barba window resize height -50
-
-# Apply floating preset
-barba window preset centered-small
-
-# Close window
-barba window close
-```
-
 #### Wallpaper Management
 
 ```bash
@@ -302,23 +244,6 @@ barba wallpaper generate-all
 
 # List available wallpapers
 barba wallpaper list
-```
-
-#### Query State
-
-```bash
-# List all screens
-barba query screens
-
-# List workspaces
-barba query workspaces
-barba query workspaces --focused
-barba query workspaces --screen main
-
-# List windows
-barba query windows
-barba query windows --focused-workspace
-barba query windows --workspace coding
 ```
 
 ---

@@ -3,8 +3,6 @@ import { css } from '@linaria/core';
 import { colors, motion } from '@/design-system';
 
 export const button = css`
-  --button-background-color: ${colors.crust};
-
   cursor: pointer;
 
   display: grid;
@@ -25,24 +23,20 @@ export const button = css`
 
   appearance: none;
   background: none;
-  background-color: var(--button-background-color, ${colors.crust});
+  background-color: ${colors.crust};
 
   transition: ${motion.easing} ${motion.duration};
   transition-property: background-color, border-color;
 
   &:hover {
-    --button-background-color: ${colors.surface1};
-
     border-color: ${colors.base};
 
-    background-color: var(--button-background-color, ${colors.surface1});
+    background-color: ${colors.surface1};
   }
 `;
 
 export const buttonActive = css`
-  --button-background-color: ${colors.surface1};
-
   border-color: ${colors.base};
 
-  background-color: var(--button-background-color, ${colors.surface1});
+  background-color: ${colors.surface1};
 `;
