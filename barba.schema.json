@@ -62,10 +62,37 @@
     }
   },
   "$defs": {
+    "AudioDeviceDependency": {
+      "description": "Dependency condition for audio device selection.\n\nSpecifies a device that must be present (connected) for the parent device\nto be considered in the priority list. The dependent device itself will\nnever be switched to; it only serves as a condition.\n\nExample: \"External Speakers\" might depend on \"`MiniFuse` 2\" being connected,\nsince the speakers are physically connected through the audio interface.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "The name (or pattern) of the device that must be present.",
+          "type": "string",
+          "default": ""
+        },
+        "strategy": {
+          "description": "The strategy for matching the dependency device name.\n- `exact`: Exact match (case-insensitive). Default if not specified.\n- `contains`: Device name contains the string (case-insensitive).\n- `startsWith`: Device name starts with the string (case-insensitive).\n- `regex`: Device name matches the regex pattern.",
+          "$ref": "#/$defs/MatchStrategy",
+          "default": "exact"
+        }
+      }
+    },
     "AudioDevicePriority": {
       "description": "Priority entry for audio device selection.\n\nDefines a single device in the priority list with its name and matching strategy.",
       "type": "object",
       "properties": {
+        "dependsOn": {
+          "description": "Optional dependency condition.\nIf specified, this device will only be considered if the dependent device\nis present (connected). The dependent device will never be switched to;\nit only serves as a condition for enabling this device.\n\nExample: External speakers connected via an audio interface might\ndepend on the interface being present.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AudioDeviceDependency"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "name": {
           "description": "The name (or pattern) of the audio device to match.",
           "type": "string",

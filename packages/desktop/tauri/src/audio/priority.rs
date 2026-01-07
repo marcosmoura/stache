@@ -179,14 +179,17 @@ mod tests {
                     AudioDevicePriority {
                         name: "AirPods Pro".to_string(),
                         strategy: MatchStrategy::Contains,
+                        depends_on: None,
                     },
                     AudioDevicePriority {
                         name: "AT2020USB".to_string(),
                         strategy: MatchStrategy::Contains,
+                        depends_on: None,
                     },
                     AudioDevicePriority {
                         name: "MacBook Pro".to_string(),
                         strategy: MatchStrategy::Contains,
+                        depends_on: None,
                     },
                 ],
             },
@@ -197,14 +200,17 @@ mod tests {
                     AudioDevicePriority {
                         name: "AirPods Pro".to_string(),
                         strategy: MatchStrategy::Contains,
+                        depends_on: None,
                     },
                     AudioDevicePriority {
                         name: "External Speakers".to_string(),
                         strategy: MatchStrategy::Contains,
+                        depends_on: None,
                     },
                     AudioDevicePriority {
                         name: "MacBook Pro".to_string(),
                         strategy: MatchStrategy::Contains,
+                        depends_on: None,
                     },
                 ],
             },
@@ -412,5 +418,152 @@ mod tests {
         let target = legacy::get_target_input_device(&current, &devices);
         assert!(target.is_some());
         assert_eq!(target.unwrap().id, 1);
+    }
+
+    #[test]
+    fn output_respects_dependency_when_satisfied() {
+        use barba_shared::AudioDeviceDependency;
+
+        let config = ProxyAudioConfig {
+            enabled: true,
+            input: ProxyAudioInputConfig::default(),
+            output: ProxyAudioOutputConfig {
+                name: "Virtual Output".to_string(),
+                buffer_size: 128,
+                priority: vec![
+                    AudioDevicePriority {
+                        name: "External Speakers".to_string(),
+                        strategy: MatchStrategy::Contains,
+                        depends_on: Some(AudioDeviceDependency {
+                            name: "MiniFuse".to_string(),
+                            strategy: MatchStrategy::StartsWith,
+                        }),
+                    },
+                    AudioDevicePriority {
+                        name: "MacBook Pro".to_string(),
+                        strategy: MatchStrategy::Contains,
+                        depends_on: None,
+                    },
+                ],
+            },
+        };
+
+        let current = AudioDevice {
+            id: 1,
+            name: "MacBook Pro Speakers".to_string(),
+        };
+
+        let devices = vec![
+            AudioDevice {
+                id: 1,
+                name: "MacBook Pro Speakers".to_string(),
+            },
+            AudioDevice {
+                id: 2,
+                name: "External Speakers".to_string(),
+            },
+            AudioDevice {
+                id: 3,
+                name: "MiniFuse 2".to_string(),
+            },
+        ];
+
+        // MiniFuse is present, so External Speakers should be selected
+        let target = get_target_output_device(&current, &devices, &config);
+        assert!(target.is_some());
+        assert_eq!(target.unwrap().id, 2);
+    }
+
+    #[test]
+    fn output_skips_device_when_dependency_not_satisfied() {
+        use barba_shared::AudioDeviceDependency;
+
+        let config = ProxyAudioConfig {
+            enabled: true,
+            input: ProxyAudioInputConfig::default(),
+            output: ProxyAudioOutputConfig {
+                name: "Virtual Output".to_string(),
+                buffer_size: 128,
+                priority: vec![
+                    AudioDevicePriority {
+                        name: "External Speakers".to_string(),
+                        strategy: MatchStrategy::Contains,
+                        depends_on: Some(AudioDeviceDependency {
+                            name: "MiniFuse".to_string(),
+                            strategy: MatchStrategy::StartsWith,
+                        }),
+                    },
+                    AudioDevicePriority {
+                        name: "MacBook Pro".to_string(),
+                        strategy: MatchStrategy::Contains,
+                        depends_on: None,
+                    },
+                ],
+            },
+        };
+
+        let current = AudioDevice {
+            id: 1,
+            name: "MacBook Pro Speakers".to_string(),
+        };
+
+        // MiniFuse is NOT present
+        let devices = vec![
+            AudioDevice {
+                id: 1,
+                name: "MacBook Pro Speakers".to_string(),
+            },
+            AudioDevice {
+                id: 2,
+                name: "External Speakers".to_string(),
+            },
+        ];
+
+        // MiniFuse is NOT present, so External Speakers should be skipped
+        // and MacBook Pro should be selected instead
+        let target = get_target_output_device(&current, &devices, &config);
+        assert!(target.is_some());
+        assert_eq!(target.unwrap().id, 1); // MacBook Pro Speakers
+    }
+
+    #[test]
+    fn dependency_device_is_never_selected() {
+        use barba_shared::AudioDeviceDependency;
+
+        // Even if MiniFuse is in the device list, it should NEVER be
+        // selected as the target - it's only a condition
+        let config = ProxyAudioConfig {
+            enabled: true,
+            input: ProxyAudioInputConfig::default(),
+            output: ProxyAudioOutputConfig {
+                name: "Virtual Output".to_string(),
+                buffer_size: 128,
+                priority: vec![AudioDevicePriority {
+                    name: "External Speakers".to_string(),
+                    strategy: MatchStrategy::Contains,
+                    depends_on: Some(AudioDeviceDependency {
+                        name: "MiniFuse".to_string(),
+                        strategy: MatchStrategy::StartsWith,
+                    }),
+                }],
+            },
+        };
+
+        let current = AudioDevice {
+            id: 3,
+            name: "MiniFuse 2".to_string(),
+        };
+
+        // External Speakers is not present, only MiniFuse
+        let devices = vec![AudioDevice {
+            id: 3,
+            name: "MiniFuse 2".to_string(),
+        }];
+
+        // External Speakers is not present, so nothing should be selected
+        // MiniFuse should NOT be selected even though it's the only device
+        let target = get_target_output_device(&current, &devices, &config);
+        // Falls back to find_device_by_name for MacBook Pro, which is also not present
+        assert!(target.is_none());
     }
 }

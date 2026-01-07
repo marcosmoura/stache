@@ -28,11 +28,34 @@ pub enum MatchStrategy {
     Regex,
 }
 
+/// Dependency condition for audio device selection.
+///
+/// Specifies a device that must be present (connected) for the parent device
+/// to be considered in the priority list. The dependent device itself will
+/// never be switched to; it only serves as a condition.
+///
+/// Example: "External Speakers" might depend on "`MiniFuse` 2" being connected,
+/// since the speakers are physically connected through the audio interface.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AudioDeviceDependency {
+    /// The name (or pattern) of the device that must be present.
+    pub name: String,
+
+    /// The strategy for matching the dependency device name.
+    /// - `exact`: Exact match (case-insensitive). Default if not specified.
+    /// - `contains`: Device name contains the string (case-insensitive).
+    /// - `startsWith`: Device name starts with the string (case-insensitive).
+    /// - `regex`: Device name matches the regex pattern.
+    #[serde(default)]
+    pub strategy: MatchStrategy,
+}
+
 /// Priority entry for audio device selection.
 ///
 /// Defines a single device in the priority list with its name and matching strategy.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct AudioDevicePriority {
     /// The name (or pattern) of the audio device to match.
     pub name: String,
@@ -44,6 +67,16 @@ pub struct AudioDevicePriority {
     /// - `regex`: Device name matches the regex pattern.
     #[serde(default)]
     pub strategy: MatchStrategy,
+
+    /// Optional dependency condition.
+    /// If specified, this device will only be considered if the dependent device
+    /// is present (connected). The dependent device will never be switched to;
+    /// it only serves as a condition for enabling this device.
+    ///
+    /// Example: External speakers connected via an audio interface might
+    /// depend on the interface being present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depends_on: Option<AudioDeviceDependency>,
 }
 
 /// Input device configuration for proxy audio.
