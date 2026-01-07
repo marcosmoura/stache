@@ -63,7 +63,7 @@ thread_local! {
     static CF_PRESS: OnceCell<CFString> = const { OnceCell::new() };
 }
 
-/// Gets or creates a cached CFString.
+/// Gets or creates a cached `CFString`.
 macro_rules! cached_cfstring {
     ($cell:expr, $value:expr) => {
         $cell.with(|cell| cell.get_or_init(|| CFString::new($value)).as_concrete_TypeRef().cast())
@@ -97,7 +97,7 @@ fn cf_cmd_mods() -> *const c_void { cached_cfstring!(CF_CMD_MODS, "AXMenuItemCmd
 #[inline]
 fn cf_press() -> *const c_void { cached_cfstring!(CF_PRESS, "AXPress") }
 
-/// Gets a string attribute using cached CFString.
+/// Gets a string attribute using cached `CFString`.
 #[inline]
 unsafe fn get_ax_string_attr(element: AXUIElementRef, attr: *const c_void) -> Option<String> {
     if element.is_null() {
@@ -124,7 +124,7 @@ unsafe fn get_ax_string_attr(element: AXUIElementRef, attr: *const c_void) -> Op
     Some(string)
 }
 
-/// Gets a boolean attribute using cached CFString.
+/// Gets a boolean attribute using cached `CFString`.
 #[inline]
 unsafe fn get_ax_bool_attr(element: AXUIElementRef, attr: *const c_void) -> Option<bool> {
     if element.is_null() {
@@ -146,7 +146,7 @@ unsafe fn get_ax_bool_attr(element: AXUIElementRef, attr: *const c_void) -> Opti
     Some(result)
 }
 
-/// Gets an integer attribute using cached CFString.
+/// Gets an integer attribute using cached `CFString`.
 #[inline]
 unsafe fn get_ax_int_attr(element: AXUIElementRef, attr: *const c_void) -> Option<i64> {
     if element.is_null() {
@@ -279,7 +279,7 @@ unsafe fn build_menu_from_ax_element(
     let _: () = unsafe { msg_send![menu, setMinimumWidth: 0.0f64] };
 
     let mut is_first = true;
-    let start_idx = if is_submenu { 0 } else { 1 }; // Skip Apple menu for root
+    let start_idx = usize::from(!is_submenu); // Skip Apple menu for root
 
     for child in children.iter().skip(start_idx) {
         if let Some(item) = unsafe { build_menu_item_from_ax_element(*child, is_submenu, is_first) }
@@ -329,8 +329,8 @@ unsafe fn build_menu_item_from_ax_element(
     let _: () = unsafe { msg_send![item, setEnabled: if enabled { YES } else { NO }] };
 
     // Set checkmark state
-    if let Some(mark) = unsafe { get_ax_string_attr(element, cf_mark_char()) } {
-        if !mark.is_empty() {
+    if let Some(mark) = unsafe { get_ax_string_attr(element, cf_mark_char()) }
+        && !mark.is_empty() {
             let state: i64 = match mark.as_str() {
                 "✓" => 1,
                 "•" => -1,
@@ -338,11 +338,10 @@ unsafe fn build_menu_item_from_ax_element(
             };
             let _: () = unsafe { msg_send![item, setState: state] };
         }
-    }
 
     // Set keyboard shortcut
-    if let Some(cmd) = unsafe { get_ax_string_attr(element, cf_cmd_char()) } {
-        if !cmd.is_empty() {
+    if let Some(cmd) = unsafe { get_ax_string_attr(element, cf_cmd_char()) }
+        && !cmd.is_empty() {
             let key_equiv = unsafe { ns_string(&cmd.to_lowercase()) };
             let _: () = unsafe { msg_send![item, setKeyEquivalent: key_equiv] };
 
@@ -350,7 +349,6 @@ unsafe fn build_menu_item_from_ax_element(
             let _: () =
                 unsafe { msg_send![item, setKeyEquivalentModifierMask: ax_modifiers_to_ns(mods)] };
         }
-    }
 
     // Check for submenu
     if let Some(children) = unsafe { get_ax_children(element) } {

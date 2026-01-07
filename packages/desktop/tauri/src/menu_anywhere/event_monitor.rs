@@ -163,13 +163,11 @@ fn trigger_menu_display(location: CGPoint) {
 
 #[allow(clippy::items_after_statements)]
 fn get_or_create_dispatch_helper() -> *mut Object {
-    if let Ok(guard) = DISPATCH_HELPER.lock() {
-        if let Some(SendSyncPtr(ptr)) = guard.as_ref() {
-            if !ptr.is_null() {
+    if let Ok(guard) = DISPATCH_HELPER.lock()
+        && let Some(SendSyncPtr(ptr)) = guard.as_ref()
+            && !ptr.is_null() {
                 return *ptr;
             }
-        }
-    }
 
     use objc::declare::ClassDecl;
 
