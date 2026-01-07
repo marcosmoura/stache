@@ -9,6 +9,7 @@
 #[cfg(not(target_os = "macos"))]
 compile_error!("This application only supports macOS.");
 
+mod audio;
 mod commands;
 mod error;
 mod ipc;

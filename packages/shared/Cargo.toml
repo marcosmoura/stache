@@ -14,7 +14,7 @@ dirs = "6.0"
 json_comments = "0.2.2"
 schemars = { version = "1.2.0", default-features = true }
 serde = { version = "1.0.228", default-features = false, features = ["derive"] }
-serde_json = { version = "1.0.148", default-features = false, features = [
+serde_json = { version = "1.0.149", default-features = false, features = [
   "std",
 ] }
 

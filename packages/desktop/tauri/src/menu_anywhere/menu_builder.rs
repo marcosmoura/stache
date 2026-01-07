@@ -330,25 +330,27 @@ unsafe fn build_menu_item_from_ax_element(
 
     // Set checkmark state
     if let Some(mark) = unsafe { get_ax_string_attr(element, cf_mark_char()) }
-        && !mark.is_empty() {
-            let state: i64 = match mark.as_str() {
-                "✓" => 1,
-                "•" => -1,
-                _ => 0,
-            };
-            let _: () = unsafe { msg_send![item, setState: state] };
-        }
+        && !mark.is_empty()
+    {
+        let state: i64 = match mark.as_str() {
+            "✓" => 1,
+            "•" => -1,
+            _ => 0,
+        };
+        let _: () = unsafe { msg_send![item, setState: state] };
+    }
 
     // Set keyboard shortcut
     if let Some(cmd) = unsafe { get_ax_string_attr(element, cf_cmd_char()) }
-        && !cmd.is_empty() {
-            let key_equiv = unsafe { ns_string(&cmd.to_lowercase()) };
-            let _: () = unsafe { msg_send![item, setKeyEquivalent: key_equiv] };
+        && !cmd.is_empty()
+    {
+        let key_equiv = unsafe { ns_string(&cmd.to_lowercase()) };
+        let _: () = unsafe { msg_send![item, setKeyEquivalent: key_equiv] };
 
-            let mods = unsafe { get_ax_int_attr(element, cf_cmd_mods()) };
-            let _: () =
-                unsafe { msg_send![item, setKeyEquivalentModifierMask: ax_modifiers_to_ns(mods)] };
-        }
+        let mods = unsafe { get_ax_int_attr(element, cf_cmd_mods()) };
+        let _: () =
+            unsafe { msg_send![item, setKeyEquivalentModifierMask: ax_modifiers_to_ns(mods)] };
+    }
 
     // Check for submenu
     if let Some(children) = unsafe { get_ax_children(element) } {

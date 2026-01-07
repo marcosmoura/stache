@@ -165,9 +165,10 @@ fn trigger_menu_display(location: CGPoint) {
 fn get_or_create_dispatch_helper() -> *mut Object {
     if let Ok(guard) = DISPATCH_HELPER.lock()
         && let Some(SendSyncPtr(ptr)) = guard.as_ref()
-            && !ptr.is_null() {
-                return *ptr;
-            }
+        && !ptr.is_null()
+    {
+        return *ptr;
+    }
 
     use objc::declare::ClassDecl;
 
@@ -186,10 +187,7 @@ fn get_or_create_dispatch_helper() -> *mut Object {
     };
 
     extern "C" fn show_menu_at_pending_location(_this: &Object, _sel: objc::runtime::Sel) {
-        let location = match PENDING_MENU_LOCATION.lock() {
-            Ok(mut guard) => guard.take(),
-            Err(_) => None,
-        };
+        let location = PENDING_MENU_LOCATION.lock().ok().and_then(|mut guard| guard.take());
 
         let Some((x, y)) = location else {
             return;

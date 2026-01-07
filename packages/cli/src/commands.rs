@@ -8,6 +8,7 @@ use std::str::FromStr;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Generator, Shell, generate};
 
+use crate::audio::{self, DeviceFilter};
 use crate::error::CliError;
 use crate::ipc;
 
@@ -54,6 +55,12 @@ pub enum Commands {
     /// Manage the application's cache directory.
     #[command(subcommand)]
     Cache(CacheCommands),
+
+    /// Audio device management commands.
+    ///
+    /// List and inspect audio devices on the system.
+    #[command(subcommand)]
+    Audio(AudioCommands),
 
     /// Reload Barba configuration.
     ///
@@ -210,6 +217,39 @@ pub enum CacheCommands {
     Path,
 }
 
+// ============================================================================
+// Audio Commands
+// ============================================================================
+
+/// Audio subcommands for listing and inspecting audio devices.
+#[derive(Subcommand, Debug)]
+#[command(next_display_order = None)]
+pub enum AudioCommands {
+    /// List all audio devices on the system.
+    ///
+    /// Shows audio input and output devices with their names and types.
+    /// By default, displays a human-readable table format.
+    #[command(after_long_help = r#"Examples:
+  barba audio list              # List all devices in table format
+  barba audio list --json       # List all devices in JSON format
+  barba audio list --input      # List only input devices
+  barba audio list --output     # List only output devices
+  barba audio list -io --json   # List all devices in JSON (explicit)"#)]
+    List {
+        /// Output in JSON format instead of table format.
+        #[arg(long, short = 'j')]
+        json: bool,
+
+        /// Show only input devices.
+        #[arg(long, short = 'i')]
+        input: bool,
+
+        /// Show only output devices.
+        #[arg(long, short = 'o')]
+        output: bool,
+    },
+}
+
 /// Payload for CLI events sent to the desktop app.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CliEventPayload {
@@ -241,6 +281,7 @@ impl Cli {
 
             Commands::Wallpaper(wallpaper_cmd) => Self::execute_wallpaper(wallpaper_cmd)?,
             Commands::Cache(cache_cmd) => Self::execute_cache(cache_cmd)?,
+            Commands::Audio(audio_cmd) => Self::execute_audio(audio_cmd)?,
 
             Commands::Reload => {
                 let payload = CliEventPayload {
@@ -292,6 +333,32 @@ impl Cli {
             CacheCommands::Path => {
                 let cache_dir = barba_shared::get_cache_dir();
                 println!("{}", cache_dir.display());
+            }
+        }
+        Ok(())
+    }
+
+    /// Execute audio subcommands.
+    fn execute_audio(cmd: &AudioCommands) -> Result<(), CliError> {
+        match cmd {
+            AudioCommands::List { json, input, output } => {
+                let filter = match (input, output) {
+                    (true, false) => DeviceFilter::InputOnly,
+                    (false, true) => DeviceFilter::OutputOnly,
+                    _ => DeviceFilter::All,
+                };
+
+                let devices = audio::list_devices(filter);
+
+                if *json {
+                    let json_output = serde_json::to_string_pretty(&devices).map_err(|e| {
+                        CliError::AudioError(format!("JSON serialization error: {e}"))
+                    })?;
+                    println!("{json_output}");
+                } else {
+                    let table = audio::format_devices_table(&devices);
+                    println!("{table}");
+                }
             }
         }
         Ok(())

@@ -32,6 +32,22 @@
         "mouseButton": "rightClick"
       }
     },
+    "proxyAudio": {
+      "description": "Proxy audio configuration for automatic device routing.\n\nEnables intelligent audio device switching based on device availability\nand priority. `AirPlay` devices are always given highest priority.\n\nExample:\n```json\n{\n  \"proxyAudio\": {\n    \"enabled\": true,\n    \"input\": {\n      \"priority\": [{ \"name\": \"AirPods Pro\" }, { \"name\": \"MacBook Pro\" }]\n    },\n    \"output\": {\n      \"bufferSize\": 128,\n      \"priority\": [{ \"name\": \"AirPods Pro\" }, { \"name\": \"External Speakers\" }]\n    }\n  }\n}\n```",
+      "$ref": "#/$defs/ProxyAudioConfig",
+      "default": {
+        "enabled": false,
+        "input": {
+          "name": "Barba Virtual Input",
+          "priority": []
+        },
+        "output": {
+          "bufferSize": 256,
+          "name": "Barba Virtual Output",
+          "priority": []
+        }
+      }
+    },
     "wallpapers": {
       "description": "Desktop wallpaper configuration.\n\nControls dynamic wallpaper rotation, effects, and display.\n\nExample:\n```json\n{\n  \"wallpapers\": {\n    \"path\": \"/path/to/wallpapers\",\n    \"mode\": \"random\",\n    \"interval\": 300,\n    \"radius\": 12,\n    \"blur\": 8\n  }\n}\n```",
       "$ref": "#/$defs/WallpaperConfig",
@@ -46,6 +62,22 @@
     }
   },
   "$defs": {
+    "AudioDevicePriority": {
+      "description": "Priority entry for audio device selection.\n\nDefines a single device in the priority list with its name and matching strategy.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "The name (or pattern) of the audio device to match.",
+          "type": "string",
+          "default": ""
+        },
+        "strategy": {
+          "description": "The strategy for matching the device name.\n- `exact`: Exact match (case-insensitive). Default if not specified.\n- `contains`: Device name contains the string (case-insensitive).\n- `startsWith`: Device name starts with the string (case-insensitive).\n- `regex`: Device name matches the regex pattern.",
+          "$ref": "#/$defs/MatchStrategy",
+          "default": "exact"
+        }
+      }
+    },
     "BarConfig": {
       "description": "Bar configuration for the status bar UI components.\n\nContains settings for bar-specific features like weather.\n\nExample:\n```json\n{\n  \"bar\": {\n    \"weather\": {\n      \"visualCrossingApiKey\": \"YOUR_API_KEY\",\n      \"defaultLocation\": \"Prague\"\n    }\n  }\n}\n```",
       "type": "object",
@@ -59,6 +91,31 @@
           }
         }
       }
+    },
+    "MatchStrategy": {
+      "description": "Strategy for matching device names in the priority list.",
+      "oneOf": [
+        {
+          "description": "Exact match (case-insensitive). This is the default strategy.",
+          "type": "string",
+          "const": "exact"
+        },
+        {
+          "description": "Device name contains the specified string (case-insensitive).",
+          "type": "string",
+          "const": "contains"
+        },
+        {
+          "description": "Device name starts with the specified string (case-insensitive).",
+          "type": "string",
+          "const": "startsWith"
+        },
+        {
+          "description": "Device name matches the specified regex pattern.",
+          "type": "string",
+          "const": "regex"
+        }
+      ]
     },
     "MenuAnywhereConfig": {
       "description": "Configuration for the `MenuAnywhere` feature.\n\n`MenuAnywhere` allows you to summon the current application's menu bar\nat any location on screen using a configurable keyboard + mouse trigger.\n\nExample:\n```json\n{\n  \"menuAnywhere\": {\n    \"enabled\": true,\n    \"modifiers\": [\"control\", \"command\"],\n    \"mouseButton\": \"rightClick\"\n  }\n}\n```",
@@ -123,6 +180,79 @@
           "const": "middleClick"
         }
       ]
+    },
+    "ProxyAudioConfig": {
+      "description": "Proxy audio configuration for automatic device routing.\n\nThis configuration enables intelligent audio device switching based on\ndevice availability and priority. When enabled, the app automatically\nswitches to the highest-priority available device when devices connect\nor disconnect.\n\n`AirPlay` devices are always given the highest priority, even if not\nexplicitly listed in the priority configuration.\n\nExample:\n```json\n{\n  \"proxyAudio\": {\n    \"enabled\": true,\n    \"input\": {\n      \"name\": \"Virtual Input Device\",\n      \"priority\": [\n        { \"name\": \"AirPods Pro\" },\n        { \"name\": \"AT2020USB\" },\n        { \"name\": \"MacBook Pro\" }\n      ]\n    },\n    \"output\": {\n      \"name\": \"Virtual Output Device\",\n      \"bufferSize\": 128,\n      \"priority\": [\n        { \"name\": \"AirPods Pro\" },\n        { \"name\": \"External Speakers\" },\n        { \"name\": \"MacBook Pro\" }\n      ]\n    }\n  }\n}\n```",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether proxy audio functionality is enabled.\nWhen enabled, the app will automatically switch audio devices\nbased on the priority configuration.\nDefault: false",
+          "type": "boolean",
+          "default": false
+        },
+        "input": {
+          "description": "Input device configuration.",
+          "$ref": "#/$defs/ProxyAudioInputConfig",
+          "default": {
+            "name": "Barba Virtual Input",
+            "priority": []
+          }
+        },
+        "output": {
+          "description": "Output device configuration.",
+          "$ref": "#/$defs/ProxyAudioOutputConfig",
+          "default": {
+            "bufferSize": 256,
+            "name": "Barba Virtual Output",
+            "priority": []
+          }
+        }
+      }
+    },
+    "ProxyAudioInputConfig": {
+      "description": "Input device configuration for proxy audio.\n\nDefines the virtual input device name and priority list for device selection.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Name of the virtual input device (used if a virtual device is installed).\nDefault: \"Barba Virtual Input\"",
+          "type": "string",
+          "default": "Barba Virtual Input"
+        },
+        "priority": {
+          "description": "Priority list for input device selection.\nDevices are checked in order; the first available device is selected.\n`AirPlay` devices are always given highest priority automatically.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/AudioDevicePriority"
+          }
+        }
+      }
+    },
+    "ProxyAudioOutputConfig": {
+      "description": "Output device configuration for proxy audio.\n\nDefines the virtual output device name, buffer size, and priority list.",
+      "type": "object",
+      "properties": {
+        "bufferSize": {
+          "description": "Audio buffer size in frames. Smaller values reduce latency but may cause artifacts.\nRecommended values: 128 (low latency), 256 (balanced), 512 (stable).\nDefault: 256",
+          "type": "integer",
+          "format": "uint32",
+          "default": 256,
+          "minimum": 0
+        },
+        "name": {
+          "description": "Name of the virtual output device (used if a virtual device is installed).\nDefault: \"Barba Virtual Output\"",
+          "type": "string",
+          "default": "Barba Virtual Output"
+        },
+        "priority": {
+          "description": "Priority list for output device selection.\nDevices are checked in order; the first available device is selected.\n`AirPlay` devices are always given highest priority automatically.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/AudioDevicePriority"
+          }
+        }
+      }
     },
     "ShortcutCommands": {
       "description": "Commands to execute for a keyboard shortcut.\n\nCan be either a single command string or an array of commands\nthat will be executed sequentially.",

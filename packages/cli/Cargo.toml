@@ -18,13 +18,18 @@ barba-shared = { path = "../shared" }
 clap = { version = "4.5.54", features = ["derive", "env", "string"] }
 clap_complete = "4.5.64"
 
+# CoreAudio for audio device listing
+coreaudio-rs = { version = "0.13.0", default-features = false, features = [
+  "audio_unit",
+] }
+
 # Shared with desktop app
 dirs = "6.0"
 
 # For IPC with the desktop app
 interprocess = { version = "2.2.3", features = ["tokio"] }
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.148"
+serde_json = "1.0.149"
 tokio = { version = "1.49.0", features = ["rt", "macros", "io-util", "net"] }
 
 [build-dependencies]

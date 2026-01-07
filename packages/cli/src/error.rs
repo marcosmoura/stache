@@ -15,6 +15,8 @@ pub enum CliError {
     InvalidArguments(String),
     /// Cache operation failed.
     CacheError(String),
+    /// Audio operation failed.
+    AudioError(String),
     /// IO error.
     Io(std::io::Error),
 }
@@ -36,6 +38,9 @@ impl fmt::Display for CliError {
             }
             Self::CacheError(msg) => {
                 write!(f, "Cache error: {msg}")
+            }
+            Self::AudioError(msg) => {
+                write!(f, "Audio error: {msg}")
             }
             Self::Io(err) => write!(f, "IO error: {err}"),
         }
