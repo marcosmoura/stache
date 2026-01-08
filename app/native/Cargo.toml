@@ -70,7 +70,6 @@ starship-battery = { version = "0.10.3", default-features = false }
 sysinfo = { version = "0.37.2", default-features = false, features = [
     "system",
 ] }
-thiserror = "2.0.17"
 
 # Tauri and plugins
 tauri = { version = "2.9.5", default-features = false, features = [
@@ -83,6 +82,7 @@ tauri-plugin-process = "2.3.1"
 tauri-plugin-shell = "2.3.4"
 tauri-plugin-single-instance = "2.3.7"
 tauri-plugin-zustand = "1.1.0"
+thiserror = "2.0.17"
 wallpaper = "3.2"
 
 [build-dependencies]

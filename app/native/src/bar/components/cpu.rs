@@ -389,10 +389,7 @@ mod tests {
 
     #[test]
     fn test_cpu_info_serialization_no_temperature() {
-        let info = CpuInfo {
-            usage: 45.5,
-            temperature: None,
-        };
+        let info = CpuInfo { usage: 45.5, temperature: None };
         let json = serde_json::to_string(&info).unwrap();
         assert!(json.contains("null") || json.contains("temperature"));
     }

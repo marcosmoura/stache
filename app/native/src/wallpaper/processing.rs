@@ -171,11 +171,7 @@ pub fn get_screen_count() -> usize {
         }
 
         let count: usize = msg_send![screens, count];
-        if count == 0 {
-            1
-        } else {
-            count
-        }
+        if count == 0 { 1 } else { count }
     }
 }
 

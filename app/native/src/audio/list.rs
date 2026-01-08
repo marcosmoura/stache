@@ -4,10 +4,10 @@
 
 use std::fmt::Write;
 
+use coreaudio::audio_unit::Scope;
 use coreaudio::audio_unit::macos_helpers::{
     get_audio_device_ids, get_audio_device_supports_scope, get_device_name,
 };
-use coreaudio::audio_unit::Scope;
 use serde::Serialize;
 
 use super::device::AudioDeviceType;

@@ -6,7 +6,7 @@ use std::io;
 use std::str::FromStr;
 
 use clap::{CommandFactory, Parser, Subcommand};
-use clap_complete::{generate, Generator, Shell};
+use clap_complete::{Generator, Shell, generate};
 
 use crate::error::StacheError;
 use crate::utils::ipc::{self, StacheNotification};
