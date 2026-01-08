@@ -1,23 +1,13 @@
-<!-- markdownlint-disable MD033 MD041 MD024 -->
+<!-- markdownlint-disable MD013 MD029 MD033 MD041 MD024 -->
 <p align="center">
-  <img src="app/native/icons/icon.png" alt="Stache Logo" width="256" height="256">
+  <img src="app/native/icons/icon.png" alt="Stache Logo" width="320" height="320">
 </p>
 
 <h1 align="center">Stache</h1>
 
 <p align="center">
-  <strong>A macOS utility suite with status bar, automation, and desktop enhancements</strong>
+  <strong>A macOS desktop enhancement suite built with Tauri 2.x, featuring a custom status bar, dynamic wallpapers, audio automation, and more.</strong>
 </p>
-
-\*<p align="center">
-<a href="#overview">Overview</a> •
-<a href="#features">Features</a> •
-<a href="#installation">Installation</a> •
-<a href="#configuration">Configuration</a> •
-<a href="#development">Development</a> •
-<a href="#license">License</a>
-
-</p>*
 
 <p align="center">
   <img src="https://img.shields.io/badge/platform-macOS-blue?style=flat-square" alt="Platform">
@@ -25,266 +15,111 @@
   <img src="https://img.shields.io/badge/tauri-2.x-purple?style=flat-square" alt="Tauri">
 </p>
 
----
-
-## Overview
-
-Stache is a **macOS-only** Tauri 2.x desktop application that provides a complete desktop enhancement suite with:
-
-- 📊 **Status Bar** — Customizable menubar with system information widgets (workspaces, media, weather, CPU, battery, clock)
-- ⌨️ **Global Keybindings** — Configurable keyboard shortcuts for any action or shell command
-- 🎨 **Dynamic Wallpapers** — Automatic wallpaper rotation with blur and rounded corners effects
-- 🎵 **Media Controls** — Now playing widget with artwork, playback controls, and track info
-- 🔊 **Audio Device Management** — Automatic audio device switching based on configurable priority rules
-- 📍 **MenuAnywhere** — Summon any app's menu bar at your cursor position with a keyboard + mouse combo
-- 🎵 **noTunes** — Prevent Apple Music from auto-launching and optionally open your preferred music app
-- ⏹️ **Hold-to-Quit** — Require holding Cmd+Q to quit apps, preventing accidental closes
-- 😴 **Keep Awake** — Prevent system sleep with a single click from the status bar
-- 🖥️ **Tiling WM Integration** — Built-in support for Hyprspace/yabai/aerospace workspace events
-
-Built with **Rust** for the backend and **React 19** for the frontend, Stache combines native performance with a modern, reactive UI.
-
----
-
 ## Features
 
-### 📊 Status Bar
+| Feature              | Description                                                                     |
+| -------------------- | ------------------------------------------------------------------------------- |
+| **Status Bar**       | Custom menubar with workspaces, media, weather, CPU, battery, and clock widgets |
+| **Wallpapers**       | Dynamic wallpaper rotation with blur and rounded corners effects                |
+| **Audio Management** | Automatic audio device switching based on priority rules                        |
+| **Keybindings**      | Global keyboard shortcuts for commands and automation                           |
+| **MenuAnywhere**     | Summon any app's menu at your cursor position                                   |
+| **noTunes**          | Prevent Apple Music from auto-launching                                         |
+| **Hold-to-Quit**     | Require holding Cmd+Q to quit applications                                      |
+| **Keep Awake**       | Prevent system sleep from the status bar                                        |
 
-A sleek, transparent menubar that displays:
+## Requirements
 
-| Widget          | Description                                     |
-| --------------- | ----------------------------------------------- |
-| **Workspaces**  | Visual workspace indicator with click-to-switch |
-| **Current App** | Active application name and icon                |
-| **Media**       | Now playing track with playback controls        |
-| **Weather**     | Current conditions and temperature              |
-| **CPU**         | Real-time CPU usage monitor                     |
-| **Battery**     | Battery level and charging status               |
-| **Keep Awake**  | Prevent system sleep toggle                     |
-| **Clock**       | Current time and date                           |
-
-### ⌨️ Global Keybindings
-
-Define custom keyboard shortcuts to:
-
-- Switch workspaces and layouts
-- Move and resize windows
-- Execute shell commands
-- Trigger application actions
-
-### 🎨 Dynamic Wallpapers
-
-- Automatic wallpaper rotation (random or sequential)
-- Configurable change interval
-- Rounded corners and blur effects
-- Per-screen wallpaper support
-- Pre-generation for instant switching
-
-### 🔊 Audio Device Management
-
-- Automatic switching when devices connect/disconnect
-- Priority-based device selection (e.g., prefer AirPods over built-in speakers)
-- Separate input/output device priorities
-- Regex and pattern matching for device names
-- Device dependency rules (e.g., use speakers only when audio interface is connected)
-
-### 📍 MenuAnywhere
-
-Summon any application's menu bar right at your cursor:
-
-- Configurable modifier keys (Control, Option, Command, Shift)
-- Right-click or middle-click trigger
-- Works with any macOS application
-
-### 🎵 noTunes
-
-Prevent Apple Music from hijacking your media keys:
-
-- Blocks Apple Music/iTunes from auto-launching
-- Optionally launches your preferred music app (Spotify, Tidal) instead
-- Works with Bluetooth headphone connections and media key presses
-
-### ⏹️ Hold-to-Quit
-
-Prevent accidental app closures:
-
-- Requires holding Cmd+Q instead of just pressing it
-- Visual feedback showing hold progress
-- Per-app customization (coming soon)
-
----
+- macOS 10.15 (Catalina) or later
 
 ## Installation
 
-### Requirements
+Download the latest release from the [Releases](https://github.com/marcosmoura/stache/releases) page, or build from source:
 
-- **macOS 10.15** (Catalina) or later
-
-### Download
-
-Download the latest release from the [Releases](https://github.com/marcosmoura/stache/releases) page.
-
-### Build from Source
-
-1. **Install dependencies:**
-
-   ```bash
-   # Install Rust
-   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-   # Install pnpm
-   npm install -g pnpm
-
-   # Install project dependencies
-   pnpm install
-   ```
-
-2. **Build the application:**
-
-   ```bash
-   pnpm release
-   ```
-
----
-
-## Configuration
-
-Stache uses a JSONC configuration file located at:
-
-`~/.config/stache/config.json`
-
-> **Tip:** JSONC supports comments! Use `//` for single-line and `/* */` for multi-line comments.
-
-### JSON Schema
-
-A JSON Schema is provided for editor autocompletion and validation:
-
-```jsonc
-{
-  "$schema": "https://raw.githubusercontent.com/marcosmoura/stache/main/stache.schema.json",
-  // Your configuration here...
-}
+```bash
+git clone https://github.com/marcosmoura/stache.git
+cd stache
+pnpm install
+pnpm release
 ```
 
-### Example Configuration
+## Quick Start
+
+1. Create a configuration file at `~/.config/stache/config.jsonc`:
 
 ```jsonc
 {
   "$schema": "https://raw.githubusercontent.com/marcosmoura/stache/main/stache.schema.json",
 
-  // Status bar configuration
-  "bar": {
-    "wallpapers": {
-      "path": "~/Pictures/Wallpapers",
-      "interval": 300,
-      "mode": "random",
-      "radius": 12,
-      "blur": 8,
-    },
-    "weather": {
-      "visualCrossingApiKey": "YOUR_API_KEY",
-      "defaultLocation": "San Francisco",
-    },
+  "wallpapers": {
+    "path": "~/Pictures/Wallpapers",
+    "interval": 1800,
+    "mode": "random",
   },
 
-  // Global keybindings
   "keybindings": {
     "Command+Control+R": "stache reload",
+    "Command+Control+W": "stache wallpaper set --random",
+  },
+
+  "notunes": {
+    "enabled": true,
+    "targetApp": "spotify",
   },
 }
 ```
+
+2. Launch Stache from Applications or run `stache` in the terminal
+
+3. Grant Accessibility permissions when prompted
+
+## CLI
+
+Stache includes a CLI for automation and integration:
+
+```bash
+stache reload                    # Reload configuration
+stache wallpaper set --random    # Set random wallpaper
+stache audio list                # List audio devices
+stache event workspace-changed 1 # Send workspace event
+```
+
+## Documentation
+
+- [Getting Started](docs/getting-started.md)
+- [Configuration Reference](docs/configuration.md)
+- [CLI Reference](docs/cli.md)
+- [Architecture](docs/architecture.md)
+- [Development Guide](docs/development.md)
+
+### Features
+
+- [Status Bar](docs/features/status-bar.md)
+- [Wallpapers](docs/features/wallpapers.md)
+- [Audio Management](docs/features/audio.md)
+- [Keybindings](docs/features/keybindings.md)
+- [MenuAnywhere](docs/features/menu-anywhere.md)
+- [noTunes](docs/features/notunes.md)
 
 ## Development
 
-### Prerequisites
+```bash
+# Install dependencies
+pnpm install
 
-- [Rust](https://rustup.rs/) (2024 edition)
-- [Node.js](https://nodejs.org/) 20+
-- [pnpm](https://pnpm.io/) 9+
+# Development mode with hot reload
+pnpm tauri:dev
 
-### Recommended IDE Setup
+# Run tests
+pnpm test
 
-- [VS Code](https://code.visualstudio.com/)
-- [Tauri VS Code extension](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode)
-- [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+# Lint and format
+pnpm lint && pnpm format
 
-### Project Structure
-
-```text
-stache/
-├── app/
-│   ├── native/               # Rust backend (Tauri)
-│   │   └── src/
-│   │       ├── main.rs           # Entry point (CLI + desktop)
-│   │       ├── lib.rs            # Tauri app initialization
-│   │       ├── cli/              # CLI commands
-│   │       ├── config/           # Configuration types
-│   │       ├── bar/              # Status bar components
-│   │       ├── wallpaper/        # Wallpaper management
-│   │       ├── audio/            # Audio device management
-│   │       └── utils/            # Utilities (IPC, paths, etc.)
-│   │
-│   └── ui/                   # React frontend
-│       ├── main.tsx              # App entry
-│       ├── renderer/             # Window renderers (bar, widgets)
-│       ├── components/           # Shared UI components
-│       ├── hooks/                # React hooks
-│       ├── stores/               # Zustand stores
-│       └── design-system/        # Styling tokens
-│
-├── scripts/                  # Build & release scripts
-├── stache.schema.json        # JSON Schema for config
-└── Cargo.toml                # Workspace root
+# Build for production
+pnpm tauri:build
 ```
-
-### Available Scripts
-
-| Command            | Description                           |
-| ------------------ | ------------------------------------- |
-| `pnpm dev`         | Start Vite dev server (frontend only) |
-| `pnpm tauri:dev`   | Full app with hot reload              |
-| `pnpm tauri:build` | Build production app                  |
-| `pnpm build:cli`   | Build CLI binary                      |
-| `pnpm test`        | Run all tests                         |
-| `pnpm test:ui`     | Run Vitest browser tests              |
-| `pnpm test:rust`   | Run Rust tests with nextest           |
-| `pnpm lint`        | Run all linters                       |
-| `pnpm format`      | Format all code                       |
-
-### Architecture
-
-```text
-┌─────────────┐  NSDistributed      ┌──────────────────────────────────────┐
-│   CLI       │  Notification       │         Desktop App                  │
-│  (stache)   │ ──────────────────► │  ┌─────────────┐   ┌───────────────┐ │
-└─────────────┘                     │  │IPC Listener │──►│ Tauri Events  │ │
-                                    │  └─────────────┘   └───────┬───────┘ │
-                                    │                            │         │
-                                    │  ┌─────────────────────────▼───────┐ │
-                                    │  │        React Frontend           │ │
-                                    │  │  (React Query + Tauri Invoke)   │ │
-                                    │  └─────────────────────────────────┘ │
-                                    └──────────────────────────────────────┘
-```
-
-### Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes
-4. Run linting and tests (`pnpm lint && pnpm test`)
-5. Commit your changes (`git commit -m 'Add amazing feature'`)
-6. Push to the branch (`git push origin feature/amazing-feature`)
-7. Open a Pull Request
-
----
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
-
-<p align="center">
-  Made with ❤️ by <a href="https://github.com/marcosmoura">Marcos Moura</a>
-</p>
+MIT
