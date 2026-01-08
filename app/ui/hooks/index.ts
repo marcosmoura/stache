@@ -1,15 +1,17 @@
 export { useDisableRightClick } from './useDisableRightClick';
 export { useMediaQuery } from './useMediaQuery';
 export { useTauriEvent } from './useTauriEvent';
-export { useTauriEventQuery } from './useTauriEventQuery';
+export { useWidgetToggle } from './useWidgetToggle';
 
 /**
- * @experimental Cross-window synchronized query hooks
+ * Unified Tauri query hooks for data fetching with optional event listening
+ * and cross-window state synchronization.
  */
-export { useSuspenseStoreQuery } from './useSuspenseStoreQuery';
-export type { UseSuspenseStoreQueryOptions } from './useSuspenseStoreQuery';
+export { useTauri, useTauriSuspense } from './useTauri';
+export type { UseTauriOptions, UseTauriSuspenseOptions } from './useTauri';
 
-export { useStoreQuery } from './useStoreQuery';
-export type { UseStoreQueryOptions } from './useStoreQuery';
-
-export { destroyQueryStore, getQueryStoreIds } from './useStoreQueryBase';
+/**
+ * Cross-window state synchronization utilities.
+ */
+export { useCrossWindowSync, destroyQueryStore, getQueryStoreIds } from './useCrossWindowSync';
+export type { UseCrossWindowSyncOptions } from './useCrossWindowSync';

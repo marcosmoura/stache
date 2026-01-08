@@ -1,8 +1,8 @@
 /**
- * @internal Shared base utilities for store query hooks
+ * Cross-window state synchronization utilities.
  *
- * This module provides common functionality used by both useSuspenseStoreQuery
- * and useStoreQuery hooks for cross-window state synchronization.
+ * This module provides functionality for synchronizing React Query cache
+ * state across multiple Tauri windows using Zustand stores with @tauri-store/zustand.
  */
 import { useEffect, useRef } from 'react';
 
@@ -11,6 +11,10 @@ import type { StoreApi, UseBoundStore } from 'zustand';
 
 import { createStore, getStore, destroyStore, getStoreIds, type State } from '@/utils/createStore';
 
+// ============================================================================
+// Types
+// ============================================================================
+
 /** State structure for query stores */
 export interface QueryStoreState<TData> extends State {
   data: TData | undefined;
@@ -18,17 +22,32 @@ export interface QueryStoreState<TData> extends State {
   setData: (data: TData) => void;
 }
 
+/** Options for the cross-window sync hook */
+export interface UseCrossWindowSyncOptions<TData> {
+  /** Query key used for cache identification */
+  queryKey: QueryKey;
+  /** Whether to enable cross-window synchronization */
+  syncAcrossWindows: boolean;
+  /** Current data to sync */
+  data: TData | undefined;
+}
+
+// ============================================================================
+// Internal Utilities
+// ============================================================================
+
 /**
  * Creates a unique store ID from a query key.
  */
-export function queryKeyToStoreId(queryKey: QueryKey): string {
+function queryKeyToStoreId(queryKey: QueryKey): string {
   return `query-${JSON.stringify(queryKey)}`;
 }
 
 /**
- * Gets or creates a store for a query key using createStore.
+ * Gets or creates a Zustand store for a query key.
+ * The store is configured for cross-window sync via @tauri-store/zustand.
  */
-export function getOrCreateQueryStore<TData>(
+function getOrCreateQueryStore<TData>(
   queryKey: QueryKey,
 ): UseBoundStore<StoreApi<QueryStoreState<TData>>> {
   const storeId = queryKeyToStoreId(queryKey);
@@ -62,24 +81,35 @@ export function getOrCreateQueryStore<TData>(
   );
 }
 
-/** Options for the store sync hook */
-export interface UseStoreSyncOptions<TData> {
-  queryKey: QueryKey;
-  syncAcrossWindows: boolean;
-  data: TData | undefined;
-}
+// ============================================================================
+// Public API
+// ============================================================================
 
 /**
  * Hook that handles bidirectional synchronization between React Query cache
  * and the Tauri store for cross-window state sharing.
  *
- * @param options - Sync options including query key, sync flag, and current data
+ * This hook:
+ * 1. Syncs local query data changes to the Zustand store (for other windows)
+ * 2. Syncs store changes from other windows to the local query cache
+ *
+ * @example
+ * ```tsx
+ * // Inside a custom hook that uses React Query
+ * const result = useQuery({ queryKey: ['data'], queryFn: fetchData });
+ *
+ * useCrossWindowSync({
+ *   queryKey: ['data'],
+ *   syncAcrossWindows: true,
+ *   data: result.data,
+ * });
+ * ```
  */
-export function useStoreSync<TData>({
+export function useCrossWindowSync<TData>({
   queryKey,
   syncAcrossWindows,
   data,
-}: UseStoreSyncOptions<TData>): void {
+}: UseCrossWindowSyncOptions<TData>): void {
   const queryClient = useQueryClient();
 
   // Ref to prevent circular updates between store and query
@@ -125,6 +155,7 @@ export function useStoreSync<TData>({
 
 /**
  * Destroys a query store and removes it from the registry.
+ * Use this for cleanup when a query is no longer needed.
  *
  * @param queryKey - The query key used to create the store
  */
@@ -135,6 +166,7 @@ export async function destroyQueryStore(queryKey: QueryKey): Promise<void> {
 
 /**
  * Gets all registered query store IDs.
+ * Useful for debugging or bulk cleanup operations.
  */
 export function getQueryStoreIds(): string[] {
   return getStoreIds().filter((id) => id.startsWith('query-'));

@@ -1,85 +1,35 @@
 import { useCallback, useEffect, useState } from 'react';
 
-import { type IconDefinition, faTidal } from '@fortawesome/free-brands-svg-icons';
-import { SpotifyIcon, YoutubeIcon, PlayCircle02Icon } from '@hugeicons/core-free-icons';
-import type { IconSvgElement } from '@hugeicons/react';
 import { invoke } from '@tauri-apps/api/core';
 
-import { colors } from '@/design-system';
-import { useTauriEventQuery } from '@/hooks';
+import { useTauri } from '@/hooks/useTauri';
 import { MediaEvents } from '@/types';
 
-import type { MediaApp, MediaPayload, TransformedMediaPayload } from './Media.types';
+import { getPlayerIconProps, MEDIA_APPS_BY_BUNDLE_ID } from './Media.constants';
+import type { MediaPayload, TransformedMediaPayload } from './Media.types';
 
-const mediaApps = {
-  spotify: {
-    bundleIdentifier: 'com.spotify.client',
-    name: 'Spotify',
-  },
-  edge: {
-    bundleIdentifier: 'com.microsoft.edgemac.Dev',
-    name: 'Microsoft Edge Dev',
-  },
-  tidal: {
-    bundleIdentifier: 'com.tidal.desktop',
-    name: 'Tidal',
-  },
-};
-
-const mediaAppsByBundleId = Object.values(mediaApps).reduce<Record<string, MediaApp>>(
-  (acc, app) => {
-    acc[app.bundleIdentifier] = app;
-    return acc;
-  },
-  {},
-);
-
-type PlayerIconInfo = {
-  icon: IconSvgElement | IconDefinition;
-  color: string;
-  pack: 'hugeicons' | 'fontawesome';
-};
-
-const getPlayerIcon = (bundleIdentifier: string): PlayerIconInfo => {
-  switch (bundleIdentifier) {
-    case mediaApps.spotify.bundleIdentifier:
-      return {
-        icon: SpotifyIcon,
-        color: colors.green,
-        pack: 'hugeicons',
-      };
-    case mediaApps.edge.bundleIdentifier:
-      return {
-        icon: YoutubeIcon,
-        color: colors.red,
-        pack: 'hugeicons',
-      };
-    case mediaApps.tidal.bundleIdentifier:
-      return {
-        icon: faTidal,
-        color: colors.text,
-        pack: 'fontawesome',
-      };
-    default:
-      return {
-        icon: PlayCircle02Icon,
-        color: colors.text,
-        pack: 'hugeicons',
-      };
-  }
-};
-
+/**
+ * Fetches the current media playback information from the Tauri backend.
+ * Returns null if no media is playing or if the fetch fails.
+ */
 const fetchCurrentMedia = async (): Promise<MediaPayload | null> => {
   try {
     const payload = await invoke<MediaPayload | null>('get_current_media_info');
     return payload ?? null;
   } catch (error) {
-    console.error('Failed to fetch media information', error);
+    // Media info may not be available if no media is playing - this is expected
+    console.warn('[Media] Failed to fetch media information:', error);
     return null;
   }
 };
 
-const parseMediaPayload = (media: MediaPayload): TransformedMediaPayload => {
+/**
+ * Transforms a raw media payload into a display-ready format.
+ * Constructs the label from title and artist, and adds a prefix for paused state.
+ */
+const parseMediaPayload = (media: MediaPayload | null): TransformedMediaPayload | null => {
+  if (!media) return null;
+
   const { artist, title, artwork, playing, bundleIdentifier } = media;
 
   const separator = ' - ';
@@ -94,25 +44,35 @@ const parseMediaPayload = (media: MediaPayload): TransformedMediaPayload => {
   };
 };
 
+/**
+ * Hook that manages media playback state and artwork loading.
+ *
+ * Features:
+ * - Fetches current media info on mount
+ * - Subscribes to real-time playback changes
+ * - Preloads artwork images
+ * - Provides click handler to open the source app
+ * - Returns appropriate icon based on the media source
+ */
 export const useMedia = () => {
   const [loadedArtwork, setLoadedArtwork] = useState<string | null>(null);
 
-  const { data: media } = useTauriEventQuery<MediaPayload, TransformedMediaPayload>({
+  const { data: rawMedia } = useTauri<MediaPayload | null>({
+    queryKey: ['media'],
+    queryFn: fetchCurrentMedia,
     eventName: MediaEvents.PLAYBACK_CHANGED,
-    transformFn: (payload) => parseMediaPayload(payload),
-    initialFetch: fetchCurrentMedia,
-    queryOptions: {
-      refetchOnMount: true,
-      staleTime: 5 * 60 * 1000, // 5 minutes
-    },
+    staleTime: 5 * 60 * 1000, // 5 minutes
   });
+
+  // Transform the media payload
+  const media = parseMediaPayload(rawMedia ?? null);
 
   const onMediaClick = useCallback(async () => {
     if (!media?.bundleIdentifier) {
       return;
     }
 
-    const targetApp = mediaAppsByBundleId[media.bundleIdentifier];
+    const targetApp = MEDIA_APPS_BY_BUNDLE_ID[media.bundleIdentifier];
 
     if (!targetApp) {
       return;
@@ -121,6 +81,7 @@ export const useMedia = () => {
     await invoke('open_app', { name: targetApp.name });
   }, [media]);
 
+  // Preload artwork image to prevent flickering
   useEffect(() => {
     const artwork = media?.artwork;
 
@@ -142,7 +103,7 @@ export const useMedia = () => {
     };
   }, [media?.artwork]);
 
-  const mediaIcon = getPlayerIcon(media?.bundleIdentifier || '');
+  const mediaIconProps = getPlayerIconProps(media?.bundleIdentifier ?? '');
 
-  return { media, loadedArtwork, onMediaClick, mediaIcon };
+  return { media, loadedArtwork, onMediaClick, mediaIconProps };
 };

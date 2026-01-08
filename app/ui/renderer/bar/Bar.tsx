@@ -1,4 +1,5 @@
 import { Suspense, memo } from 'react';
+import { ErrorBoundary } from 'react-error-boundary';
 
 import { cx } from '@linaria/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -32,10 +33,14 @@ const BarContent = memo(() => {
   );
 });
 
+BarContent.displayName = 'BarContent';
+
 export const Bar = () => (
   <QueryClientProvider client={queryClient}>
-    <Suspense fallback={null}>
-      <BarContent />
-    </Suspense>
+    <ErrorBoundary fallback={null}>
+      <Suspense fallback={null}>
+        <BarContent />
+      </Suspense>
+    </ErrorBoundary>
   </QueryClientProvider>
 );

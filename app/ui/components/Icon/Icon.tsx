@@ -1,7 +1,6 @@
-import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { HugeiconsIcon } from '@hugeicons/react';
 
-import type { IconProps, HugeIconsProps, FontAwesomeProps } from './Icon.types';
+import type { IconProps, HugeIconsProps, SimpleIconsProps } from './Icon.types';
 
 export const Icon = ({ pack = 'hugeicons', ...props }: IconProps) => {
   if (pack === 'hugeicons') {
@@ -9,5 +8,7 @@ export const Icon = ({ pack = 'hugeicons', ...props }: IconProps) => {
     return <HugeiconsIcon icon={icon} size={size} strokeWidth={strokeWidth} {...rest} />;
   }
 
-  return <FontAwesomeIcon {...(props as FontAwesomeProps)} />;
+  // simple-icons
+  const { icon: SimpleIcon, size = 18, ...rest } = props as SimpleIconsProps;
+  return <SimpleIcon size={size} {...rest} />;
 };

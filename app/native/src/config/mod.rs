@@ -28,14 +28,11 @@ static CONFIG: OnceLock<StacheConfig> = OnceLock::new();
 /// Path to the currently loaded configuration file.
 static CONFIG_PATH: OnceLock<PathBuf> = OnceLock::new();
 
-/// Loads the configuration and stores it in a global static.
+/// Loads the configuration from disk.
 ///
-/// This function is idempotent - calling it multiple times will return
-/// the same configuration instance.
-///
-/// If no configuration file is found, returns a default empty configuration.
-pub fn init() -> &'static StacheConfig {
-    CONFIG.get_or_init(|| match load_config_with_path() {
+/// Returns the loaded configuration, or a default configuration if loading fails.
+fn load_or_default() -> StacheConfig {
+    match load_config_with_path() {
         Ok((config, path)) => {
             let _ = CONFIG_PATH.set(path);
             config
@@ -45,17 +42,24 @@ pub fn init() -> &'static StacheConfig {
             eprintln!("stache: warning: failed to load configuration: {err}");
             StacheConfig::default()
         }
-    })
+    }
 }
 
-/// Returns the global configuration instance.
+/// Initializes and returns the global configuration instance.
 ///
-/// # Panics
+/// This function is idempotent - calling it multiple times will return
+/// the same configuration instance.
 ///
-/// Panics if called before `init()` has been called.
-pub fn get_config() -> &'static StacheConfig {
-    CONFIG.get().expect("Configuration not initialized. Call init() first.")
-}
+/// If no configuration file is found, returns a default empty configuration.
+pub fn init() -> &'static StacheConfig { CONFIG.get_or_init(load_or_default) }
+
+/// Returns the global configuration instance, initializing it if necessary.
+///
+/// This function is safe to call at any time - it will lazily initialize
+/// the configuration if it hasn't been loaded yet.
+///
+/// If no configuration file is found, returns a default empty configuration.
+pub fn get_config() -> &'static StacheConfig { CONFIG.get_or_init(load_or_default) }
 
 /// Returns the path to the loaded configuration file, if any.
 pub fn get_config_path() -> Option<&'static PathBuf> { CONFIG_PATH.get() }

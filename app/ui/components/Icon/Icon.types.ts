@@ -1,12 +1,16 @@
-import type { FontAwesomeIconProps } from '@fortawesome/react-fontawesome';
+import type { ComponentProps } from 'react';
+
 import type { HugeiconsIconProps } from '@hugeicons/react';
+import type { IconType } from '@icons-pack/react-simple-icons';
 
 export type HugeIconsProps = Omit<HugeiconsIconProps, 'ref'> & {
   pack?: 'hugeicons';
 };
 
-export type FontAwesomeProps = Omit<FontAwesomeIconProps, 'ref'> & {
-  pack: 'fontawesome';
-};
+export type SimpleIconsProps = {
+  pack: 'simple-icons';
+  icon: IconType;
+  size?: number;
+} & Omit<ComponentProps<'svg'>, 'ref'>;
 
-export type IconProps = HugeIconsProps | FontAwesomeProps;
+export type IconProps = HugeIconsProps | SimpleIconsProps;

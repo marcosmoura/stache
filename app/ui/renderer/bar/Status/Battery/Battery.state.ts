@@ -1,13 +1,11 @@
-import { useCallback, useMemo, useRef } from 'react';
+import { useMemo } from 'react';
 
 import { colors } from '@/design-system';
-import type { WidgetConfig } from '@/renderer/widgets/Widgets.types';
+import { useWidgetToggle } from '@/hooks';
 import { getBatteryIcon, useBatteryStore } from '@/stores/BatteryStore';
-import { WidgetsEvents } from '@/types';
-import { emitTauriEvent } from '@/utils/emitTauriEvent';
 
 export const useBattery = () => {
-  const ref = useRef<HTMLButtonElement>(null);
+  const { ref, onClick } = useWidgetToggle('battery');
 
   // Get state from hook-based store (uses React Query internally)
   const { battery } = useBatteryStore();
@@ -38,28 +36,6 @@ export const useBattery = () => {
         return colors.text;
     }
   }, [state]);
-
-  const onClick = useCallback(() => {
-    if (!ref.current) {
-      return;
-    }
-
-    const { x, y, width, height } = ref.current.getBoundingClientRect();
-
-    emitTauriEvent<WidgetConfig>({
-      eventName: WidgetsEvents.TOGGLE,
-      target: 'widgets',
-      payload: {
-        name: 'battery',
-        rect: {
-          x,
-          y,
-          width,
-          height,
-        },
-      },
-    });
-  }, []);
 
   return { percentage, label, icon, color, ref, onClick };
 };

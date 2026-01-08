@@ -11,7 +11,7 @@ use std::fs::{File, create_dir_all};
 use std::hash::{Hash, Hasher};
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -49,7 +49,7 @@ fn resize_artwork(img: &image::DynamicImage) -> io::Result<(Vec<u8>, String)> {
     let rgba = resized.to_rgba8();
 
     let buffer = PNG_BUFFER.get_or_init(|| std::sync::Mutex::new(Vec::with_capacity(4096)));
-    let mut buffer = buffer.lock().unwrap();
+    let mut buffer = buffer.lock().unwrap_or_else(PoisonError::into_inner);
     buffer.clear();
     let mut cursor = std::io::Cursor::new(&mut *buffer);
     image::DynamicImage::ImageRgba8(rgba)
@@ -174,7 +174,7 @@ fn save_artwork(state: &Map<String, Value>) -> io::Result<Option<String>> {
 
     let decode_buffer =
         DECODE_BUFFER.get_or_init(|| std::sync::Mutex::new(Vec::with_capacity(4096)));
-    let mut buffer = decode_buffer.lock().unwrap();
+    let mut buffer = decode_buffer.lock().unwrap_or_else(PoisonError::into_inner);
     buffer.clear();
 
     if STANDARD.decode_vec(art, &mut buffer).is_err() {
@@ -206,13 +206,13 @@ fn calculate_state_hash(state: &Map<String, Value>) -> u64 {
 
 fn set_last_media_payload(payload: Option<Value>) {
     let storage = LAST_MEDIA_PAYLOAD.get_or_init(|| Mutex::new(Value::Null));
-    let mut guard = storage.lock().unwrap();
+    let mut guard = storage.lock().unwrap_or_else(PoisonError::into_inner);
     *guard = payload.unwrap_or(Value::Null);
 }
 
 fn get_last_media_payload() -> Option<Value> {
     let storage = LAST_MEDIA_PAYLOAD.get_or_init(|| Mutex::new(Value::Null));
-    let guard = storage.lock().unwrap();
+    let guard = storage.lock().unwrap_or_else(PoisonError::into_inner);
     if guard.is_null() {
         None
     } else {
@@ -258,7 +258,7 @@ fn save_artwork_and_emit(
 fn parse_json(line: &str) -> Option<Value> {
     static JSON_BUFFER: OnceLock<std::sync::Mutex<Vec<u8>>> = OnceLock::new();
     let buffer = JSON_BUFFER.get_or_init(|| std::sync::Mutex::new(Vec::with_capacity(4096)));
-    let mut bb = buffer.lock().unwrap();
+    let mut bb = buffer.lock().unwrap_or_else(PoisonError::into_inner);
     bb.clear();
     bb.extend_from_slice(line.as_bytes());
     let result = serde_json::from_slice::<Value>(&bb).ok();

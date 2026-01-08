@@ -22,8 +22,7 @@ unexpected_cfgs = { level = "allow", check-cfg = [
 
 [profile.release]
 codegen-units = 1
-debug = 1
-incremental = true
+incremental = false
 lto = true
 opt-level = "s"
 panic = "abort"

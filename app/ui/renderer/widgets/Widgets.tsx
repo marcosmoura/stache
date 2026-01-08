@@ -1,4 +1,5 @@
-import { lazy, Suspense } from 'react';
+import { lazy, memo, Suspense } from 'react';
+import { ErrorBoundary } from 'react-error-boundary';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { motion } from 'motion/react';
@@ -24,7 +25,7 @@ const queryClient = new QueryClient({
   },
 });
 
-const WidgetsContent = () => {
+const WidgetsContent = memo(() => {
   const { isAnimatingIn, transition, contentRef, activeWidget } = useWidgets();
 
   return (
@@ -40,12 +41,16 @@ const WidgetsContent = () => {
       </motion.div>
     </div>
   );
-};
+});
+
+WidgetsContent.displayName = 'WidgetsContent';
 
 export const Widgets = () => (
   <QueryClientProvider client={queryClient}>
-    <Suspense fallback={null}>
-      <WidgetsContent />
-    </Suspense>
+    <ErrorBoundary fallback={null}>
+      <Suspense fallback={null}>
+        <WidgetsContent />
+      </Suspense>
+    </ErrorBoundary>
   </QueryClientProvider>
 );

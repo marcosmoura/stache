@@ -65,7 +65,10 @@ pub fn run() {
         ])
         .setup(move |app| {
             // Make the app not appear in the dock
-            let _ = app.handle().set_activation_policy(tauri::ActivationPolicy::Prohibited);
+            if let Err(e) = app.handle().set_activation_policy(tauri::ActivationPolicy::Prohibited)
+            {
+                eprintln!("stache: warning: failed to set activation policy: {e}");
+            }
 
             // Start watching the config file for changes
             config::watch_config_file(app.handle().clone());

@@ -103,7 +103,7 @@ export default defineConfig({
                 }
 
                 // Exclude icon libraries - they stay in main bundle
-                if (/@hugeicons|@fortawesome|hugeicons|fontawesome/.test(id)) {
+                if (/@hugeicons|@icons-pack|hugeicons|simple-icons/.test(id)) {
                   return false;
                 }
 

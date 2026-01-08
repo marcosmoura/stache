@@ -1,6 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
-
-import { useStoreQuery, useSuspenseStoreQuery } from '@/hooks';
+import { useTauri, useTauriSuspense } from '@/hooks/useTauri';
 
 import type {
   IpApiResponse,
@@ -18,10 +16,6 @@ const API_INCLUDE = 'current,hours,days';
 const REFETCH_INTERVAL = 20 * 60 * 1000; // 20 minutes
 
 /* Helper functions */
-const getWeatherConfig = (): Promise<WeatherConfig> => {
-  return invoke<WeatherConfig>('get_weather_config');
-};
-
 const buildLocationString = (parts: Array<string | undefined>): string =>
   parts.filter(Boolean).join(', ');
 
@@ -116,19 +110,18 @@ const fetchWeatherData = async (
 };
 
 /**
- * @experimental Hook-based Weather Store using React Query for data fetching
- * and Zustand + @tauri-store/zustand for cross-window state synchronization.
+ * Hook-based Weather Store using React Query for data fetching.
  */
 export const useWeatherStore = () => {
   // Fetch config (suspends until loaded)
-  const { data: config } = useSuspenseStoreQuery<WeatherConfig>({
+  const { data: config } = useTauriSuspense<WeatherConfig>({
     queryKey: ['weatherConfig'],
-    queryFn: getWeatherConfig,
+    command: 'get_weather_config',
     staleTime: Infinity, // Config doesn't change during runtime
   });
 
   // Fetch location (depends on config)
-  const { data: location } = useStoreQuery<string>({
+  const { data: location } = useTauri<string>({
     queryKey: ['weatherLocation', config?.defaultLocation],
     queryFn: () => fetchLocationData(config!.defaultLocation),
     refetchInterval: REFETCH_INTERVAL,
@@ -136,7 +129,7 @@ export const useWeatherStore = () => {
   });
 
   // Fetch weather data (depends on config and location)
-  const { data: weather, isLoading } = useStoreQuery<WeatherData>({
+  const { data: weather, isLoading } = useTauri<WeatherData>({
     queryKey: ['weather', location, config?.visualCrossingApiKey],
     queryFn: () =>
       fetchWeatherData(config!.visualCrossingApiKey, location!, config!.defaultLocation),

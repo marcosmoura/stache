@@ -5,6 +5,7 @@ use serde_json::{Map, Value};
 use tauri::AppHandle;
 use tauri_plugin_shell::ShellExt;
 
+use crate::error::StacheError;
 use crate::utils::command::resolve_binary;
 
 static HYPRSPACE_PATH: OnceLock<PathBuf> = OnceLock::new();
@@ -13,7 +14,7 @@ static HYPRSPACE_PATH: OnceLock<PathBuf> = OnceLock::new();
 /// Falls back to `--all` so multi-monitor setups are covered.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
-pub fn get_hyprspace_workspaces(app: tauri::AppHandle) -> Result<Vec<Value>, String> {
+pub fn get_hyprspace_workspaces(app: tauri::AppHandle) -> Result<Vec<Value>, StacheError> {
     run_hyprspace_json(&app, &["list-workspaces", "--all", "--json"])
 }
 
@@ -22,14 +23,14 @@ pub fn get_hyprspace_workspaces(app: tauri::AppHandle) -> Result<Vec<Value>, Str
 #[allow(clippy::needless_pass_by_value)]
 pub fn get_hyprspace_current_workspace_windows(
     app: tauri::AppHandle,
-) -> Result<Vec<Value>, String> {
+) -> Result<Vec<Value>, StacheError> {
     run_hyprspace_json(&app, &["list-windows", "--workspace", "focused", "--json"])
 }
 
 /// Retrieve all windows for the currently focused workspace.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
-pub fn get_hyprspace_focused_window(app: tauri::AppHandle) -> Result<Vec<Value>, String> {
+pub fn get_hyprspace_focused_window(app: tauri::AppHandle) -> Result<Vec<Value>, StacheError> {
     run_hyprspace_json(&app, &["list-windows", "--focused", "--json"])
 }
 
@@ -37,17 +38,19 @@ pub fn get_hyprspace_focused_window(app: tauri::AppHandle) -> Result<Vec<Value>,
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 pub fn focus_window_by_window_id(app: tauri::AppHandle, window_id: String) {
-    let _ = run_hyprspace_json(&app, &["focus", "--window-id", &window_id]);
+    if let Err(e) = run_hyprspace_json(&app, &["focus", "--window-id", &window_id]) {
+        eprintln!("stache: warning: failed to focus window {window_id}: {e}");
+    }
 }
 
 /// Retrieve metadata for the focused workspace only.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
-pub fn get_hyprspace_focused_workspace(app: tauri::AppHandle) -> Result<Value, String> {
+pub fn get_hyprspace_focused_workspace(app: tauri::AppHandle) -> Result<Value, StacheError> {
     let mut workspaces = run_hyprspace_json(&app, &["list-workspaces", "--focused", "--json"])?;
-    workspaces
-        .pop()
-        .ok_or_else(|| "Hyprspace did not return a focused workspace".to_string())
+    workspaces.pop().ok_or_else(|| {
+        StacheError::HyprspaceError("Hyprspace did not return a focused workspace".to_string())
+    })
 }
 
 /// Switch to the requested workspace by name.
@@ -56,10 +59,12 @@ pub fn get_hyprspace_focused_workspace(app: tauri::AppHandle) -> Result<Value, S
 pub fn go_to_hyprspace_workspace(
     app: tauri::AppHandle,
     mut workspace: String,
-) -> Result<(), String> {
+) -> Result<(), StacheError> {
     workspace = workspace.trim().to_string();
     if workspace.is_empty() {
-        return Err("Workspace name cannot be empty".to_string());
+        return Err(StacheError::InvalidArguments(
+            "Workspace name cannot be empty".to_string(),
+        ));
     }
 
     let binary = hyprspace_binary()?;
@@ -80,7 +85,7 @@ pub fn go_to_hyprspace_workspace(
             binary.display(),
             workspace
         );
-        format!("Failed to run `{cmd}`: {err}")
+        StacheError::ShellError(format!("Failed to run `{cmd}`: {err}"))
     })?;
 
     if !status.success() {
@@ -88,29 +93,30 @@ pub fn go_to_hyprspace_workspace(
             || "Hyprspace workspace switch terminated by signal".to_string(),
             |code| format!("Hyprspace workspace switch exited with status {code}"),
         );
-        return Err(message);
+        return Err(StacheError::HyprspaceError(message));
     }
 
     Ok(())
 }
 
-fn run_hyprspace_json(app: &AppHandle, args: &[&str]) -> Result<Vec<Value>, String> {
+fn run_hyprspace_json(app: &AppHandle, args: &[&str]) -> Result<Vec<Value>, StacheError> {
     let raw = run_hyprspace_command(app, args)?;
     parse_json_array(&raw)
 }
 
-fn hyprspace_binary() -> Result<&'static PathBuf, String> {
+fn hyprspace_binary() -> Result<&'static PathBuf, StacheError> {
     if let Some(path) = HYPRSPACE_PATH.get() {
         return Ok(path);
     }
 
-    let resolved = resolve_binary("hyprspace")
-        .map_err(|err| format!("Unable to resolve hyprspace binary: {err}"))?;
+    let resolved = resolve_binary("hyprspace").map_err(|err| {
+        StacheError::HyprspaceError(format!("Unable to resolve hyprspace binary: {err}"))
+    })?;
     let _ = HYPRSPACE_PATH.set(resolved);
 
-    HYPRSPACE_PATH
-        .get()
-        .ok_or_else(|| "Unable to cache hyprspace binary path".to_string())
+    HYPRSPACE_PATH.get().ok_or_else(|| {
+        StacheError::HyprspaceError("Unable to cache hyprspace binary path".to_string())
+    })
 }
 
 fn format_command(binary: &Path, args: &[&str]) -> String {
@@ -120,34 +126,34 @@ fn format_command(binary: &Path, args: &[&str]) -> String {
     parts.join(" ")
 }
 
-fn run_hyprspace_command(app: &AppHandle, args: &[&str]) -> Result<String, String> {
+fn run_hyprspace_command(app: &AppHandle, args: &[&str]) -> Result<String, StacheError> {
     let binary = hyprspace_binary()?;
     let formatted = format_command(binary, args);
     let output = tauri::async_runtime::block_on(async {
         app.shell().command(binary.as_os_str()).args(args).output().await
     })
-    .map_err(|err| format!("Failed to run `{formatted}`: {err}"))?;
+    .map_err(|err| StacheError::ShellError(format!("Failed to run `{formatted}`: {err}")))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!(
+        return Err(StacheError::HyprspaceError(format!(
             "`{formatted}` exited with status {:?}: {}",
             output.status.code(),
             stderr.trim()
-        ));
+        )));
     }
 
-    String::from_utf8(output.stdout)
-        .map_err(|err| format!("`{}` returned invalid UTF-8: {err}", binary.display()))
+    String::from_utf8(output.stdout).map_err(|err| {
+        StacheError::HyprspaceError(format!("`{}` returned invalid UTF-8: {err}", binary.display()))
+    })
 }
 
-fn parse_json_array(raw: &str) -> Result<Vec<Value>, String> {
+fn parse_json_array(raw: &str) -> Result<Vec<Value>, StacheError> {
     if raw.trim().is_empty() {
         return Ok(Vec::new());
     }
 
-    let parsed: Value =
-        serde_json::from_str(raw).map_err(|err| format!("Failed to parse JSON output: {err}"))?;
+    let parsed: Value = serde_json::from_str(raw)?;
 
     match parsed {
         Value::Array(items) => Ok(items.into_iter().map(normalize_value).collect()),

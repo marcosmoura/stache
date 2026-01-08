@@ -3,7 +3,7 @@
 //! Provides synchronous helpers that read CPU metrics on demand using sysinfo
 //! and direct SMC access for accurate temperature readings.
 
-use std::sync::{LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex, PoisonError};
 
 use serde::Serialize;
 use sysinfo::System;
@@ -38,7 +38,7 @@ pub fn get_cpu_info(app: tauri::AppHandle) -> CpuInfo {
 
 /// Get current CPU usage percentage.
 fn get_cpu_usage() -> f32 {
-    let mut sys = SYS.lock().unwrap();
+    let mut sys = SYS.lock().unwrap_or_else(PoisonError::into_inner);
 
     // Refresh CPU info
     sys.refresh_cpu_all();

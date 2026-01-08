@@ -9,7 +9,7 @@ import globals from 'globals';
 import { configs as tseslintConfigs } from 'typescript-eslint';
 
 export default defineConfig([
-  globalIgnores(['**/dist', 'packages/desktop/tauri', 'packages/cli', 'node_modules', 'target']),
+  globalIgnores(['**/dist', 'app/native', 'node_modules', 'target', 'coverage']),
   reactHooks.configs.flat['recommended-latest'],
   ...pluginQuery.configs['flat/recommended'],
   {
@@ -86,13 +86,6 @@ export default defineConfig([
           pathGroupsExcludedImportTypes: ['builtin'],
         },
       ],
-    },
-  },
-  {
-    files: ['**/*.test.{ts,tsx}'],
-    rules: {
-      // Allow inline function handlers in test files for simplicity
-      'react-perf/jsx-no-new-function-as-prop': 'off',
     },
   },
 ]);

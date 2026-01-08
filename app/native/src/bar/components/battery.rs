@@ -7,6 +7,8 @@ use starship_battery::units::thermodynamic_temperature::degree_celsius;
 use starship_battery::units::time::second;
 use starship_battery::{Battery, Manager, State, Technology};
 
+use crate::error::StacheError;
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct BatteryInfo {
     /// Battery charge percentage (0-100)
@@ -121,21 +123,22 @@ impl From<Battery> for BatteryInfo {
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
-pub fn get_battery_info(app_handle: tauri::AppHandle) -> Result<BatteryInfo, String> {
+pub fn get_battery_info(app_handle: tauri::AppHandle) -> Result<BatteryInfo, StacheError> {
     let _ = app_handle; // App handle kept for future event wiring
 
-    let manager = Manager::new().map_err(stringify_error)?;
-    let mut batteries = manager.batteries().map_err(stringify_error)?;
+    let manager = Manager::new()
+        .map_err(|e| StacheError::BatteryError(format!("Manager init failed: {e}")))?;
+    let mut batteries = manager
+        .batteries()
+        .map_err(|e| StacheError::BatteryError(format!("Failed to list batteries: {e}")))?;
 
     let battery = batteries
         .next()
-        .ok_or_else(|| "No battery detected on this system".to_string())?
-        .map_err(stringify_error)?;
+        .ok_or_else(|| StacheError::BatteryError("No battery detected on this system".to_string()))?
+        .map_err(|e| StacheError::BatteryError(format!("Failed to read battery: {e}")))?;
 
     Ok(BatteryInfo::from(battery))
 }
-
-fn stringify_error(err: impl std::fmt::Display) -> String { err.to_string() }
 
 // Value is clamped to 0..=100, so casting is safe for pedantic clippy settings.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -212,14 +215,6 @@ mod tests {
             BatteryTechnology::from(Technology::Unknown),
             BatteryTechnology::Unknown
         ));
-    }
-
-    #[test]
-    fn stringify_error_returns_display_message() {
-        use std::io::Error;
-
-        let err = Error::other("boom");
-        assert_eq!(stringify_error(err), "boom");
     }
 
     #[test]

@@ -47,7 +47,10 @@ pub fn start_menu_bar_visibility_watcher(window: &WebviewWindow) {
 fn register_menu_bar_visibility_observer(app_handle: AppHandle, window_label: String) {
     let initial_state = query_menu_bar_visible().unwrap_or(false);
     MENU_BAR_VISIBLE.store(initial_state, Ordering::Release);
-    let _ = emit_menubar_visibility_event(&app_handle, &window_label, initial_state);
+
+    if let Err(e) = emit_menubar_visibility_event(&app_handle, &window_label, initial_state) {
+        eprintln!("stache: warning: failed to emit initial menubar visibility: {e}");
+    }
 
     // Start polling mechanism to detect menubar visibility changes
     start_polling_mechanism(app_handle, window_label);
@@ -64,10 +67,16 @@ fn start_polling_mechanism(app_handle: AppHandle, window_label: String) {
                     if visible != previous {
                         MENU_BAR_VISIBLE.store(visible, Ordering::Release);
 
-                        let _ = emit_menubar_visibility_event(&app_handle, &window_label, visible);
+                        if let Err(e) =
+                            emit_menubar_visibility_event(&app_handle, &window_label, visible)
+                        {
+                            eprintln!("stache: warning: failed to emit menubar visibility: {e}");
+                        }
                     }
                 }
-                Err(_err) => {}
+                Err(e) => {
+                    eprintln!("stache: warning: failed to query menubar visibility: {e}");
+                }
             }
         }
     });

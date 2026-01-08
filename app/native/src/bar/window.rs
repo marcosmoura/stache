@@ -2,6 +2,7 @@ use serde::Serialize;
 use tauri::Manager;
 
 use crate::bar::constants::{BAR_HEIGHT, PADDING};
+use crate::error::StacheError;
 use crate::utils::window::{get_screen_size, set_position};
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -31,13 +32,12 @@ const fn calculate_window_frame(logical_width: f64) -> (f64, f64, f64, f64) {
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
-pub fn get_bar_window_frame(app: tauri::AppHandle) -> Result<WindowFrame, String> {
-    let Some(window) = app.get_webview_window("bar") else {
-        return Err("Failed to get bar window".into());
-    };
-    let Ok((screen_width, _screen_height)) = get_screen_size(&window) else {
-        return Err("Failed to get screen size for window positioning".into());
-    };
+pub fn get_bar_window_frame(app: tauri::AppHandle) -> Result<WindowFrame, StacheError> {
+    let window = app
+        .get_webview_window("bar")
+        .ok_or_else(|| StacheError::CommandError("Failed to get bar window".to_string()))?;
+    let (screen_width, _screen_height) = get_screen_size(&window)
+        .map_err(|_| StacheError::CommandError("Failed to get screen size".to_string()))?;
     let (x, y, width, height) = calculate_window_frame(screen_width);
 
     Ok(WindowFrame { x, y, width, height })

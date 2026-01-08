@@ -1,10 +1,6 @@
-import { useCallback, useRef } from 'react';
-
 import { useSuspenseQuery } from '@tanstack/react-query';
 
-import type { WidgetConfig } from '@/renderer/widgets/Widgets.types';
-import { WidgetsEvents } from '@/types';
-import { emitTauriEvent } from '@/utils/emitTauriEvent';
+import { useWidgetToggle } from '@/hooks';
 
 function getClock(): string {
   const findDatePart = (parts: Intl.DateTimeFormatPart[], part: string) =>
@@ -42,29 +38,7 @@ export const useClock = () => {
     refetchOnMount: true,
   });
 
-  const ref = useRef<HTMLButtonElement>(null);
-
-  const onClick = useCallback(() => {
-    if (!ref.current) {
-      return;
-    }
-
-    const { x, y, width, height } = ref.current.getBoundingClientRect();
-
-    emitTauriEvent<WidgetConfig>({
-      eventName: WidgetsEvents.TOGGLE,
-      target: 'widgets',
-      payload: {
-        name: 'calendar',
-        rect: {
-          x,
-          y,
-          width,
-          height,
-        },
-      },
-    });
-  }, []);
+  const { ref, onClick } = useWidgetToggle('calendar');
 
   return { clock, ref, onClick };
 };

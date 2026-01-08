@@ -1,14 +1,11 @@
-import { useCallback, useMemo, useRef } from 'react';
+import { useMemo } from 'react';
 
-import { useMediaQuery } from '@/hooks';
-import type { WidgetConfig } from '@/renderer/widgets/Widgets.types';
+import { useMediaQuery, useWidgetToggle } from '@/hooks';
 import { getWeatherIcon, useWeatherStore } from '@/stores/WeatherStore';
-import { WidgetsEvents } from '@/types';
-import { emitTauriEvent } from '@/utils/emitTauriEvent';
 import { LAPTOP_MEDIA_QUERY } from '@/utils/media-query';
 
 export const useWeather = () => {
-  const ref = useRef<HTMLButtonElement>(null);
+  const { ref, onClick } = useWidgetToggle('weather');
   const isLaptopScreen = useMediaQuery(LAPTOP_MEDIA_QUERY);
   const { weather, isLoading } = useWeatherStore();
 
@@ -36,28 +33,6 @@ export const useWeather = () => {
 
     return `${feelsLike}°C (${condition})`;
   }, [currentConditions, isLaptopScreen, isLoading]);
-
-  const onClick = useCallback(() => {
-    if (!ref.current) {
-      return;
-    }
-
-    const { x, y, width, height } = ref.current.getBoundingClientRect();
-
-    emitTauriEvent<WidgetConfig>({
-      eventName: WidgetsEvents.TOGGLE,
-      target: 'widgets',
-      payload: {
-        name: 'weather',
-        rect: {
-          x,
-          y,
-          width,
-          height,
-        },
-      },
-    });
-  }, []);
 
   return { label, icon, ref, onClick };
 };

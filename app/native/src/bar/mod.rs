@@ -11,7 +11,11 @@ use crate::utils::window::{set_window_below_menu, set_window_sticky};
 
 pub fn init(app: &App) {
     let app_handle = app.app_handle().clone();
-    let webview_window = app_handle.get_webview_window("bar").unwrap();
+
+    let Some(webview_window) = app_handle.get_webview_window("bar") else {
+        eprintln!("stache: error: 'bar' window not found in tauri.conf.json");
+        return;
+    };
 
     set_window_sticky(&webview_window);
     set_window_below_menu(&webview_window);
@@ -29,7 +33,9 @@ pub fn init(app: &App) {
     ipc_listener::init(app_handle);
 
     // Show the window
-    let _ = webview_window.show();
+    if let Err(e) = webview_window.show() {
+        eprintln!("stache: error: failed to show bar window: {e}");
+    }
 
     // Open devtools if in dev mode
     #[cfg(debug_assertions)]

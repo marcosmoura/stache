@@ -1,5 +1,5 @@
-import { faSpotify } from '@fortawesome/free-brands-svg-icons';
 import { Home01Icon } from '@hugeicons/core-free-icons';
+import { SiTidal } from '@icons-pack/react-simple-icons';
 import { describe, expect, test, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 
@@ -44,27 +44,34 @@ describe('Icon Component', () => {
     });
   });
 
-  describe('FontAwesome pack', () => {
-    test('renders FontAwesome icon', async () => {
-      const { container } = await render(<Icon pack="fontawesome" icon={faSpotify} />);
+  describe('SimpleIcons pack', () => {
+    test('renders SimpleIcons icon', async () => {
+      const { container } = await render(<Icon pack="simple-icons" icon={SiTidal} />);
 
       await vi.waitFor(() => {
         const svg = container.querySelector('svg');
         expect(svg).toBeDefined();
-        // FontAwesome adds specific data attribute
-        expect(svg?.getAttribute('data-icon')).toBe('spotify');
       });
     });
 
-    test('forwards FontAwesome-specific props', async () => {
+    test('renders SimpleIcons with custom size', async () => {
+      const { container } = await render(<Icon pack="simple-icons" icon={SiTidal} size={24} />);
+
+      await vi.waitFor(() => {
+        const svg = container.querySelector('svg');
+        expect(svg).toBeDefined();
+      });
+    });
+
+    test('forwards SimpleIcons-specific props', async () => {
       const { container } = await render(
-        <Icon pack="fontawesome" icon={faSpotify} data-testid="fa-icon" className="fa-custom" />,
+        <Icon pack="simple-icons" icon={SiTidal} data-testid="si-icon" className="si-custom" />,
       );
 
       await vi.waitFor(() => {
         const svg = container.querySelector('svg');
-        expect(svg?.getAttribute('data-testid')).toBe('fa-icon');
-        expect(svg?.classList.contains('fa-custom')).toBe(true);
+        expect(svg?.getAttribute('data-testid')).toBe('si-icon');
+        expect(svg?.classList.contains('si-custom')).toBe(true);
       });
     });
   });

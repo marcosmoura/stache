@@ -12,6 +12,7 @@ use keepawake::{Builder, KeepAwake};
 use serde::Serialize;
 use tauri::{Emitter, Manager};
 
+use crate::error::StacheError;
 use crate::utils::thread::spawn_named_thread;
 use crate::{constants, events};
 
@@ -118,14 +119,14 @@ impl KeepAwakeController {
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
-pub fn toggle_system_awake(state: tauri::State<KeepAwakeController>) -> Result<bool, String> {
-    state.toggle_impl()
+pub fn toggle_system_awake(state: tauri::State<KeepAwakeController>) -> Result<bool, StacheError> {
+    state.toggle_impl().map_err(StacheError::CommandError)
 }
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
-pub fn is_system_awake(state: tauri::State<KeepAwakeController>) -> Result<bool, String> {
-    state.is_awake()
+pub fn is_system_awake(state: tauri::State<KeepAwakeController>) -> Result<bool, StacheError> {
+    state.is_awake().map_err(StacheError::CommandError)
 }
 
 static LOCK_WATCHER_ONCE: OnceLock<()> = OnceLock::new();

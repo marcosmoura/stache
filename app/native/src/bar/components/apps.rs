@@ -7,6 +7,8 @@
 use tauri::AppHandle;
 use tauri_plugin_shell::ShellExt;
 
+use crate::error::StacheError;
+
 #[derive(Clone, Copy)]
 enum LaunchTarget {
     Application(&'static str),
@@ -61,30 +63,32 @@ fn resolve_allowed_app(name: &str) -> Option<&'static AppEntry> {
         .find(|entry| trimmed.eq_ignore_ascii_case(entry.display_name))
 }
 
-fn run_open_command<'a, I>(app: &AppHandle, args: I, target: &str) -> Result<(), String>
+fn run_open_command<'a, I>(app: &AppHandle, args: I, target: &str) -> Result<(), StacheError>
 where I: IntoIterator<Item = &'a str> {
     let collected_args: Vec<&str> = args.into_iter().collect();
     let status = tauri::async_runtime::block_on(async {
         app.shell().command("open").args(&collected_args).status().await
     })
-    .map_err(|err| format!("Failed to launch '{target}': {err}"))?;
+    .map_err(|err| StacheError::ShellError(format!("Failed to launch '{target}': {err}")))?;
 
     if status.success() {
         Ok(())
     } else if let Some(code) = status.code() {
-        Err(format!("Launching '{target}' exited with status code {code}."))
+        Err(StacheError::ShellError(format!(
+            "Launching '{target}' exited with status code {code}."
+        )))
     } else {
-        Err(format!(
+        Err(StacheError::ShellError(format!(
             "Launching '{target}' failed: terminated by external signal"
-        ))
+        )))
     }
 }
 
-fn launch_application(app: &AppHandle, name: &str) -> Result<(), String> {
+fn launch_application(app: &AppHandle, name: &str) -> Result<(), StacheError> {
     run_open_command(app, ["-a", name], name)
 }
 
-fn launch_url(app: &AppHandle, url: &str) -> Result<(), String> {
+fn launch_url(app: &AppHandle, url: &str) -> Result<(), StacheError> {
     run_open_command(app, [url], url)
 }
 
@@ -96,9 +100,13 @@ fn launch_url(app: &AppHandle, url: &str) -> Result<(), String> {
 /// application fails.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
-pub fn open_app(app: tauri::AppHandle, name: &str) -> Result<(), String> {
+pub fn open_app(app: tauri::AppHandle, name: &str) -> Result<(), StacheError> {
     resolve_allowed_app(name).map_or_else(
-        || Err(format!("Application '{name}' is not allowed.")),
+        || {
+            Err(StacheError::InvalidArguments(format!(
+                "Application '{name}' is not allowed."
+            )))
+        },
         |entry| match entry.target {
             LaunchTarget::Application(app_name) => launch_application(&app, app_name),
             LaunchTarget::Url(url) => launch_url(&app, url),

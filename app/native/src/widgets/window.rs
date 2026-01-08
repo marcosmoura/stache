@@ -193,8 +193,10 @@ extern "C" fn mouse_event_callback(
     let frame = get_window_frame(&window);
 
     // If the click is outside the window, emit the event
-    if !frame.contains(location) {
-        let _ = app_handle.emit(events::widgets::CLICK_OUTSIDE, ());
+    if !frame.contains(location)
+        && let Err(e) = app_handle.emit(events::widgets::CLICK_OUTSIDE, ())
+    {
+        eprintln!("stache: warning: failed to emit click-outside event: {e}");
     }
 
     event

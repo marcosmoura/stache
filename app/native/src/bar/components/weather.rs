@@ -48,11 +48,13 @@ impl WeatherConfigInfo {
 #[tauri::command]
 pub fn get_weather_config() -> WeatherConfigInfo {
     let config = get_config();
-    let config_dir = get_config_path()
+    let config_path = get_config_path();
+    let config_dir = config_path
         .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
         .unwrap_or_else(|| PathBuf::from("."));
 
-    WeatherConfigInfo::from_config(&config.bar.weather, &config_dir)
+    let weather_config = &config.bar.weather;
+    WeatherConfigInfo::from_config(weather_config, &config_dir)
 }
 
 #[cfg(test)]
