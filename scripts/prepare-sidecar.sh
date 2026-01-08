@@ -5,8 +5,8 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BINARIES_DIR="$SCRIPT_DIR/../packages/desktop/tauri/binaries"
-RESOURCES_DIR="$SCRIPT_DIR/../packages/desktop/tauri/resources"
+BINARIES_DIR="$SCRIPT_DIR/../app/native/binaries"
+RESOURCES_DIR="$SCRIPT_DIR/../app/native/resources"
 
 # Get the current target triple
 TARGET_TRIPLE=$(rustc -vV | grep host | cut -f2 -d' ')

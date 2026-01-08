@@ -10,7 +10,7 @@
 
     /* Paths */
     "paths": {
-      "@/*": ["./packages/desktop/ui/*"]
+      "@/*": ["./app/ui/*"],
     },
 
     /* Bundler mode */
@@ -35,10 +35,10 @@
         "name": "@styled/typescript-styled-plugin",
         "tags": ["css"],
         "lint": {
-          "vendorPrefix": "ignore"
-        }
-      }
-    ]
+          "vendorPrefix": "ignore",
+        },
+      },
+    ],
   },
-  "include": ["packages/desktop/ui"]
+  "include": ["app/ui"],
 }

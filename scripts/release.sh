@@ -19,8 +19,7 @@ set -euo pipefail
 APP_NAME="Barba"
 APPLICATIONS_DIR="/Applications"
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TAURI_DIR="${PROJECT_ROOT}/packages/desktop/tauri"
-CLI_DIR="${PROJECT_ROOT}/packages/cli"
+TAURI_DIR="${PROJECT_ROOT}/app/native"
 BUNDLE_PROFILE="${BUNDLE_PROFILE:-release}" # Accepts "release" or "debug"
 BUNDLE_DIR="${PROJECT_ROOT}/target/${BUNDLE_PROFILE}/bundle/macos"
 BUNDLE_NAME="${APP_NAME}.app"
@@ -278,11 +277,8 @@ main() {
 	progress "Building Tauri bundle (profile=${BUNDLE_PROFILE})"
 	tauri_build
 
-	progress "Building CLI binary"
-	cargo build --package barba-cli --release
-
-	progress "Installing ${APP_NAME} CLI binary via Cargo"
-	cargo install --path "${CLI_DIR}" --force
+	progress "Installing ${APP_NAME} binary via Cargo"
+	cargo install --path "${TAURI_DIR}" --force
 
 	discover_bundle
 

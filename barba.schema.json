@@ -6,17 +6,17 @@
   "type": "object",
   "properties": {
     "bar": {
-      "description": "Bar configuration for status bar UI components.\n\nContains settings for weather.\n\nExample:\n```json\n{\n  \"bar\": {\n    \"weather\": {\n      \"visualCrossingApiKey\": \"YOUR_API_KEY\"\n    }\n  }\n}\n```",
+      "description": "Bar configuration for status bar UI components.\n\nContains settings for weather.",
       "$ref": "#/$defs/BarConfig",
       "default": {
         "weather": {
-          "defaultLocation": "",
-          "visualCrossingApiKey": ""
+          "apiKeys": "",
+          "defaultLocation": ""
         }
       }
     },
     "keybindings": {
-      "description": "Global keyboard keybindings configuration.\n\nThe key is the shortcut string (e.g., \"Command+Control+R\").\nThe value is either a single command string or an array of commands.\n\nExample:\n```json\n{\n  \"keybindings\": {\n    \"Command+Control+R\": \"barba reload\",\n  }\n}\n```",
+      "description": "Global keyboard keybindings configuration.\n\nThe key is the shortcut string (e.g., \"Command+Control+R\").\nThe value is either a single command string or an array of commands.",
       "type": "object",
       "additionalProperties": {
         "$ref": "#/$defs/ShortcutCommands"
@@ -24,7 +24,7 @@
       "default": {}
     },
     "menuAnywhere": {
-      "description": "`MenuAnywhere` configuration.\n\nAllows summoning the current application's menu bar at the cursor position.\n\nExample:\n```json\n{\n  \"menuAnywhere\": {\n    \"enabled\": true,\n    \"modifiers\": [\"control\", \"command\"],\n    \"mouseButton\": \"rightClick\"\n  }\n}\n```",
+      "description": "`MenuAnywhere` configuration.\n\nAllows summoning the current application's menu bar at the cursor position.",
       "$ref": "#/$defs/MenuAnywhereConfig",
       "default": {
         "enabled": false,
@@ -32,8 +32,16 @@
         "mouseButton": "rightClick"
       }
     },
+    "notunes": {
+      "description": "noTunes configuration.\n\nPrevents Apple Music/iTunes from auto-launching and optionally\nlaunches a preferred music player instead.",
+      "$ref": "#/$defs/NoTunesConfig",
+      "default": {
+        "enabled": true,
+        "targetApp": "tidal"
+      }
+    },
     "proxyAudio": {
-      "description": "Proxy audio configuration for automatic device routing.\n\nEnables intelligent audio device switching based on device availability\nand priority. `AirPlay` devices are always given highest priority.\n\nExample:\n```json\n{\n  \"proxyAudio\": {\n    \"enabled\": true,\n    \"input\": {\n      \"priority\": [{ \"name\": \"AirPods Pro\" }, { \"name\": \"MacBook Pro\" }]\n    },\n    \"output\": {\n      \"bufferSize\": 128,\n      \"priority\": [{ \"name\": \"AirPods Pro\" }, { \"name\": \"External Speakers\" }]\n    }\n  }\n}\n```",
+      "description": "Proxy audio configuration for automatic device routing.\n\nEnables intelligent audio device switching based on device availability\nand priority. `AirPlay` devices are always given highest priority.",
       "$ref": "#/$defs/ProxyAudioConfig",
       "default": {
         "enabled": false,
@@ -49,7 +57,7 @@
       }
     },
     "wallpapers": {
-      "description": "Desktop wallpaper configuration.\n\nControls dynamic wallpaper rotation, effects, and display.\n\nExample:\n```json\n{\n  \"wallpapers\": {\n    \"path\": \"/path/to/wallpapers\",\n    \"mode\": \"random\",\n    \"interval\": 300,\n    \"radius\": 12,\n    \"blur\": 8\n  }\n}\n```",
+      "description": "Desktop wallpaper configuration.\n\nControls dynamic wallpaper rotation, effects, and display.",
       "$ref": "#/$defs/WallpaperConfig",
       "default": {
         "blur": 0,
@@ -106,15 +114,15 @@
       }
     },
     "BarConfig": {
-      "description": "Bar configuration for the status bar UI components.\n\nContains settings for bar-specific features like weather.\n\nExample:\n```json\n{\n  \"bar\": {\n    \"weather\": {\n      \"visualCrossingApiKey\": \"YOUR_API_KEY\",\n      \"defaultLocation\": \"Prague\"\n    }\n  }\n}\n```",
+      "description": "Bar configuration for the status bar UI components.\n\nContains settings for bar-specific features like weather.",
       "type": "object",
       "properties": {
         "weather": {
           "description": "Weather status bar configuration.",
           "$ref": "#/$defs/WeatherConfig",
           "default": {
-            "defaultLocation": "",
-            "visualCrossingApiKey": ""
+            "apiKeys": "",
+            "defaultLocation": ""
           }
         }
       }
@@ -145,7 +153,7 @@
       ]
     },
     "MenuAnywhereConfig": {
-      "description": "Configuration for the `MenuAnywhere` feature.\n\n`MenuAnywhere` allows you to summon the current application's menu bar\nat any location on screen using a configurable keyboard + mouse trigger.\n\nExample:\n```json\n{\n  \"menuAnywhere\": {\n    \"enabled\": true,\n    \"modifiers\": [\"control\", \"command\"],\n    \"mouseButton\": \"rightClick\"\n  }\n}\n```",
+      "description": "Configuration for the `MenuAnywhere` feature.\n\n`MenuAnywhere` allows you to summon the current application's menu bar\nat any location on screen using a configurable keyboard + mouse trigger.",
       "type": "object",
       "properties": {
         "enabled": {
@@ -208,8 +216,24 @@
         }
       ]
     },
+    "NoTunesConfig": {
+      "description": "Configuration for the noTunes feature.\n\nnoTunes prevents Apple Music or iTunes from launching automatically\n(e.g., when pressing media keys or connecting Bluetooth headphones)\nand optionally launches a preferred music player instead.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether noTunes functionality is enabled.\nDefault: true",
+          "type": "boolean",
+          "default": true
+        },
+        "targetApp": {
+          "description": "The music app to launch when Apple Music/iTunes is blocked.\nOptions: \"tidal\", \"spotify\", \"none\"\nDefault: \"tidal\"",
+          "$ref": "#/$defs/TargetMusicApp",
+          "default": "tidal"
+        }
+      }
+    },
     "ProxyAudioConfig": {
-      "description": "Proxy audio configuration for automatic device routing.\n\nThis configuration enables intelligent audio device switching based on\ndevice availability and priority. When enabled, the app automatically\nswitches to the highest-priority available device when devices connect\nor disconnect.\n\n`AirPlay` devices are always given the highest priority, even if not\nexplicitly listed in the priority configuration.\n\nExample:\n```json\n{\n  \"proxyAudio\": {\n    \"enabled\": true,\n    \"input\": {\n      \"name\": \"Virtual Input Device\",\n      \"priority\": [\n        { \"name\": \"AirPods Pro\" },\n        { \"name\": \"AT2020USB\" },\n        { \"name\": \"MacBook Pro\" }\n      ]\n    },\n    \"output\": {\n      \"name\": \"Virtual Output Device\",\n      \"bufferSize\": 128,\n      \"priority\": [\n        { \"name\": \"AirPods Pro\" },\n        { \"name\": \"External Speakers\" },\n        { \"name\": \"MacBook Pro\" }\n      ]\n    }\n  }\n}\n```",
+      "description": "Proxy audio configuration for automatic device routing.\n\nThis configuration enables intelligent audio device switching based on\ndevice availability and priority. When enabled, the app automatically\nswitches to the highest-priority available device when devices connect\nor disconnect.\n\n`AirPlay` devices are always given the highest priority, even if not\nexplicitly listed in the priority configuration.",
       "type": "object",
       "properties": {
         "enabled": {
@@ -297,8 +321,28 @@
         }
       ]
     },
+    "TargetMusicApp": {
+      "description": "Target music application for noTunes replacement.\n\nWhen Apple Music or iTunes is blocked, this app will be launched instead.",
+      "oneOf": [
+        {
+          "description": "Tidal music streaming service.",
+          "type": "string",
+          "const": "tidal"
+        },
+        {
+          "description": "Spotify music streaming service.",
+          "type": "string",
+          "const": "spotify"
+        },
+        {
+          "description": "Do not launch any replacement app.",
+          "type": "string",
+          "const": "none"
+        }
+      ]
+    },
     "WallpaperConfig": {
-      "description": "Wallpaper configuration for dynamic wallpaper management.\n\nExample:\n```json\n{\n  \"wallpapers\": {\n    \"path\": \"/path/to/wallpapers\",\n    \"list\": [\"wallpaper1.jpg\", \"wallpaper2.png\"],\n    \"interval\": 300,\n    \"mode\": \"random\",\n    \"radius\": 10,\n    \"blur\": 5\n  }\n}\n```",
+      "description": "Wallpaper configuration for dynamic wallpaper management.",
       "type": "object",
       "properties": {
         "blur": {
@@ -358,16 +402,16 @@
       ]
     },
     "WeatherConfig": {
-      "description": "Weather configuration for the status bar.\n\nExample:\n```json\n{\n  \"weather\": {\n    \"visualCrossingApiKey\": \"YOUR_API_KEY\",\n    \"defaultLocation\": \"Prague\"\n  }\n}\n```",
+      "description": "Weather configuration for the status bar.",
       "type": "object",
       "properties": {
-        "defaultLocation": {
-          "description": "Default location for weather data when geolocation fails.\nCan be a city name, address, or coordinates.",
+        "apiKeys": {
+          "description": "Path to an environment file containing API keys.\n\nThe file should contain key-value pairs in the format `KEY=value`.\nSupported keys:\n- `VISUAL_CROSSING_API_KEY` - API key for Visual Crossing Weather API\n\nThe path can be:\n- Relative to the config file directory (e.g., `.env`, `secrets/.env`)\n- Absolute path (e.g., `/Users/username/.secrets/.env`)\n- Use `~` for home directory (e.g., `~/.config/barba/.env`)\n\nExample `.env` file:\n```env\nVISUAL_CROSSING_API_KEY=your_api_key_here\n```",
           "type": "string",
           "default": ""
         },
-        "visualCrossingApiKey": {
-          "description": "API key for Visual Crossing Weather API.\nGet one at <https://www.visualcrossing.com/>",
+        "defaultLocation": {
+          "description": "Default location for weather data when geolocation fails.\nCan be a city name, address, or coordinates.",
           "type": "string",
           "default": ""
         }

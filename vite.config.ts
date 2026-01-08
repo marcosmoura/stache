@@ -21,7 +21,7 @@ const hmr = {
 };
 
 // Path to the UI source directory
-const UI_DIR = './packages/desktop/ui';
+const UI_DIR = './app/ui';
 
 export default defineConfig({
   root: UI_DIR,
@@ -67,7 +67,7 @@ export default defineConfig({
     host: host || false,
     hmr: host ? hmr : undefined,
     watch: {
-      ignored: ['**/packages/desktop/tauri/**', '**/coverage/**'],
+      ignored: ['**/app/native/**', '**/coverage/**'],
     },
   },
   experimental: {

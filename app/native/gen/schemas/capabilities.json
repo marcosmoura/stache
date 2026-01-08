@@ -1,0 +1,48 @@
+{
+  "bar-window": {
+    "identifier": "bar-window",
+    "description": "Capability for the bar window",
+    "local": true,
+    "windows": ["bar"],
+    "permissions": [
+      "global-shortcut:allow-register",
+      "global-shortcut:allow-unregister",
+      "global-shortcut:allow-is-registered",
+      {
+        "identifier": "shell:allow-spawn",
+        "allow": [
+          { "args": ["stream", "--no-diff"], "name": "binaries/media-control", "sidecar": true }
+        ]
+      }
+    ],
+    "platforms": ["macOS"]
+  },
+  "default": {
+    "identifier": "default",
+    "description": "Capability for default features",
+    "local": true,
+    "windows": ["bar", "widgets"],
+    "permissions": [
+      "core:default",
+      "core:event:default",
+      "process:allow-restart",
+      "zustand:default"
+    ],
+    "platforms": ["macOS"]
+  },
+  "widgets-window": {
+    "identifier": "widgets-window",
+    "description": "Capability for widgets window",
+    "local": true,
+    "windows": ["widgets"],
+    "permissions": [
+      "core:webview:allow-set-webview-focus",
+      "core:window:allow-hide",
+      "core:window:allow-set-focus",
+      "core:window:allow-set-position",
+      "core:window:allow-set-size",
+      "core:window:allow-show"
+    ],
+    "platforms": ["macOS"]
+  }
+}

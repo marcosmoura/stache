@@ -20,7 +20,12 @@
     "noUnusedParameters": true,
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true,
-    "noUncheckedSideEffectImports": true
+    "noUncheckedSideEffectImports": true,
   },
-  "include": ["vite.config.ts", "lint-staged.config.ts", "eslint.config.ts", "stylelint.config.mjs"]
+  "include": [
+    "vite.config.ts",
+    "lint-staged.config.ts",
+    "eslint.config.ts",
+    "stylelint.config.mjs",
+  ],
 }

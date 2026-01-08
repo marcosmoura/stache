@@ -10,18 +10,18 @@ SCHEMA_FILE="$ROOT_DIR/barba.schema.json"
 
 echo "Generating Barba configuration schema..."
 
-# Check if the CLI binary exists (workspace builds go to root target/)
-CLI_BINARY="$ROOT_DIR/target/release/barba"
-if [ ! -f "$CLI_BINARY" ]; then
-	echo "CLI binary not found at $CLI_BINARY"
-	echo "Building CLI binary..."
+# Check if the binary exists (workspace builds go to root target/)
+BARBA_BINARY="$ROOT_DIR/target/release/barba"
+if [ ! -f "$BARBA_BINARY" ]; then
+	echo "Barba binary not found at $BARBA_BINARY"
+	echo "Building binary..."
 	cd "$ROOT_DIR"
-	cargo build --package barba-cli --release
+	cargo build --package barba --release
 fi
 
 # Generate the schema using the CLI
-# The CLI can generate the schema without the desktop app running
-"$CLI_BINARY" schema >"$SCHEMA_FILE"
+# The barba binary can generate the schema without the desktop app running
+"$BARBA_BINARY" schema >"$SCHEMA_FILE"
 
 echo "Schema saved to $SCHEMA_FILE"
 

@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capability for default features",
+  "windows": ["bar", "widgets"],
+  "platforms": ["macOS"],
+  "permissions": ["core:default", "core:event:default", "process:allow-restart", "zustand:default"]
+}

@@ -1,0 +1,245 @@
+{
+  // =============================================================================
+  // Barba Shell Configuration
+  // =============================================================================
+  //
+  // Place this file at one of these locations (in priority order):
+  //   1. ~/.config/barba/config.jsonc  (recommended)
+  //   2. ~/.config/barba/config.json
+  //   3. ~/Library/Application Support/barba/config.jsonc
+  //   4. ~/Library/Application Support/barba/config.json
+  //   5. ~/.barba.jsonc  (legacy)
+  //   6. ~/.barba.json   (legacy)
+  //
+  // This file supports JSONC format (JSON with comments).
+  // Both single-line (//) and multi-line (/* */) comments are allowed.
+  //
+  // =============================================================================
+
+  // ---------------------------------------------------------------------------
+  // Status Bar Configuration
+  // ---------------------------------------------------------------------------
+  "bar": {
+    // Weather widget configuration
+    "weather": {
+      // Path to an environment file containing API keys.
+      // This keeps sensitive API keys out of the config file.
+      //
+      // The path can be:
+      //   - Relative to this config file (e.g., ".env", "secrets/.env")
+      //   - Absolute path (e.g., "/Users/username/.secrets/barba.env")
+      //   - Use ~ for home directory (e.g., "~/.config/barba/.env")
+      //
+      // The env file should contain:
+      //   VISUAL_CROSSING_API_KEY=your_api_key_here
+      //
+      // Get a free API key at: https://www.visualcrossing.com/
+      "apiKeys": ".env",
+
+      // Default location when geolocation fails or is unavailable
+      // Can be a city name, address, or coordinates (e.g., "40.7128,-74.0060")
+      "defaultLocation": "San Francisco, CA",
+    },
+  },
+
+  // ---------------------------------------------------------------------------
+  // Wallpaper Configuration
+  // ---------------------------------------------------------------------------
+  "wallpapers": {
+    // Option 1: Directory containing wallpaper images
+    // All supported image files (jpg, jpeg, png, webp, bmp, gif) will be used
+    // Supports ~ for home directory expansion
+    "path": "~/Pictures/Wallpapers",
+
+    // Option 2: Explicit list of wallpaper file paths (ignored if "path" is set)
+    // "list": [
+    //   "~/Pictures/wallpaper1.jpg",
+    //   "~/Pictures/wallpaper2.png",
+    //   "/absolute/path/to/wallpaper3.webp"
+    // ],
+
+    // Time in seconds between wallpaper changes
+    // Set to 0 to disable automatic rotation (wallpaper set only once at startup)
+    // Default: 0
+    "interval": 3600,
+
+    // Wallpaper selection mode
+    // Options: "random" | "sequential"
+    // Default: "random"
+    "mode": "random",
+
+    // Rounded corner radius in pixels applied to wallpapers
+    // Set to 0 for no rounding
+    // Default: 0
+    "radius": 12,
+
+    // Gaussian blur amount in pixels applied to wallpapers
+    // Set to 0 for no blur
+    // Default: 0
+    "blur": 0,
+  },
+
+  // ---------------------------------------------------------------------------
+  // Global Keyboard Shortcuts
+  // ---------------------------------------------------------------------------
+  // Keys are shortcut strings using modifier names:
+  //   - "Command" or "Cmd" (macOS Command key)
+  //   - "Control" or "Ctrl" (Control key)
+  //   - "Option" or "Alt" (Option/Alt key)
+  //   - "Shift" (Shift key)
+  //   - "Super" or "Meta" (mapped to Command on macOS)
+  //
+  // Values can be:
+  //   - A single command string
+  //   - An array of commands (executed sequentially)
+  //   - An empty string "" to capture/block the shortcut without action
+  //
+  "keybindings": {
+    // Reload Barba configuration
+    "Command+Control+R": "barba reload",
+
+    // Set a random wallpaper
+    "Command+Control+W": "barba wallpaper set --random",
+
+    // Set random wallpaper on main screen only
+    "Command+Control+Shift+W": "barba wallpaper set --random --screen main",
+
+    // Multiple commands executed sequentially
+    "Command+Control+T": ["open -a Terminal", "barba reload"],
+
+    // Block a system shortcut (capture without executing any action)
+    // Useful for preventing accidental hiding of windows
+    // "Command+H": "",
+
+    // Example: Open specific applications
+    // "Command+Control+S": "open -a Safari",
+    // "Command+Control+F": "open -a Finder",
+
+    // Example: Run shell scripts
+    // "Command+Control+B": "/usr/local/bin/my-script.sh"
+  },
+
+  // ---------------------------------------------------------------------------
+  // MenuAnywhere Configuration
+  // ---------------------------------------------------------------------------
+  // Summon the current application's menu bar at the cursor position
+  // using a keyboard + mouse trigger combination.
+  //
+  "menuAnywhere": {
+    // Enable or disable MenuAnywhere
+    // Default: false
+    "enabled": true,
+
+    // Keyboard modifiers that must be held when clicking
+    // Options: "control" | "option" | "command" | "shift"
+    // Default: ["control", "command"]
+    "modifiers": ["control", "command"],
+
+    // Mouse button that triggers the menu
+    // Options: "rightClick" | "middleClick"
+    // Default: "rightClick"
+    "mouseButton": "rightClick",
+  },
+
+  // ---------------------------------------------------------------------------
+  // Proxy Audio Configuration
+  // ---------------------------------------------------------------------------
+  // Automatic audio device switching based on device availability and priority.
+  // When enabled, Barba monitors connected audio devices and automatically
+  // switches to the highest-priority available device.
+  //
+  // AirPlay devices are always given the highest priority automatically,
+  // even if not explicitly listed in the priority configuration.
+  //
+  "proxyAudio": {
+    // Enable or disable proxy audio functionality
+    // Default: false
+    "enabled": true,
+
+    // Input device (microphone) configuration
+    "input": {
+      // Name of the virtual input device (if using a virtual audio driver)
+      // Default: "Barba Virtual Input"
+      "name": "Barba Virtual Input",
+
+      // Priority list for input device selection
+      // Devices are checked in order; the first available device is selected
+      "priority": [
+        // Simple device matching (exact name, case-insensitive)
+        { "name": "AirPods Pro" },
+
+        // Match devices containing a string
+        { "name": "AT2020", "strategy": "contains" },
+
+        // Match devices starting with a string
+        { "name": "Blue Yeti", "strategy": "startsWith" },
+
+        // Match using regex pattern
+        { "name": "^USB.*Microphone$", "strategy": "regex" },
+
+        // Fallback to built-in microphone
+        { "name": "MacBook Pro Microphone", "strategy": "contains" },
+      ],
+    },
+
+    // Output device (speakers/headphones) configuration
+    "output": {
+      // Name of the virtual output device (if using a virtual audio driver)
+      // Default: "Barba Virtual Output"
+      "name": "Barba Virtual Output",
+
+      // Audio buffer size in frames
+      // Smaller values = lower latency but may cause audio artifacts
+      // Recommended: 128 (low latency), 256 (balanced), 512 (stable)
+      // Default: 256
+      "bufferSize": 256,
+
+      // Priority list for output device selection
+      "priority": [
+        // AirPods (will match "AirPods Pro", "AirPods Max", etc.)
+        { "name": "AirPods", "strategy": "startsWith" },
+
+        // External speakers that depend on an audio interface being connected
+        // The speakers will only be selected if the MiniFuse interface is present
+        {
+          "name": "External Speakers",
+          "strategy": "exact",
+          "dependsOn": {
+            "name": "MiniFuse",
+            "strategy": "startsWith",
+          },
+        },
+
+        // USB headphones
+        { "name": "USB", "strategy": "contains" },
+
+        // Bluetooth headphones (regex matching)
+        { "name": "^(Sony|Bose|Sennheiser).*", "strategy": "regex" },
+
+        // Fallback to built-in speakers
+        { "name": "MacBook Pro Speakers", "strategy": "contains" },
+      ],
+    },
+  },
+
+  // ---------------------------------------------------------------------------
+  // noTunes Configuration
+  // ---------------------------------------------------------------------------
+  // Prevents Apple Music (or iTunes on older macOS) from launching automatically
+  // when you press media keys or connect Bluetooth headphones.
+  // Optionally launches a preferred music player instead.
+  //
+  "notunes": {
+    // Enable or disable noTunes functionality
+    // Default: true
+    "enabled": true,
+
+    // Music app to launch when Apple Music/iTunes is blocked
+    // Options: "tidal" | "spotify" | "none"
+    //   - "tidal": Launch Tidal (/Applications/TIDAL.app)
+    //   - "spotify": Launch Spotify (/Applications/Spotify.app)
+    //   - "none": Don't launch any replacement app
+    // Default: "tidal"
+    "targetApp": "spotify",
+  },
+}
