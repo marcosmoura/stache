@@ -27,6 +27,7 @@ pub fn init<R: Runtime>(app_handle: AppHandle<R>) {
 }
 
 /// Handles incoming Stache notifications.
+#[allow(clippy::too_many_lines)]
 fn handle_notification<R: Runtime>(app_handle: &AppHandle<R>, notification: StacheNotification) {
     match notification {
         StacheNotification::WindowFocusChanged => {
@@ -58,6 +59,175 @@ fn handle_notification<R: Runtime>(app_handle: &AppHandle<R>, notification: Stac
             #[cfg(not(debug_assertions))]
             {
                 app_handle.restart();
+            }
+        }
+
+        // Tiling notifications - forwarded to the tiling manager
+        StacheNotification::TilingFocusWorkspace(workspace) => {
+            if let Some(manager) = crate::tiling::get_manager() {
+                let mut mgr = manager.write();
+                if let Some(info) = mgr.switch_workspace(&workspace) {
+                    eprintln!("stache: tiling: switched to workspace: {}", info.workspace);
+                    drop(mgr); // Release lock before emitting
+
+                    // Emit WORKSPACE_CHANGED event
+                    if let Err(e) = app_handle.emit(
+                        events::tiling::WORKSPACE_CHANGED,
+                        serde_json::json!({
+                            "workspace": info.workspace,
+                            "screen": info.screen,
+                            "previousWorkspace": info.previous_workspace,
+                        }),
+                    ) {
+                        eprintln!("stache: tiling: failed to emit workspace-changed: {e}");
+                    }
+                } else {
+                    eprintln!("stache: tiling: workspace not found: {workspace}");
+                }
+            } else {
+                eprintln!("stache: tiling: manager not initialized");
+            }
+        }
+
+        StacheNotification::TilingSetLayout(layout) => {
+            if let Some(manager) = crate::tiling::get_manager() {
+                // Parse the layout string into LayoutType
+                let layout_type: Result<crate::config::LayoutType, _> =
+                    serde_json::from_value(serde_json::json!(layout));
+
+                match layout_type {
+                    Ok(layout_type) => {
+                        let mut mgr = manager.write();
+
+                        // Get the focused workspace name
+                        let workspace_name = mgr.get_focused_workspace().map(|ws| ws.name.clone());
+
+                        if let Some(ws_name) = workspace_name {
+                            if mgr.set_workspace_layout(&ws_name, layout_type) {
+                                drop(mgr);
+                                eprintln!(
+                                    "stache: tiling: set layout to {layout_type:?} for workspace '{ws_name}'"
+                                );
+                            } else {
+                                eprintln!(
+                                    "stache: tiling: failed to set layout for workspace '{ws_name}'"
+                                );
+                            }
+                        } else {
+                            eprintln!("stache: tiling: no focused workspace to set layout");
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("stache: tiling: invalid layout '{layout}': {e}");
+                    }
+                }
+            } else {
+                eprintln!("stache: tiling: manager not initialized");
+            }
+        }
+
+        StacheNotification::TilingWindowFocus(target) => {
+            if let Some(manager) = crate::tiling::get_manager() {
+                let mut mgr = manager.write();
+                if let Some(window_id) = mgr.focus_window_in_direction(&target) {
+                    eprintln!("stache: tiling: focused window {window_id}");
+                } else {
+                    eprintln!("stache: tiling: failed to focus window: {target}");
+                }
+            } else {
+                eprintln!("stache: tiling: manager not initialized");
+            }
+        }
+
+        StacheNotification::TilingWindowSwap(direction) => {
+            if let Some(manager) = crate::tiling::get_manager() {
+                let mut mgr = manager.write();
+                if mgr.swap_window_in_direction(&direction) {
+                    eprintln!("stache: tiling: swapped window {direction}");
+                } else {
+                    eprintln!("stache: tiling: failed to swap window: {direction}");
+                }
+            } else {
+                eprintln!("stache: tiling: manager not initialized");
+            }
+        }
+
+        StacheNotification::TilingWindowResize { dimension, amount } => {
+            if let Some(manager) = crate::tiling::get_manager() {
+                let mut mgr = manager.write();
+                if mgr.resize_focused_window(&dimension, amount) {
+                    eprintln!("stache: tiling: resized window {dimension} by {amount}px");
+                } else {
+                    eprintln!("stache: tiling: failed to resize window");
+                }
+            } else {
+                eprintln!("stache: tiling: manager not initialized");
+            }
+        }
+
+        StacheNotification::TilingWindowPreset(preset) => {
+            // TODO: Implement window presets (half-left, half-right, etc.)
+            eprintln!("stache: tiling: window presets not yet implemented: {preset}");
+        }
+
+        StacheNotification::TilingWindowSendToWorkspace(workspace) => {
+            if let Some(manager) = crate::tiling::get_manager() {
+                let mut mgr = manager.write();
+                if mgr.send_window_to_workspace(&workspace) {
+                    eprintln!("stache: tiling: sent window to workspace {workspace}");
+                } else {
+                    eprintln!("stache: tiling: failed to send window to workspace: {workspace}");
+                }
+            } else {
+                eprintln!("stache: tiling: manager not initialized");
+            }
+        }
+
+        StacheNotification::TilingWindowSendToScreen(screen) => {
+            if let Some(manager) = crate::tiling::get_manager() {
+                let mut mgr = manager.write();
+                if mgr.send_window_to_screen(&screen) {
+                    eprintln!("stache: tiling: sent window to screen {screen}");
+                } else {
+                    eprintln!("stache: tiling: failed to send window to screen: {screen}");
+                }
+            } else {
+                eprintln!("stache: tiling: manager not initialized");
+            }
+        }
+
+        StacheNotification::TilingWorkspaceBalance => {
+            if let Some(manager) = crate::tiling::get_manager() {
+                let mut mgr = manager.write();
+
+                // Get the focused workspace name
+                let workspace_name = mgr.get_focused_workspace().map(|ws| ws.name.clone());
+
+                if let Some(ws_name) = workspace_name {
+                    // Balance the workspace (clears ratios and re-applies layout)
+                    let repositioned = mgr.balance_workspace(&ws_name);
+                    drop(mgr);
+                    eprintln!(
+                        "stache: tiling: balanced {repositioned} windows in workspace '{ws_name}'"
+                    );
+                } else {
+                    eprintln!("stache: tiling: no focused workspace to balance");
+                }
+            } else {
+                eprintln!("stache: tiling: manager not initialized");
+            }
+        }
+
+        StacheNotification::TilingWorkspaceSendToScreen(screen) => {
+            if let Some(manager) = crate::tiling::get_manager() {
+                let mut mgr = manager.write();
+                if mgr.send_workspace_to_screen(&screen) {
+                    eprintln!("stache: tiling: sent workspace to screen: {screen}");
+                } else {
+                    eprintln!("stache: tiling: failed to send workspace to screen: {screen}");
+                }
+            } else {
+                eprintln!("stache: tiling: manager not initialized");
             }
         }
     }

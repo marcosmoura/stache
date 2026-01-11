@@ -30,6 +30,27 @@ export default defineConfig({
   plugins: [
     wyw({
       include: [`${UI_DIR}/**/*.styles.ts`],
+      babelOptions: {
+        plugins: [
+          [
+            'module-resolver',
+            {
+              alias: {
+                '@': path.resolve(__dirname, UI_DIR),
+              },
+              extensions: ['.ts', '.tsx'],
+            },
+          ],
+        ],
+      },
+      // Allow project-internal imports to reach Node resolver during eval
+      importOverrides: {
+        './app/ui/design-system/index.ts': { unknown: 'allow' },
+        './app/ui/design-system/colors.ts': { unknown: 'allow' },
+        './app/ui/design-system/motion.ts': { unknown: 'allow' },
+        './app/ui/utils/media-query.ts': { unknown: 'allow' },
+        './app/ui/renderer/widgets/components/Calendar/Calendar.constants.ts': { unknown: 'allow' },
+      },
     }),
     react({
       babel: {

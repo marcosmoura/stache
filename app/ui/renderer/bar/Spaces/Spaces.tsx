@@ -1,11 +1,15 @@
+import { Suspense } from 'react';
+
 import { Stack } from '@/components/Stack';
+import { Surface } from '@/components/Surface';
 
 import { AppList } from './components/AppList';
 import { WorkspaceList } from './components/WorkspaceList';
 
 import { useSpaces } from './Spaces.state';
+import * as styles from './Spaces.styles';
 
-export const Spaces = () => {
+const SpacesContent = () => {
   const { workspaces, focusedApp, focusedWorkspace, apps, onSpaceClick, onAppClick } = useSpaces();
 
   if (!workspaces.length) {
@@ -24,3 +28,15 @@ export const Spaces = () => {
     </Stack>
   );
 };
+
+const SpacesFallback = () => (
+  <Stack>
+    <Surface className={styles.fallback}>Hyprspace Loading...</Surface>
+  </Stack>
+);
+
+export const Spaces = () => (
+  <Suspense fallback={<SpacesFallback />}>
+    <SpacesContent />
+  </Suspense>
+);

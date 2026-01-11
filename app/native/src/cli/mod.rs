@@ -5,6 +5,7 @@
 //! it directly. When not running, some commands may launch the app.
 
 mod commands;
+mod output;
 
 use clap::Parser;
 pub use commands::Cli;

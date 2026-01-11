@@ -171,7 +171,11 @@ pub fn get_screen_count() -> usize {
         }
 
         let count: usize = msg_send![screens, count];
-        if count == 0 { 1 } else { count }
+        if count == 0 {
+            1
+        } else {
+            count
+        }
     }
 }
 
@@ -837,32 +841,32 @@ mod tests {
 
     #[test]
     fn test_resize_to_screen_same_aspect_ratio() {
-        // Create a 1920x1080 image (16:9)
-        let img =
-            DynamicImage::ImageRgb8(RgbImage::from_fn(1920, 1080, |_, _| Rgb([64u8, 64, 64])));
+        // Create a small 16:9 image (same aspect ratio as target)
+        let img = DynamicImage::ImageRgb8(RgbImage::from_fn(160, 90, |_, _| Rgb([64u8, 64, 64])));
 
-        // Target screen is also 16:9 but different size
-        let screen = ScreenSize { width: 3840, height: 2160 };
+        // Target screen is also 16:9 but larger
+        let screen = ScreenSize { width: 320, height: 180 };
 
         let resized = resize_to_screen(&img, screen);
         let (w, h) = resized.dimensions();
 
-        assert_eq!(w, 3840);
-        assert_eq!(h, 2160);
+        assert_eq!(w, 320);
+        assert_eq!(h, 180);
     }
 
     #[test]
     fn test_resize_to_screen_square_image() {
-        let img =
-            DynamicImage::ImageRgb8(RgbImage::from_fn(500, 500, |_, _| Rgb([200u8, 200, 200])));
+        // Create a small square image
+        let img = DynamicImage::ImageRgb8(RgbImage::from_fn(50, 50, |_, _| Rgb([200u8, 200, 200])));
 
-        let screen = ScreenSize { width: 1920, height: 1080 };
+        // Target is 16:9 aspect ratio
+        let screen = ScreenSize { width: 160, height: 90 };
 
         let resized = resize_to_screen(&img, screen);
         let (w, h) = resized.dimensions();
 
-        assert_eq!(w, 1920);
-        assert_eq!(h, 1080);
+        assert_eq!(w, 160);
+        assert_eq!(h, 90);
     }
 
     // ========================================================================

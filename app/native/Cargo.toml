@@ -25,9 +25,11 @@ path = "src/main.rs"
 
 # Utilities
 base64 = { version = "0.22.1", default-features = false, features = ["std"] }
+
 # CLI dependencies
 clap = { version = "4.5.54", features = ["derive", "env", "string"] }
 clap_complete = "4.5.65"
+colored = { version = "3.0", default-features = false }
 core-foundation = { version = "0.10.1", default-features = false }
 core-foundation-sys = { version = "0.8.7", default-features = false }
 core-graphics = { version = "0.25.0", default-features = false }
@@ -70,6 +72,7 @@ starship-battery = { version = "0.10.3", default-features = false }
 sysinfo = { version = "0.37.2", default-features = false, features = [
     "system",
 ] }
+tabled = { version = "0.20", default-features = false, features = ["std", "derive", "ansi"] }
 
 # Tauri and plugins
 tauri = { version = "2.9.5", default-features = false, features = [

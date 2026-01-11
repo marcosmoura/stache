@@ -10,7 +10,6 @@
 //! This is a Rust implementation inspired by the menuanywhere project:
 //! <https://github.com/acsandmann/menuanywhere>
 
-mod accessibility;
 mod event_monitor;
 mod menu_builder;
 
@@ -18,6 +17,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::config::get_config;
+use crate::is_accessibility_granted;
 
 /// Flag indicating if the module is running.
 static IS_RUNNING: AtomicBool = AtomicBool::new(false);
@@ -39,8 +39,8 @@ pub fn init(app_handle: tauri::AppHandle) {
         return;
     }
 
-    // Check accessibility permissions first
-    if !accessibility::check_permissions() {
+    // Use cached accessibility permission check from lib.rs
+    if !is_accessibility_granted() {
         return;
     }
 

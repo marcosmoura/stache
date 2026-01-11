@@ -22,6 +22,6 @@ pub fn init(app: &App) {
     // Open devtools if in dev mode
     #[cfg(debug_assertions)]
     {
-        webview_window.open_devtools();
+        // webview_window.open_devtools();
     }
 }

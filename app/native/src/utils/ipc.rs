@@ -28,6 +28,28 @@ pub enum StacheNotification {
     WorkspaceChanged(String),
     /// Reload configuration request.
     Reload,
+
+    // Tiling window manager notifications
+    /// Focus a workspace by name.
+    TilingFocusWorkspace(String),
+    /// Change layout of focused workspace.
+    TilingSetLayout(String),
+    /// Focus window in direction or by ID.
+    TilingWindowFocus(String),
+    /// Swap focused window with neighbor in direction.
+    TilingWindowSwap(String),
+    /// Resize focused window.
+    TilingWindowResize { dimension: String, amount: i32 },
+    /// Apply floating preset to focused window.
+    TilingWindowPreset(String),
+    /// Send focused window to workspace.
+    TilingWindowSendToWorkspace(String),
+    /// Send focused window to screen.
+    TilingWindowSendToScreen(String),
+    /// Balance focused workspace.
+    TilingWorkspaceBalance,
+    /// Send focused workspace to screen.
+    TilingWorkspaceSendToScreen(String),
 }
 
 impl StacheNotification {
@@ -37,14 +59,41 @@ impl StacheNotification {
             Self::WindowFocusChanged => "window-focus-changed",
             Self::WorkspaceChanged(_) => "workspace-changed",
             Self::Reload => "reload",
+            // Tiling notifications
+            Self::TilingFocusWorkspace(_) => "tiling-focus-workspace",
+            Self::TilingSetLayout(_) => "tiling-set-layout",
+            Self::TilingWindowFocus(_) => "tiling-window-focus",
+            Self::TilingWindowSwap(_) => "tiling-window-swap",
+            Self::TilingWindowResize { .. } => "tiling-window-resize",
+            Self::TilingWindowPreset(_) => "tiling-window-preset",
+            Self::TilingWindowSendToWorkspace(_) => "tiling-window-send-to-workspace",
+            Self::TilingWindowSendToScreen(_) => "tiling-window-send-to-screen",
+            Self::TilingWorkspaceBalance => "tiling-workspace-balance",
+            Self::TilingWorkspaceSendToScreen(_) => "tiling-workspace-send-to-screen",
         };
         format!("{NOTIFICATION_PREFIX}{suffix}")
     }
 
     /// Returns the user info dictionary for this notification, if any.
-    fn user_info(&self) -> Option<Vec<(&str, &str)>> {
+    fn user_info(&self) -> Option<Vec<(&str, String)>> {
         match self {
-            Self::WorkspaceChanged(name) => Some(vec![("workspace", name.as_str())]),
+            Self::WorkspaceChanged(name) => Some(vec![("workspace", name.clone())]),
+            // Tiling notifications with parameters
+            Self::TilingFocusWorkspace(workspace) => Some(vec![("workspace", workspace.clone())]),
+            Self::TilingSetLayout(layout) => Some(vec![("layout", layout.clone())]),
+            Self::TilingWindowFocus(target) => Some(vec![("target", target.clone())]),
+            Self::TilingWindowSwap(direction) => Some(vec![("direction", direction.clone())]),
+            Self::TilingWindowResize { dimension, amount } => Some(vec![
+                ("dimension", dimension.clone()),
+                ("amount", amount.to_string()),
+            ]),
+            Self::TilingWindowPreset(preset) => Some(vec![("preset", preset.clone())]),
+            Self::TilingWindowSendToWorkspace(workspace) => {
+                Some(vec![("workspace", workspace.clone())])
+            }
+            Self::TilingWindowSendToScreen(screen) | Self::TilingWorkspaceSendToScreen(screen) => {
+                Some(vec![("screen", screen.clone())])
+            }
             _ => None,
         }
     }
@@ -64,6 +113,57 @@ impl StacheNotification {
                 Some(Self::WorkspaceChanged(workspace))
             }
             "reload" => Some(Self::Reload),
+            // Tiling notifications
+            "tiling-focus-workspace" => {
+                let workspace =
+                    user_info.and_then(|info| info.get("workspace")).cloned().unwrap_or_default();
+                Some(Self::TilingFocusWorkspace(workspace))
+            }
+            "tiling-set-layout" => {
+                let layout =
+                    user_info.and_then(|info| info.get("layout")).cloned().unwrap_or_default();
+                Some(Self::TilingSetLayout(layout))
+            }
+            "tiling-window-focus" => {
+                let target =
+                    user_info.and_then(|info| info.get("target")).cloned().unwrap_or_default();
+                Some(Self::TilingWindowFocus(target))
+            }
+            "tiling-window-swap" => {
+                let direction =
+                    user_info.and_then(|info| info.get("direction")).cloned().unwrap_or_default();
+                Some(Self::TilingWindowSwap(direction))
+            }
+            "tiling-window-resize" => {
+                let dimension =
+                    user_info.and_then(|info| info.get("dimension")).cloned().unwrap_or_default();
+                let amount = user_info
+                    .and_then(|info| info.get("amount"))
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+                Some(Self::TilingWindowResize { dimension, amount })
+            }
+            "tiling-window-preset" => {
+                let preset =
+                    user_info.and_then(|info| info.get("preset")).cloned().unwrap_or_default();
+                Some(Self::TilingWindowPreset(preset))
+            }
+            "tiling-window-send-to-workspace" => {
+                let workspace =
+                    user_info.and_then(|info| info.get("workspace")).cloned().unwrap_or_default();
+                Some(Self::TilingWindowSendToWorkspace(workspace))
+            }
+            "tiling-window-send-to-screen" => {
+                let screen =
+                    user_info.and_then(|info| info.get("screen")).cloned().unwrap_or_default();
+                Some(Self::TilingWindowSendToScreen(screen))
+            }
+            "tiling-workspace-balance" => Some(Self::TilingWorkspaceBalance),
+            "tiling-workspace-send-to-screen" => {
+                let screen =
+                    user_info.and_then(|info| info.get("screen")).cloned().unwrap_or_default();
+                Some(Self::TilingWorkspaceSendToScreen(screen))
+            }
             _ => None,
         }
     }
@@ -122,7 +222,7 @@ pub fn send_notification(notification: &StacheNotification) -> bool {
 /// Caller must ensure:
 /// - This is called within a valid Objective-C runtime context
 /// - The returned pointer is either used immediately or properly retained
-unsafe fn create_ns_dictionary(pairs: &[(&str, &str)]) -> *mut Object {
+unsafe fn create_ns_dictionary(pairs: &[(&str, String)]) -> *mut Object {
     let dict_class = class!(NSMutableDictionary);
     let dict: *mut Object = msg_send![dict_class, new];
 
@@ -188,6 +288,17 @@ pub fn start_notification_listener() {
             format!("{NOTIFICATION_PREFIX}window-focus-changed"),
             format!("{NOTIFICATION_PREFIX}workspace-changed"),
             format!("{NOTIFICATION_PREFIX}reload"),
+            // Tiling notifications
+            format!("{NOTIFICATION_PREFIX}tiling-focus-workspace"),
+            format!("{NOTIFICATION_PREFIX}tiling-set-layout"),
+            format!("{NOTIFICATION_PREFIX}tiling-window-focus"),
+            format!("{NOTIFICATION_PREFIX}tiling-window-swap"),
+            format!("{NOTIFICATION_PREFIX}tiling-window-resize"),
+            format!("{NOTIFICATION_PREFIX}tiling-window-preset"),
+            format!("{NOTIFICATION_PREFIX}tiling-window-send-to-workspace"),
+            format!("{NOTIFICATION_PREFIX}tiling-window-send-to-screen"),
+            format!("{NOTIFICATION_PREFIX}tiling-workspace-balance"),
+            format!("{NOTIFICATION_PREFIX}tiling-workspace-send-to-screen"),
         ];
 
         for notification_name in &notifications {
@@ -344,7 +455,7 @@ mod tests {
         assert!(info.is_some());
         let info = info.unwrap();
         assert_eq!(info.len(), 1);
-        assert_eq!(info[0], ("workspace", "coding"));
+        assert_eq!(info[0], ("workspace", "coding".to_string()));
     }
 
     #[test]

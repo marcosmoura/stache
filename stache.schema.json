@@ -56,6 +56,32 @@
         }
       }
     },
+    "tiling": {
+      "description": "Tiling window manager configuration.\n\nProvides virtual workspace management with multiple layout modes.\nDisabled by default.",
+      "$ref": "#/$defs/TilingConfig",
+      "default": {
+        "animations": {
+          "duration": 200,
+          "easing": "ease-out",
+          "enabled": false
+        },
+        "enabled": false,
+        "floating": {
+          "defaultPosition": "center",
+          "presets": []
+        },
+        "gaps": {
+          "inner": 0,
+          "outer": 0
+        },
+        "ignore": [],
+        "master": {
+          "position": "auto",
+          "ratio": 60
+        },
+        "workspaces": []
+      }
+    },
     "wallpapers": {
       "description": "Desktop wallpaper configuration.\n\nControls dynamic wallpaper rotation, effects, and display.",
       "$ref": "#/$defs/WallpaperConfig",
@@ -70,6 +96,29 @@
     }
   },
   "$defs": {
+    "AnimationConfig": {
+      "description": "Animation configuration for window transitions.",
+      "type": "object",
+      "properties": {
+        "duration": {
+          "description": "Animation duration in milliseconds.\nDefault: 200",
+          "type": "integer",
+          "format": "uint32",
+          "default": 200,
+          "minimum": 0
+        },
+        "easing": {
+          "description": "Easing function for animations.\nDefault: \"ease-out\"",
+          "$ref": "#/$defs/EasingType",
+          "default": "ease-out"
+        },
+        "enabled": {
+          "description": "Whether animations are enabled.\nDefault: false",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
     "AudioDeviceDependency": {
       "description": "Dependency condition for audio device selection.\n\nSpecifies a device that must be present (connected) for the parent device\nto be considered in the priority list. The dependent device itself will\nnever be switched to; it only serves as a condition.\n\nExample: \"External Speakers\" might depend on \"`MiniFuse` 2\" being connected,\nsince the speakers are physically connected through the audio interface.",
       "type": "object",
@@ -126,6 +175,317 @@
           }
         }
       }
+    },
+    "DimensionValue": {
+      "description": "A dimension value that can be either pixels or a percentage.",
+      "anyOf": [
+        {
+          "description": "Value in pixels.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        {
+          "description": "Value as a percentage string (e.g., \"50%\").",
+          "type": "string"
+        }
+      ]
+    },
+    "EasingType": {
+      "description": "Easing function for animations.",
+      "oneOf": [
+        {
+          "description": "Linear interpolation.",
+          "type": "string",
+          "const": "linear"
+        },
+        {
+          "description": "Ease in (slow start).",
+          "type": "string",
+          "const": "ease-in"
+        },
+        {
+          "description": "Ease out (slow end).",
+          "type": "string",
+          "const": "ease-out"
+        },
+        {
+          "description": "Ease in and out (slow start and end).",
+          "type": "string",
+          "const": "ease-in-out"
+        },
+        {
+          "description": "Spring physics animation.",
+          "type": "string",
+          "const": "spring"
+        }
+      ]
+    },
+    "FloatingConfig": {
+      "description": "Floating windows configuration.",
+      "type": "object",
+      "properties": {
+        "defaultPosition": {
+          "description": "Default position for new floating windows.\nDefault: \"center\"",
+          "$ref": "#/$defs/FloatingPosition",
+          "default": "center"
+        },
+        "presets": {
+          "description": "Named presets for window positioning.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/FloatingPreset"
+          }
+        }
+      }
+    },
+    "FloatingPosition": {
+      "description": "Default position for floating windows.",
+      "oneOf": [
+        {
+          "description": "Center the window on screen.",
+          "type": "string",
+          "const": "center"
+        },
+        {
+          "description": "Use the window's last known position.",
+          "type": "string",
+          "const": "default"
+        }
+      ]
+    },
+    "FloatingPreset": {
+      "description": "Floating window preset for quick positioning.",
+      "type": "object",
+      "properties": {
+        "center": {
+          "description": "If true, center the window on screen (x and y are ignored).",
+          "type": "boolean",
+          "default": false
+        },
+        "height": {
+          "description": "Height: pixels (900) or percentage (\"100%\").",
+          "$ref": "#/$defs/DimensionValue"
+        },
+        "name": {
+          "description": "Unique name for this preset.",
+          "type": "string"
+        },
+        "width": {
+          "description": "Width: pixels (1440) or percentage (\"50%\").",
+          "$ref": "#/$defs/DimensionValue"
+        },
+        "x": {
+          "description": "X position (ignored if center is true).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DimensionValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "y": {
+          "description": "Y position (ignored if center is true).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DimensionValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": ["name", "width", "height"]
+    },
+    "GapValue": {
+      "description": "A gap value that can be uniform, per-axis, or per-side.",
+      "anyOf": [
+        {
+          "description": "Same value for all sides/axes.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        {
+          "description": "Different values per axis (for inner gaps).",
+          "type": "object",
+          "properties": {
+            "horizontal": {
+              "description": "Horizontal gap (left/right between windows).",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "vertical": {
+              "description": "Vertical gap (top/bottom between windows).",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "required": ["horizontal", "vertical"]
+        },
+        {
+          "description": "Different values per side (for outer gaps).",
+          "type": "object",
+          "properties": {
+            "bottom": {
+              "description": "Bottom gap.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "left": {
+              "description": "Left gap.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "right": {
+              "description": "Right gap.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "top": {
+              "description": "Top gap.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "required": ["top", "right", "bottom", "left"]
+        }
+      ]
+    },
+    "GapsConfig": {
+      "description": "Gaps configuration for a single screen or global.",
+      "type": "object",
+      "properties": {
+        "inner": {
+          "description": "Inner gaps between windows.",
+          "$ref": "#/$defs/GapValue",
+          "default": 0
+        },
+        "outer": {
+          "description": "Outer gaps from screen edges.",
+          "$ref": "#/$defs/GapValue",
+          "default": 0
+        }
+      }
+    },
+    "GapsConfigValue": {
+      "description": "Gaps configuration that can be global or per-screen.",
+      "anyOf": [
+        {
+          "description": "Same gaps for all screens.",
+          "$ref": "#/$defs/GapsConfig"
+        },
+        {
+          "description": "Per-screen gap configuration.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ScreenGapsConfig"
+          }
+        }
+      ]
+    },
+    "LayoutType": {
+      "description": "Layout type for workspaces.",
+      "oneOf": [
+        {
+          "description": "Binary Space Partitioning - windows arranged in a tree structure.",
+          "type": "string",
+          "const": "dwindle"
+        },
+        {
+          "description": "Split layout - windows split based on screen orientation.",
+          "type": "string",
+          "const": "split"
+        },
+        {
+          "description": "Vertical split layout - windows arranged vertically.",
+          "type": "string",
+          "const": "split-vertical"
+        },
+        {
+          "description": "Horizontal split layout - windows arranged horizontally.",
+          "type": "string",
+          "const": "split-horizontal"
+        },
+        {
+          "description": "Monocle layout - all windows maximized, stacked.",
+          "type": "string",
+          "const": "monocle"
+        },
+        {
+          "description": "Master layout - one master window with stack.",
+          "type": "string",
+          "const": "master"
+        },
+        {
+          "description": "Grid layout - windows arranged in a grid pattern.",
+          "type": "string",
+          "const": "grid"
+        },
+        {
+          "description": "Floating layout - windows can be freely moved and resized.",
+          "type": "string",
+          "const": "floating"
+        }
+      ]
+    },
+    "MasterConfig": {
+      "description": "Master layout configuration.",
+      "type": "object",
+      "properties": {
+        "position": {
+          "description": "Position of the master window.\nDefault: auto (left for landscape, top for portrait)",
+          "$ref": "#/$defs/MasterPosition",
+          "default": "auto"
+        },
+        "ratio": {
+          "description": "Ratio of master window size (0-100).\nDefault: 60",
+          "type": "integer",
+          "format": "uint32",
+          "default": 60,
+          "minimum": 0
+        }
+      }
+    },
+    "MasterPosition": {
+      "description": "Position of the master window in the master layout.",
+      "oneOf": [
+        {
+          "description": "Master window on the left (landscape default).",
+          "type": "string",
+          "const": "left"
+        },
+        {
+          "description": "Master window on the right.",
+          "type": "string",
+          "const": "right"
+        },
+        {
+          "description": "Master window on top.",
+          "type": "string",
+          "const": "top"
+        },
+        {
+          "description": "Master window on bottom.",
+          "type": "string",
+          "const": "bottom"
+        },
+        {
+          "description": "Automatically choose based on screen orientation.\n- Landscape screens: left\n- Portrait screens: top",
+          "type": "string",
+          "const": "auto"
+        }
+      ]
     },
     "MatchStrategy": {
       "description": "Strategy for matching device names in the priority list.",
@@ -305,6 +665,27 @@
         }
       }
     },
+    "ScreenGapsConfig": {
+      "description": "Per-screen gaps configuration.",
+      "type": "object",
+      "properties": {
+        "inner": {
+          "description": "Inner gaps between windows.",
+          "$ref": "#/$defs/GapValue",
+          "default": 0
+        },
+        "outer": {
+          "description": "Outer gaps from screen edges.",
+          "$ref": "#/$defs/GapValue",
+          "default": 0
+        },
+        "screen": {
+          "description": "Screen identifier: \"main\", \"secondary\", or screen name.",
+          "type": "string"
+        }
+      },
+      "required": ["screen"]
+    },
     "ShortcutCommands": {
       "description": "Commands to execute for a keyboard shortcut.\n\nCan be either a single command string or an array of commands\nthat will be executed sequentially.",
       "anyOf": [
@@ -340,6 +721,66 @@
           "const": "none"
         }
       ]
+    },
+    "TilingConfig": {
+      "description": "Tiling window manager configuration.\n\nProvides virtual workspace management with multiple layout modes,\nconfigurable gaps, and window matching rules.",
+      "type": "object",
+      "properties": {
+        "animations": {
+          "description": "Animation settings for window transitions.",
+          "$ref": "#/$defs/AnimationConfig",
+          "default": {
+            "duration": 200,
+            "easing": "ease-out",
+            "enabled": false
+          }
+        },
+        "enabled": {
+          "description": "Whether the tiling window manager is enabled.\nDefault: false",
+          "type": "boolean",
+          "default": false
+        },
+        "floating": {
+          "description": "Floating window presets and settings.",
+          "$ref": "#/$defs/FloatingConfig",
+          "default": {
+            "defaultPosition": "center",
+            "presets": []
+          }
+        },
+        "gaps": {
+          "description": "Gap configuration (global or per-screen).",
+          "$ref": "#/$defs/GapsConfigValue",
+          "default": {
+            "inner": 0,
+            "outer": 0
+          }
+        },
+        "ignore": {
+          "description": "Applications/windows to ignore (never managed by tiling).",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/WindowRule"
+          }
+        },
+        "master": {
+          "description": "Master layout settings.",
+          "$ref": "#/$defs/MasterConfig",
+          "default": {
+            "position": "auto",
+            "ratio": 60
+          }
+        },
+        "workspaces": {
+          "description": "Workspace definitions.\nIf empty and tiling is enabled, creates one default workspace per screen.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/WorkspaceConfig"
+          }
+        }
+      }
     },
     "WallpaperConfig": {
       "description": "Wallpaper configuration for dynamic wallpaper management.",
@@ -416,6 +857,57 @@
           "default": ""
         }
       }
+    },
+    "WindowRule": {
+      "description": "Window matching rule for workspace assignment.\n\nAll specified properties must match (AND logic).\nAt least one property must be specified.",
+      "type": "object",
+      "properties": {
+        "app-id": {
+          "description": "Match by bundle identifier (e.g., \"com.apple.finder\").",
+          "type": ["string", "null"]
+        },
+        "app-name": {
+          "description": "Match by application name.",
+          "type": ["string", "null"]
+        },
+        "title": {
+          "description": "Match by window title (substring match).",
+          "type": ["string", "null"]
+        }
+      }
+    },
+    "WorkspaceConfig": {
+      "description": "Workspace configuration.",
+      "type": "object",
+      "properties": {
+        "layout": {
+          "description": "Layout mode for this workspace.\nDefault: \"floating\"",
+          "$ref": "#/$defs/LayoutType",
+          "default": "floating"
+        },
+        "name": {
+          "description": "Unique name for the workspace.",
+          "type": "string"
+        },
+        "preset-on-open": {
+          "description": "Floating preset to apply when windows open in this workspace.",
+          "type": ["string", "null"]
+        },
+        "rules": {
+          "description": "Rules for automatically assigning windows to this workspace.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/WindowRule"
+          }
+        },
+        "screen": {
+          "description": "Screen assignment: \"main\", \"secondary\", or screen name.\nDefault: \"main\"",
+          "type": "string",
+          "default": "main"
+        }
+      },
+      "required": ["name"]
     }
   }
 }

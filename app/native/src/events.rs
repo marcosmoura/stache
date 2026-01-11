@@ -98,6 +98,47 @@ pub mod app {
     pub const RELOAD: &str = "stache://app/reload";
 }
 
+/// Tiling window manager events.
+///
+/// These events are emitted by the tiling module to notify the frontend
+/// about workspace, window, and layout changes.
+pub mod tiling {
+    /// Emitted when the focused workspace changes.
+    ///
+    /// Payload: `{ workspace: String, screen: String }`
+    pub const WORKSPACE_CHANGED: &str = "stache://tiling/workspace-changed";
+
+    /// Emitted when windows in a workspace change (added/removed).
+    ///
+    /// Payload: `{ workspace: String, windows: Vec<u32> }`
+    pub const WORKSPACE_WINDOWS_CHANGED: &str = "stache://tiling/workspace-windows-changed";
+
+    /// Emitted when a workspace's layout changes.
+    ///
+    /// Payload: `{ workspace: String, layout: String }`
+    pub const LAYOUT_CHANGED: &str = "stache://tiling/layout-changed";
+
+    /// Emitted when a new window is tracked by the tiling manager.
+    ///
+    /// Payload: `{ windowId: u32, workspace: String }`
+    pub const WINDOW_TRACKED: &str = "stache://tiling/window-tracked";
+
+    /// Emitted when a window is no longer tracked.
+    ///
+    /// Payload: `{ windowId: u32 }`
+    pub const WINDOW_UNTRACKED: &str = "stache://tiling/window-untracked";
+
+    /// Emitted when screens are connected or disconnected.
+    ///
+    /// Payload: Array of screen objects.
+    pub const SCREENS_CHANGED: &str = "stache://tiling/screens-changed";
+
+    /// Emitted when the tiling manager finishes initialization.
+    ///
+    /// Payload: `{ enabled: bool }`
+    pub const INITIALIZED: &str = "stache://tiling/initialized";
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,6 +155,13 @@ mod tests {
             widgets::CLICK_OUTSIDE,
             cmd_q::ALERT,
             app::RELOAD,
+            tiling::WORKSPACE_CHANGED,
+            tiling::WORKSPACE_WINDOWS_CHANGED,
+            tiling::LAYOUT_CHANGED,
+            tiling::WINDOW_TRACKED,
+            tiling::WINDOW_UNTRACKED,
+            tiling::SCREENS_CHANGED,
+            tiling::INITIALIZED,
         ];
 
         for event in events {
@@ -137,6 +185,17 @@ mod tests {
             (widgets::CLICK_OUTSIDE, "widgets", "click-outside"),
             (cmd_q::ALERT, "cmd-q", "alert"),
             (app::RELOAD, "app", "reload"),
+            (tiling::WORKSPACE_CHANGED, "tiling", "workspace-changed"),
+            (
+                tiling::WORKSPACE_WINDOWS_CHANGED,
+                "tiling",
+                "workspace-windows-changed",
+            ),
+            (tiling::LAYOUT_CHANGED, "tiling", "layout-changed"),
+            (tiling::WINDOW_TRACKED, "tiling", "window-tracked"),
+            (tiling::WINDOW_UNTRACKED, "tiling", "window-untracked"),
+            (tiling::SCREENS_CHANGED, "tiling", "screens-changed"),
+            (tiling::INITIALIZED, "tiling", "initialized"),
         ];
 
         for (event, module, name) in events {

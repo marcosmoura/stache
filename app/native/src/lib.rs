@@ -20,9 +20,24 @@ mod cmd_q;
 mod hotkey;
 mod menu_anywhere;
 mod notunes;
+mod tiling;
 mod utils;
 mod wallpaper;
 mod widgets;
+
+use std::sync::OnceLock;
+
+/// Cached accessibility permission status.
+static ACCESSIBILITY_GRANTED: OnceLock<bool> = OnceLock::new();
+
+/// Returns whether accessibility permissions have been granted.
+///
+/// This function checks once at startup and caches the result.
+/// If permissions are not granted on first check, it prompts the user.
+#[must_use]
+pub fn is_accessibility_granted() -> bool {
+    *ACCESSIBILITY_GRANTED.get_or_init(utils::accessibility::check_and_prompt)
+}
 
 /// Runs the Tauri desktop application.
 ///
@@ -34,6 +49,13 @@ mod widgets;
 pub fn run() {
     // Initialize the configuration system early
     config::init();
+
+    // Check accessibility permissions once at startup for features that need it
+    // (tiling window manager, menu anywhere, etc.)
+    let accessibility_granted = is_accessibility_granted();
+    if !accessibility_granted {
+        eprintln!("stache: accessibility permissions not granted. Some features will be disabled.");
+    }
 
     // Initialize wallpaper manager early so CLI commands can use it
     wallpaper::init();
@@ -73,6 +95,12 @@ pub fn run() {
             // Start watching the config file for changes
             config::watch_config_file(app.handle().clone());
 
+            // Initialize tiling window manager
+            tiling::init_with_handle(Some(app.handle().clone()));
+
+            // Start IPC socket server for CLI queries
+            utils::ipc_socket::start_server(tiling::handle_ipc_query);
+
             // Initialize Bar components
             bar::init(app);
 
@@ -96,6 +124,12 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                // Clean up IPC socket on exit
+                utils::ipc_socket::stop_server();
+            }
+        });
 }

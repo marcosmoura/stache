@@ -418,6 +418,384 @@ impl NoTunesConfig {
     pub const fn is_enabled(&self) -> bool { self.enabled }
 }
 
+// ============================================================================
+// Tiling Window Manager Configuration
+// ============================================================================
+
+/// Layout type for workspaces.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum LayoutType {
+    /// Binary Space Partitioning - windows arranged in a tree structure.
+    Dwindle,
+    /// Split layout - windows split based on screen orientation.
+    Split,
+    /// Vertical split layout - windows arranged vertically.
+    SplitVertical,
+    /// Horizontal split layout - windows arranged horizontally.
+    SplitHorizontal,
+    /// Monocle layout - all windows maximized, stacked.
+    Monocle,
+    /// Master layout - one master window with stack.
+    Master,
+    /// Grid layout - windows arranged in a grid pattern.
+    Grid,
+    /// Floating layout - windows can be freely moved and resized.
+    #[default]
+    Floating,
+}
+
+/// Easing function for animations.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum EasingType {
+    /// Linear interpolation.
+    Linear,
+    /// Ease in (slow start).
+    EaseIn,
+    /// Ease out (slow end).
+    #[default]
+    EaseOut,
+    /// Ease in and out (slow start and end).
+    EaseInOut,
+    /// Spring physics animation.
+    Spring,
+}
+
+/// Default position for floating windows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum FloatingPosition {
+    /// Center the window on screen.
+    #[default]
+    Center,
+    /// Use the window's last known position.
+    Default,
+}
+
+/// Animation configuration for window transitions.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AnimationConfig {
+    /// Whether animations are enabled.
+    /// Default: false
+    pub enabled: bool,
+
+    /// Animation duration in milliseconds.
+    /// Default: 200
+    pub duration: u32,
+
+    /// Easing function for animations.
+    /// Default: "ease-out"
+    pub easing: EasingType,
+}
+
+impl Default for AnimationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            duration: 200,
+            easing: EasingType::EaseOut,
+        }
+    }
+}
+
+/// A dimension value that can be either pixels or a percentage.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum DimensionValue {
+    /// Value in pixels.
+    Pixels(u32),
+    /// Value as a percentage string (e.g., "50%").
+    Percentage(String),
+}
+
+impl Default for DimensionValue {
+    fn default() -> Self { Self::Pixels(0) }
+}
+
+impl DimensionValue {
+    /// Resolves the dimension value to pixels given a reference size.
+    #[must_use]
+    pub fn resolve(&self, reference_size: f64) -> f64 {
+        match self {
+            Self::Pixels(px) => f64::from(*px),
+            Self::Percentage(s) => {
+                let trimmed = s.trim().trim_end_matches('%');
+                trimmed.parse::<f64>().map(|pct| (pct / 100.0) * reference_size).unwrap_or(0.0)
+            }
+        }
+    }
+}
+
+/// A gap value that can be uniform, per-axis, or per-side.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum GapValue {
+    /// Same value for all sides/axes.
+    Uniform(u32),
+    /// Different values per axis (for inner gaps).
+    PerAxis {
+        /// Horizontal gap (left/right between windows).
+        horizontal: u32,
+        /// Vertical gap (top/bottom between windows).
+        vertical: u32,
+    },
+    /// Different values per side (for outer gaps).
+    PerSide {
+        /// Top gap.
+        top: u32,
+        /// Right gap.
+        right: u32,
+        /// Bottom gap.
+        bottom: u32,
+        /// Left gap.
+        left: u32,
+    },
+}
+
+impl Default for GapValue {
+    fn default() -> Self { Self::Uniform(0) }
+}
+
+impl GapValue {
+    /// Returns the gap values as (horizontal, vertical) for inner gaps.
+    #[must_use]
+    pub fn as_inner(&self) -> (u32, u32) {
+        match self {
+            Self::Uniform(v) => (*v, *v),
+            Self::PerAxis { horizontal, vertical } => (*horizontal, *vertical),
+            Self::PerSide { left, right, top, bottom } => ((left + right) / 2, (top + bottom) / 2),
+        }
+    }
+
+    /// Returns the gap values as (top, right, bottom, left) for outer gaps.
+    #[must_use]
+    pub const fn as_outer(&self) -> (u32, u32, u32, u32) {
+        match self {
+            Self::Uniform(v) => (*v, *v, *v, *v),
+            Self::PerAxis { horizontal, vertical } => {
+                (*vertical, *horizontal, *vertical, *horizontal)
+            }
+            Self::PerSide { top, right, bottom, left } => (*top, *right, *bottom, *left),
+        }
+    }
+}
+
+/// Gaps configuration for a single screen or global.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(default, rename_all = "camelCase")]
+pub struct GapsConfig {
+    /// Inner gaps between windows.
+    pub inner: GapValue,
+    /// Outer gaps from screen edges.
+    pub outer: GapValue,
+}
+
+/// Per-screen gaps configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenGapsConfig {
+    /// Screen identifier: "main", "secondary", or screen name.
+    pub screen: String,
+    /// Inner gaps between windows.
+    #[serde(default)]
+    pub inner: GapValue,
+    /// Outer gaps from screen edges.
+    #[serde(default)]
+    pub outer: GapValue,
+}
+
+/// Gaps configuration that can be global or per-screen.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum GapsConfigValue {
+    /// Same gaps for all screens.
+    Global(GapsConfig),
+    /// Per-screen gap configuration.
+    PerScreen(Vec<ScreenGapsConfig>),
+}
+
+impl Default for GapsConfigValue {
+    fn default() -> Self { Self::Global(GapsConfig::default()) }
+}
+
+/// Floating window preset for quick positioning.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FloatingPreset {
+    /// Unique name for this preset.
+    pub name: String,
+
+    /// Width: pixels (1440) or percentage ("50%").
+    pub width: DimensionValue,
+
+    /// Height: pixels (900) or percentage ("100%").
+    pub height: DimensionValue,
+
+    /// X position (ignored if center is true).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<DimensionValue>,
+
+    /// Y position (ignored if center is true).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<DimensionValue>,
+
+    /// If true, center the window on screen (x and y are ignored).
+    #[serde(default)]
+    pub center: bool,
+}
+
+/// Floating windows configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(default, rename_all = "camelCase")]
+pub struct FloatingConfig {
+    /// Default position for new floating windows.
+    /// Default: "center"
+    pub default_position: FloatingPosition,
+
+    /// Named presets for window positioning.
+    pub presets: Vec<FloatingPreset>,
+}
+
+/// Position of the master window in the master layout.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum MasterPosition {
+    /// Master window on the left (landscape default).
+    #[default]
+    Left,
+    /// Master window on the right.
+    Right,
+    /// Master window on top.
+    Top,
+    /// Master window on bottom.
+    Bottom,
+    /// Automatically choose based on screen orientation.
+    /// - Landscape screens: left
+    /// - Portrait screens: top
+    Auto,
+}
+
+/// Master layout configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(default, rename_all = "camelCase")]
+pub struct MasterConfig {
+    /// Ratio of master window size (0-100).
+    /// Default: 60
+    pub ratio: u32,
+    /// Position of the master window.
+    /// Default: auto (left for landscape, top for portrait)
+    pub position: MasterPosition,
+}
+
+impl Default for MasterConfig {
+    fn default() -> Self {
+        Self {
+            ratio: 60,
+            position: MasterPosition::Auto,
+        }
+    }
+}
+
+/// Window matching rule for workspace assignment.
+///
+/// All specified properties must match (AND logic).
+/// At least one property must be specified.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct WindowRule {
+    /// Match by bundle identifier (e.g., "com.apple.finder").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<String>,
+
+    /// Match by window title (substring match).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+
+    /// Match by application name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_name: Option<String>,
+}
+
+impl WindowRule {
+    /// Returns true if the rule has at least one matching criterion.
+    #[must_use]
+    pub const fn is_valid(&self) -> bool {
+        self.app_id.is_some() || self.title.is_some() || self.app_name.is_some()
+    }
+}
+
+/// Helper function for default screen value.
+fn default_screen() -> String { "main".to_string() }
+
+/// Workspace configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceConfig {
+    /// Unique name for the workspace.
+    pub name: String,
+
+    /// Layout mode for this workspace.
+    /// Default: "floating"
+    #[serde(default)]
+    pub layout: LayoutType,
+
+    /// Screen assignment: "main", "secondary", or screen name.
+    /// Default: "main"
+    #[serde(default = "default_screen")]
+    pub screen: String,
+
+    /// Rules for automatically assigning windows to this workspace.
+    #[serde(default)]
+    pub rules: Vec<WindowRule>,
+
+    /// Floating preset to apply when windows open in this workspace.
+    #[serde(
+        default,
+        rename = "preset-on-open",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub preset_on_open: Option<String>,
+}
+
+/// Tiling window manager configuration.
+///
+/// Provides virtual workspace management with multiple layout modes,
+/// configurable gaps, and window matching rules.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TilingConfig {
+    /// Whether the tiling window manager is enabled.
+    /// Default: false
+    pub enabled: bool,
+
+    /// Workspace definitions.
+    /// If empty and tiling is enabled, creates one default workspace per screen.
+    pub workspaces: Vec<WorkspaceConfig>,
+
+    /// Applications/windows to ignore (never managed by tiling).
+    pub ignore: Vec<WindowRule>,
+
+    /// Animation settings for window transitions.
+    pub animations: AnimationConfig,
+
+    /// Gap configuration (global or per-screen).
+    pub gaps: GapsConfigValue,
+
+    /// Floating window presets and settings.
+    pub floating: FloatingConfig,
+
+    /// Master layout settings.
+    pub master: MasterConfig,
+}
+
+impl TilingConfig {
+    /// Returns whether the tiling window manager is enabled.
+    #[must_use]
+    pub const fn is_enabled(&self) -> bool { self.enabled }
+}
+
 /// Root configuration structure for Stache.
 ///
 /// This structure is designed to be extended with additional sections
@@ -460,6 +838,12 @@ pub struct StacheConfig {
     /// launches a preferred music player instead.
     #[serde(rename = "notunes")]
     pub notunes: NoTunesConfig,
+
+    /// Tiling window manager configuration.
+    ///
+    /// Provides virtual workspace management with multiple layout modes.
+    /// Disabled by default.
+    pub tiling: TilingConfig,
 }
 
 /// Commands to execute for a keyboard shortcut.
