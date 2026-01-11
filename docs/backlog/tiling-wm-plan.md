@@ -377,6 +377,10 @@ app/native/src/
 
 **Status**: [ ] Not Started / [ ] In Progress / [ ] Complete
 
+**Goal**: Implement animations for window transitions, drag-and-drop window swapping, and performance optimizations.
+
+#### Phase 9.1: Animations
+
 - [ ] Create `tiling/animation.rs`:
   - [ ] `AnimationSystem` struct
   - [ ] Frame interpolation logic
@@ -389,20 +393,46 @@ app/native/src/
   - [ ] Animate layout changes
   - [ ] Animate window moves
   - [ ] Respect `animations.enabled` config
+- [ ] Add unit tests for animations
+- [ ] Run tests, fix clippy warnings and ensure build passes
+
+**Verification**: Window animations are smooth and respect configuration
+
+---
+
+#### Phase 9.2: Drag and Drop
+
 - [ ] Implement drag-and-drop swapping:
   - [ ] Detect window drag start
   - [ ] Track drag position
   - [ ] Detect drop on another window
   - [ ] Trigger swap operation
-- [ ] Performance optimization:
-  - [ ] Profile window operations
-  - [ ] Batch frame updates where possible
-  - [ ] Optimize observer callbacks
-  - [ ] Consider debouncing rapid events
-- [ ] Add unit tests for animations
+- [ ] Add visual feedback during drag (optional highlight)
+- [ ] Handle edge cases:
+  - [ ] Drag to different workspace
+  - [ ] Drag to different screen
+  - [ ] Cancelled drags
+- [ ] Add unit tests for drag-and-drop logic
 - [ ] Run tests, fix clippy warnings and ensure build passes
 
-**Verification**: Animations smooth, drag-swap works
+**Verification**: Drag-swap works reliably
+
+---
+
+#### Phase 9.3: Performance Optimizations
+
+- [ ] Profile window operations:
+  - [ ] Measure layout calculation time
+  - [ ] Measure window move/resize time
+  - [ ] Identify bottlenecks
+- [ ] Batch frame updates where possible
+- [ ] Optimize observer callbacks:
+  - [ ] Consider debouncing rapid events
+  - [ ] Minimize redundant layout recalculations
+- [ ] Reduce AX API call frequency
+- [ ] Run performance tests, fix clippy warnings and ensure build passes
+
+**Verification**: Tiling operations feel snappy, no lag during window management
 
 ---
 

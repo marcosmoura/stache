@@ -65,7 +65,7 @@
 //!             └──┴──┘
 //! ```
 
-use super::{helpers, Gaps, LayoutResult};
+use super::{Gaps, LayoutResult, helpers};
 use crate::tiling::state::Rect;
 
 /// Dwindle layout - windows arranged in a dwindling spiral pattern.
