@@ -158,10 +158,8 @@ mod tests {
     #[test]
     fn respects_absolute_paths() {
         let bin = "/bin/ls";
-        if cfg!(target_os = "macos") {
-            let resolved = resolve_binary(bin).expect("ls should exist");
-            assert_eq!(resolved, std::path::Path::new(bin));
-        }
+        let resolved = resolve_binary(bin).expect("ls should exist");
+        assert_eq!(resolved, std::path::Path::new(bin));
     }
 
     #[test]

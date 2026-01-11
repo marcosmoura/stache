@@ -72,7 +72,7 @@ fn non_activating_panel_class() -> &'static Class {
 
 #[link(name = "SkyLight", kind = "framework")]
 unsafe extern "C" {
-    fn SLSMainConnectionID() -> i32;
+    fn SLSMainConnectionID() -> u32;
     fn SLSSpaceCreate(connection: u32, space_type: u64, flags: u64) -> u64;
     fn SLSSpaceSetAbsoluteLevel(connection: u32, space: u64, level: i32);
     fn SLSShowSpaces(connection: u32, spaces: ObjcId);
@@ -122,8 +122,6 @@ pub fn set_window_sticky(window: &WebviewWindow) {
         unsafe {
             let connection = SLSMainConnectionID();
             if connection != 0 {
-                #[allow(clippy::cast_sign_loss)]
-                let connection = connection as u32;
                 let ns_win: ObjcId = ns_win_ptr as ObjcId;
                 enforce_non_activating_click_behavior(ns_win);
                 let window_number: usize = msg_send![ns_win, windowNumber];

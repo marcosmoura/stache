@@ -184,7 +184,7 @@ impl TilingManager {
     /// startup sequence, after initial layouts have been applied.
     pub fn mark_initialized(&mut self) {
         self.initialized = true;
-        eprintln!("stache: tiling: manager marked as initialized - animations now enabled");
+        eprintln!("stache: tiling: manager initialized - animations enabled");
     }
 
     /// Returns a reference to the current state.

@@ -32,31 +32,141 @@
 //! animator.animate(transitions);
 //! ```
 
+// Import for high-precision sleep
+use std::os::raw::c_int;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use super::state::Rect;
 use super::window::{
-    resolve_window_ax_elements, set_window_frames_by_id, set_window_frames_direct,
+    resolve_window_ax_elements, set_window_frames_by_id, set_window_frames_delta,
+    set_window_frames_direct, set_window_positions_only,
 };
 use crate::config::{EasingType, get_config};
+
+// ============================================================================
+// FFI Declarations
+// ============================================================================
+
+#[link(name = "pthread")]
+unsafe extern "C" {
+    fn pthread_set_qos_class_self_np(qos_class: c_int, relative_priority: c_int) -> c_int;
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    /// Get the main display ID.
+    fn CGMainDisplayID() -> u32;
+    /// Copy the current display mode.
+    fn CGDisplayCopyDisplayMode(display: u32) -> *mut std::ffi::c_void;
+    /// Get refresh rate from display mode.
+    fn CGDisplayModeGetRefreshRate(mode: *mut std::ffi::c_void) -> f64;
+    /// Release a display mode.
+    fn CGDisplayModeRelease(mode: *mut std::ffi::c_void);
+}
+
+/// macOS `QoS` class for user-interactive work (highest priority).
+const QOS_CLASS_USER_INTERACTIVE: c_int = 0x21;
 
 // ============================================================================
 // Constants
 // ============================================================================
 
 /// Minimum animation duration in milliseconds.
-const MIN_DURATION_MS: u32 = 50;
+const MIN_DURATION_MS: u32 = 100;
 
 /// Maximum animation duration in milliseconds.
 const MAX_DURATION_MS: u32 = 1000;
 
-/// Target frame rate for animations (frames per second).
-/// Using 60 FPS as a realistic target given macOS Accessibility API overhead.
-/// The actual frame rate may be lower if window positioning takes longer.
-const TARGET_FPS: u32 = 240;
+/// Default frame rate if detection fails.
+const DEFAULT_FPS: u32 = 60;
 
 /// Minimum distance (pixels) for animation. Below this, windows are moved instantly.
 const MIN_ANIMATION_DISTANCE: f64 = 5.0;
+
+/// Threshold below which we spin-wait instead of sleeping (microseconds).
+/// Sleeping has ~1ms minimum granularity on most systems, so for sub-millisecond
+/// waits we spin to achieve more precise timing.
+const SPIN_WAIT_THRESHOLD_US: u64 = 1000;
+
+// ============================================================================
+// Display Refresh Rate Detection
+// ============================================================================
+
+/// Cached display refresh rate.
+static DISPLAY_REFRESH_RATE: OnceLock<u32> = OnceLock::new();
+
+/// Gets the main display's refresh rate, caching the result.
+///
+/// Returns the detected refresh rate, or `DEFAULT_FPS` if detection fails.
+fn get_display_refresh_rate() -> u32 {
+    *DISPLAY_REFRESH_RATE.get_or_init(|| {
+        let rate = unsafe {
+            let display = CGMainDisplayID();
+            let mode = CGDisplayCopyDisplayMode(display);
+            if mode.is_null() {
+                return DEFAULT_FPS;
+            }
+            let rate = CGDisplayModeGetRefreshRate(mode);
+            CGDisplayModeRelease(mode);
+
+            // Some displays report 0 for refresh rate (e.g., LCD panels)
+            // In this case, assume 60 Hz
+            if rate <= 0.0 {
+                DEFAULT_FPS
+            } else {
+                // Round to nearest common refresh rate
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let rounded = rate.round() as u32;
+                rounded.clamp(30, 360)
+            }
+        };
+        eprintln!("stache: tiling: detected display refresh rate: {rate} Hz");
+        rate
+    })
+}
+
+/// Returns the target FPS for animations, based on display refresh rate.
+#[inline]
+fn target_fps() -> u32 { get_display_refresh_rate() }
+
+// ============================================================================
+// Thread Priority
+// ============================================================================
+
+/// Sets the current thread to high priority for smooth animations.
+///
+/// On macOS, this uses `QoS` (Quality of Service) classes to request
+/// user-interactive priority, which reduces scheduling latency.
+fn set_high_priority_thread() {
+    unsafe {
+        pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+    }
+}
+
+/// High-precision sleep that uses spin-waiting for the final microseconds.
+///
+/// Regular `thread::sleep` has ~1ms minimum granularity. For smoother animations,
+/// we sleep for most of the duration, then spin-wait for the remainder.
+#[inline]
+fn precision_sleep(duration: Duration) {
+    if duration.is_zero() {
+        return;
+    }
+
+    let target = Instant::now() + duration;
+
+    // Sleep for the bulk of the time (minus spin threshold)
+    let spin_threshold = Duration::from_micros(SPIN_WAIT_THRESHOLD_US);
+    if let Some(sleep_duration) = duration.checked_sub(spin_threshold) {
+        std::thread::sleep(sleep_duration);
+    }
+
+    // Spin-wait for precise timing
+    while Instant::now() < target {
+        std::hint::spin_loop();
+    }
+}
 
 // ============================================================================
 // Spring Constants
@@ -115,6 +225,17 @@ impl WindowTransition {
         dx.max(dy).max(dw).max(dh)
     }
 
+    /// Returns whether this transition involves resizing the window.
+    ///
+    /// A transition involves resizing if the width or height changes by more than 1 pixel.
+    /// Position-only transitions can be animated more efficiently with fewer AX calls.
+    #[must_use]
+    pub fn involves_resize(&self) -> bool {
+        let dw = (self.to.width - self.from.width).abs();
+        let dh = (self.to.height - self.from.height).abs();
+        dw > 1.0 || dh > 1.0
+    }
+
     /// Interpolates the frame at a given progress (0.0 to 1.0).
     #[must_use]
     pub fn interpolate(&self, progress: f64) -> Rect {
@@ -125,6 +246,15 @@ impl WindowTransition {
             lerp(self.from.width, self.to.width, t),
             lerp(self.from.height, self.to.height, t),
         )
+    }
+
+    /// Interpolates only the position at a given progress (0.0 to 1.0).
+    ///
+    /// Returns `(x, y)` tuple. More efficient when size doesn't change.
+    #[must_use]
+    pub fn interpolate_position(&self, progress: f64) -> (f64, f64) {
+        let t = progress.clamp(0.0, 1.0);
+        (lerp(self.from.x, self.to.x, t), lerp(self.from.y, self.to.y, t))
     }
 }
 
@@ -451,13 +581,26 @@ impl AnimationSystem {
 
     /// Runs a time-based eased animation.
     ///
-    /// Caches AX element references at the start to avoid expensive window list
-    /// queries on every frame.
+    /// Optimizations:
+    /// - Adaptive frame rate based on display refresh rate
+    /// - Position-only updates when no resizing (1 AX call vs 2)
+    /// - Delta optimization (skips unchanged properties)
+    /// - High-priority thread for reduced latency
+    /// - Precision sleep for accurate frame timing
+    /// - Pre-allocated buffers to avoid per-frame allocations
     fn run_eased_animation(&self, transitions: &[WindowTransition]) -> usize {
-        let frame_duration = Duration::from_secs(1) / TARGET_FPS;
+        // Set high priority for smooth animation
+        set_high_priority_thread();
+
+        // Use display refresh rate for optimal frame pacing
+        let fps = target_fps();
+        let frame_duration = Duration::from_secs(1) / fps;
         let start = Instant::now();
         let duration = self.config.duration;
         let easing = self.config.easing;
+
+        // Check if this is a position-only animation (no resizing)
+        let position_only = !transitions.iter().any(WindowTransition::involves_resize);
 
         // Resolve AX elements once at the start (expensive operation)
         let window_ids: Vec<u32> = transitions.iter().map(|t| t.window_id).collect();
@@ -474,35 +617,60 @@ impl AnimationSystem {
             return 0;
         }
 
+        // Pre-allocate buffers based on animation type
+        let mut position_frames: Vec<(_, f64, f64)> = if position_only {
+            Vec::with_capacity(animatable.len())
+        } else {
+            Vec::new()
+        };
+        let mut prev_frames: Vec<Rect> = if position_only {
+            Vec::new()
+        } else {
+            animatable.iter().map(|&(idx, _)| transitions[idx].from).collect()
+        };
+        let mut delta_frames: Vec<(_, Rect, Rect)> = if position_only {
+            Vec::new()
+        } else {
+            Vec::with_capacity(animatable.len())
+        };
+
         loop {
             let elapsed = start.elapsed();
             let progress = (elapsed.as_secs_f64() / duration.as_secs_f64()).min(1.0);
             let eased_progress = apply_easing(progress, easing);
 
-            // Calculate interpolated frames using cached AX elements
-            let frames: Vec<(_, Rect)> = animatable
-                .iter()
-                .map(|&(idx, ax)| (ax, transitions[idx].interpolate(eased_progress)))
-                .collect();
-
-            // Apply frames using cached AX elements (fast path)
-            let positioned = set_window_frames_direct(&frames);
+            let positioned = if position_only {
+                // Fast path: position-only (1 AX call per window)
+                position_frames.clear();
+                for &(idx, ax) in &animatable {
+                    let (x, y) = transitions[idx].interpolate_position(eased_progress);
+                    position_frames.push((ax, x, y));
+                }
+                set_window_positions_only(&position_frames)
+            } else {
+                // Full path: position + size with delta optimization
+                delta_frames.clear();
+                for (i, &(idx, ax)) in animatable.iter().enumerate() {
+                    let new_frame = transitions[idx].interpolate(eased_progress);
+                    delta_frames.push((ax, new_frame, prev_frames[i]));
+                    prev_frames[i] = new_frame;
+                }
+                set_window_frames_delta(&delta_frames)
+            };
 
             // Check if animation is complete
             if progress >= 1.0 {
                 return positioned;
             }
 
-            // Sleep until next frame
+            // Precision sleep until next frame
             let frame_end = start
                 + Duration::from_secs_f64(
                     (elapsed.as_secs_f64() / frame_duration.as_secs_f64()).ceil()
                         * frame_duration.as_secs_f64(),
                 );
-            let now = Instant::now();
-            if frame_end > now {
-                std::thread::sleep(frame_end - now);
-            }
+            let remaining = frame_end.saturating_duration_since(Instant::now());
+            precision_sleep(remaining);
         }
     }
 
@@ -511,14 +679,27 @@ impl AnimationSystem {
     /// Uses wall-clock time for spring simulation to ensure animations complete
     /// in the expected time regardless of frame rendering overhead.
     ///
-    /// Caches AX element references at the start to avoid expensive window list
-    /// queries on every frame.
+    /// Optimizations:
+    /// - Adaptive frame rate based on display refresh rate
+    /// - Position-only updates when no resizing (1 AX call vs 2)
+    /// - Delta optimization (skips unchanged properties)
+    /// - High-priority thread for reduced latency
+    /// - Precision sleep for accurate frame timing
+    /// - Pre-allocates frame buffer to avoid per-frame allocations
     fn run_spring_animation(&self, transitions: &[WindowTransition]) -> usize {
-        let frame_duration = Duration::from_secs(1) / TARGET_FPS;
+        // Set high priority for smooth animation
+        set_high_priority_thread();
+
+        // Use display refresh rate for optimal frame pacing
+        let fps = target_fps();
+        let frame_duration = Duration::from_secs(1) / fps;
         let max_duration = Duration::from_millis(u64::from(MAX_DURATION_MS));
         let target_duration = self.config.duration;
         let start = Instant::now();
         let mut last_frame_time = start;
+
+        // Check if this is a position-only animation (no resizing)
+        let position_only = !transitions.iter().any(WindowTransition::involves_resize);
 
         // Resolve AX elements once at the start (expensive operation)
         let window_ids: Vec<u32> = transitions.iter().map(|t| t.window_id).collect();
@@ -538,41 +719,72 @@ impl AnimationSystem {
         let mut spring_states: Vec<SpringState> =
             transitions.iter().map(|_| SpringState::new(target_duration)).collect();
 
+        // Pre-allocate buffers based on animation type
+        let mut position_frames: Vec<(_, f64, f64)> = if position_only {
+            Vec::with_capacity(animatable.len())
+        } else {
+            Vec::new()
+        };
+        let mut prev_frames: Vec<Rect> = if position_only {
+            Vec::new()
+        } else {
+            animatable.iter().map(|&(idx, _)| transitions[idx].from).collect()
+        };
+        let mut delta_frames: Vec<(_, Rect, Rect)> = if position_only {
+            Vec::new()
+        } else {
+            Vec::with_capacity(animatable.len())
+        };
+
         loop {
             // Calculate actual elapsed time since last frame (wall-clock time)
             let now = Instant::now();
             let dt = (now - last_frame_time).as_secs_f64();
             last_frame_time = now;
 
-            // Update all springs and check if all have settled
+            // Update all springs and check if settled
             let mut all_settled = true;
-            let frames: Vec<(_, Rect)> = animatable
-                .iter()
-                .map(|&(idx, ax)| {
-                    let (progress, settled) = spring_states[idx].update(dt);
-                    if !settled {
-                        all_settled = false;
-                    }
-                    (ax, transitions[idx].interpolate(progress))
-                })
-                .collect();
+            for &(idx, _) in &animatable {
+                let (_, settled) = spring_states[idx].update(dt);
+                if !settled {
+                    all_settled = false;
+                }
+            }
 
-            // Apply frames using cached AX elements (fast path)
-            let positioned = set_window_frames_direct(&frames);
+            let positioned = if position_only {
+                // Fast path: position-only (1 AX call per window)
+                position_frames.clear();
+                for &(idx, ax) in &animatable {
+                    let progress =
+                        spring_states[idx].calculate_position(spring_states[idx].elapsed);
+                    let (x, y) = transitions[idx].interpolate_position(progress);
+                    position_frames.push((ax, x, y));
+                }
+                set_window_positions_only(&position_frames)
+            } else {
+                // Full path: position + size with delta optimization
+                delta_frames.clear();
+                for (i, &(idx, ax)) in animatable.iter().enumerate() {
+                    let progress =
+                        spring_states[idx].calculate_position(spring_states[idx].elapsed);
+                    let new_frame = transitions[idx].interpolate(progress);
+                    delta_frames.push((ax, new_frame, prev_frames[i]));
+                    prev_frames[i] = new_frame;
+                }
+                set_window_frames_delta(&delta_frames)
+            };
 
             // Check completion conditions
             if all_settled || start.elapsed() > max_duration {
-                // Ensure final positions are exact
+                // Ensure final positions are exact (use direct for final frame)
                 let final_frames: Vec<(_, Rect)> =
                     animatable.iter().map(|&(idx, ax)| (ax, transitions[idx].to)).collect();
                 return set_window_frames_direct(&final_frames).max(positioned);
             }
 
-            // Sleep until next frame (may be shorter or zero if frame took long to render)
+            // Precision sleep until next frame
             let remaining = frame_duration.saturating_sub(now.elapsed());
-            if !remaining.is_zero() {
-                std::thread::sleep(remaining);
-            }
+            precision_sleep(remaining);
         }
     }
 }
