@@ -331,6 +331,19 @@ unsafe fn set_ax_frame(element: AXUIElementRef, frame: &Rect) -> bool {
     pos_ok && (size_ok_1 || size_ok_2)
 }
 
+/// Fast frame setter for animations - only 2 AX calls instead of 3.
+///
+/// During animations, windows move in small increments so we don't need
+/// the defensive double-size-set that `set_ax_frame` uses. This reduces
+/// AX API calls by 33%.
+#[inline]
+unsafe fn set_ax_frame_fast(element: AXUIElementRef, frame: &Rect) -> bool {
+    // For animations: position first, then size (2 calls instead of 3)
+    let pos_ok = unsafe { set_ax_position(element, frame.x, frame.y) };
+    let size_ok = unsafe { set_ax_size(element, frame.width, frame.height) };
+    pos_ok && size_ok
+}
+
 /// Raises (brings to front) an `AXUIElement` window.
 #[inline]
 unsafe fn raise_ax_window(element: AXUIElementRef) -> bool {
@@ -1173,6 +1186,65 @@ pub fn set_window_frames_by_id(window_frames: &[(u32, Rect)]) -> usize {
             "stache: tiling: set_window_frames_by_id: available IDs: {:?}",
             window_map.keys().collect::<Vec<_>>()
         );
+    }
+
+    success_count
+}
+
+/// Resolves window IDs to their AX element references.
+///
+/// This is used to cache AX elements for animations, avoiding repeated
+/// calls to `get_all_windows()` on every frame.
+///
+/// # Arguments
+///
+/// * `window_ids` - List of window IDs to resolve
+///
+/// # Returns
+///
+/// A map of `window_id` -> `AXUIElementRef` for windows that were found.
+pub fn resolve_window_ax_elements(
+    window_ids: &[u32],
+) -> std::collections::HashMap<u32, AXUIElementRef> {
+    let windows = get_all_windows();
+
+    window_ids
+        .iter()
+        .filter_map(|&id| {
+            windows
+                .iter()
+                .find(|w| w.id == id)
+                .and_then(|w| w.ax_element.map(|ax| (id, ax)))
+        })
+        .collect()
+}
+
+/// Sets frames for multiple windows using cached AX element references.
+///
+/// This is the fast path for animations - it doesn't query the window list,
+/// just directly positions windows using pre-resolved AX elements.
+/// Uses `set_ax_frame_fast` which makes only 2 AX calls per window instead of 3.
+///
+/// # Arguments
+///
+/// * `frames` - Pairs of (`AXUIElementRef`, `new_frame`)
+///
+/// # Returns
+///
+/// Number of windows successfully positioned.
+///
+/// # Safety
+///
+/// The AX element references must be valid. They should be obtained from
+/// `resolve_window_ax_elements` and used within the same animation sequence.
+pub fn set_window_frames_direct(frames: &[(AXUIElementRef, Rect)]) -> usize {
+    let mut success_count = 0;
+
+    for (ax_element, new_frame) in frames {
+        // Use fast version for animations (2 AX calls instead of 3)
+        if unsafe { set_ax_frame_fast(*ax_element, new_frame) } {
+            success_count += 1;
+        }
     }
 
     success_count

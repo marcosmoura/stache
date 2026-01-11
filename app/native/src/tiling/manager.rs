@@ -10,6 +10,7 @@ use std::time::Instant;
 use parking_lot::RwLock;
 use tauri::{AppHandle, Emitter, Runtime};
 
+use super::animation::{AnimationSystem, WindowTransition};
 use super::layout::{Gaps, calculate_layout_with_gaps, calculate_layout_with_gaps_and_ratios};
 use super::screen;
 use super::state::{Rect, Screen, TilingState, TrackedWindow, Workspace};
@@ -117,6 +118,9 @@ pub struct TilingManager {
     state: TilingState,
     /// Whether the tiling system is enabled.
     enabled: bool,
+    /// Whether the manager has completed initialization.
+    /// Windows are positioned instantly (no animation) until this is true.
+    initialized: bool,
     /// Focus history for workspace switching.
     focus_history: FocusHistory,
     /// Last programmatically focused window ID and when it was focused.
@@ -125,6 +129,8 @@ pub struct TilingManager {
     /// Last workspace switch timestamp.
     /// Used to debounce workspace switches triggered by focus events during a switch.
     last_workspace_switch: Option<Instant>,
+    /// Animation system for smooth window transitions.
+    animation_system: AnimationSystem,
 }
 
 impl TilingManager {
@@ -134,9 +140,11 @@ impl TilingManager {
         Self {
             state: TilingState::new(),
             enabled: false,
+            initialized: false,
             focus_history: FocusHistory::new(),
             last_programmatic_focus: None,
             last_workspace_switch: None,
+            animation_system: AnimationSystem::from_config(),
         }
     }
 
@@ -168,6 +176,16 @@ impl TilingManager {
     /// Returns whether the tiling system is enabled.
     #[must_use]
     pub const fn is_enabled(&self) -> bool { self.enabled }
+
+    /// Marks the manager as initialized.
+    ///
+    /// After calling this, window positioning will use animations (if enabled in config)
+    /// instead of instant positioning. This should be called at the end of the
+    /// startup sequence, after initial layouts have been applied.
+    pub fn mark_initialized(&mut self) {
+        self.initialized = true;
+        eprintln!("stache: tiling: manager marked as initialized - animations now enabled");
+    }
 
     /// Returns a reference to the current state.
     #[must_use]
@@ -1103,14 +1121,28 @@ impl TilingManager {
             );
         }
 
-        // Build list of (window_id, new_frame) pairs for positioning
-        let frame_updates: Vec<(u32, Rect)> = windows_to_reposition
-            .iter()
-            .map(|(window_id, new_frame, _, _)| (*window_id, *new_frame))
-            .collect();
+        // Position windows - during initialization, use instant positioning (no animation)
+        // to avoid windows visibly sliding to their initial positions on startup.
+        // After initialization, the animation system decides whether to animate based on config.
+        let repositioned = if self.initialized {
+            // Build window transitions for animation
+            let transitions: Vec<WindowTransition> = windows_to_reposition
+                .iter()
+                .map(|(window_id, new_frame, _, current_frame)| {
+                    WindowTransition::new(*window_id, *current_frame, *new_frame)
+                })
+                .collect();
 
-        // Position all windows at once using ID-based lookup (more reliable than frame matching)
-        let repositioned = set_window_frames_by_id(&frame_updates);
+            self.animation_system.animate(transitions)
+        } else {
+            // Instant positioning during startup - no animation
+            let window_frames: Vec<(u32, Rect)> = windows_to_reposition
+                .iter()
+                .map(|(window_id, new_frame, _, _)| (*window_id, *new_frame))
+                .collect();
+
+            set_window_frames_by_id(&window_frames)
+        };
 
         // Update tracked frames for all windows we attempted to reposition
         for (window_id, new_frame, _, _) in &windows_to_reposition {

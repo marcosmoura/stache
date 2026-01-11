@@ -14,12 +14,12 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 pub use types::{
-    AudioDeviceDependency, AudioDevicePriority, BarConfig, ConfigError, GapsConfig,
-    GapsConfigValue, LayoutType, MasterConfig, MasterPosition, MatchStrategy, MenuAnywhereConfig,
+    config_paths, load_config as load_config_with_path, AnimationConfig, AudioDeviceDependency,
+    AudioDevicePriority, BarConfig, ConfigError, EasingType, GapsConfig, GapsConfigValue,
+    LayoutType, MasterConfig, MasterPosition, MatchStrategy, MenuAnywhereConfig,
     MenuAnywhereModifier, MenuAnywhereMouseButton, NoTunesConfig, ProxyAudioConfig,
     ProxyAudioInputConfig, ProxyAudioOutputConfig, ShortcutCommands, StacheConfig, TargetMusicApp,
     TilingConfig, WallpaperConfig, WallpaperMode, WeatherConfig, WindowRule, WorkspaceConfig,
-    config_paths, load_config as load_config_with_path,
 };
 pub use watcher::watch_config_file;
 

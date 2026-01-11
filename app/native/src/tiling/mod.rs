@@ -42,6 +42,7 @@
 //! stache tiling window --swap <direction>
 //! ```
 
+pub mod animation;
 pub mod drag_state;
 pub mod layout;
 pub mod manager;
@@ -55,6 +56,7 @@ pub mod window;
 pub mod workspace;
 
 // Re-export commonly used types
+pub use animation::{AnimationConfig, AnimationSystem, WindowTransition};
 pub use manager::{TilingManager, WorkspaceSwitchInfo, get_manager, init_manager};
 pub use observer::{WindowEvent, WindowEventType};
 pub use rules::{
@@ -371,8 +373,11 @@ fn apply_startup_behavior() {
     // Now hide windows from non-visible workspaces and show windows from visible ones
     apply_initial_window_visibility(&mgr);
 
-    // Apply layouts to all visible workspaces
+    // Apply layouts to all visible workspaces (uses instant positioning since not yet initialized)
     apply_initial_layouts(&mut mgr);
+
+    // Mark the manager as initialized - from now on, animations will be used (if enabled)
+    mgr.mark_initialized();
 }
 
 /// Applies initial window visibility based on workspace visibility.

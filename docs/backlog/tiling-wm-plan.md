@@ -688,6 +688,8 @@ app/native/src/
   - [ ] Update `docs/features/tiling.md` with usage guide
   - [ ] Update `docs/sample-config.jsonc` with tiling examples
   - [ ] Add inline documentation to all public functions
+  - [ ] Update the README if necessary
+  - [ ] Document things with `cargo doc --no-deps`
 - [ ] Final cleanup:
   - [ ] Remove any dead code
   - [ ] Ensure consistent naming
