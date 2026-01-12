@@ -586,9 +586,15 @@ fn on_mouse_up() {
 
 /// Handles the completion of a move operation.
 ///
-/// For tiled windows: reapply the layout to snap them back to position.
+/// For tiled windows:
+/// - If dropped on another tiled window, swap them
+/// - Otherwise, reapply the layout to snap back to position
+///
 /// For floating windows: leave them where they are (this is their new position).
 fn handle_move_finished(info: &drag_state::DragInfo) {
+    // Get current window frames before updating tracked frames
+    let current_windows = get_all_windows();
+
     // Update tracked frames for all windows
     update_all_tracked_frames(&info.workspace_name);
 
@@ -601,7 +607,30 @@ fn handle_move_finished(info: &drag_state::DragInfo) {
         return;
     }
 
-    // Tiled windows get snapped back to their layout position
+    // Check if a window was dragged onto another window for swapping
+    if let Some((dragged_id, target_id)) =
+        find_drag_swap_target(&info.window_snapshots, &current_windows)
+    {
+        eprintln!(
+            "stache: tiling: drag: window {dragged_id} dropped on window {target_id} - swapping"
+        );
+
+        let Some(manager) = get_manager() else {
+            return;
+        };
+
+        cancel_animation();
+        let mut mgr = manager.write();
+        begin_animation();
+
+        if mgr.is_enabled() {
+            mgr.swap_windows_by_id(dragged_id, target_id);
+        }
+        drop(mgr);
+        return;
+    }
+
+    // No swap target - just snap back to layout position
     eprintln!(
         "stache: tiling: drag: tiled windows moved - reapplying layout for workspace '{}'",
         info.workspace_name
@@ -619,6 +648,80 @@ fn handle_move_finished(info: &drag_state::DragInfo) {
     if mgr.is_enabled() {
         mgr.apply_layout_forced(&info.workspace_name);
     }
+}
+
+/// Finds if a dragged window should be swapped with another window.
+///
+/// Returns `Some((dragged_id, target_id))` if a swap should occur:
+/// - `dragged_id` is the window that was moved significantly
+/// - `target_id` is the window whose original bounds contain the dragged window's new center
+///
+/// Returns `None` if no swap should occur (window wasn't dropped on another window).
+fn find_drag_swap_target(
+    snapshots: &[drag_state::WindowSnapshot],
+    current_windows: &[WindowInfo],
+) -> Option<(u32, u32)> {
+    // Minimum distance a window must move to be considered "dragged" (in pixels)
+    const MIN_DRAG_DISTANCE: f64 = 50.0;
+
+    // Find which window was dragged (moved significantly from original position)
+    let mut dragged: Option<(u32, Rect)> = None;
+    let mut max_distance = 0.0f64;
+
+    for snapshot in snapshots {
+        // Skip floating windows - they don't participate in swap
+        if snapshot.is_floating {
+            continue;
+        }
+
+        // Find current frame for this window
+        let Some(current) = current_windows.iter().find(|w| w.id == snapshot.window_id) else {
+            continue;
+        };
+
+        // Calculate how far the window moved (center-to-center distance)
+        let orig_center_x = snapshot.original_frame.x + snapshot.original_frame.width / 2.0;
+        let orig_center_y = snapshot.original_frame.y + snapshot.original_frame.height / 2.0;
+        let curr_center_x = current.frame.x + current.frame.width / 2.0;
+        let curr_center_y = current.frame.y + current.frame.height / 2.0;
+
+        let dx = curr_center_x - orig_center_x;
+        let dy = curr_center_y - orig_center_y;
+        let distance = dx.hypot(dy);
+
+        if distance > max_distance && distance > MIN_DRAG_DISTANCE {
+            max_distance = distance;
+            dragged = Some((snapshot.window_id, current.frame));
+        }
+    }
+
+    let (dragged_id, dragged_frame) = dragged?;
+
+    // Calculate the center of the dragged window's new position
+    let dragged_center_x = dragged_frame.x + dragged_frame.width / 2.0;
+    let dragged_center_y = dragged_frame.y + dragged_frame.height / 2.0;
+
+    // Find which other window's original bounds contain this center point
+    for snapshot in snapshots {
+        // Skip the dragged window itself and floating windows
+        if snapshot.window_id == dragged_id || snapshot.is_floating {
+            continue;
+        }
+
+        let orig = &snapshot.original_frame;
+
+        // Check if the dragged window's center is inside this window's original bounds
+        if dragged_center_x >= orig.x
+            && dragged_center_x <= orig.x + orig.width
+            && dragged_center_y >= orig.y
+            && dragged_center_y <= orig.y + orig.height
+        {
+            return Some((dragged_id, snapshot.window_id));
+        }
+    }
+
+    // Dragged window wasn't dropped on any other window
+    None
 }
 
 /// Handles the completion of a resize operation.
@@ -1347,5 +1450,154 @@ mod tests {
 
         let main = get_main_screen();
         assert!(main.is_some());
+    }
+
+    // ========================================================================
+    // Drag-and-Drop Tests
+    // ========================================================================
+
+    fn make_snapshot(id: u32, x: f64, y: f64, w: f64, h: f64, floating: bool) -> drag_state::WindowSnapshot {
+        drag_state::WindowSnapshot {
+            window_id: id,
+            original_frame: Rect::new(x, y, w, h),
+            is_floating: floating,
+        }
+    }
+
+    fn make_window_info(id: u32, x: f64, y: f64, w: f64, h: f64) -> WindowInfo {
+        WindowInfo::new_for_test(id, 1, Rect::new(x, y, w, h))
+    }
+
+    #[test]
+    fn test_find_drag_swap_target_window_dropped_on_another() {
+        // Two windows side by side, window 1 is dragged onto window 2's position
+        let snapshots = vec![
+            make_snapshot(1, 0.0, 0.0, 500.0, 600.0, false),   // Left window
+            make_snapshot(2, 500.0, 0.0, 500.0, 600.0, false), // Right window
+        ];
+
+        // Window 1 moved to center of window 2's original position
+        let current = vec![
+            make_window_info(1, 600.0, 200.0, 500.0, 600.0), // Dragged to right
+            make_window_info(2, 500.0, 0.0, 500.0, 600.0),   // Stayed in place
+        ];
+
+        let result = find_drag_swap_target(&snapshots, &current);
+        assert!(result.is_some());
+        let (dragged, target) = result.unwrap();
+        assert_eq!(dragged, 1);
+        assert_eq!(target, 2);
+    }
+
+    #[test]
+    fn test_find_drag_swap_target_no_swap_when_not_on_window() {
+        // Window dragged but not dropped on another window
+        let snapshots = vec![
+            make_snapshot(1, 0.0, 0.0, 500.0, 600.0, false),
+            make_snapshot(2, 500.0, 0.0, 500.0, 600.0, false),
+        ];
+
+        // Window 1 moved but not into window 2's bounds
+        let current = vec![
+            make_window_info(1, 100.0, 100.0, 500.0, 600.0), // Moved slightly
+            make_window_info(2, 500.0, 0.0, 500.0, 600.0),
+        ];
+
+        let result = find_drag_swap_target(&snapshots, &current);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_drag_swap_target_ignores_small_moves() {
+        // Window moved less than MIN_DRAG_DISTANCE (50px)
+        let snapshots = vec![
+            make_snapshot(1, 0.0, 0.0, 500.0, 600.0, false),
+            make_snapshot(2, 500.0, 0.0, 500.0, 600.0, false),
+        ];
+
+        // Window 1 moved only 30px
+        let current = vec![
+            make_window_info(1, 30.0, 0.0, 500.0, 600.0),
+            make_window_info(2, 500.0, 0.0, 500.0, 600.0),
+        ];
+
+        let result = find_drag_swap_target(&snapshots, &current);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_drag_swap_target_ignores_floating_windows() {
+        // Floating window dragged onto tiled window - should not swap
+        let snapshots = vec![
+            make_snapshot(1, 0.0, 0.0, 500.0, 600.0, true),    // Floating
+            make_snapshot(2, 500.0, 0.0, 500.0, 600.0, false), // Tiled
+        ];
+
+        let current = vec![
+            make_window_info(1, 600.0, 200.0, 500.0, 600.0), // Dragged to window 2
+            make_window_info(2, 500.0, 0.0, 500.0, 600.0),
+        ];
+
+        let result = find_drag_swap_target(&snapshots, &current);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_drag_swap_target_does_not_swap_with_floating() {
+        // Tiled window dragged onto floating window - should not swap
+        let snapshots = vec![
+            make_snapshot(1, 0.0, 0.0, 500.0, 600.0, false),  // Tiled
+            make_snapshot(2, 500.0, 0.0, 500.0, 600.0, true), // Floating
+        ];
+
+        let current = vec![
+            make_window_info(1, 600.0, 200.0, 500.0, 600.0), // Dragged to window 2
+            make_window_info(2, 500.0, 0.0, 500.0, 600.0),
+        ];
+
+        let result = find_drag_swap_target(&snapshots, &current);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_drag_swap_target_with_three_windows() {
+        // Window 1 dragged onto window 3
+        let snapshots = vec![
+            make_snapshot(1, 0.0, 0.0, 333.0, 600.0, false),
+            make_snapshot(2, 333.0, 0.0, 333.0, 600.0, false),
+            make_snapshot(3, 666.0, 0.0, 334.0, 600.0, false),
+        ];
+
+        // Window 1's center is now inside window 3's original bounds
+        let current = vec![
+            make_window_info(1, 700.0, 100.0, 333.0, 600.0), // Dragged to window 3
+            make_window_info(2, 333.0, 0.0, 333.0, 600.0),
+            make_window_info(3, 666.0, 0.0, 334.0, 600.0),
+        ];
+
+        let result = find_drag_swap_target(&snapshots, &current);
+        assert!(result.is_some());
+        let (dragged, target) = result.unwrap();
+        assert_eq!(dragged, 1);
+        assert_eq!(target, 3);
+    }
+
+    #[test]
+    fn test_find_drag_swap_target_empty_snapshots() {
+        let snapshots: Vec<drag_state::WindowSnapshot> = vec![];
+        let current: Vec<WindowInfo> = vec![];
+
+        let result = find_drag_swap_target(&snapshots, &current);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_drag_swap_target_single_window() {
+        // Single window can't be swapped with anything
+        let snapshots = vec![make_snapshot(1, 0.0, 0.0, 500.0, 600.0, false)];
+        let current = vec![make_window_info(1, 200.0, 200.0, 500.0, 600.0)];
+
+        let result = find_drag_swap_target(&snapshots, &current);
+        assert!(result.is_none());
     }
 }

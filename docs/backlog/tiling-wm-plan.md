@@ -375,26 +375,26 @@ app/native/src/
 
 ### Milestone 9: Advanced Features
 
-**Status**: [ ] Not Started / [ ] In Progress / [ ] Complete
+**Status**: [ ] Not Started / [x] In Progress / [ ] Complete
 
 **Goal**: Implement animations for window transitions, drag-and-drop window swapping, and performance optimizations.
 
 #### Phase 9.1: Animations
 
-- [ ] Create `tiling/animation.rs`:
-  - [ ] `AnimationSystem` struct
-  - [ ] Frame interpolation logic
-  - [ ] Easing functions (linear, ease-in, ease-out, ease-in-out, spring)
-    - [ ] Evaluate usage of existing easing crate or implement manually
-  - [ ] Animation thread/timer management
-  - [ ] `animate_window_frames(transitions)` function
-- [ ] Integrate animations:
-  - [ ] Animate workspace switches
-  - [ ] Animate layout changes
-  - [ ] Animate window moves
-  - [ ] Respect `animations.enabled` config
-- [ ] Add unit tests for animations
-- [ ] Run tests, fix clippy warnings and ensure build passes
+- [x] Create `tiling/animation.rs`:
+  - [x] `AnimationSystem` struct
+  - [x] Frame interpolation logic
+  - [x] Easing functions (linear, ease-in, ease-out, ease-in-out, spring)
+    - [x] Evaluate usage of existing easing crate or implement manually
+  - [x] Animation thread/timer management
+  - [x] `animate_window_frames(transitions)` function
+- [x] Integrate animations:
+  - [x] Animate workspace switches
+  - [x] Animate layout changes
+  - [x] Animate window moves
+  - [x] Respect `animations.enabled` config
+- [x] Add unit tests for animations
+- [x] Run tests, fix clippy warnings and ensure build passes
 
 **Verification**: Window animations are smooth and respect configuration
 
@@ -402,18 +402,18 @@ app/native/src/
 
 #### Phase 9.2: Drag and Drop
 
-- [ ] Implement drag-and-drop swapping:
-  - [ ] Detect window drag start
-  - [ ] Track drag position
-  - [ ] Detect drop on another window
-  - [ ] Trigger swap operation
-- [ ] Add visual feedback during drag (optional highlight)
-- [ ] Handle edge cases:
-  - [ ] Drag to different workspace
-  - [ ] Drag to different screen
-  - [ ] Cancelled drags
-- [ ] Add unit tests for drag-and-drop logic
-- [ ] Run tests, fix clippy warnings and ensure build passes
+- [x] Implement drag-and-drop swapping:
+  - [x] Detect window drag start (via `AXWindowMoved` + mouse down)
+  - [x] Track drag position (using mouse monitor)
+  - [x] Detect drop on another window (center-point-in-bounds check)
+  - [x] Trigger swap operation (`swap_windows_by_id`)
+- [ ] Add visual feedback during drag (optional highlight) - Deferred to borders milestone
+- [x] Handle edge cases:
+  - [x] Drag to different workspace (handled - swap only within same workspace)
+  - [x] Drag to different screen (handled - swap only within same workspace)
+  - [x] Cancelled drags (handled - window snaps back to layout position)
+- [x] Add unit tests for drag-and-drop logic (8 new tests)
+- [x] Run tests, fix clippy warnings and ensure build passes
 
 **Verification**: Drag-swap works reliably
 
@@ -429,7 +429,10 @@ app/native/src/
 - [ ] Optimize observer callbacks:
   - [ ] Consider debouncing rapid events
   - [ ] Minimize redundant layout recalculations
-- [ ] Reduce AX API call frequency
+- [ ] Minimize AX API calls
+- [ ] Optimize layout calculations
+- [ ] Optimize observer event handling
+- [ ] Evaluate caching strategies
 - [ ] Run performance tests, fix clippy warnings and ensure build passes
 
 **Verification**: Tiling operations feel snappy, no lag during window management
@@ -768,7 +771,7 @@ CLI-to-app communication via `NSDistributedNotificationCenter`:
 - **Layout Implementation**: All layouts in single `layout.rs` file (simpler than planned directory structure)
 - **Gaps Implementation**: Integrated into `layout.rs` as `Gaps` struct with `from_config()` method
 - **Borders Implementation**: Per-window NSWindow overlays with Core Animation rendering (Milestone 10)
-- **Test Count**: 770 tests total (4 workspace screen movement tests added in Milestone 8)
+- **Test Count**: 804 tests total (8 drag-and-drop tests added in Phase 9.2)
 
 ---
 
@@ -776,6 +779,8 @@ CLI-to-app communication via `NSDistributedNotificationCenter`:
 
 | Date       | Change                                                                                                               |
 | ---------- | -------------------------------------------------------------------------------------------------------------------- |
+| 2026-01-12 | Phase 9.2 complete: Drag-and-drop window swapping with `swap_windows_by_id`, 804 tests                               |
+| 2026-01-12 | Bug fix: Window swap now preserves window sizes (ratios swapped along with window IDs)                               |
 | 2026-01-11 | Milestone 8 complete: Workspace screen movement with original_screen_id tracking, 770 tests                          |
 | 2026-01-11 | Bug fix: send-to-workspace now switches to target workspace, focuses moved window, and sets correct focus index      |
 | 2026-01-11 | Milestone 7 complete: Grid layout, Master position configuration (left/right/top/bottom/auto), 766 tests             |

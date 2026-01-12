@@ -1899,6 +1899,27 @@ impl WindowInfo {
             workspace_name.to_string(),
         )
     }
+
+    /// Creates a minimal `WindowInfo` for testing purposes.
+    ///
+    /// All optional fields are set to reasonable defaults.
+    #[cfg(test)]
+    #[must_use]
+    pub fn new_for_test(id: u32, pid: i32, frame: Rect) -> Self {
+        Self {
+            id,
+            pid,
+            bundle_id: String::new(),
+            app_name: String::new(),
+            title: String::new(),
+            frame,
+            is_minimized: false,
+            is_hidden: false,
+            is_main: false,
+            is_focused: false,
+            ax_element: None,
+        }
+    }
 }
 
 // ============================================================================

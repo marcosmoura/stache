@@ -2133,6 +2133,106 @@ impl TilingManager {
         true
     }
 
+    /// Swaps two windows by their IDs within the same workspace.
+    ///
+    /// This is used by drag-and-drop to swap windows when one is dropped on another.
+    /// Unlike `swap_window_in_direction`, this doesn't require the windows to be
+    /// adjacent or in a particular direction.
+    ///
+    /// # Arguments
+    ///
+    /// * `window_id_a` - The first window ID
+    /// * `window_id_b` - The second window ID
+    ///
+    /// # Returns
+    ///
+    /// `true` if windows were swapped successfully.
+    pub fn swap_windows_by_id(&mut self, window_id_a: u32, window_id_b: u32) -> bool {
+        if window_id_a == window_id_b {
+            eprintln!("stache: tiling: swap-by-id: cannot swap window with itself");
+            return false;
+        }
+
+        // Find the workspace containing window A
+        let window_a = self.state.window_by_id(window_id_a).cloned();
+        let Some(window_a) = window_a else {
+            eprintln!("stache: tiling: swap-by-id: window {window_id_a} not found");
+            return false;
+        };
+
+        let workspace_name = window_a.workspace_name;
+
+        // Verify window B is in the same workspace
+        let window_b = self.state.window_by_id(window_id_b).cloned();
+        let Some(window_b) = window_b else {
+            eprintln!("stache: tiling: swap-by-id: window {window_id_b} not found");
+            return false;
+        };
+
+        if window_b.workspace_name != workspace_name {
+            eprintln!(
+                "stache: tiling: swap-by-id: windows are in different workspaces ('{workspace_name}' vs '{}')",
+                window_b.workspace_name
+            );
+            return false;
+        }
+
+        // Get the workspace and find indices
+        let Some(workspace) = self.state.workspace_by_name(&workspace_name) else {
+            eprintln!("stache: tiling: swap-by-id: workspace '{workspace_name}' not found");
+            return false;
+        };
+
+        let window_ids = workspace.window_ids.clone();
+        let idx_a = window_ids.iter().position(|&id| id == window_id_a);
+        let idx_b = window_ids.iter().position(|&id| id == window_id_b);
+
+        let (Some(idx_a), Some(idx_b)) = (idx_a, idx_b) else {
+            eprintln!("stache: tiling: swap-by-id: could not find window indices");
+            return false;
+        };
+
+        eprintln!(
+            "stache: tiling: swap-by-id: swapping window {window_id_a} (idx {idx_a}) with {window_id_b} (idx {idx_b}) in '{workspace_name}'"
+        );
+
+        // Perform the swap, preserving sizes
+        if let Some(ws) = self.state.workspace_by_name_mut(&workspace_name) {
+            let window_count = ws.window_ids.len();
+
+            // Get current proportions (individual sizes) from ratios
+            let mut proportions = cumulative_ratios_to_proportions(&ws.split_ratios, window_count);
+
+            // Swap the proportions so each window keeps its size
+            proportions.swap(idx_a, idx_b);
+
+            // Convert back to cumulative ratios
+            let new_ratios = proportions_to_cumulative_ratios(&proportions);
+
+            // Swap window IDs and update ratios
+            ws.window_ids.swap(idx_a, idx_b);
+            ws.split_ratios = new_ratios;
+
+            // Update focused window index if needed (keep focus on same window)
+            if let Some(focused_idx) = ws.focused_window_index {
+                if focused_idx == idx_a {
+                    ws.focused_window_index = Some(idx_b);
+                } else if focused_idx == idx_b {
+                    ws.focused_window_index = Some(idx_a);
+                }
+            }
+        }
+
+        eprintln!(
+            "stache: tiling: swap-by-id: swapped window {window_id_a} with {window_id_b} in workspace '{workspace_name}'"
+        );
+
+        // Re-apply layout to reposition windows
+        self.apply_layout_forced(&workspace_name);
+
+        true
+    }
+
     // ========================================================================
     // Window Send Commands
     // ========================================================================
