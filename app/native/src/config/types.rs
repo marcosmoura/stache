@@ -481,7 +481,8 @@ pub struct AnimationConfig {
     /// Default: false
     pub enabled: bool,
 
-    /// Animation duration in milliseconds.
+    /// Animation duration in milliseconds for large movements (500+ pixels).
+    /// For smaller movements, duration is automatically scaled down.
     /// Default: 200
     pub duration: u32,
 

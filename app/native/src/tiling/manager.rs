@@ -10,7 +10,7 @@ use std::time::Instant;
 use parking_lot::RwLock;
 use tauri::{AppHandle, Emitter, Runtime};
 
-use super::animation::{AnimationSystem, WindowTransition};
+use super::animation::{AnimationSystem, WindowTransition, get_interrupted_position};
 use super::layout::{Gaps, calculate_layout_with_gaps, calculate_layout_with_gaps_and_ratios};
 use super::screen;
 use super::state::{Rect, Screen, TilingState, TrackedWindow, Workspace};
@@ -1126,10 +1126,13 @@ impl TilingManager {
         // After initialization, the animation system decides whether to animate based on config.
         let repositioned = if self.initialized {
             // Build window transitions for animation
+            // If a previous animation was interrupted, use the interrupted position as the
+            // starting point instead of the tracked frame (which may be stale)
             let transitions: Vec<WindowTransition> = windows_to_reposition
                 .iter()
                 .map(|(window_id, new_frame, _, current_frame)| {
-                    WindowTransition::new(*window_id, *current_frame, *new_frame)
+                    let from = get_interrupted_position(*window_id).unwrap_or(*current_frame);
+                    WindowTransition::new(*window_id, from, *new_frame)
                 })
                 .collect();
 
@@ -2094,13 +2097,31 @@ impl TilingManager {
             return false;
         };
 
-        // Swap the windows in the workspace's window_ids list
+        // Swap the windows in the workspace's window_ids list, preserving their sizes
         if let Some(ws) = self.state.workspace_by_name_mut(&workspace_name) {
+            let window_count = ws.window_ids.len();
+
+            // Get current proportions (individual sizes) from ratios
+            let mut proportions =
+                cumulative_ratios_to_proportions(&ws.split_ratios, window_count);
+
+            // Swap the proportions so each window keeps its size
+            proportions.swap(focused_idx, target_idx);
+
+            // Convert back to cumulative ratios
+            let new_ratios = proportions_to_cumulative_ratios(&proportions);
+
+            eprintln!(
+                "stache: tiling: swap: proportions after swap: {:?}",
+                proportions.iter().map(|p| format!("{:.1}%", p * 100.0)).collect::<Vec<_>>()
+            );
+
+            // Swap window IDs and update ratios
             ws.window_ids.swap(focused_idx, target_idx);
+            ws.split_ratios = new_ratios;
+
             // Keep focus on the originally focused window (now at target_idx)
             ws.focused_window_index = Some(target_idx);
-            // Clear ratios to re-balance after swap
-            ws.split_ratios.clear();
         }
 
         eprintln!(

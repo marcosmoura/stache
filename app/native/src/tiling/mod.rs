@@ -56,7 +56,10 @@ pub mod window;
 pub mod workspace;
 
 // Re-export commonly used types
-pub use animation::{AnimationConfig, AnimationSystem, WindowTransition};
+pub use animation::{
+    AnimationConfig, AnimationSystem, WindowTransition, begin_animation, cancel_animation,
+    get_interrupted_position,
+};
 pub use manager::{TilingManager, WorkspaceSwitchInfo, get_manager, init_manager};
 pub use observer::{WindowEvent, WindowEventType};
 pub use rules::{
@@ -608,7 +611,11 @@ fn handle_move_finished(info: &drag_state::DragInfo) {
         return;
     };
 
+    // Cancel any running animation before acquiring lock
+    cancel_animation();
+
     let mut mgr = manager.write();
+    begin_animation(); // Signal we're no longer waiting
     if mgr.is_enabled() {
         mgr.apply_layout_forced(&info.workspace_name);
     }
@@ -641,7 +648,11 @@ fn handle_resize_finished(info: &drag_state::DragInfo) {
         return;
     };
 
+    // Cancel any running animation before acquiring lock
+    cancel_animation();
+
     let mut mgr = manager.write();
+    begin_animation(); // Signal we're no longer waiting
     if !mgr.is_enabled() {
         return;
     }
@@ -756,7 +767,11 @@ fn handle_window_created(pid: i32) {
             return;
         };
 
+        // Cancel any running animation before acquiring lock
+        cancel_animation();
+
         let mut mgr = manager.write();
+        begin_animation(); // Signal we're no longer waiting
         if !mgr.is_enabled() {
             return;
         }
@@ -877,7 +892,11 @@ fn handle_window_destroyed(pid: i32) {
     let app_windows: Vec<_> = current_windows.iter().filter(|w| w.pid == pid).collect();
     let current_ids: std::collections::HashSet<u32> = app_windows.iter().map(|w| w.id).collect();
 
+    // Cancel any running animation before acquiring lock
+    cancel_animation();
+
     let mut mgr = manager.write();
+    begin_animation(); // Signal we're no longer waiting
     if !mgr.is_enabled() {
         return;
     }
@@ -995,7 +1014,11 @@ fn handle_window_focused(pid: i32) {
         focused.id, focused.app_name, focused.title
     );
 
+    // Cancel any running animation before acquiring lock
+    cancel_animation();
+
     let mut mgr = manager.write();
+    begin_animation(); // Signal we're no longer waiting
     if !mgr.is_enabled() {
         return;
     }
@@ -1101,8 +1124,12 @@ fn handle_screen_change() {
     // Prevent recursive callbacks during our screen refresh
     screen_monitor::set_processing(true);
 
+    // Cancel any running animation before acquiring lock
+    cancel_animation();
+
     let (added, removed) = {
         let mut mgr = manager.write();
+        begin_animation(); // Signal we're no longer waiting
         if !mgr.is_enabled() {
             screen_monitor::set_processing(false);
             return;

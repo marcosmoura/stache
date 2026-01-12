@@ -1369,13 +1369,13 @@ pub fn set_window_frames_delta(frames: &[(AXUIElementRef, Rect, Rect)]) -> usize
     // Position multiple windows in parallel
     let success_count = AtomicUsize::new(0);
 
-    sendable_frames
-        .par_iter()
-        .for_each(|(SendableAXElement(ax_element), new_frame, prev_frame)| {
+    sendable_frames.par_iter().for_each(
+        |(SendableAXElement(ax_element), new_frame, prev_frame)| {
             if unsafe { set_ax_frame_delta(*ax_element, new_frame, prev_frame) } {
                 success_count.fetch_add(1, Ordering::Relaxed);
             }
-        });
+        },
+    );
 
     success_count.load(Ordering::Relaxed)
 }
@@ -1411,13 +1411,11 @@ pub fn set_window_positions_only(frames: &[(AXUIElementRef, f64, f64)]) -> usize
     // Position multiple windows in parallel
     let success_count = AtomicUsize::new(0);
 
-    sendable_frames
-        .par_iter()
-        .for_each(|(SendableAXElement(ax_element), x, y)| {
-            if unsafe { set_ax_position(*ax_element, *x, *y) } {
-                success_count.fetch_add(1, Ordering::Relaxed);
-            }
-        });
+    sendable_frames.par_iter().for_each(|(SendableAXElement(ax_element), x, y)| {
+        if unsafe { set_ax_position(*ax_element, *x, *y) } {
+            success_count.fetch_add(1, Ordering::Relaxed);
+        }
+    });
 
     success_count.load(Ordering::Relaxed)
 }

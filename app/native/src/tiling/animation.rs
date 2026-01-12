@@ -33,8 +33,10 @@
 //! ```
 
 // Import for high-precision sleep
+use std::collections::HashMap;
 use std::os::raw::c_int;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use super::state::Rect;
@@ -65,6 +67,60 @@ unsafe extern "C" {
     fn CGDisplayModeRelease(mode: *mut std::ffi::c_void);
 }
 
+// CVDisplayLink FFI
+type CVDisplayLinkRef = *mut std::ffi::c_void;
+type CVReturn = i32;
+type CVOptionFlags = u64;
+
+/// `CVTimeStamp` structure for display link callbacks.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct CVTimeStamp {
+    version: u32,
+    video_time_scale: i32,
+    video_time: i64,
+    host_time: u64,
+    rate_scalar: f64,
+    video_refresh_period: i64,
+    smpte_time: [u8; 24], // SMPTETime structure, we don't need to parse it
+    flags: u64,
+    reserved: u64,
+}
+
+/// Callback type for `CVDisplayLink`.
+type CVDisplayLinkOutputCallback = unsafe extern "C" fn(
+    display_link: CVDisplayLinkRef,
+    in_now: *const CVTimeStamp,
+    in_output_time: *const CVTimeStamp,
+    flags_in: CVOptionFlags,
+    flags_out: *mut CVOptionFlags,
+    context: *mut std::ffi::c_void,
+) -> CVReturn;
+
+#[link(name = "CoreVideo", kind = "framework")]
+unsafe extern "C" {
+    fn CVDisplayLinkCreateWithCGDisplay(
+        display_id: u32,
+        display_link_out: *mut CVDisplayLinkRef,
+    ) -> CVReturn;
+    fn CVDisplayLinkSetOutputCallback(
+        display_link: CVDisplayLinkRef,
+        callback: CVDisplayLinkOutputCallback,
+        user_info: *mut std::ffi::c_void,
+    ) -> CVReturn;
+    fn CVDisplayLinkStart(display_link: CVDisplayLinkRef) -> CVReturn;
+    fn CVDisplayLinkStop(display_link: CVDisplayLinkRef) -> CVReturn;
+    fn CVDisplayLinkRelease(display_link: CVDisplayLinkRef);
+}
+
+// Objective-C runtime for calling CATransaction methods
+#[link(name = "objc")]
+unsafe extern "C" {
+    fn objc_getClass(name: *const std::ffi::c_char) -> *const std::ffi::c_void;
+    fn sel_registerName(name: *const std::ffi::c_char) -> *const std::ffi::c_void;
+    fn objc_msgSend(receiver: *const std::ffi::c_void, selector: *const std::ffi::c_void, ...);
+}
+
 /// macOS `QoS` class for user-interactive work (highest priority).
 const QOS_CLASS_USER_INTERACTIVE: c_int = 0x21;
 
@@ -88,6 +144,81 @@ const MIN_ANIMATION_DISTANCE: f64 = 5.0;
 /// Sleeping has ~1ms minimum granularity on most systems, so for sub-millisecond
 /// waits we spin to achieve more precise timing.
 const SPIN_WAIT_THRESHOLD_US: u64 = 1000;
+
+// ============================================================================
+// Animation Cancellation
+// ============================================================================
+
+/// Counter of commands waiting for the lock to start an animation.
+/// Incremented before acquiring lock, decremented after acquiring lock.
+/// Animation cancels if this is > 0 (meaning other commands are waiting).
+static WAITING_COMMANDS: AtomicU64 = AtomicU64::new(0);
+
+/// Stores the last rendered position for each window when animation is cancelled.
+/// This allows the next animation to start from where the previous one was interrupted.
+static INTERRUPTED_POSITIONS: OnceLock<Mutex<HashMap<u32, Rect>>> = OnceLock::new();
+
+/// Gets the interrupted positions map, initializing if needed.
+fn get_interrupted_positions() -> &'static Mutex<HashMap<u32, Rect>> {
+    INTERRUPTED_POSITIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Signals that a command is waiting to run an animation.
+///
+/// Call this BEFORE trying to acquire the write lock. This increments the
+/// waiting counter, which the running animation will detect and cancel early.
+pub fn cancel_animation() { WAITING_COMMANDS.fetch_add(1, Ordering::SeqCst); }
+
+/// Called after acquiring the lock to signal we're no longer waiting.
+///
+/// IMPORTANT: This MUST be called after every `cancel_animation()` call,
+/// regardless of whether an animation actually runs. Call it right after
+/// acquiring the write lock.
+pub fn begin_animation() {
+    // Decrement, but don't underflow (handles startup code that doesn't call cancel_animation)
+    let _ = WAITING_COMMANDS.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+        Some(current.saturating_sub(1))
+    });
+}
+
+/// Checks if other commands are waiting to run.
+/// Returns true if the animation should cancel to let them proceed.
+#[inline]
+fn should_cancel() -> bool { WAITING_COMMANDS.load(Ordering::SeqCst) > 0 }
+
+/// Gets the interrupted position for a window, if any.
+///
+/// Returns the position where the window was when animation was cancelled.
+/// This is used to build accurate transitions after cancellation.
+#[must_use]
+pub fn get_interrupted_position(window_id: u32) -> Option<Rect> {
+    get_interrupted_positions()
+        .lock()
+        .ok()
+        .and_then(|map| map.get(&window_id).copied())
+}
+
+/// Stores interrupted positions for the given windows.
+///
+/// Called when animation is cancelled to record where windows are.
+fn store_interrupted_positions(positions: &[(u32, Rect)]) {
+    if let Ok(mut map) = get_interrupted_positions().lock() {
+        for (window_id, rect) in positions {
+            map.insert(*window_id, *rect);
+        }
+    }
+}
+
+/// Clears interrupted positions for the given windows.
+///
+/// Called after a successful animation completes (not cancelled).
+fn clear_interrupted_positions(window_ids: &[u32]) {
+    if let Ok(mut map) = get_interrupted_positions().lock() {
+        for window_id in window_ids {
+            map.remove(window_id);
+        }
+    }
+}
 
 // ============================================================================
 // Display Refresh Rate Detection
@@ -129,6 +260,224 @@ fn get_display_refresh_rate() -> u32 {
 /// Returns the target FPS for animations, based on display refresh rate.
 #[inline]
 fn target_fps() -> u32 { get_display_refresh_rate() }
+
+// ============================================================================
+// CVDisplayLink Frame Synchronization
+// ============================================================================
+
+/// Shared state for display link callback synchronization.
+struct DisplaySyncState {
+    /// Frame counter, incremented on each vsync.
+    frame_count: AtomicU64,
+    /// Condvar for waiting on vsync.
+    condvar: Condvar,
+    /// Mutex for condvar (required but not used for actual data).
+    mutex: Mutex<()>,
+}
+
+impl DisplaySyncState {
+    const fn new() -> Self {
+        Self {
+            frame_count: AtomicU64::new(0),
+            condvar: Condvar::new(),
+            mutex: Mutex::new(()),
+        }
+    }
+
+    /// Signals that a vsync occurred.
+    fn signal_vsync(&self) {
+        self.frame_count.fetch_add(1, Ordering::Release);
+        self.condvar.notify_all();
+    }
+
+    /// Waits for the next vsync, with a timeout fallback.
+    #[allow(clippy::significant_drop_tightening)] // Guard must be passed to wait_timeout_while
+    fn wait_for_vsync(&self, timeout: Duration) -> bool {
+        let current_frame = self.frame_count.load(Ordering::Acquire);
+        let guard = self.mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        // Wait until frame count changes or timeout
+        let result = self
+            .condvar
+            .wait_timeout_while(guard, timeout, |()| {
+                self.frame_count.load(Ordering::Acquire) == current_frame
+            })
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        !result.1.timed_out()
+    }
+}
+
+/// Global display sync state for the animation system.
+static DISPLAY_SYNC: OnceLock<Arc<DisplaySyncState>> = OnceLock::new();
+
+/// `CVDisplayLink` callback - called on each vsync.
+unsafe extern "C" fn display_link_callback(
+    _display_link: CVDisplayLinkRef,
+    _in_now: *const CVTimeStamp,
+    _in_output_time: *const CVTimeStamp,
+    _flags_in: CVOptionFlags,
+    _flags_out: *mut CVOptionFlags,
+    context: *mut std::ffi::c_void,
+) -> CVReturn {
+    // SAFETY: context is a pointer to Arc<DisplaySyncState> that we set in DisplayLink::new()
+    // and it remains valid for the lifetime of the display link.
+    unsafe {
+        let state = &*(context.cast::<DisplaySyncState>());
+        state.signal_vsync();
+    }
+    0 // kCVReturnSuccess
+}
+
+/// RAII wrapper for `CVDisplayLink`.
+///
+/// `CVDisplayLink` is thread-safe according to Apple's documentation,
+/// so we can safely implement Send + Sync.
+struct DisplayLink {
+    link: CVDisplayLinkRef,
+    #[allow(dead_code)]
+    state: Arc<DisplaySyncState>,
+}
+
+// SAFETY: CVDisplayLink is thread-safe per Apple's Core Video documentation.
+// The internal state is managed by Core Video and the callback synchronization
+// is handled through our Arc<DisplaySyncState>.
+unsafe impl Send for DisplayLink {}
+unsafe impl Sync for DisplayLink {}
+
+impl DisplayLink {
+    /// Creates and starts a display link for the main display.
+    fn new() -> Option<Self> {
+        let state = Arc::new(DisplaySyncState::new());
+        let mut link: CVDisplayLinkRef = std::ptr::null_mut();
+
+        unsafe {
+            let display_id = CGMainDisplayID();
+
+            // Create display link
+            if CVDisplayLinkCreateWithCGDisplay(display_id, &raw mut link) != 0 {
+                return None;
+            }
+
+            // Set callback with state as context
+            let state_ptr = Arc::as_ptr(&state).cast_mut().cast::<std::ffi::c_void>();
+            if CVDisplayLinkSetOutputCallback(link, display_link_callback, state_ptr) != 0 {
+                CVDisplayLinkRelease(link);
+                return None;
+            }
+
+            // Start the display link
+            if CVDisplayLinkStart(link) != 0 {
+                CVDisplayLinkRelease(link);
+                return None;
+            }
+        }
+
+        // Store state globally for wait_for_vsync access
+        let _ = DISPLAY_SYNC.set(Arc::clone(&state));
+
+        Some(Self { link, state })
+    }
+}
+
+impl Drop for DisplayLink {
+    fn drop(&mut self) {
+        unsafe {
+            CVDisplayLinkStop(self.link);
+            CVDisplayLinkRelease(self.link);
+        }
+    }
+}
+
+/// Global display link instance.
+static DISPLAY_LINK: OnceLock<Option<DisplayLink>> = OnceLock::new();
+
+/// Initializes the display link if not already initialized.
+fn init_display_link() {
+    DISPLAY_LINK.get_or_init(|| {
+        let link = DisplayLink::new();
+        if link.is_some() {
+            eprintln!("stache: tiling: CVDisplayLink initialized for vsync");
+        } else {
+            eprintln!("stache: tiling: CVDisplayLink failed, using fallback timing");
+        }
+        link
+    });
+}
+
+/// Waits for the next vsync, falling back to precision sleep if display link unavailable.
+#[inline]
+fn wait_for_next_frame(fallback_duration: Duration) {
+    // Try to use display link vsync
+    if let Some(state) = DISPLAY_SYNC.get() {
+        // Wait with a reasonable timeout (2x frame duration)
+        if state.wait_for_vsync(fallback_duration * 2) {
+            return;
+        }
+    }
+
+    // Fallback to precision sleep
+    precision_sleep(fallback_duration);
+}
+
+// ============================================================================
+// CATransaction - Disable Implicit Animations
+// ============================================================================
+
+/// Cached selectors for `CATransaction` methods.
+struct CATransactionSelectors {
+    class: *const std::ffi::c_void,
+    begin: *const std::ffi::c_void,
+    commit: *const std::ffi::c_void,
+    set_disable_actions: *const std::ffi::c_void,
+}
+
+// SAFETY: These are immutable pointers to Objective-C runtime data that is thread-safe.
+unsafe impl Send for CATransactionSelectors {}
+unsafe impl Sync for CATransactionSelectors {}
+
+/// Cached `CATransaction` selectors for performance.
+static CA_TRANSACTION: OnceLock<CATransactionSelectors> = OnceLock::new();
+
+/// Gets or initializes the cached `CATransaction` selectors.
+fn get_ca_transaction() -> &'static CATransactionSelectors {
+    CA_TRANSACTION.get_or_init(|| unsafe {
+        CATransactionSelectors {
+            class: objc_getClass(c"CATransaction".as_ptr()),
+            begin: sel_registerName(c"begin".as_ptr()),
+            commit: sel_registerName(c"commit".as_ptr()),
+            set_disable_actions: sel_registerName(c"setDisableActions:".as_ptr()),
+        }
+    })
+}
+
+/// Begins a `CATransaction` with implicit animations disabled.
+///
+/// This prevents macOS from applying its own animations when we move windows,
+/// which would otherwise interfere with our custom animation system.
+///
+/// Must be paired with `ca_transaction_commit()`.
+#[inline]
+fn ca_transaction_begin_disabled() {
+    let ca = get_ca_transaction();
+    unsafe {
+        // [CATransaction begin]
+        objc_msgSend(ca.class, ca.begin);
+        // [CATransaction setDisableActions:YES]
+        // Variadic functions require c_int minimum, but BOOL is treated as int in Obj-C ABI
+        objc_msgSend(ca.class, ca.set_disable_actions, 1 as c_int);
+    }
+}
+
+/// Commits the current `CATransaction`.
+#[inline]
+fn ca_transaction_commit() {
+    let ca = get_ca_transaction();
+    unsafe {
+        // [CATransaction commit]
+        objc_msgSend(ca.class, ca.commit);
+    }
+}
 
 // ============================================================================
 // Thread Priority
@@ -451,12 +800,19 @@ fn apply_easing(t: f64, easing: EasingType) -> f64 {
 // Animation System
 // ============================================================================
 
+/// Reference distance (pixels) for full animation duration.
+/// Movements >= this distance use the full configured duration.
+const REFERENCE_DISTANCE: f64 = 500.0;
+
+/// Minimum duration for very small movements (hardcoded).
+const MIN_DYNAMIC_DURATION_MS: u64 = 50;
+
 /// Configuration for the animation system.
 #[derive(Debug, Clone)]
 pub struct AnimationConfig {
     /// Whether animations are enabled.
     pub enabled: bool,
-    /// Animation duration.
+    /// Base animation duration (for large movements).
     pub duration: Duration,
     /// Easing function type.
     pub easing: EasingType,
@@ -486,6 +842,47 @@ impl AnimationConfig {
             )),
             easing: anim_config.easing,
         }
+    }
+
+    /// Calculates the animation duration based on travel distance.
+    ///
+    /// Smaller movements get shorter durations for a snappier feel:
+    /// - Uses sqrt scaling for perceptually consistent speed
+    /// - Movements < 20px use minimum duration (50ms)
+    /// - Movements >= 500px use full configured duration
+    ///
+    /// # Arguments
+    ///
+    /// * `max_distance` - The maximum distance any window needs to travel
+    ///
+    /// # Returns
+    ///
+    /// The calculated animation duration.
+    #[must_use]
+    pub fn calculate_duration(&self, max_distance: f64) -> Duration {
+        // Minimum threshold - very small movements get minimum duration
+        const MIN_DISTANCE: f64 = 20.0;
+        let min_duration = Duration::from_millis(MIN_DYNAMIC_DURATION_MS);
+
+        if max_distance <= MIN_DISTANCE {
+            return min_duration;
+        }
+
+        if max_distance >= REFERENCE_DISTANCE {
+            return self.duration;
+        }
+
+        // Use sqrt scaling for perceptually consistent animation speed
+        // sqrt makes small movements feel snappier while large movements stay smooth
+        let normalized = (max_distance / REFERENCE_DISTANCE).sqrt();
+        #[allow(clippy::cast_precision_loss)]
+        let min_ms = MIN_DYNAMIC_DURATION_MS as f64;
+        #[allow(clippy::cast_precision_loss)]
+        let max_ms = self.duration.as_millis() as f64;
+        let duration_ms = (max_ms - min_ms).mul_add(normalized, min_ms);
+
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        Duration::from_millis(duration_ms as u64)
     }
 }
 
@@ -573,22 +970,35 @@ impl AnimationSystem {
 
     /// Runs the animation loop for the given transitions.
     fn run_animation(&self, transitions: &[WindowTransition]) -> usize {
+        // Calculate max distance for dynamic duration
+        let max_distance =
+            transitions.iter().map(WindowTransition::max_distance).fold(0.0_f64, f64::max);
+
+        // Calculate dynamic duration based on travel distance
+        let duration = self.config.calculate_duration(max_distance);
+
         match self.config.easing {
-            EasingType::Spring => self.run_spring_animation(transitions),
-            _ => self.run_eased_animation(transitions),
+            EasingType::Spring => self.run_spring_animation(transitions, duration),
+            _ => self.run_eased_animation(transitions, duration),
         }
     }
 
     /// Runs a time-based eased animation.
     ///
     /// Optimizations:
+    /// - `CVDisplayLink` vsync synchronization for tear-free rendering
+    /// - `CATransaction` to disable implicit macOS animations
+    /// - Parallel window updates using rayon
+    /// - Dynamic duration based on travel distance
     /// - Adaptive frame rate based on display refresh rate
     /// - Position-only updates when no resizing (1 AX call vs 2)
     /// - Delta optimization (skips unchanged properties)
     /// - High-priority thread for reduced latency
-    /// - Precision sleep for accurate frame timing
     /// - Pre-allocated buffers to avoid per-frame allocations
-    fn run_eased_animation(&self, transitions: &[WindowTransition]) -> usize {
+    fn run_eased_animation(&self, transitions: &[WindowTransition], duration: Duration) -> usize {
+        // Initialize display link for vsync synchronization
+        init_display_link();
+
         // Set high priority for smooth animation
         set_high_priority_thread();
 
@@ -596,7 +1006,6 @@ impl AnimationSystem {
         let fps = target_fps();
         let frame_duration = Duration::from_secs(1) / fps;
         let start = Instant::now();
-        let duration = self.config.duration;
         let easing = self.config.easing;
 
         // Check if this is a position-only animation (no resizing)
@@ -634,17 +1043,43 @@ impl AnimationSystem {
             Vec::with_capacity(animatable.len())
         };
 
+        // Track last rendered frames for cancellation recovery
+        let mut last_rendered: Vec<Rect> =
+            animatable.iter().map(|&(idx, _)| transitions[idx].from).collect();
+
         loop {
+            // Check if other commands are waiting - if so, cancel to let them run
+            if should_cancel() {
+                // Store interrupted positions for next animation to use
+                let interrupted: Vec<(u32, Rect)> = animatable
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &(idx, _))| (transitions[idx].window_id, last_rendered[i]))
+                    .collect();
+                store_interrupted_positions(&interrupted);
+                return animatable.len(); // Return count of windows we were animating
+            }
+
             let elapsed = start.elapsed();
             let progress = (elapsed.as_secs_f64() / duration.as_secs_f64()).min(1.0);
             let eased_progress = apply_easing(progress, easing);
 
+            // Disable implicit animations for this frame
+            ca_transaction_begin_disabled();
+
             let positioned = if position_only {
                 // Fast path: position-only (1 AX call per window)
                 position_frames.clear();
-                for &(idx, ax) in &animatable {
+                for (i, &(idx, ax)) in animatable.iter().enumerate() {
                     let (x, y) = transitions[idx].interpolate_position(eased_progress);
                     position_frames.push((ax, x, y));
+                    // Update last rendered for cancellation tracking
+                    last_rendered[i] = Rect {
+                        x,
+                        y,
+                        width: transitions[idx].to.width,
+                        height: transitions[idx].to.height,
+                    };
                 }
                 set_window_positions_only(&position_frames)
             } else {
@@ -654,23 +1089,22 @@ impl AnimationSystem {
                     let new_frame = transitions[idx].interpolate(eased_progress);
                     delta_frames.push((ax, new_frame, prev_frames[i]));
                     prev_frames[i] = new_frame;
+                    last_rendered[i] = new_frame;
                 }
                 set_window_frames_delta(&delta_frames)
             };
 
+            ca_transaction_commit();
+
             // Check if animation is complete
             if progress >= 1.0 {
+                // Animation completed normally - clear interrupted positions
+                clear_interrupted_positions(&window_ids);
                 return positioned;
             }
 
-            // Precision sleep until next frame
-            let frame_end = start
-                + Duration::from_secs_f64(
-                    (elapsed.as_secs_f64() / frame_duration.as_secs_f64()).ceil()
-                        * frame_duration.as_secs_f64(),
-                );
-            let remaining = frame_end.saturating_duration_since(Instant::now());
-            precision_sleep(remaining);
+            // Wait for next vsync (or fallback to precision sleep)
+            wait_for_next_frame(frame_duration);
         }
     }
 
@@ -680,13 +1114,19 @@ impl AnimationSystem {
     /// in the expected time regardless of frame rendering overhead.
     ///
     /// Optimizations:
+    /// - `CVDisplayLink` vsync synchronization for tear-free rendering
+    /// - `CATransaction` to disable implicit macOS animations
+    /// - Parallel window updates using rayon
     /// - Adaptive frame rate based on display refresh rate
     /// - Position-only updates when no resizing (1 AX call vs 2)
     /// - Delta optimization (skips unchanged properties)
     /// - High-priority thread for reduced latency
-    /// - Precision sleep for accurate frame timing
     /// - Pre-allocates frame buffer to avoid per-frame allocations
-    fn run_spring_animation(&self, transitions: &[WindowTransition]) -> usize {
+    #[allow(clippy::unused_self)] // Keeps consistent API with run_eased_animation
+    fn run_spring_animation(&self, transitions: &[WindowTransition], duration: Duration) -> usize {
+        // Initialize display link for vsync synchronization
+        init_display_link();
+
         // Set high priority for smooth animation
         set_high_priority_thread();
 
@@ -694,7 +1134,6 @@ impl AnimationSystem {
         let fps = target_fps();
         let frame_duration = Duration::from_secs(1) / fps;
         let max_duration = Duration::from_millis(u64::from(MAX_DURATION_MS));
-        let target_duration = self.config.duration;
         let start = Instant::now();
         let mut last_frame_time = start;
 
@@ -717,7 +1156,7 @@ impl AnimationSystem {
         }
 
         let mut spring_states: Vec<SpringState> =
-            transitions.iter().map(|_| SpringState::new(target_duration)).collect();
+            transitions.iter().map(|_| SpringState::new(duration)).collect();
 
         // Pre-allocate buffers based on animation type
         let mut position_frames: Vec<(_, f64, f64)> = if position_only {
@@ -736,7 +1175,23 @@ impl AnimationSystem {
             Vec::with_capacity(animatable.len())
         };
 
+        // Track last rendered frames for cancellation recovery
+        let mut last_rendered: Vec<Rect> =
+            animatable.iter().map(|&(idx, _)| transitions[idx].from).collect();
+
         loop {
+            // Check if other commands are waiting - if so, cancel to let them run
+            if should_cancel() {
+                // Store interrupted positions for next animation to use
+                let interrupted: Vec<(u32, Rect)> = animatable
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &(idx, _))| (transitions[idx].window_id, last_rendered[i]))
+                    .collect();
+                store_interrupted_positions(&interrupted);
+                return animatable.len(); // Return count of windows we were animating
+            }
+
             // Calculate actual elapsed time since last frame (wall-clock time)
             let now = Instant::now();
             let dt = (now - last_frame_time).as_secs_f64();
@@ -751,14 +1206,24 @@ impl AnimationSystem {
                 }
             }
 
+            // Disable implicit animations for this frame
+            ca_transaction_begin_disabled();
+
             let positioned = if position_only {
                 // Fast path: position-only (1 AX call per window)
                 position_frames.clear();
-                for &(idx, ax) in &animatable {
+                for (i, &(idx, ax)) in animatable.iter().enumerate() {
                     let progress =
                         spring_states[idx].calculate_position(spring_states[idx].elapsed);
                     let (x, y) = transitions[idx].interpolate_position(progress);
                     position_frames.push((ax, x, y));
+                    // Update last rendered for cancellation tracking
+                    last_rendered[i] = Rect {
+                        x,
+                        y,
+                        width: transitions[idx].to.width,
+                        height: transitions[idx].to.height,
+                    };
                 }
                 set_window_positions_only(&position_frames)
             } else {
@@ -770,21 +1235,28 @@ impl AnimationSystem {
                     let new_frame = transitions[idx].interpolate(progress);
                     delta_frames.push((ax, new_frame, prev_frames[i]));
                     prev_frames[i] = new_frame;
+                    last_rendered[i] = new_frame;
                 }
                 set_window_frames_delta(&delta_frames)
             };
 
+            ca_transaction_commit();
+
             // Check completion conditions
             if all_settled || start.elapsed() > max_duration {
                 // Ensure final positions are exact (use direct for final frame)
+                ca_transaction_begin_disabled();
                 let final_frames: Vec<(_, Rect)> =
                     animatable.iter().map(|&(idx, ax)| (ax, transitions[idx].to)).collect();
-                return set_window_frames_direct(&final_frames).max(positioned);
+                let final_count = set_window_frames_direct(&final_frames);
+                ca_transaction_commit();
+                // Animation completed normally - clear interrupted positions
+                clear_interrupted_positions(&window_ids);
+                return final_count.max(positioned);
             }
 
-            // Precision sleep until next frame
-            let remaining = frame_duration.saturating_sub(now.elapsed());
-            precision_sleep(remaining);
+            // Wait for next vsync (or fallback to precision sleep)
+            wait_for_next_frame(frame_duration);
         }
     }
 }
@@ -1067,6 +1539,95 @@ mod tests {
         let system = AnimationSystem::new();
         let result = system.animate(Vec::new());
         assert_eq!(result, 0);
+    }
+
+    // ========================================================================
+    // Cancellation Tests
+    // ========================================================================
+
+    #[test]
+    fn test_cancel_increments_waiting_counter() {
+        let before = WAITING_COMMANDS.load(Ordering::SeqCst);
+        cancel_animation();
+        let after = WAITING_COMMANDS.load(Ordering::SeqCst);
+        assert_eq!(after, before + 1);
+
+        // Clean up
+        begin_animation();
+    }
+
+    #[test]
+    fn test_begin_animation_decrements_counter() {
+        // Increment the counter first
+        cancel_animation();
+        let before = WAITING_COMMANDS.load(Ordering::SeqCst);
+        assert!(before > 0);
+
+        // Begin animation should decrement
+        begin_animation();
+        let after = WAITING_COMMANDS.load(Ordering::SeqCst);
+        assert!(after < before);
+    }
+
+    #[test]
+    fn test_should_cancel_when_commands_waiting() {
+        // Ensure counter is 0
+        while WAITING_COMMANDS.load(Ordering::SeqCst) > 0 {
+            begin_animation();
+        }
+
+        // Initially should not cancel (no one waiting)
+        assert!(!should_cancel());
+
+        // New command arrives (increments counter)
+        cancel_animation();
+
+        // Now should cancel (someone is waiting)
+        assert!(should_cancel());
+
+        // Clean up
+        begin_animation();
+    }
+
+    #[test]
+    fn test_interrupted_positions_storage() {
+        let positions = vec![
+            (100, Rect {
+                x: 10.0,
+                y: 20.0,
+                width: 100.0,
+                height: 200.0,
+            }),
+            (200, Rect {
+                x: 30.0,
+                y: 40.0,
+                width: 150.0,
+                height: 250.0,
+            }),
+        ];
+
+        store_interrupted_positions(&positions);
+
+        // Check that positions can be retrieved
+        let pos1 = get_interrupted_position(100);
+        assert!(pos1.is_some());
+        let pos1 = pos1.unwrap();
+        assert!((pos1.x - 10.0).abs() < f64::EPSILON);
+        assert!((pos1.y - 20.0).abs() < f64::EPSILON);
+
+        let pos2 = get_interrupted_position(200);
+        assert!(pos2.is_some());
+        let pos2 = pos2.unwrap();
+        assert!((pos2.x - 30.0).abs() < f64::EPSILON);
+
+        // Non-existent window should return None
+        let pos3 = get_interrupted_position(999);
+        assert!(pos3.is_none());
+
+        // Clean up
+        clear_interrupted_positions(&[100, 200]);
+        assert!(get_interrupted_position(100).is_none());
+        assert!(get_interrupted_position(200).is_none());
     }
 
     // Note: Integration tests for actual window animation would require
