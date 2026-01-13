@@ -1092,6 +1092,9 @@ impl TilingManager {
                 manager.set_window_state_no_color_update(*window_id, state);
             }
 
+            // Drop manager before calling janky to avoid holding lock unnecessarily
+            drop(manager);
+
             // Update colors after all states are set
             // This ensures the colors reflect the new layout
             super::borders::janky::update_colors_for_state(is_monocle, is_floating);
@@ -1745,6 +1748,9 @@ impl TilingManager {
 
             // Update new focused window to focused state
             manager.set_window_state_no_color_update(new_focused_id, focused_state);
+
+            // Drop manager before calling janky to avoid holding lock unnecessarily
+            drop(manager);
 
             // Always update JankyBorders colors on focus change
             // This is the ONLY place where colors are updated
