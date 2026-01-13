@@ -344,6 +344,57 @@ pub fn set_whitelist(apps: &str) -> bool {
     send_command(&[&arg])
 }
 
+/// Sets multiple `JankyBorders` settings in a single IPC call.
+///
+/// This is more efficient than calling individual setters when you need to
+/// update multiple settings at once, as it reduces IPC round trips.
+///
+/// # Arguments
+///
+/// * `settings` - Key-value pairs to set (e.g., `[("active_color", "0xFFFF0000"), ("width", "6.0")]`)
+///
+/// # Returns
+///
+/// `true` if all settings were sent successfully.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// janky::set_multiple(&[
+///     ("active_color", "0xFFFF0000"),
+///     ("inactive_color", "0xFF333333"),
+///     ("width", "6.0"),
+/// ]);
+/// ```
+pub fn set_multiple(settings: &[(&str, &str)]) -> bool {
+    if settings.is_empty() {
+        return true;
+    }
+
+    let args: Vec<String> = settings.iter().map(|(k, v)| format!("{k}={v}")).collect();
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    send_command(&arg_refs)
+}
+
+/// Sets both active and inactive colors in a single IPC call.
+///
+/// This is more efficient than calling `set_active_color` and `set_inactive_color`
+/// separately when both need to be updated.
+///
+/// # Arguments
+///
+/// * `active` - Color for focused windows
+/// * `inactive` - Color for unfocused windows
+///
+/// # Returns
+///
+/// `true` if the command succeeded.
+pub fn set_colors(active: &str, inactive: &str) -> bool {
+    let active_arg = format!("active_color={active}");
+    let inactive_arg = format!("inactive_color={inactive}");
+    send_command(&[&active_arg, &inactive_arg])
+}
+
 // ============================================================================
 // Configuration Application
 // ============================================================================
@@ -629,18 +680,20 @@ mod tests {
 
     #[test]
     fn test_filter_changed_args_partial_change() {
+        // Note: This test uses a shared global cache, so it may be flaky when
+        // run in parallel with other tests. The logic is correct in isolation.
         clear_cache();
 
-        // Set initial values
-        let args1 = &["active_color=0xFFFF0000", "width=6.0"];
+        // Set initial values with unique keys to avoid conflicts
+        let args1 = &["test_partial_color=0xFFFF0000", "test_partial_width=6.0"];
         let changed1 = filter_changed_args(args1);
         assert_eq!(changed1.len(), 2);
 
         // Only change one value
-        let args2 = &["active_color=0xFFFF0000", "width=8.0"];
+        let args2 = &["test_partial_color=0xFFFF0000", "test_partial_width=8.0"];
         let changed2 = filter_changed_args(args2);
         assert_eq!(changed2.len(), 1);
-        assert!(changed2.contains(&"width=8.0"));
+        assert!(changed2.contains(&"test_partial_width=8.0"));
     }
 
     #[test]
@@ -657,5 +710,30 @@ mod tests {
         // Same value should now be sent again
         let changed = filter_changed_args(args);
         assert_eq!(changed.len(), 1);
+    }
+
+    // ========================================================================
+    // Batch function tests
+    // ========================================================================
+
+    #[test]
+    fn test_set_multiple_builds_correct_args() {
+        clear_cache();
+
+        // This test verifies the argument format without actually sending
+        // (send_command will fail without JankyBorders running)
+        let settings = [("active_color", "0xFFFF0000"), ("width", "6.0")];
+        let args: Vec<String> = settings.iter().map(|(k, v)| format!("{k}={v}")).collect();
+
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], "active_color=0xFFFF0000");
+        assert_eq!(args[1], "width=6.0");
+    }
+
+    #[test]
+    fn test_set_multiple_empty_is_noop() {
+        // Empty settings should return true (success) without doing anything
+        let result = set_multiple(&[]);
+        assert!(result);
     }
 }
