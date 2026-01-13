@@ -450,6 +450,87 @@ pub fn add_observer(app: &AppInfo) -> Result<(), String> {
     Ok(())
 }
 
+/// Adds an observer for an application by PID.
+///
+/// This is a convenience function that creates an observer without needing
+/// full `AppInfo`. It's useful when an app launches after startup and we
+/// only know its PID.
+///
+/// # Arguments
+///
+/// * `pid` - The process ID of the application
+/// * `name` - Optional name for logging
+///
+/// # Returns
+///
+/// `Ok(())` if successful, `Err` with a message otherwise.
+#[allow(clippy::significant_drop_tightening)] // Guard must be held for entire function
+pub fn add_observer_by_pid(pid: i32, _name: Option<&str>) -> Result<(), String> {
+    if !INITIALIZED.load(Ordering::SeqCst) {
+        return Err("Observer system not initialized".to_string());
+    }
+
+    let mut state_guard = OBSERVER_STATE
+        .lock()
+        .map_err(|e| format!("Failed to lock observer state: {e}"))?;
+
+    let state = state_guard.as_mut().ok_or("Observer state not initialized")?;
+
+    // Skip if already observing
+    if state.observers.contains_key(&pid) {
+        return Ok(());
+    }
+
+    // Create the observer
+    let mut observer: AXObserverRef = ptr::null_mut();
+    let result =
+        unsafe { AXObserverCreate(pid, observer_callback, std::ptr::addr_of_mut!(observer)) };
+
+    if result != K_AX_ERROR_SUCCESS || observer.is_null() {
+        return Err(format!("AXObserverCreate failed with error {result}"));
+    }
+
+    // Create the application element
+    let app_element = unsafe { AXUIElementCreateApplication(pid) };
+    if app_element.is_null() {
+        unsafe { CFRelease(observer.cast()) };
+        return Err("Failed to create application element".to_string());
+    }
+
+    // Add notifications
+    let refcon = pid as *mut c_void;
+    for event_type in WindowEventType::all() {
+        let notification = CFString::new(event_type.notification_name());
+        let result = unsafe {
+            AXObserverAddNotification(
+                observer,
+                app_element,
+                notification.as_concrete_TypeRef().cast(),
+                refcon,
+            )
+        };
+
+        // Ignore failures - notification may already be registered or other non-fatal error
+        let _ = result;
+    }
+
+    // Add observer to run loop
+    unsafe {
+        let source = AXObserverGetRunLoopSource(observer);
+        if !source.is_null() {
+            let run_loop = CFRunLoop::get_main();
+            let rl_ptr: *mut c_void = run_loop.as_concrete_TypeRef().cast();
+            let mode_ptr: *const c_void = kCFRunLoopDefaultMode.cast();
+            CFRunLoopAddSource(rl_ptr, source, mode_ptr);
+        }
+    }
+
+    // Store the observer
+    state.observers.insert(pid, AppObserver { observer, app_element, pid });
+
+    Ok(())
+}
+
 /// Removes the observer for an application.
 ///
 /// Call this when an application terminates.
