@@ -43,6 +43,7 @@
 //! ```
 
 pub mod animation;
+pub mod borders;
 pub mod drag_state;
 pub mod layout;
 pub mod manager;
@@ -121,6 +122,11 @@ pub fn init_with_handle<R: Runtime>(app_handle: Option<AppHandle<R>>) {
     }
 
     eprintln!("stache: tiling: manager initialized");
+
+    // Initialize the border system (must be before tracking windows)
+    if borders::init() && config.tiling.borders.is_enabled() {
+        eprintln!("stache: tiling: borders initialized");
+    }
 
     // Track existing windows
     track_existing_windows();
@@ -385,8 +391,8 @@ fn apply_startup_behavior() {
 
 /// Applies initial window visibility based on workspace visibility.
 ///
-/// For visible workspaces: Shows (unhides) all windows.
-/// For non-visible workspaces: Hides all windows.
+/// For visible workspaces: Shows (unhides) all windows and their borders.
+/// For non-visible workspaces: Hides all windows and their borders.
 fn apply_initial_window_visibility(mgr: &TilingManager) {
     use workspace::{hide_workspace_windows, show_workspace_windows};
 
@@ -396,11 +402,14 @@ fn apply_initial_window_visibility(mgr: &TilingManager) {
     for ws in mgr.get_workspaces() {
         let windows: Vec<_> = mgr.get_windows_for_workspace(&ws.name);
 
-        if windows.is_empty() {
-            continue;
-        }
-
         if ws.is_visible {
+            // Show borders for visible workspaces
+            TilingManager::show_borders_for_workspace(&ws.name);
+
+            if windows.is_empty() {
+                continue;
+            }
+
             // Show all windows in visible workspaces (some might be hidden)
             let (shown, _failures) = show_workspace_windows(&windows);
             // Note: show_workspace_windows returns false for already-visible apps,
@@ -413,6 +422,13 @@ fn apply_initial_window_visibility(mgr: &TilingManager) {
                 );
             }
         } else {
+            // Hide borders for non-visible workspaces
+            TilingManager::hide_borders_for_workspace(&ws.name);
+
+            if windows.is_empty() {
+                continue;
+            }
+
             // Hide all windows in non-visible workspaces
             let (hidden, failures) = hide_workspace_windows(&windows);
             if hidden > 0 {
@@ -487,15 +503,17 @@ fn handle_window_event(event: WindowEvent) {
 /// Handles a window being moved.
 ///
 /// If the mouse is down and no drag operation is in progress, this starts
-/// tracking a move operation. During a drag, events are ignored.
+/// tracking a move operation. During a drag, borders are updated to follow
+/// the window but layout changes are deferred until mouse up.
 fn handle_window_moved(pid: i32) {
     // If mouse is not down, this is a programmatic move (from us) - ignore
     if !mouse_monitor::is_mouse_down() {
         return;
     }
 
-    // If we're already tracking an operation, ignore additional events
+    // If we're already tracking an operation, just update borders to follow
     if drag_state::is_operation_in_progress() {
+        update_borders_for_pid(pid);
         return;
     }
 
@@ -506,20 +524,33 @@ fn handle_window_moved(pid: i32) {
 /// Handles a window being resized.
 ///
 /// If the mouse is down and no resize operation is in progress, this starts
-/// tracking a resize operation. During a resize, events are ignored.
+/// tracking a resize operation. During a resize, borders are updated to follow
+/// the window but layout changes are deferred until mouse up.
 fn handle_window_resized(pid: i32) {
     // If mouse is not down, this is a programmatic resize (from us) - ignore
     if !mouse_monitor::is_mouse_down() {
         return;
     }
 
-    // If we're already tracking an operation, ignore additional events
+    // If we're already tracking an operation, just update borders to follow
     if drag_state::is_operation_in_progress() {
+        update_borders_for_pid(pid);
         return;
     }
 
     // Start tracking this as a resize operation
     start_drag_operation(pid, drag_state::DragOperation::Resize);
+}
+
+/// Updates border frames for all tracked windows from a given PID.
+///
+/// NOTE: With `JankyBorders` integration, border positioning is handled entirely
+/// by `JankyBorders` itself via its own window event subscriptions. This function
+/// is kept as a no-op for API compatibility but does nothing.
+#[allow(unused_variables)]
+const fn update_borders_for_pid(pid: i32) {
+    // JankyBorders handles its own border positioning via window server events.
+    // No action needed from Stache during drag operations.
 }
 
 /// Starts tracking a drag/resize operation for a window from the given PID.
@@ -1126,15 +1157,15 @@ fn handle_window_focused(pid: i32) {
         return;
     }
 
-    // Find the tracked window - if not found, ignore this focus event
-    // The window will be tracked by handle_window_created with proper tab detection
+    // Find the tracked window - if not found, focus went to an untracked window
     let Some(tracked) = mgr.get_window(focused.id).cloned() else {
-        // Window not tracked yet - this is normal for new windows/tabs
-        // Let handle_window_created handle it with proper tab detection
+        // Window not tracked - focus moved outside the tiling system
+        // Set all borders to unfocused state
         eprintln!(
-            "stache: tiling: focus event: window {} not tracked yet, ignoring (will be handled by window_created)",
+            "stache: tiling: focus event: window {} not tracked, clearing all focus borders",
             focused.id
         );
+        mgr.clear_all_focus_borders();
         return;
     };
 

@@ -1,3 +1,4 @@
+use std::ffi::c_void;
 use std::thread;
 
 pub fn spawn_named_thread<F>(name: &str, task: F)
@@ -6,6 +7,107 @@ where F: FnOnce() + Send + 'static {
 
     if let Err(err) = thread::Builder::new().name(thread_name.clone()).spawn(task) {
         eprintln!("Failed to spawn {thread_name}: {err}");
+    }
+}
+
+// ============================================================================
+// Main Thread Dispatch (macOS GCD)
+// ============================================================================
+
+/// Dispatch queue type alias.
+type DispatchQueue = *const c_void;
+
+/// Quality of Service class for dispatch queues.
+#[allow(dead_code)]
+mod qos {
+    pub const USER_INTERACTIVE: u32 = 0x21;
+    pub const USER_INITIATED: u32 = 0x19;
+    pub const DEFAULT: u32 = 0x15;
+    pub const UTILITY: u32 = 0x11;
+    pub const BACKGROUND: u32 = 0x09;
+}
+
+#[link(name = "System", kind = "dylib")]
+unsafe extern "C" {
+    /// The main dispatch queue (this is the actual symbol, not the macro).
+    static _dispatch_main_q: c_void;
+    fn dispatch_async_f(
+        queue: DispatchQueue,
+        context: *mut c_void,
+        work: extern "C" fn(*mut c_void),
+    );
+    fn dispatch_get_global_queue(identifier: isize, flags: usize) -> DispatchQueue;
+}
+
+/// Returns the main dispatch queue.
+///
+/// This is equivalent to `dispatch_get_main_queue()` in C, which is a macro
+/// that returns `&_dispatch_main_q`.
+fn get_main_queue() -> DispatchQueue { std::ptr::addr_of!(_dispatch_main_q) }
+
+/// Context for dispatching a closure to the main thread.
+struct DispatchContext<F: FnOnce() + Send + 'static> {
+    closure: Option<F>,
+}
+
+/// C-compatible trampoline function that executes the closure.
+extern "C" fn dispatch_trampoline<F: FnOnce() + Send + 'static>(context: *mut c_void) {
+    unsafe {
+        let ctx = Box::from_raw(context.cast::<DispatchContext<F>>());
+        if let Some(closure) = ctx.closure {
+            closure();
+        }
+    }
+}
+
+/// Dispatches a closure to run on the main thread asynchronously.
+///
+/// This uses Grand Central Dispatch (GCD) to schedule work on the main queue.
+/// The closure will be executed on the main thread at some point in the future.
+///
+/// # Safety
+///
+/// This function is safe to call from any thread. The closure must be `Send`
+/// because it will be transferred to the main thread.
+///
+/// # Example
+///
+/// ```ignore
+/// dispatch_on_main(|| {
+///     // This code runs on the main thread
+///     println!("Running on main thread!");
+/// });
+/// ```
+pub fn dispatch_on_main<F>(closure: F)
+where F: FnOnce() + Send + 'static {
+    let ctx = Box::new(DispatchContext { closure: Some(closure) });
+    let ctx_ptr = Box::into_raw(ctx).cast::<c_void>();
+
+    unsafe {
+        let main_queue = get_main_queue();
+        dispatch_async_f(main_queue, ctx_ptr, dispatch_trampoline::<F>);
+    }
+}
+
+/// Dispatches a closure to run on a high-priority global queue asynchronously.
+///
+/// This uses Grand Central Dispatch (GCD) to schedule work on a user-interactive
+/// `QoS` queue, which has the highest priority. This is ideal for time-sensitive
+/// UI updates like border following during window drag operations.
+///
+/// # Safety
+///
+/// This function is safe to call from any thread. The closure must be `Send`
+/// because it will be transferred to a background thread.
+pub fn dispatch_on_high_priority<F>(closure: F)
+where F: FnOnce() + Send + 'static {
+    let ctx = Box::new(DispatchContext { closure: Some(closure) });
+    let ctx_ptr = Box::into_raw(ctx).cast::<c_void>();
+
+    unsafe {
+        // QOS_CLASS_USER_INTERACTIVE = 0x21, which gives highest priority
+        let queue = dispatch_get_global_queue(qos::USER_INTERACTIVE as isize, 0);
+        dispatch_async_f(queue, ctx_ptr, dispatch_trampoline::<F>);
     }
 }
 

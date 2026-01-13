@@ -11,6 +11,7 @@ use parking_lot::RwLock;
 use tauri::{AppHandle, Emitter, Runtime};
 
 use super::animation::{AnimationSystem, WindowTransition, get_interrupted_position};
+use super::borders::{BorderManager, BorderState, get_border_manager};
 use super::layout::{Gaps, calculate_layout_with_gaps, calculate_layout_with_gaps_and_ratios};
 use super::screen;
 use super::state::{Rect, Screen, TilingState, TrackedWindow, Workspace};
@@ -809,6 +810,9 @@ impl TilingManager {
                     std::thread::sleep(std::time::Duration::from_millis(HIDE_SHOW_DELAY_MS));
                 }
             }
+
+            // Hide borders for the current workspace
+            Self::hide_borders_for_workspace(current_name);
         }
 
         // Debug: Log workspace state before switch
@@ -862,6 +866,12 @@ impl TilingManager {
             name,
             final_windows.len()
         );
+
+        // Show borders for the target workspace
+        Self::show_borders_for_workspace(name);
+
+        // Update border colors based on the target workspace's layout
+        Self::update_border_colors_for_workspace(&target_ws);
 
         // Update workspace visibility
         for ws in &mut self.state.workspaces {
@@ -1183,10 +1193,53 @@ impl TilingManager {
         // Clear custom ratios when layout changes
         workspace.split_ratios.clear();
 
+        // Get window IDs before applying layout
+        let window_ids: Vec<u32> = workspace.window_ids.clone();
+        let focused_idx = workspace.focused_window_index;
+
         // Apply the new layout
         self.apply_layout_mut(workspace_name);
 
+        // Update border states for all windows in the workspace
+        Self::update_all_border_states_for_layout(&window_ids, focused_idx, layout);
+
         true
+    }
+
+    /// Updates border states for all windows when layout changes.
+    ///
+    /// Dispatched to main thread because border operations require it.
+    fn update_all_border_states_for_layout(
+        window_ids: &[u32],
+        focused_idx: Option<usize>,
+        layout: LayoutType,
+    ) {
+        if get_border_manager().is_none() {
+            return;
+        }
+
+        let window_ids = window_ids.to_vec();
+        crate::utils::thread::dispatch_on_main(move || {
+            let Some(border_manager) = get_border_manager() else {
+                return;
+            };
+            let mut manager = border_manager.write();
+
+            for (idx, window_id) in window_ids.iter().enumerate() {
+                let state = match layout {
+                    LayoutType::Monocle => BorderState::Monocle,
+                    LayoutType::Floating => BorderState::Floating,
+                    _ => {
+                        if focused_idx == Some(idx) {
+                            BorderState::Focused
+                        } else {
+                            BorderState::Unfocused
+                        }
+                    }
+                };
+                manager.update_window_state(*window_id, state);
+            }
+        });
     }
 
     /// Balances a workspace by resetting all windows to equal proportions.
@@ -1466,9 +1519,22 @@ impl TilingManager {
 
             // Create tracked window
             let tracked = Self::create_tracked_window(&window_info, &assignment.workspace_name);
+            let workspace_name = tracked.workspace_name.clone();
 
             // Add to state
             self.add_window_to_state(tracked);
+
+            // Create border for this window (visibility will be updated later during startup)
+            // At this point, workspaces haven't had visibility set yet, so we'll create borders
+            // as hidden and let the workspace visibility logic show/hide them.
+            let workspace_is_visible =
+                self.state.workspace_by_name(&workspace_name).is_some_and(|ws| ws.is_visible);
+            self.create_border_for_window(
+                window_info.id,
+                &window_info.frame,
+                &workspace_name,
+                workspace_is_visible,
+            );
         }
     }
 
@@ -1554,18 +1620,96 @@ impl TilingManager {
 
         let tracked = Self::create_tracked_window(window_info, &assignment.workspace_name);
         let workspace_name = tracked.workspace_name.clone();
+        let window_id = window_info.id;
+        let window_frame = window_info.frame;
 
         self.add_window_to_state(tracked);
 
         // Apply layout if requested and workspace is visible
-        if apply_layout
-            && let Some(ws) = self.state.workspace_by_name(&workspace_name)
-            && ws.is_visible
-        {
+        let workspace_is_visible =
+            self.state.workspace_by_name(&workspace_name).is_some_and(|ws| ws.is_visible);
+
+        if apply_layout && workspace_is_visible {
             self.apply_layout_mut(&workspace_name);
         }
 
+        // Create border for this window if borders are enabled
+        self.create_border_for_window(
+            window_id,
+            &window_frame,
+            &workspace_name,
+            workspace_is_visible,
+        );
+
         Some(workspace_name)
+    }
+
+    /// Creates a border for a tracked window.
+    ///
+    /// Border creation is dispatched to the main thread because some
+    /// operations may require the main thread.
+    ///
+    /// NOTE: With `JankyBorders` integration, `frame` is no longer used since
+    /// `JankyBorders` handles its own border positioning.
+    fn create_border_for_window(
+        &self,
+        window_id: u32,
+        _frame: &Rect,
+        workspace_name: &str,
+        workspace_is_visible: bool,
+    ) {
+        // Check if borders are initialized before dispatching
+        if get_border_manager().is_none() {
+            return; // Borders not enabled or not initialized
+        }
+
+        // Determine initial border state based on workspace layout and focus
+        let state = self.determine_border_state(window_id, workspace_name);
+
+        // Clone data for the closure (can't hold references across dispatch)
+        // Note: frame is no longer needed since JankyBorders handles positioning
+        let workspace_name = workspace_name.to_string();
+
+        // Dispatch border tracking to main thread (may need main thread for some operations)
+        crate::utils::thread::dispatch_on_main(move || {
+            let Some(border_manager) = get_border_manager() else {
+                return;
+            };
+            // Note: With JankyBorders integration, we only track window state.
+            // JankyBorders handles the actual border rendering.
+            border_manager.write().track_window(
+                window_id,
+                state,
+                &workspace_name,
+                workspace_is_visible,
+            );
+        });
+    }
+
+    /// Determines the border state for a window based on layout and focus.
+    fn determine_border_state(&self, window_id: u32, workspace_name: &str) -> BorderState {
+        let Some(ws) = self.state.workspace_by_name(workspace_name) else {
+            return BorderState::Unfocused;
+        };
+
+        // Check layout type first
+        match ws.layout {
+            LayoutType::Monocle => BorderState::Monocle,
+            LayoutType::Floating => BorderState::Floating,
+            _ => {
+                // Check if this window is focused
+                let is_focused = ws
+                    .focused_window_index
+                    .and_then(|idx| ws.window_ids.get(idx))
+                    .is_some_and(|&id| id == window_id);
+
+                if is_focused {
+                    BorderState::Focused
+                } else {
+                    BorderState::Unfocused
+                }
+            }
+        }
     }
 
     /// Untracks a window by ID.
@@ -1627,6 +1771,9 @@ impl TilingManager {
             // Remove from focus history
             self.focus_history.remove_window(window_id);
 
+            // Remove border for this window
+            Self::remove_border_for_window(window_id);
+
             // Re-apply layout if requested and workspace is visible
             if apply_layout && workspace_is_visible {
                 eprintln!(
@@ -1641,11 +1788,40 @@ impl TilingManager {
         }
     }
 
+    /// Removes the border for a window.
+    ///
+    /// Dispatched to main thread because `NSWindow` operations require it.
+    fn remove_border_for_window(window_id: u32) {
+        if get_border_manager().is_none() {
+            return;
+        }
+
+        crate::utils::thread::dispatch_on_main(move || {
+            if let Some(border_manager) = get_border_manager() {
+                border_manager.write().untrack_window(window_id);
+            }
+        });
+    }
+
     /// Updates a tracked window's frame.
     pub fn update_window_frame(&mut self, window_id: u32, frame: Rect) {
         if let Some(window) = self.state.windows.iter_mut().find(|w| w.id == window_id) {
             window.frame = frame;
+
+            // Update border frame to match
+            Self::update_border_frame(window_id, &frame);
         }
+    }
+
+    /// Updates the border frame for a window.
+    ///
+    /// NOTE: With `JankyBorders` integration, border frame updates are handled by
+    /// `JankyBorders` itself via its own window event subscriptions. This function
+    /// is kept for API compatibility but is a no-op.
+    #[allow(unused_variables)]
+    const fn update_border_frame(window_id: u32, frame: &Rect) {
+        // JankyBorders handles its own border positioning via window server events.
+        // No action needed from Stache.
     }
 
     /// Updates a tracked window's title.
@@ -1691,6 +1867,21 @@ impl TilingManager {
     /// This also updates the focused workspace and screen to match where the
     /// focused window is located.
     pub fn set_focused_window(&mut self, workspace_name: &str, window_id: u32) {
+        // Get the previously focused window ID before updating
+        let old_focused_id = self
+            .state
+            .workspace_by_name(workspace_name)
+            .and_then(|ws| ws.focused_window_index)
+            .and_then(|idx| {
+                self.state
+                    .workspace_by_name(workspace_name)
+                    .and_then(|ws| ws.window_ids.get(idx).copied())
+            });
+
+        eprintln!(
+            "stache: borders: DEBUG set_focused_window: workspace='{workspace_name}' new_id={window_id} old_id={old_focused_id:?}"
+        );
+
         // First, update the focused window index in the workspace
         let screen_id = if let Some(ws) = self.state.workspace_by_name_mut(workspace_name)
             && let Some(idx) = ws.window_ids.iter().position(|&id| id == window_id)
@@ -1710,7 +1901,124 @@ impl TilingManager {
             }
             self.state.focused_workspace = Some(workspace_name.to_string());
             self.state.focused_screen_id = screen_id;
+
+            // Update border states for old and new focused windows
+            self.update_focus_border_states(old_focused_id, window_id, workspace_name);
         }
+    }
+
+    /// Updates border states when focus changes.
+    ///
+    /// Dispatched to main thread because border operations require it.
+    fn update_focus_border_states(
+        &self,
+        old_focused_id: Option<u32>,
+        new_focused_id: u32,
+        workspace_name: &str,
+    ) {
+        if get_border_manager().is_none() {
+            return;
+        }
+
+        // Determine the appropriate state based on layout
+        let ws = self.state.workspace_by_name(workspace_name);
+        let layout = ws.map(|w| w.layout);
+        let (focused_state, unfocused_state) = match layout {
+            Some(LayoutType::Monocle) => (BorderState::Monocle, BorderState::Monocle),
+            Some(LayoutType::Floating) => (BorderState::Floating, BorderState::Floating),
+            _ => (BorderState::Focused, BorderState::Unfocused),
+        };
+
+        eprintln!(
+            "stache: borders: DEBUG update_focus_border_states: workspace='{workspace_name}' layout={layout:?} old={old_focused_id:?} new={new_focused_id} focused_state={focused_state:?}"
+        );
+
+        crate::utils::thread::dispatch_on_main(move || {
+            let Some(border_manager) = get_border_manager() else {
+                return;
+            };
+            let mut manager = border_manager.write();
+
+            // Update old focused window to unfocused state
+            if let Some(old_id) = old_focused_id
+                && old_id != new_focused_id
+            {
+                eprintln!("stache: borders: DEBUG setting window {old_id} to unfocused");
+                manager.update_window_state(old_id, unfocused_state);
+            }
+
+            // Update new focused window to focused state
+            eprintln!("stache: borders: DEBUG setting window {new_focused_id} to focused");
+            manager.update_window_state(new_focused_id, focused_state);
+        });
+    }
+
+    /// Clears focus from all borders (sets all to unfocused state).
+    ///
+    /// Called when focus moves to an untracked window outside the tiling system.
+    /// Dispatched to main thread because border operations require it.
+    #[allow(clippy::unused_self)] // Method semantically belongs to the manager
+    pub fn clear_all_focus_borders(&self) {
+        if get_border_manager().is_none() {
+            return;
+        }
+
+        crate::utils::thread::dispatch_on_main(move || {
+            let Some(border_manager) = get_border_manager() else {
+                return;
+            };
+            border_manager.write().set_all_unfocused();
+        });
+    }
+
+    /// Shows borders for all windows in a workspace.
+    ///
+    /// Dispatched to main thread because `NSWindow` operations require it.
+    pub fn show_borders_for_workspace(workspace_name: &str) {
+        if get_border_manager().is_none() {
+            return;
+        }
+
+        let workspace_name = workspace_name.to_string();
+        crate::utils::thread::dispatch_on_main(move || {
+            if let Some(border_manager) = get_border_manager() {
+                border_manager.write().show_workspace(&workspace_name);
+            }
+        });
+    }
+
+    /// Hides borders for all windows in a workspace.
+    ///
+    /// Dispatched to main thread because some operations may require it.
+    pub fn hide_borders_for_workspace(workspace_name: &str) {
+        if get_border_manager().is_none() {
+            return;
+        }
+
+        let workspace_name = workspace_name.to_string();
+        crate::utils::thread::dispatch_on_main(move || {
+            if let Some(border_manager) = get_border_manager() {
+                border_manager.write().hide_workspace(&workspace_name);
+            }
+        });
+    }
+
+    /// Updates border colors based on workspace layout.
+    ///
+    /// This is called when switching workspaces to ensure the active color
+    /// matches the layout (monocle, floating, or normal focused).
+    fn update_border_colors_for_workspace(workspace: &Workspace) {
+        use super::borders::janky;
+
+        let is_monocle = workspace.layout == LayoutType::Monocle;
+        let is_floating = workspace.layout == LayoutType::Floating;
+
+        eprintln!(
+            "stache: borders: updating colors for workspace '{}' (layout={:?}, monocle={}, floating={})",
+            workspace.name, workspace.layout, is_monocle, is_floating
+        );
+
+        janky::update_colors_for_state(is_monocle, is_floating);
     }
 
     /// Gets all tracked windows.

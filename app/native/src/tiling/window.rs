@@ -1920,6 +1920,33 @@ impl WindowInfo {
             ax_element: None,
         }
     }
+
+    /// Creates a `WindowInfo` for testing with app identification.
+    ///
+    /// Use this when you need to test rule matching based on bundle ID or app name.
+    #[cfg(test)]
+    #[must_use]
+    pub fn new_for_test_with_app(
+        id: u32,
+        pid: i32,
+        frame: Rect,
+        bundle_id: &str,
+        app_name: &str,
+    ) -> Self {
+        Self {
+            id,
+            pid,
+            bundle_id: bundle_id.to_string(),
+            app_name: app_name.to_string(),
+            title: String::new(),
+            frame,
+            is_minimized: false,
+            is_hidden: false,
+            is_main: false,
+            is_focused: false,
+            ax_element: None,
+        }
+    }
 }
 
 // ============================================================================

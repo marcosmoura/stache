@@ -699,6 +699,481 @@ impl Default for MasterConfig {
     }
 }
 
+// ============================================================================
+// Window Border Configuration
+// ============================================================================
+
+/// RGBA color representation for border rendering.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Rgba {
+    /// Red channel (0.0 - 1.0).
+    pub r: f64,
+    /// Green channel (0.0 - 1.0).
+    pub g: f64,
+    /// Blue channel (0.0 - 1.0).
+    pub b: f64,
+    /// Alpha channel (0.0 - 1.0).
+    pub a: f64,
+}
+
+impl Rgba {
+    /// Creates a new RGBA color.
+    #[must_use]
+    pub const fn new(r: f64, g: f64, b: f64, a: f64) -> Self { Self { r, g, b, a } }
+
+    /// Creates an opaque black color.
+    #[must_use]
+    pub const fn black() -> Self { Self::new(0.0, 0.0, 0.0, 1.0) }
+
+    /// Creates an opaque white color.
+    #[must_use]
+    pub const fn white() -> Self { Self::new(1.0, 1.0, 1.0, 1.0) }
+}
+
+impl Default for Rgba {
+    fn default() -> Self { Self::black() }
+}
+
+/// Parses a hex color string to RGBA.
+///
+/// Supports the following formats:
+/// - `#RGB` - 3-digit hex (e.g., "#F00" for red)
+/// - `#RGBA` - 4-digit hex with alpha (e.g., "#F00F" for opaque red)
+/// - `#RRGGBB` - 6-digit hex (e.g., "#FF0000" for red)
+/// - `#RRGGBBAA` - 8-digit hex with alpha (e.g., "#FF0000FF" for opaque red)
+///
+/// The `#` prefix is optional.
+///
+/// # Errors
+///
+/// Returns an error string if the hex color is invalid.
+pub fn parse_hex_color(hex: &str) -> Result<Rgba, String> {
+    let hex = hex.trim().trim_start_matches('#');
+
+    let (r, g, b, a) = match hex.len() {
+        3 => {
+            // RGB format
+            let r = u8::from_str_radix(&hex[0..1], 16).map_err(|e| e.to_string())?;
+            let g = u8::from_str_radix(&hex[1..2], 16).map_err(|e| e.to_string())?;
+            let b = u8::from_str_radix(&hex[2..3], 16).map_err(|e| e.to_string())?;
+            // Expand 4-bit to 8-bit by repeating (0xF -> 0xFF)
+            (r * 17, g * 17, b * 17, 255)
+        }
+        4 => {
+            // RGBA format
+            let r = u8::from_str_radix(&hex[0..1], 16).map_err(|e| e.to_string())?;
+            let g = u8::from_str_radix(&hex[1..2], 16).map_err(|e| e.to_string())?;
+            let b = u8::from_str_radix(&hex[2..3], 16).map_err(|e| e.to_string())?;
+            let a = u8::from_str_radix(&hex[3..4], 16).map_err(|e| e.to_string())?;
+            (r * 17, g * 17, b * 17, a * 17)
+        }
+        6 => {
+            // RRGGBB format
+            let r = u8::from_str_radix(&hex[0..2], 16).map_err(|e| e.to_string())?;
+            let g = u8::from_str_radix(&hex[2..4], 16).map_err(|e| e.to_string())?;
+            let b = u8::from_str_radix(&hex[4..6], 16).map_err(|e| e.to_string())?;
+            (r, g, b, 255)
+        }
+        8 => {
+            // RRGGBBAA format
+            let r = u8::from_str_radix(&hex[0..2], 16).map_err(|e| e.to_string())?;
+            let g = u8::from_str_radix(&hex[2..4], 16).map_err(|e| e.to_string())?;
+            let b = u8::from_str_radix(&hex[4..6], 16).map_err(|e| e.to_string())?;
+            let a = u8::from_str_radix(&hex[6..8], 16).map_err(|e| e.to_string())?;
+            (r, g, b, a)
+        }
+        _ => {
+            return Err(format!(
+                "Invalid hex color length: expected 3, 4, 6, or 8 characters, got {}",
+                hex.len()
+            ));
+        }
+    };
+
+    Ok(Rgba {
+        r: f64::from(r) / 255.0,
+        g: f64::from(g) / 255.0,
+        b: f64::from(b) / 255.0,
+        a: f64::from(a) / 255.0,
+    })
+}
+
+/// Gradient color configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GradientConfig {
+    /// Starting color (hex string).
+    pub from: String,
+    /// Ending color (hex string).
+    pub to: String,
+    /// Angle in degrees (0 = left to right, 90 = bottom to top).
+    /// Default: 90
+    #[serde(default = "default_gradient_angle")]
+    pub angle: f64,
+}
+
+/// Default gradient angle (90 degrees = bottom to top).
+const fn default_gradient_angle() -> f64 { 90.0 }
+
+impl Default for GradientConfig {
+    fn default() -> Self {
+        Self {
+            from: "#b4befe".to_string(),
+            to: "#cba6f7".to_string(),
+            angle: default_gradient_angle(),
+        }
+    }
+}
+
+/// Border state configuration - either disabled or with specific settings.
+///
+/// Can be:
+/// - `false` to disable borders for this state
+/// - An object with `width` and either `color` (solid), `gradient`, or `glow`
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum BorderStateConfig {
+    /// Disabled - don't draw border for this state.
+    /// Use `false` in config to disable.
+    Disabled(bool),
+
+    /// Enabled with solid color.
+    SolidColor {
+        /// Border width in pixels.
+        width: u32,
+        /// Solid color (hex string).
+        color: String,
+    },
+
+    /// Enabled with gradient color.
+    GradientColor {
+        /// Border width in pixels.
+        width: u32,
+        /// Gradient configuration.
+        gradient: GradientConfig,
+    },
+
+    /// Enabled with glow effect.
+    GlowColor {
+        /// Border width in pixels.
+        width: u32,
+        /// Glow color (hex string).
+        glow: String,
+    },
+}
+
+impl BorderStateConfig {
+    /// Returns whether this border state is enabled.
+    #[must_use]
+    pub const fn is_enabled(&self) -> bool { !matches!(self, Self::Disabled(false)) }
+
+    /// Returns the border width, or None if disabled.
+    #[must_use]
+    pub const fn width(&self) -> Option<u32> {
+        match self {
+            Self::Disabled(_) => None,
+            Self::SolidColor { width, .. }
+            | Self::GradientColor { width, .. }
+            | Self::GlowColor { width, .. } => Some(*width),
+        }
+    }
+
+    /// Returns true if this is a gradient color.
+    #[must_use]
+    pub const fn is_gradient(&self) -> bool { matches!(self, Self::GradientColor { .. }) }
+
+    /// Returns true if this is a glow effect.
+    #[must_use]
+    pub const fn is_glow(&self) -> bool { matches!(self, Self::GlowColor { .. }) }
+
+    /// Returns the primary color string (for solid, glow, or gradient's from color).
+    #[must_use]
+    pub fn color(&self) -> Option<String> {
+        match self {
+            Self::Disabled(_) => None,
+            Self::SolidColor { color, .. } => Some(color.clone()),
+            Self::GradientColor { gradient, .. } => Some(gradient.from.clone()),
+            Self::GlowColor { glow, .. } => Some(glow.clone()),
+        }
+    }
+
+    /// Returns the solid color as RGBA.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the hex color string is invalid or if this is not a solid color.
+    pub fn to_rgba(&self) -> Result<Rgba, String> {
+        match self {
+            Self::Disabled(_) => Err("Border state is disabled".to_string()),
+            Self::SolidColor { color, .. } | Self::GlowColor { glow: color, .. } => {
+                parse_hex_color(color)
+            }
+            Self::GradientColor { gradient, .. } => parse_hex_color(&gradient.from),
+        }
+    }
+
+    /// Returns gradient colors and angle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the hex color strings are invalid or if this is disabled.
+    pub fn to_gradient_rgba(&self) -> Result<(Rgba, Rgba, f64), String> {
+        match self {
+            Self::Disabled(_) => Err("Border state is disabled".to_string()),
+            Self::SolidColor { color, .. } | Self::GlowColor { glow: color, .. } => {
+                let rgba = parse_hex_color(color)?;
+                Ok((rgba, rgba, 0.0))
+            }
+            Self::GradientColor { gradient, .. } => {
+                let from = parse_hex_color(&gradient.from)?;
+                let to = parse_hex_color(&gradient.to)?;
+                Ok((from, to, gradient.angle))
+            }
+        }
+    }
+
+    /// Creates a default focused border state.
+    #[must_use]
+    pub fn default_focused() -> Self {
+        Self::SolidColor {
+            width: 4,
+            color: "#b4befe".to_string(), // Catppuccin Mocha lavender
+        }
+    }
+
+    /// Creates a default unfocused border state.
+    #[must_use]
+    pub fn default_unfocused() -> Self {
+        Self::SolidColor {
+            width: 4,
+            color: "#6c7086".to_string(), // Catppuccin Mocha overlay0
+        }
+    }
+
+    /// Creates a default monocle border state.
+    #[must_use]
+    pub fn default_monocle() -> Self {
+        Self::SolidColor {
+            width: 4,
+            color: "#cba6f7".to_string(), // Catppuccin Mocha mauve
+        }
+    }
+
+    /// Creates a default floating border state.
+    #[must_use]
+    pub fn default_floating() -> Self {
+        Self::SolidColor {
+            width: 4,
+            color: "#94e2d5".to_string(), // Catppuccin Mocha teal
+        }
+    }
+}
+
+/// Animation configuration for border transitions.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(default, rename_all = "camelCase")]
+pub struct BorderAnimationConfig {
+    /// Animation duration in milliseconds.
+    /// Default: 200
+    pub duration_ms: u32,
+
+    /// Easing function for color transitions.
+    /// Default: "ease-out"
+    pub easing: EasingType,
+}
+
+impl Default for BorderAnimationConfig {
+    fn default() -> Self {
+        Self {
+            duration_ms: 200,
+            easing: EasingType::EaseOut,
+        }
+    }
+}
+
+/// Window border configuration.
+///
+/// Borders are rendered as transparent overlay windows that frame managed windows.
+/// They provide visual feedback for focus state, layout mode, and floating status.
+///
+/// Each border state (focused, unfocused, monocle, floating) can be:
+/// - `false` to disable borders for that state
+/// - An object with `width` and either `color` (solid) or `gradient`
+///
+/// # Example
+///
+/// ```jsonc
+/// {
+///   "borders": {
+///     "enabled": true,
+///     "focused": { "width": 4, "color": "#89b4fa" },
+///     "unfocused": false,
+///     "monocle": { "width": 4, "color": "#cba6f7" },
+///     "floating": {
+///       "width": 4,
+///       "gradient": { "from": "#89b4fa", "to": "#a6e3a1", "angle": 180 }
+///     }
+///   }
+/// }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(default, rename_all = "camelCase")]
+pub struct BordersConfig {
+    /// Whether window borders are enabled globally.
+    /// Default: false
+    pub enabled: bool,
+
+    /// Border style: "round" or "square".
+    /// Default: "round"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
+
+    /// Enable HiDPI/Retina support for borders.
+    /// Default: true
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hidpi: Option<bool>,
+
+    /// Border configuration for focused windows.
+    pub focused: BorderStateConfig,
+
+    /// Border configuration for unfocused windows.
+    /// Set to `false` to hide borders on unfocused windows.
+    pub unfocused: BorderStateConfig,
+
+    /// Border configuration for windows in monocle layout.
+    pub monocle: BorderStateConfig,
+
+    /// Border configuration for floating windows.
+    pub floating: BorderStateConfig,
+
+    /// Animation settings for border color transitions.
+    /// Note: Animation is handled by `JankyBorders` and may not be configurable.
+    pub animation: BorderAnimationConfig,
+
+    /// Rules for windows that should not have borders.
+    /// These rules are checked in addition to the global tiling ignore rules.
+    #[serde(default)]
+    pub ignore: Vec<WindowRule>,
+}
+
+impl Default for BordersConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            style: None, // Defaults to "round" in JankyBorders
+            hidpi: None, // Defaults to true in JankyBorders
+            focused: BorderStateConfig::default_focused(),
+            unfocused: BorderStateConfig::default_unfocused(),
+            monocle: BorderStateConfig::default_monocle(),
+            floating: BorderStateConfig::default_floating(),
+            animation: BorderAnimationConfig::default(),
+            ignore: Vec::new(),
+        }
+    }
+}
+
+impl BordersConfig {
+    /// Returns whether window borders are enabled globally.
+    #[must_use]
+    pub const fn is_enabled(&self) -> bool { self.enabled }
+
+    /// Returns the border state config for a given state.
+    #[must_use]
+    #[allow(clippy::match_same_arms)] // Intentional: default fallback to unfocused
+    pub fn get_state_config(&self, state: &str) -> &BorderStateConfig {
+        match state {
+            "focused" => &self.focused,
+            "unfocused" => &self.unfocused,
+            "monocle" => &self.monocle,
+            "floating" => &self.floating,
+            _ => &self.unfocused,
+        }
+    }
+}
+
+// ============================================================================
+// Legacy BorderColor type (kept for backward compatibility in rendering)
+// ============================================================================
+
+/// Border color definition (internal use).
+///
+/// This is used internally by the `JankyBorders` integration. Use `BorderStateConfig` for configuration.
+#[derive(Debug, Clone)]
+pub enum BorderColor {
+    /// A solid color.
+    Solid(String),
+    /// A gradient with start and end colors and optional angle.
+    Gradient {
+        from: String,
+        to: String,
+        angle: Option<f64>,
+    },
+    /// A glow effect with a color.
+    Glow(String),
+}
+
+impl BorderColor {
+    /// Creates from a `BorderStateConfig`.
+    #[must_use]
+    pub fn from_state_config(config: &BorderStateConfig) -> Option<Self> {
+        match config {
+            BorderStateConfig::Disabled(_) => None,
+            BorderStateConfig::SolidColor { color, .. } => Some(Self::Solid(color.clone())),
+            BorderStateConfig::GradientColor { gradient, .. } => Some(Self::Gradient {
+                from: gradient.from.clone(),
+                to: gradient.to.clone(),
+                angle: Some(gradient.angle),
+            }),
+            BorderStateConfig::GlowColor { glow, .. } => Some(Self::Glow(glow.clone())),
+        }
+    }
+
+    /// Returns the solid color as RGBA.
+    ///
+    /// For gradients, returns the `from` color.
+    /// For glow, returns the glow color.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the hex color string is invalid.
+    pub fn to_rgba(&self) -> Result<Rgba, String> {
+        match self {
+            Self::Solid(hex) | Self::Glow(hex) => parse_hex_color(hex),
+            Self::Gradient { from, .. } => parse_hex_color(from),
+        }
+    }
+
+    /// Returns gradient colors and angle.
+    ///
+    /// For solid colors, returns the same color for both start and end.
+    /// For glow, returns the glow color for both start and end.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the hex color strings are invalid.
+    pub fn to_gradient_rgba(&self) -> Result<(Rgba, Rgba, f64), String> {
+        match self {
+            Self::Solid(hex) | Self::Glow(hex) => {
+                let color = parse_hex_color(hex)?;
+                Ok((color, color, 0.0))
+            }
+            Self::Gradient { from, to, angle } => {
+                let from_color = parse_hex_color(from)?;
+                let to_color = parse_hex_color(to)?;
+                Ok((from_color, to_color, angle.unwrap_or(135.0)))
+            }
+        }
+    }
+
+    /// Returns true if this is a gradient color.
+    #[must_use]
+    pub const fn is_gradient(&self) -> bool { matches!(self, Self::Gradient { .. }) }
+
+    /// Returns true if this is a glow color.
+    #[must_use]
+    pub const fn is_glow(&self) -> bool { matches!(self, Self::Glow(_)) }
+}
+
 /// Window matching rule for workspace assignment.
 ///
 /// All specified properties must match (AND logic).
@@ -789,6 +1264,10 @@ pub struct TilingConfig {
 
     /// Master layout settings.
     pub master: MasterConfig,
+
+    /// Window border configuration.
+    /// Borders provide visual feedback for focus state and layout mode.
+    pub borders: BordersConfig,
 }
 
 impl TilingConfig {
@@ -1576,5 +2055,405 @@ mod tests {
             serde_json::to_string(&MenuAnywhereMouseButton::MiddleClick).unwrap(),
             r#""middleClick""#
         );
+    }
+
+    // ========================================================================
+    // Rgba tests
+    // ========================================================================
+
+    #[test]
+    fn test_rgba_new() {
+        let color = Rgba::new(0.5, 0.25, 0.75, 1.0);
+        assert!((color.r - 0.5).abs() < f64::EPSILON);
+        assert!((color.g - 0.25).abs() < f64::EPSILON);
+        assert!((color.b - 0.75).abs() < f64::EPSILON);
+        assert!((color.a - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_rgba_black() {
+        let color = Rgba::black();
+        assert!((color.r - 0.0).abs() < f64::EPSILON);
+        assert!((color.g - 0.0).abs() < f64::EPSILON);
+        assert!((color.b - 0.0).abs() < f64::EPSILON);
+        assert!((color.a - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_rgba_white() {
+        let color = Rgba::white();
+        assert!((color.r - 1.0).abs() < f64::EPSILON);
+        assert!((color.g - 1.0).abs() < f64::EPSILON);
+        assert!((color.b - 1.0).abs() < f64::EPSILON);
+        assert!((color.a - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_rgba_default_is_black() {
+        let color = Rgba::default();
+        assert_eq!(color, Rgba::black());
+    }
+
+    // ========================================================================
+    // parse_hex_color tests
+    // ========================================================================
+
+    #[test]
+    fn test_parse_hex_color_6_digit() {
+        let color = parse_hex_color("#FF0000").unwrap();
+        assert!((color.r - 1.0).abs() < f64::EPSILON);
+        assert!((color.g - 0.0).abs() < f64::EPSILON);
+        assert!((color.b - 0.0).abs() < f64::EPSILON);
+        assert!((color.a - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_parse_hex_color_6_digit_no_hash() {
+        let color = parse_hex_color("00FF00").unwrap();
+        assert!((color.r - 0.0).abs() < f64::EPSILON);
+        assert!((color.g - 1.0).abs() < f64::EPSILON);
+        assert!((color.b - 0.0).abs() < f64::EPSILON);
+        assert!((color.a - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_parse_hex_color_8_digit_with_alpha() {
+        let color = parse_hex_color("#0000FF80").unwrap();
+        assert!((color.r - 0.0).abs() < f64::EPSILON);
+        assert!((color.g - 0.0).abs() < f64::EPSILON);
+        assert!((color.b - 1.0).abs() < f64::EPSILON);
+        // 0x80 = 128, 128/255 ≈ 0.502
+        assert!((color.a - 128.0 / 255.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_parse_hex_color_3_digit() {
+        let color = parse_hex_color("#F00").unwrap();
+        assert!((color.r - 1.0).abs() < f64::EPSILON);
+        assert!((color.g - 0.0).abs() < f64::EPSILON);
+        assert!((color.b - 0.0).abs() < f64::EPSILON);
+        assert!((color.a - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_parse_hex_color_4_digit_with_alpha() {
+        let color = parse_hex_color("#F008").unwrap();
+        assert!((color.r - 1.0).abs() < f64::EPSILON);
+        assert!((color.g - 0.0).abs() < f64::EPSILON);
+        assert!((color.b - 0.0).abs() < f64::EPSILON);
+        // 0x8 expanded to 0x88 = 136, 136/255 ≈ 0.533
+        assert!((color.a - 136.0 / 255.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_parse_hex_color_catppuccin_lavender() {
+        // Catppuccin Mocha lavender: #b4befe
+        let color = parse_hex_color("#b4befe").unwrap();
+        assert!((color.r - 180.0 / 255.0).abs() < 0.001);
+        assert!((color.g - 190.0 / 255.0).abs() < 0.001);
+        assert!((color.b - 254.0 / 255.0).abs() < 0.001);
+        assert!((color.a - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_parse_hex_color_invalid_length() {
+        let result = parse_hex_color("#12345");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid hex color length"));
+    }
+
+    #[test]
+    fn test_parse_hex_color_invalid_characters() {
+        let result = parse_hex_color("#GGGGGG");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_hex_color_trims_whitespace() {
+        let color = parse_hex_color("  #FF0000  ").unwrap();
+        assert!((color.r - 1.0).abs() < f64::EPSILON);
+    }
+
+    // ========================================================================
+    // BorderColor tests
+    // ========================================================================
+
+    #[test]
+    fn test_border_color_solid() {
+        let color = BorderColor::Solid("#b4befe".to_string());
+        assert!(matches!(color, BorderColor::Solid(ref s) if s == "#b4befe"));
+        assert!(!color.is_gradient());
+    }
+
+    #[test]
+    fn test_border_color_solid_to_rgba() {
+        let color = BorderColor::Solid("#FF0000".to_string());
+        let rgba = color.to_rgba().unwrap();
+        assert!((rgba.r - 1.0).abs() < f64::EPSILON);
+        assert!((rgba.g - 0.0).abs() < f64::EPSILON);
+        assert!((rgba.b - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_border_color_gradient_to_rgba() {
+        let color = BorderColor::Gradient {
+            from: "#FF0000".to_string(),
+            to: "#00FF00".to_string(),
+            angle: Some(45.0),
+        };
+        let rgba = color.to_rgba().unwrap();
+        // to_rgba returns the start color
+        assert!((rgba.r - 1.0).abs() < f64::EPSILON);
+        assert!((rgba.g - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_border_color_gradient_to_gradient_rgba() {
+        let color = BorderColor::Gradient {
+            from: "#FF0000".to_string(),
+            to: "#00FF00".to_string(),
+            angle: Some(45.0),
+        };
+        let (from, to, angle) = color.to_gradient_rgba().unwrap();
+        assert!((from.r - 1.0).abs() < f64::EPSILON);
+        assert!((to.g - 1.0).abs() < f64::EPSILON);
+        assert!((angle - 45.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_border_color_solid_to_gradient_rgba() {
+        let color = BorderColor::Solid("#FF0000".to_string());
+        let (from, to, angle) = color.to_gradient_rgba().unwrap();
+        // Solid returns same color for both
+        assert_eq!(from, to);
+        assert!((angle - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_border_color_is_gradient() {
+        let solid = BorderColor::Solid("#FF0000".to_string());
+        assert!(!solid.is_gradient());
+
+        let gradient = BorderColor::Gradient {
+            from: "#FF0000".to_string(),
+            to: "#00FF00".to_string(),
+            angle: Some(90.0),
+        };
+        assert!(gradient.is_gradient());
+    }
+
+    // ========================================================================
+    // BorderAnimationConfig tests
+    // ========================================================================
+
+    #[test]
+    fn test_border_animation_config_default() {
+        let config = BorderAnimationConfig::default();
+        assert_eq!(config.duration_ms, 200);
+        assert_eq!(config.easing, EasingType::EaseOut);
+    }
+
+    #[test]
+    fn test_border_animation_config_serialization() {
+        let config = BorderAnimationConfig {
+            duration_ms: 300,
+            easing: EasingType::Spring,
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("300"));
+        assert!(json.contains("spring"));
+    }
+
+    #[test]
+    fn test_border_animation_config_deserialization() {
+        let json = r#"{"durationMs": 150, "easing": "ease-in-out"}"#;
+        let config: BorderAnimationConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.duration_ms, 150);
+        assert_eq!(config.easing, EasingType::EaseInOut);
+    }
+
+    // ========================================================================
+    // BorderStateConfig tests
+    // ========================================================================
+
+    #[test]
+    fn test_border_state_config_disabled() {
+        let config = BorderStateConfig::Disabled(false);
+        assert!(!config.is_enabled());
+        assert!(config.width().is_none());
+        assert!(!config.is_gradient());
+    }
+
+    #[test]
+    fn test_border_state_config_solid() {
+        let config = BorderStateConfig::SolidColor {
+            width: 4,
+            color: "#FF0000".to_string(),
+        };
+        assert!(config.is_enabled());
+        assert_eq!(config.width(), Some(4));
+        assert!(!config.is_gradient());
+        let rgba = config.to_rgba().unwrap();
+        assert!((rgba.r - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_border_state_config_gradient() {
+        let config = BorderStateConfig::GradientColor {
+            width: 6,
+            gradient: GradientConfig {
+                from: "#FF0000".to_string(),
+                to: "#00FF00".to_string(),
+                angle: 45.0,
+            },
+        };
+        assert!(config.is_enabled());
+        assert_eq!(config.width(), Some(6));
+        assert!(config.is_gradient());
+        let (from, to, angle) = config.to_gradient_rgba().unwrap();
+        assert!((from.r - 1.0).abs() < f64::EPSILON);
+        assert!((to.g - 1.0).abs() < f64::EPSILON);
+        assert!((angle - 45.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_border_state_config_defaults() {
+        let focused = BorderStateConfig::default_focused();
+        assert!(focused.is_enabled());
+        assert_eq!(focused.width(), Some(4));
+
+        let unfocused = BorderStateConfig::default_unfocused();
+        assert!(unfocused.is_enabled());
+
+        let monocle = BorderStateConfig::default_monocle();
+        assert!(monocle.is_enabled());
+
+        let floating = BorderStateConfig::default_floating();
+        assert!(floating.is_enabled());
+    }
+
+    // ========================================================================
+    // BordersConfig tests
+    // ========================================================================
+
+    #[test]
+    fn test_borders_config_default() {
+        let config = BordersConfig::default();
+        assert!(!config.enabled);
+        assert!(config.focused.is_enabled());
+        assert!(config.unfocused.is_enabled());
+        assert!(config.monocle.is_enabled());
+        assert!(config.floating.is_enabled());
+        assert!(config.ignore.is_empty());
+    }
+
+    #[test]
+    fn test_borders_config_is_enabled() {
+        let disabled = BordersConfig::default();
+        assert!(!disabled.is_enabled());
+
+        let enabled = BordersConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        assert!(enabled.is_enabled());
+    }
+
+    #[test]
+    fn test_borders_config_get_state_config() {
+        let config = BordersConfig::default();
+        assert!(config.get_state_config("focused").is_enabled());
+        assert!(config.get_state_config("unfocused").is_enabled());
+        assert!(config.get_state_config("monocle").is_enabled());
+        assert!(config.get_state_config("floating").is_enabled());
+        // Unknown state falls back to unfocused
+        assert!(config.get_state_config("unknown").is_enabled());
+    }
+
+    #[test]
+    fn test_borders_config_serialization() {
+        let config = BordersConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("true"));
+        assert!(json.contains("focused"));
+        assert!(json.contains("unfocused"));
+    }
+
+    #[test]
+    fn test_borders_config_deserialization_with_disabled_state() {
+        let json = r##"{
+            "enabled": true,
+            "focused": { "width": 4, "color": "#89b4fa" },
+            "unfocused": false,
+            "animation": {
+                "durationMs": 300,
+                "easing": "spring"
+            }
+        }"##;
+        let config: BordersConfig = serde_json::from_str(json).unwrap();
+        assert!(config.enabled);
+        assert!(config.focused.is_enabled());
+        assert!(!config.unfocused.is_enabled());
+        assert_eq!(config.animation.duration_ms, 300);
+        assert_eq!(config.animation.easing, EasingType::Spring);
+    }
+
+    #[test]
+    fn test_borders_config_deserialization_with_gradient() {
+        let json = r##"{
+            "enabled": true,
+            "floating": {
+                "width": 4,
+                "gradient": { "from": "#89b4fa", "to": "#a6e3a1", "angle": 180 }
+            }
+        }"##;
+        let config: BordersConfig = serde_json::from_str(json).unwrap();
+        assert!(config.enabled);
+        assert!(config.floating.is_gradient());
+        assert_eq!(config.floating.width(), Some(4));
+    }
+
+    #[test]
+    fn test_borders_config_with_ignore_rules() {
+        let json = r#"{
+            "enabled": true,
+            "ignore": [
+                {"app-id": "com.apple.finder"},
+                {"app-name": "Spotlight"}
+            ]
+        }"#;
+        let config: BordersConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.ignore.len(), 2);
+        assert_eq!(config.ignore[0].app_id, Some("com.apple.finder".to_string()));
+        assert_eq!(config.ignore[1].app_name, Some("Spotlight".to_string()));
+    }
+
+    // ========================================================================
+    // TilingConfig with borders tests
+    // ========================================================================
+
+    #[test]
+    fn test_tiling_config_has_borders() {
+        let config = TilingConfig::default();
+        assert!(!config.borders.enabled);
+        assert!(config.borders.focused.is_enabled());
+    }
+
+    #[test]
+    fn test_tiling_config_borders_deserialization() {
+        let json = r##"{
+            "enabled": true,
+            "borders": {
+                "enabled": true,
+                "focused": { "width": 6, "color": "#FF0000" }
+            }
+        }"##;
+        let config: TilingConfig = serde_json::from_str(json).unwrap();
+        assert!(config.enabled);
+        assert!(config.borders.enabled);
+        assert_eq!(config.borders.focused.width(), Some(6));
     }
 }

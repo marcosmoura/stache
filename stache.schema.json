@@ -65,6 +65,21 @@
           "easing": "ease-out",
           "enabled": false
         },
+        "borders": {
+          "animation": {
+            "durationMs": 200,
+            "easing": "ease-out"
+          },
+          "colors": {
+            "floating": "#94e2d5",
+            "focused": "#b4befe",
+            "monocle": "#cba6f7",
+            "unfocused": "#313244"
+          },
+          "enabled": false,
+          "ignore": [],
+          "width": 4
+        },
         "enabled": false,
         "floating": {
           "defaultPosition": "center",
@@ -101,7 +116,7 @@
       "type": "object",
       "properties": {
         "duration": {
-          "description": "Animation duration in milliseconds.\nDefault: 200",
+          "description": "Animation duration in milliseconds for large movements (500+ pixels).\nFor smaller movements, duration is automatically scaled down.\nDefault: 200",
           "type": "integer",
           "format": "uint32",
           "default": 200,
@@ -173,6 +188,123 @@
             "apiKeys": "",
             "defaultLocation": ""
           }
+        }
+      }
+    },
+    "BorderAnimationConfig": {
+      "description": "Animation configuration for border transitions.",
+      "type": "object",
+      "properties": {
+        "durationMs": {
+          "description": "Animation duration in milliseconds.\nDefault: 200",
+          "type": "integer",
+          "format": "uint32",
+          "default": 200,
+          "minimum": 0
+        },
+        "easing": {
+          "description": "Easing function for color transitions.\nDefault: \"ease-out\"",
+          "$ref": "#/$defs/EasingType",
+          "default": "ease-out"
+        }
+      }
+    },
+    "BorderColor": {
+      "description": "Border color definition.\n\nCan be a solid color or a gradient for more visual effects.",
+      "anyOf": [
+        {
+          "description": "A solid color specified as a hex string (e.g., \"#FF0000\" or \"#F00\").",
+          "type": "string"
+        },
+        {
+          "description": "A gradient with start and end colors and optional angle.",
+          "type": "object",
+          "properties": {
+            "angle": {
+              "description": "Angle in degrees (0 = left to right, 90 = bottom to top).\nDefault: 0",
+              "type": ["number", "null"],
+              "format": "double"
+            },
+            "from": {
+              "description": "Starting color (hex string).",
+              "type": "string"
+            },
+            "to": {
+              "description": "Ending color (hex string).",
+              "type": "string"
+            }
+          },
+          "required": ["from", "to"]
+        }
+      ]
+    },
+    "BorderColors": {
+      "description": "Colors for different window states.",
+      "type": "object",
+      "properties": {
+        "floating": {
+          "description": "Color for floating windows.\nDefault: Catppuccin Mocha teal (#94e2d5)",
+          "$ref": "#/$defs/BorderColor",
+          "default": "#94e2d5"
+        },
+        "focused": {
+          "description": "Color for the focused window.\nDefault: Catppuccin Mocha lavender (#b4befe)",
+          "$ref": "#/$defs/BorderColor",
+          "default": "#b4befe"
+        },
+        "monocle": {
+          "description": "Color for windows in monocle layout.\nDefault: Catppuccin Mocha mauve (#cba6f7)",
+          "$ref": "#/$defs/BorderColor",
+          "default": "#cba6f7"
+        },
+        "unfocused": {
+          "description": "Color for unfocused windows.\nDefault: Catppuccin Mocha surface0 (#313244)",
+          "$ref": "#/$defs/BorderColor",
+          "default": "#313244"
+        }
+      }
+    },
+    "BordersConfig": {
+      "description": "Window border configuration.\n\nBorders are rendered as transparent overlay windows that frame managed windows.\nThey provide visual feedback for focus state, layout mode, and floating status.",
+      "type": "object",
+      "properties": {
+        "animation": {
+          "description": "Animation settings for border color transitions.",
+          "$ref": "#/$defs/BorderAnimationConfig",
+          "default": {
+            "durationMs": 200,
+            "easing": "ease-out"
+          }
+        },
+        "colors": {
+          "description": "Colors for different window states.",
+          "$ref": "#/$defs/BorderColors",
+          "default": {
+            "floating": "#94e2d5",
+            "focused": "#b4befe",
+            "monocle": "#cba6f7",
+            "unfocused": "#313244"
+          }
+        },
+        "enabled": {
+          "description": "Whether window borders are enabled.\nDefault: false",
+          "type": "boolean",
+          "default": false
+        },
+        "ignore": {
+          "description": "Rules for windows that should not have borders.\nThese rules are checked in addition to the global tiling ignore rules.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/WindowRule"
+          }
+        },
+        "width": {
+          "description": "Border width in pixels.\nDefault: 4",
+          "type": "integer",
+          "format": "uint32",
+          "default": 4,
+          "minimum": 0
         }
       }
     },
@@ -733,6 +865,25 @@
             "duration": 200,
             "easing": "ease-out",
             "enabled": false
+          }
+        },
+        "borders": {
+          "description": "Window border configuration.\nBorders provide visual feedback for focus state and layout mode.",
+          "$ref": "#/$defs/BordersConfig",
+          "default": {
+            "animation": {
+              "durationMs": 200,
+              "easing": "ease-out"
+            },
+            "colors": {
+              "floating": "#94e2d5",
+              "focused": "#b4befe",
+              "monocle": "#cba6f7",
+              "unfocused": "#313244"
+            },
+            "enabled": false,
+            "ignore": [],
+            "width": 4
           }
         },
         "enabled": {

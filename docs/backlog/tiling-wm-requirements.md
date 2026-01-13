@@ -220,7 +220,9 @@ Workspaces rules and ignore list use the same matching system, where each rule i
 
 ### Borders Configuration Example
 
-Window borders provide visual feedback for window state (focused, unfocused, monocle, floating). Borders are rendered as transparent overlay windows positioned around managed windows.
+Window borders provide visual feedback for window state (focused, unfocused, monocle, floating). Borders are rendered by [JankyBorders](https://github.com/FelixKratz/JankyBorders), a high-performance border rendering tool that Stache integrates with.
+
+> **Note**: JankyBorders must be installed and running for borders to work. Stache dynamically updates JankyBorders' configuration based on window state.
 
 #### Basic Configuration
 
@@ -229,6 +231,8 @@ Window borders provide visual feedback for window state (focused, unfocused, mon
   "borders": {
     "enabled": true,
     "width": 4, // Border width in pixels
+    "style": "round", // "round" or "square"
+    "hidpi": true, // Enable HiDPI/Retina support
     "colors": {
       "focused": "#89b4fa", // Blue for focused window
       "unfocused": "#6c7086", // Gray for unfocused windows
@@ -239,53 +243,9 @@ Window borders provide visual feedback for window state (focused, unfocused, mon
 }
 ```
 
-#### With Gradient Colors
+#### With Disabled States
 
-Colors can be solid hex strings or gradient objects:
-
-```jsonc
-{
-  "borders": {
-    "enabled": true,
-    "width": 4,
-    "colors": {
-      "focused": {
-        "from": "#89b4fa", // Gradient start color
-        "to": "#cba6f7", // Gradient end color
-        "angle": 45, // Optional: gradient angle in degrees (default: 90)
-      },
-      "unfocused": "#6c7086", // Solid color
-      "monocle": "#cba6f7",
-      "floating": "#a6e3a1",
-    },
-  },
-}
-```
-
-#### With Animation
-
-```jsonc
-{
-  "borders": {
-    "enabled": true,
-    "width": 4,
-    "animation": {
-      "duration_ms": 200, // Animation duration for appear/disappear/color change
-      "easing": "ease-in-out", // Options: "linear", "ease-in", "ease-out", "ease-in-out"
-    },
-    "colors": {
-      "focused": "#89b4fa",
-      "unfocused": "#6c7086",
-      "monocle": "#cba6f7",
-      "floating": "#a6e3a1",
-    },
-  },
-}
-```
-
-#### With Ignore Rules
-
-Use the same rule syntax as workspace rules to exclude specific windows from having borders:
+You can disable borders for specific states by setting their color to `null` or omitting them:
 
 ```jsonc
 {
@@ -294,25 +254,22 @@ Use the same rule syntax as workspace rules to exclude specific windows from hav
     "width": 4,
     "colors": {
       "focused": "#89b4fa",
-      "unfocused": "#6c7086",
-      "monocle": "#cba6f7",
+      "unfocused": null, // No border for unfocused windows
+      "monocle": null, // No border in monocle layout
       "floating": "#a6e3a1",
     },
-    "ignore": [
-      { "app-id": "com.apple.finder" }, // No borders for Finder
-      { "title": "Picture in Picture" }, // No borders for PiP windows
-    ],
   },
 }
 ```
 
 #### Border Behavior Notes
 
-- Borders adapt dynamically when windows are resized or moved
+- Borders adapt dynamically when windows are resized or moved (handled by JankyBorders)
 - Borders do not interfere with window content or layout calculations
 - Borders have rounded corners matching the target window's corner radius
-- Borders are efficiently rendered using Core Animation for GPU acceleration
-- Borders are hidden when their window is hidden (workspace switching)
+- JankyBorders provides smooth, GPU-accelerated rendering at up to 240fps
+- Stache updates border colors based on focus state and layout type
+- Gradient colors are not supported (JankyBorders limitation)
 - Borders can be toggled at runtime via CLI commands
 
 ### Complete Configuration Example
@@ -409,7 +366,6 @@ Use the same rule syntax as workspace rules to exclude specific windows from hav
       {
         "name": "communication",
         "layout": "dwindle",
-        "preset-on-open": "centered",
         "screen": "main",
         "rules": [
           { "app-id": "com.microsoft.teams2" },
@@ -752,38 +708,34 @@ Implement animations for window transitions, including opening, closing, moving,
 
 ### Window Borders
 
-Implement configurable borders around tiled windows to provide visual feedback for window state.
+Implement configurable borders around tiled windows to provide visual feedback for window state. Borders are rendered by integrating with [JankyBorders](https://github.com/FelixKratz/JankyBorders), a high-performance border rendering tool.
 
-#### Border Rendering
+#### JankyBorders Integration
 
-- Create transparent NSWindow overlays positioned around each managed window
-- Use Core Animation (CALayer) for efficient GPU-accelerated rendering
-- Support solid colors and linear gradients
-- Match corner radius to target window's corner radius
-- Render borders that adapt to window resize/move events
+- Detect if JankyBorders is installed and running
+- Send runtime configuration updates via the `borders` CLI
+- Map Stache border configuration to JankyBorders settings
+- Handle graceful degradation when JankyBorders is not available
 
 #### Border States
 
-- **Focused**: Border color when window has keyboard focus
-- **Unfocused**: Border color for visible but unfocused windows
-- **Monocle**: Special color for windows in monocle layout
-- **Floating**: Color for windows in floating layout or marked as floating
+- **Focused**: Border color when window has keyboard focus (maps to `active_color`)
+- **Unfocused**: Border color for visible but unfocused windows (maps to `inactive_color`)
+- **Monocle**: Special color for windows in monocle layout (updates `active_color`)
+- **Floating**: Color for windows in floating layout (updates `active_color`)
 
 #### Border Integration
 
-- Create borders when windows are tracked
-- Remove borders when windows are untracked
-- Update border position/size on window move/resize events
-- Update border color on focus change events
-- Show/hide borders with workspace visibility
-- Support ignore rules to exclude specific windows
+- Update JankyBorders colors on focus change events
+- Update JankyBorders colors on layout change events (monocle, floating)
+- Send configuration updates for width, style, and hidpi settings
+- Borders automatically follow windows (handled by JankyBorders)
 
-#### Border Animation
+#### Limitations
 
-- Animate border appearance (fade in)
-- Animate border disappearance (fade out)
-- Animate color transitions when state changes
-- Respect animation configuration (duration, easing)
+- Gradient colors are not supported (JankyBorders uses solid colors only)
+- Border animations are handled by JankyBorders, not configurable from Stache
+- Requires JankyBorders to be installed separately
 
 ## Design Decisions
 

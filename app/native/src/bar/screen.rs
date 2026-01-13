@@ -54,7 +54,7 @@ mod tests {
         });
 
         // Give the thread time to start
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(10));
 
         // The callback shouldn't be called without a display reconfiguration event
         assert_eq!(called.load(Ordering::SeqCst), 0);
@@ -76,7 +76,7 @@ mod tests {
         });
 
         // Give threads time to start
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(10));
     }
 
     #[test]
@@ -88,7 +88,7 @@ mod tests {
         init_screen_watcher(my_callback);
 
         // Give thread time to start
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(10));
     }
 
     #[test]
@@ -108,7 +108,7 @@ mod tests {
         });
 
         // Give threads time to start
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(10));
 
         // Neither should be called without actual display events
         assert_eq!(counter1.load(Ordering::SeqCst), 0);

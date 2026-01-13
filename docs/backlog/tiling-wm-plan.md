@@ -5,8 +5,8 @@
 
 ## Status: In Progress
 
-**Last Updated**: 2026-01-12
-**Current Phase**: Milestone 10 - Window Borders
+**Last Updated**: 2026-01-13
+**Current Phase**: Milestone 12 - Polish & Testing
 
 ---
 
@@ -49,9 +49,9 @@ app/native/src/
 │     │
 │     └── borders/
 │         ├── mod.rs          # Borders module root, init()
-│         ├── manager.rs      # BorderManager singleton
-│         ├── window.rs       # BorderWindow (NSWindow overlay)
-│         └── renderer.rs     # Border rendering (CALayer, gradients)
+│         ├── manager.rs      # BorderManager singleton (state tracking)
+│         ├── janky.rs        # JankyBorders integration (CLI/Mach IPC)
+│         └── mach_ipc.rs     # Low-latency Mach IPC for JankyBorders
 ```
 
 ---
@@ -447,33 +447,33 @@ app/native/src/
 
 ### Milestone 10: Window Borders
 
-**Status**: [ ] Not Started / [ ] In Progress / [ ] Complete
+**Status**: [ ] Not Started / [ ] In Progress / [x] Complete
 
 **Goal**: Implement configurable borders around tiled windows with support for different states, gradients, rounded corners, and animations.
 
 #### Phase 10.1: Configuration Types
 
-- [ ] Add `BordersConfig` to `TilingConfig` in `config/types.rs`:
-  - [ ] `enabled: bool` - Whether borders are enabled (default: false)
-  - [ ] `width: u32` - Border width in pixels (default: 4)
-  - [ ] `animation: BorderAnimationConfig` - Animation settings
-  - [ ] `colors: BorderColors` - State-based color configuration
-  - [ ] `ignore: Vec<WindowRule>` - Rules for windows that should not have borders
-- [ ] Add `BorderAnimationConfig` struct:
-  - [ ] `duration_ms: u32` - Animation duration for appear/disappear (default: 200)
-  - [ ] `easing: EasingType` - Easing function (reuse existing enum)
-- [ ] Add `BorderColor` enum (supports solid colors and gradients):
-  - [ ] `Solid(String)` - Hex color string (e.g., "#FF0000")
-  - [ ] `Gradient { from: String, to: String, angle: Option<f64> }` - Linear gradient
-- [ ] Add `BorderColors` struct for state-based colors:
-  - [ ] `focused: BorderColor` - Color for focused window
-  - [ ] `unfocused: BorderColor` - Color for unfocused windows
-  - [ ] `monocle: BorderColor` - Color for monocle layout windows
-  - [ ] `floating: BorderColor` - Color for floating windows
-- [ ] Implement hex color parsing to RGBA
-- [ ] Regenerate JSON schema (`./scripts/generate-schema.sh`)
-- [ ] Add unit tests for configuration parsing and color conversion
-- [ ] Run tests, fix clippy warnings and ensure build passes
+- [x] Add `BordersConfig` to `TilingConfig` in `config/types.rs`:
+  - [x] `enabled: bool` - Whether borders are enabled (default: false)
+  - [x] `width: u32` - Border width in pixels (default: 4)
+  - [x] `animation: BorderAnimationConfig` - Animation settings
+  - [x] `colors: BorderColors` - State-based color configuration
+  - [x] `ignore: Vec<WindowRule>` - Rules for windows that should not have borders
+- [x] Add `BorderAnimationConfig` struct:
+  - [x] `duration_ms: u32` - Animation duration for appear/disappear (default: 200)
+  - [x] `easing: EasingType` - Easing function (reuse existing enum)
+- [x] Add `BorderColor` enum (supports solid colors and gradients):
+  - [x] `Solid(String)` - Hex color string (e.g., "#FF0000")
+  - [x] `Gradient { from: String, to: String, angle: Option<f64> }` - Linear gradient
+- [x] Add `BorderColors` struct for state-based colors:
+  - [x] `focused: BorderColor` - Color for focused window
+  - [x] `unfocused: BorderColor` - Color for unfocused windows
+  - [x] `monocle: BorderColor` - Color for monocle layout windows
+  - [x] `floating: BorderColor` - Color for floating windows
+- [x] Implement hex color parsing to RGBA (`Rgba` struct, `parse_hex_color()` function)
+- [x] Regenerate JSON schema (`./scripts/generate-schema.sh`)
+- [x] Add unit tests for configuration parsing and color conversion (24 tests)
+- [x] Run tests, fix clippy warnings and ensure build passes
 
 **Verification**: Configuration parses correctly, schema includes border types
 
@@ -481,27 +481,30 @@ app/native/src/
 
 #### Phase 10.2: Border Window Foundation
 
-- [ ] Create `tiling/borders/mod.rs`:
-  - [ ] Module root with `init()` function and re-exports
-- [ ] Create `tiling/borders/window.rs`:
-  - [ ] `BorderWindow` struct representing a single border overlay
-  - [ ] NSWindow creation via Objective-C FFI with properties:
-    - [ ] `NSWindowStyleMaskBorderless` - No title bar
-    - [ ] `NSWindowLevelFloating` - Stay above normal windows
-    - [ ] `ignoresMouseEvents: YES` - Click-through
-    - [ ] `opaque: NO`, `backgroundColor: clearColor` - Transparent
-    - [ ] `hasShadow: NO` - No shadow
-    - [ ] `collectionBehavior: canJoinAllSpaces` - Follow to all spaces
-  - [ ] `set_frame(rect: Rect)` - Position and size the border window
-  - [ ] `set_corner_radius(radius: f64)` - Match target window corner radius
-  - [ ] `set_visible(visible: bool)` - Show/hide border
-  - [ ] `destroy()` - Clean up NSWindow resources
-- [ ] Add macOS API bindings in `utils/objc.rs` or inline:
-  - [ ] NSWindow creation and configuration
-  - [ ] CALayer setup for border drawing
-  - [ ] CGColor/NSColor handling
-- [ ] Add unit tests for border window lifecycle
-- [ ] Run tests, fix clippy warnings and ensure build passes
+- [x] Create `tiling/borders/mod.rs`:
+  - [x] Module root with `init()` function and re-exports
+- [x] Create `tiling/borders/window.rs`:
+  - [x] `BorderWindow` struct representing a single border overlay
+  - [x] NSWindow creation via Objective-C FFI with properties:
+    - [x] `NSWindowStyleMaskBorderless` - No title bar
+    - [x] `NSWindowLevelFloating` - Stay above normal windows
+    - [x] `ignoresMouseEvents: YES` - Click-through
+    - [x] `opaque: NO`, `backgroundColor: clearColor` - Transparent
+    - [x] `hasShadow: NO` - No shadow
+    - [x] `collectionBehavior: canJoinAllSpaces` - Follow to all spaces
+  - [x] `set_frame(rect: Rect)` - Position and size the border window
+  - [x] `set_corner_radius(radius: f64)` - Match target window corner radius
+  - [x] `set_visible(visible: bool)` - Show/hide border
+  - [x] `set_color(r, g, b, a)` - Set border color
+  - [x] `set_border_width(width)` - Set border width
+  - [x] `destroy()` - Clean up NSWindow resources
+- [x] Add macOS API bindings inline in `window.rs`:
+  - [x] NSWindow creation and configuration
+  - [x] CAShapeLayer setup for border drawing
+  - [x] CGColor creation via Core Graphics FFI
+- [x] Implement `Send + Sync` for `BorderWindow` (unsafe, main-thread-only operations)
+- [x] Add unit tests for border window constants (4 tests)
+- [x] Run tests, fix clippy warnings and ensure build passes
 
 **Verification**: Border windows can be created, positioned, and destroyed
 
@@ -509,18 +512,23 @@ app/native/src/
 
 #### Phase 10.3: Border Rendering
 
-- [ ] Create `tiling/borders/renderer.rs`:
-  - [ ] `BorderRenderer` for drawing borders using Core Animation
-  - [ ] `draw_solid_border(color: RGBA, width: f64, corner_radius: f64)`
-  - [ ] `draw_gradient_border(from: RGBA, to: RGBA, angle: f64, width: f64, corner_radius: f64)`
-  - [ ] Use `CAShapeLayer` with stroke for border path
-  - [ ] Use `CAGradientLayer` for gradient colors
-- [ ] Handle corner radius detection from target window:
-  - [ ] Query window corner radius via Accessibility API if available
-  - [ ] Fall back to macOS default (~10-12px on modern versions)
-- [ ] Ensure borders render correctly at Retina scale factors
-- [ ] Add unit tests for color conversion and gradient calculations
-- [ ] Run tests, fix clippy warnings and ensure build passes
+- [x] Create `tiling/borders/renderer.rs`:
+  - [x] `BorderRenderer` struct with static methods for border rendering
+  - [x] `apply_solid_color(border, rgba)` - Apply solid color to border
+  - [x] `apply_gradient(border, from, to, angle)` - Apply gradient to border
+  - [x] `apply_border_color(border, color)` - Apply `BorderColor` (solid or gradient)
+  - [x] `angle_to_gradient_points(angle)` - Convert angle to CAGradientLayer start/end points
+- [x] Add `BorderState` enum:
+  - [x] `Focused` - Currently focused window
+  - [x] `Unfocused` (default) - Visible but not focused
+  - [x] `Monocle` - In monocle layout
+  - [x] `Floating` - In floating layout or marked as floating
+- [x] Handle corner radius detection from target window:
+  - [x] `detect_corner_radius(window_id)` - Query window corner radius (returns default for now)
+  - [x] `get_corner_radius(window_id)` - Get or detect corner radius
+  - [x] `DEFAULT_CORNER_RADIUS = 10.0` - macOS default fallback
+- [x] Add unit tests for gradient calculations and border state (11 tests)
+- [x] Run tests, fix clippy warnings and ensure build passes
 
 **Verification**: Borders render with correct colors, widths, and corner radii
 
@@ -528,25 +536,28 @@ app/native/src/
 
 #### Phase 10.4: Border Manager
 
-- [ ] Create `tiling/borders/manager.rs`:
-  - [ ] `BorderManager` struct (singleton pattern like `TilingManager`)
-  - [ ] `borders: HashMap<u32, BorderWindow>` - Map window_id to border
-  - [ ] `create_border(window_id: u32, frame: Rect, state: BorderState)`
-  - [ ] `remove_border(window_id: u32)`
-  - [ ] `update_border_frame(window_id: u32, frame: Rect)`
-  - [ ] `update_border_state(window_id: u32, state: BorderState)`
-  - [ ] `show_borders_for_workspace(workspace: &str)`
-  - [ ] `hide_borders_for_workspace(workspace: &str)`
-  - [ ] `set_enabled(enabled: bool)` - Enable/disable all borders
-  - [ ] `refresh_all()` - Rebuild all borders from current state
-- [ ] Add `BorderState` enum:
-  - [ ] `Focused` - Currently focused window
-  - [ ] `Unfocused` - Visible but not focused
-  - [ ] `Monocle` - In monocle layout
-  - [ ] `Floating` - In floating layout or marked as floating
-- [ ] Implement ignore rule matching (reuse `WindowRule` logic from `rules.rs`)
-- [ ] Add unit tests for border manager operations
-- [ ] Run tests, fix clippy warnings and ensure build passes
+- [x] Create `tiling/borders/manager.rs`:
+  - [x] `BorderManager` struct (singleton pattern with `OnceLock<Arc<RwLock<>>>`)
+  - [x] `borders: HashMap<u32, BorderInfo>` - Map window_id to border info
+  - [x] `BorderInfo` struct with border, state, workspace, visibility
+  - [x] `get_border_manager()` - Get global manager instance
+  - [x] `init_border_manager()` - Initialize manager from config
+  - [x] `create_border(window_id, frame, state, workspace, visible)` - Create border for window
+  - [x] `remove_border(window_id)` - Remove border for window
+  - [x] `update_border_frame(window_id, frame)` - Update border position/size
+  - [x] `update_border_state(window_id, state)` - Update border color based on state
+  - [x] `update_border_workspace(window_id, workspace)` - Update workspace tracking
+  - [x] `show_borders_for_workspace(workspace)` - Show borders for workspace
+  - [x] `hide_borders_for_workspace(workspace)` - Hide borders for workspace
+  - [x] `set_enabled(enabled)` - Enable/disable all borders
+  - [x] `refresh_all()` - Refresh all border colors from config
+  - [x] `should_have_border(window)` - Check if window should have border
+  - [x] Helper methods: `border_count()`, `get_border_state()`, `has_border()`
+- [x] `BorderState` enum moved to `renderer.rs` (Focused, Unfocused, Monocle, Floating)
+- [x] Implement ignore rule matching (reuses `matches_window()` from `rules.rs`)
+- [x] Add `WindowInfo::new_for_test_with_app()` helper for tests with bundle_id/app_name
+- [x] Add unit tests for border manager operations (10 tests)
+- [x] Run tests, fix clippy warnings and ensure build passes
 
 **Verification**: Border manager can create, update, and remove borders correctly
 
@@ -554,114 +565,138 @@ app/native/src/
 
 #### Phase 10.5: Integration with Tiling Manager
 
-- [ ] Integrate border creation in `TilingManager::track_window()`:
-  - [ ] Check if borders enabled and window not ignored
-  - [ ] Create border with initial state based on focus/layout
-- [ ] Integrate border removal in `TilingManager::untrack_window()`:
-  - [ ] Remove border when window untracked
-- [ ] Integrate border updates in window event handlers:
-  - [ ] `WindowEventType::Moved` → `update_border_frame()`
-  - [ ] `WindowEventType::Resized` → `update_border_frame()`
-  - [ ] Focus changes → `update_border_state()` for both old and new focused windows
-- [ ] Integrate with workspace switching:
-  - [ ] `switch_workspace()` → show/hide borders along with windows
-- [ ] Integrate with layout changes:
-  - [ ] Detect monocle layout → update all borders to `Monocle` state
-  - [ ] Detect floating layout/window → update border to `Floating` state
-- [ ] Ensure borders don't interfere with layout calculations (pure visual overlay)
-- [ ] Add integration tests
-- [ ] Run tests, fix clippy warnings and ensure build passes
+- [x] Integrate border creation in `TilingManager::track_window()`:
+  - [x] `create_border_for_window()` helper method
+  - [x] `determine_border_state()` to get initial state based on layout/focus
+  - [x] Create border with visibility based on workspace visibility
+- [x] Integrate border removal in `TilingManager::untrack_window()`:
+  - [x] `remove_border_for_window()` helper method called when window untracked
+- [x] Integrate border updates in window event handlers:
+  - [x] `update_window_frame()` now calls `update_border_frame()` via static helper
+  - [x] Focus changes via `set_focused_window()` → `update_focus_border_states()`
+  - [x] Updates both old focused (→ Unfocused) and new focused (→ Focused) windows
+- [x] Integrate with workspace switching:
+  - [x] `switch_workspace()` → `hide_borders_for_workspace()` for old workspace
+  - [x] `switch_workspace()` → `show_borders_for_workspace()` for new workspace
+- [x] Integrate with layout changes:
+  - [x] `set_workspace_layout()` → `update_all_border_states_for_layout()`
+  - [x] Monocle layout → all borders get `Monocle` state
+  - [x] Floating layout → all borders get `Floating` state
+  - [x] Other layouts → focused gets `Focused`, others get `Unfocused`
+- [x] Borders are pure visual overlays (don't interfere with layout calculations)
+- [x] All 864 tests pass, clippy clean
 
 **Verification**: Borders appear/update correctly when windows are managed
 
 ---
 
-#### Phase 10.6: Animation Support
+#### Phase 10.6: JankyBorders Integration
 
-- [ ] Add animation support to `BorderWindow`:
-  - [ ] `animate_show()` - Fade in border with configured duration
-  - [ ] `animate_hide()` - Fade out border with configured duration
-  - [ ] `animate_color_change(from: BorderColor, to: BorderColor)` - Smooth color transition
-- [ ] Use `CABasicAnimation` for opacity and color animations
-- [ ] Implement easing functions mapping to `CAMediaTimingFunction`:
-  - [ ] `linear` → `kCAMediaTimingFunctionLinear`
-  - [ ] `ease-in` → `kCAMediaTimingFunctionEaseIn`
-  - [ ] `ease-out` → `kCAMediaTimingFunctionEaseOut`
-  - [ ] `ease-in-out` → `kCAMediaTimingFunctionEaseInEaseOut`
-- [ ] Respect `borders.animation` config (skip if duration is 0)
-- [ ] Handle animation interruption gracefully (e.g., rapid focus changes)
-- [ ] Add unit tests for animation timing
-- [ ] Run tests, fix clippy warnings and ensure build passes
+> **Architecture Change**: After extensive testing, the custom SkyLight-based border implementation was replaced with JankyBorders integration. JankyBorders is a battle-tested, high-performance border rendering tool that handles all the complex window server interactions. Stache now acts as a controller, updating JankyBorders configuration based on window state.
 
-**Verification**: Borders animate smoothly when appearing/disappearing/changing state
+- [x] Remove custom SkyLight border implementation:
+  - [x] Remove `tiling/borders/window.rs` (BorderWindow)
+  - [x] Remove `tiling/borders/skylight.rs` (SkyLight bindings)
+  - [x] Remove `tiling/borders/renderer.rs` (border rendering)
+  - [x] Simplify `tiling/borders/manager.rs` (state tracking only)
+- [x] Create `tiling/borders/janky.rs`:
+  - [x] `is_available()` - Check if `borders` command is in PATH
+  - [x] `is_running()` - Check if JankyBorders process is running (Mach IPC + pgrep fallback)
+  - [x] `send_command(args)` - Execute via Mach IPC (fast) or CLI (fallback)
+  - [x] `set_active_color(color)` - Update active border color
+  - [x] `set_inactive_color(color)` - Update inactive border color
+  - [x] `set_background_color(color)` - Update background color
+  - [x] `set_width(width)` - Update border width
+  - [x] `set_style(style)` - Update border style (round/square)
+  - [x] `set_order(above)` - Update border order (above/below windows)
+  - [x] `set_hidpi(enabled)` - Update HiDPI setting
+  - [x] `set_ax_focus(enabled)` - Update accessibility focus tracking
+  - [x] `set_blacklist(apps)` - Set apps to exclude from borders
+  - [x] `set_whitelist(apps)` - Set apps to include (exclusive mode)
+  - [x] `apply_config(config)` - Apply full border configuration
+  - [x] `update_colors_for_state(is_monocle, is_floating)` - Update colors based on state
+  - [x] `refresh()` - Re-apply configuration from current settings
+  - [x] Color conversion functions: `rgba_to_hex()`, `hex_to_janky()`, `border_color_to_janky()`
+  - [x] Support for solid colors, gradients, and glow effects
+  - [x] 11 unit tests for color conversion
+- [x] Create `tiling/borders/mach_ipc.rs`:
+  - [x] Low-latency Mach IPC client for JankyBorders communication
+  - [x] `JankyConnection` struct with bootstrap service lookup
+  - [x] `send(args)` - Send arguments via Mach IPC (~0.1-0.5ms latency)
+  - [x] `send_one(arg)` - Send single argument
+  - [x] `send_batch(args)` - Send multiple arguments in one message
+  - [x] `is_connected()` - Check if Mach IPC connection is active
+  - [x] `connect()` - Establish connection to JankyBorders
+  - [x] `invalidate()` - Force reconnection on next send
+  - [x] Automatic reconnection on connection loss
+  - [x] Correct struct alignment (`#[repr(C, packed(4))]`) matching JankyBorders' C structs
+  - [x] Compile-time size assertion for MachMessage (44 bytes)
+  - [x] 5 unit tests for Mach IPC
+- [x] Update `tiling/borders/mod.rs`:
+  - [x] `init()` - Check for JankyBorders, establish Mach IPC, apply initial config
+  - [x] Export `janky`, `mach_ipc`, `manager` modules
+  - [x] Re-export commonly used types
+- [x] Integrate with TilingManager:
+  - [x] On focus change → `update_focus_border_states()` → `janky::update_colors_for_state()`
+  - [x] On layout change (monocle/floating) → `update_border_colors_for_workspace()`
+  - [x] On workspace switch → `update_border_colors_for_workspace()`
+  - [x] On config reload → `janky::refresh()`
+- [x] Update configuration types (`config/types.rs`):
+  - [x] `BorderStateConfig` enum (Disabled, SolidColor, GradientColor, GlowColor)
+  - [x] `BordersConfig` with `style`, `hidpi`, `focused`, `unfocused`, `monocle`, `floating`, `ignore`
+  - [x] `BorderColor` enum for JankyBorders rendering (Solid, Gradient, Glow)
+  - [x] Regenerate JSON schema
+- [x] Add unit tests for JankyBorders integration (37 border tests total)
+- [x] Run tests (867 total), fix clippy warnings and ensure build passes
+
+**Verification**: JankyBorders colors update correctly based on focus and layout state
 
 ---
 
-#### Phase 10.7: CLI Commands & Events
+#### Phase 10.7: Polish & Documentation
 
-- [ ] Add CLI command structure to `cli/commands.rs`:
-  - [ ] `BordersCommands` enum with `Enable`, `Disable`, `Refresh` variants
-- [ ] Add `stache tiling borders` command:
-  - [ ] `--enable` - Enable borders at runtime
-  - [ ] `--disable` - Disable borders at runtime
-  - [ ] `--refresh` - Rebuild all borders from current state
-- [ ] Add IPC notification handlers in `ipc_listener.rs`:
-  - [ ] `TilingBordersEnable`
-  - [ ] `TilingBordersDisable`
-  - [ ] `TilingBordersRefresh`
-- [ ] Add events to `events.rs`:
-  - [ ] `stache://tiling/borders-changed` - Border state changed (enabled/disabled)
-- [ ] Ensure borders rebuild correctly after config reload
-- [ ] Add tests for CLI commands
-- [ ] Run tests, fix clippy warnings and ensure build passes
+- [x] Handle edge cases:
+  - [x] JankyBorders not installed (graceful degradation, log warning)
+  - [x] JankyBorders process crashes (detect via Mach IPC, auto-reconnect, CLI fallback)
+  - [x] Config reload while JankyBorders is running (app restarts, re-initializes borders)
+- [x] Add command caching to prevent border flickering:
+  - [x] `LAST_SENT` cache stores last sent key=value pairs
+  - [x] `filter_changed_args()` skips duplicate commands
+  - [x] `clear_cache()` forces re-send on config refresh
+  - [x] 5 unit tests for caching functionality
+- [x] Add comprehensive unit tests (42 border tests total)
+- [x] Update `docs/sample-config.jsonc` with border configuration examples
+- [x] Run full test suite (872 tests), fix any regressions
 
-**Verification**: CLI commands control borders as expected
-
----
-
-#### Phase 10.8: Edge Cases & Polish
-
-- [ ] Handle edge cases:
-  - [ ] Windows near screen edges (clamp borders to screen bounds)
-  - [ ] Multi-monitor setups (borders on correct screen)
-  - [ ] Minimized windows (hide borders)
-  - [ ] Full-screen windows (hide borders)
-  - [ ] Rapidly moving windows (throttle frame updates if needed)
-- [ ] Performance optimization:
-  - [ ] Profile border updates during window drag
-  - [ ] Batch updates when multiple windows change simultaneously
-  - [ ] Consider lazy border creation (only when window becomes visible)
-- [ ] Memory management:
-  - [ ] Ensure borders are cleaned up when windows close
-  - [ ] Handle application termination (clean up all borders)
-- [ ] Add comprehensive unit tests for edge cases
-- [ ] Update `docs/sample-config.jsonc` with border configuration examples
-- [ ] Run full test suite, fix any regressions
-
-**Verification**: Borders work correctly in all scenarios, no performance degradation
+**Verification**: Borders work correctly with JankyBorders, graceful degradation when unavailable
 
 ---
 
 ### Milestone 11: Floating Presets
 
-**Status**: [ ] Not Started / [ ] In Progress / [ ] Complete
+**Status**: [ ] Not Started / [ ] In Progress / [x] Complete
 
-- [ ] Create `tiling/presets.rs`:
-  - [ ] Parse `DimensionValue` (pixels vs percentage)
-  - [ ] `calculate_preset_frame(preset, screen, gaps)` function
-  - [ ] Handle `center: true` positioning
-  - [ ] Clamp to screen bounds
-  - [ ] Respect gaps in calculations
-- [ ] Implement `apply_preset(window_id, preset_name)`:
-  - [ ] Look up preset from config
-  - [ ] Calculate frame for window's screen
-  - [ ] Apply frame to window
-- [ ] Implement `stache tiling window --preset` command
-- [ ] Support `preset-on-open` workspace config:
-  - [ ] Apply preset when window opens
-  - [ ] Only for floating layout or floating windows
-- [ ] Add unit tests for preset calculations
-- [ ] Run tests, fix clippy warnings and ensure build passes
+- [x] Add preset functions to `tiling/layout/floating.rs`:
+  - [x] Parse `DimensionValue` (pixels vs percentage)
+  - [x] `calculate_preset_frame(preset, screen, gaps)` function
+  - [x] Handle `center: true` positioning
+  - [x] Clamp to screen bounds
+  - [x] Respect outer gaps in calculations
+  - [x] Respect inner gaps for 50% dimensions (half-screen layouts)
+  - [x] `find_preset(name)` - Look up preset by name (case-insensitive)
+  - [x] `list_preset_names()` - Get available preset names
+- [x] Implement `apply_preset(preset_name)` in TilingManager:
+  - [x] Look up preset from config
+  - [x] Get focused window and its screen
+  - [x] Calculate frame using preset and screen's visible frame
+  - [x] Resolve gaps for screen
+  - [x] Apply frame to window
+  - [x] Update tracked window state
+- [x] Implement `stache tiling window --preset` command:
+  - [x] CLI sends IPC notification `TilingWindowPreset`
+  - [x] IPC handler calls `manager.apply_preset()`
+- [x] Add unit tests for preset calculations (21 tests including inner gap tests)
+- [x] Run tests (893 total), fix clippy warnings and ensure build passes
 
 **Verification**: Presets position windows correctly
 
@@ -754,16 +789,18 @@ CLI-to-app communication via `NSDistributedNotificationCenter`:
 
 ## Risk Log
 
-| Risk                                   | Status | Mitigation                                            |
-| -------------------------------------- | ------ | ----------------------------------------------------- |
-| Accessibility API changes in new macOS | Open   | Use documented APIs, wrap undocumented in abstraction |
-| Window hiding affects app state        | Open   | Test thoroughly, document known issues                |
-| Animation performance issues           | Open   | Make animations optional, configurable quality        |
-| Complex multi-monitor edge cases       | Open   | Start single-monitor, add multi incrementally         |
-| AXObserver reliability                 | Open   | Add reconnection logic, fallback polling              |
-| Border overlay z-ordering issues       | Open   | Use NSWindowLevel.floating, test with various apps    |
-| Border performance during window drag  | Open   | Throttle updates, use Core Animation for GPU accel    |
-| Corner radius detection unreliable     | Open   | Fall back to system default, make configurable        |
+| Risk                                   | Status | Mitigation                                             |
+| -------------------------------------- | ------ | ------------------------------------------------------ |
+| Accessibility API changes in new macOS | Open   | Use documented APIs, wrap undocumented in abstraction  |
+| Window hiding affects app state        | Open   | Test thoroughly, document known issues                 |
+| Animation performance issues           | Open   | Make animations optional, configurable quality         |
+| Complex multi-monitor edge cases       | Open   | Start single-monitor, add multi incrementally          |
+| AXObserver reliability                 | Open   | Add reconnection logic, fallback polling               |
+| Border overlay z-ordering issues       | Closed | Resolved by using JankyBorders (handles z-ordering)    |
+| Border performance during window drag  | Closed | Resolved by using JankyBorders (optimized C impl)      |
+| Corner radius detection unreliable     | Closed | JankyBorders handles corner radius automatically       |
+| Mach IPC struct alignment mismatch     | Closed | Fixed with `#[repr(C, packed(4))]` to match C structs  |
+| JankyBorders not installed             | Open   | Graceful degradation, log warning, document dependency |
 
 ---
 
@@ -776,8 +813,12 @@ CLI-to-app communication via `NSDistributedNotificationCenter`:
 - **Separate from Hyprspace**: User will integrate later
 - **Layout Implementation**: All layouts in single `layout.rs` file (simpler than planned directory structure)
 - **Gaps Implementation**: Integrated into `layout.rs` as `Gaps` struct with `from_config()` method
-- **Borders Implementation**: Per-window NSWindow overlays with Core Animation rendering (Milestone 10)
-- **Test Count**: 804 tests total (8 drag-and-drop tests added in Phase 9.2)
+- **Borders Implementation**: JankyBorders integration (replaced custom SkyLight implementation in Phase 10.6)
+- **JankyBorders Dependency**: Borders require JankyBorders to be installed (`brew install FelixKratz/formulae/borders`)
+- **Mach IPC Performance**: ~0.1-0.5ms latency vs ~20-50ms for CLI fallback
+- **Command Caching**: Duplicate commands are skipped to prevent border flickering
+- **Test Count**: 893 tests total
+- **Floating Presets**: Preset code lives in `layout/floating.rs` with inner gap support for 50% dimensions
 
 ---
 
@@ -785,6 +826,17 @@ CLI-to-app communication via `NSDistributedNotificationCenter`:
 
 | Date       | Change                                                                                                               |
 | ---------- | -------------------------------------------------------------------------------------------------------------------- |
+| 2026-01-13 | Milestone 11: Moved presets to layout/floating.rs, added inner gap support for 50% dimensions, 893 tests total       |
+| 2026-01-13 | Milestone 11 complete: Floating presets with apply_preset(), IPC handler, 21 tests                                   |
+| 2026-01-13 | Milestone 10 complete: Window borders via JankyBorders, command caching, sample config, 872 tests                    |
+| 2026-01-13 | Phase 10.7 complete: Command caching to prevent flickering, sample config updated, edge cases handled                |
+| 2026-01-13 | Phase 10.6 complete: JankyBorders integration with Mach IPC, struct alignment fix, 867 tests                         |
+| 2026-01-12 | Phase 10.6: Replaced custom SkyLight border implementation with JankyBorders integration for better performance      |
+| 2026-01-12 | Phase 10.5 complete: Integration with TilingManager (track/untrack, focus, workspace switch, layout change)          |
+| 2026-01-12 | Phase 10.4 complete: BorderManager singleton with create/remove/update operations, 864 tests                         |
+| 2026-01-12 | Phase 10.3 complete: BorderRenderer with solid/gradient colors, BorderState enum, corner radius detection            |
+| 2026-01-12 | Phase 10.2 complete: BorderWindow with NSWindow overlay, CAShapeLayer rendering, Send+Sync impl                      |
+| 2026-01-12 | Phase 10.1 complete: BordersConfig, BorderColor, BorderColors, Rgba, parse_hex_color, JSON schema updated            |
 | 2026-01-12 | Milestone 9 complete: Animations, drag-and-drop, performance optimizations documented                                |
 | 2026-01-12 | Phase 9.3 complete: Performance review, debug logging optimized for release builds                                   |
 | 2026-01-12 | Phase 9.2 complete: Drag-and-drop window swapping with `swap_windows_by_id`, 804 tests                               |

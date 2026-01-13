@@ -242,4 +242,121 @@
     // Default: "tidal"
     "targetApp": "spotify",
   },
+
+  // ---------------------------------------------------------------------------
+  // Tiling Window Manager Configuration
+  // ---------------------------------------------------------------------------
+  // Built-in tiling window manager with multiple layouts, workspace management,
+  // and window borders via JankyBorders integration.
+  //
+  // IMPORTANT: Window borders require JankyBorders to be installed:
+  //   brew install FelixKratz/formulae/borders
+  //
+  "tiling": {
+    // Enable or disable the tiling window manager
+    // Default: false
+    "enabled": false,
+
+    // Workspace definitions (optional)
+    // If empty, creates one default workspace per screen
+    "workspaces": [
+      {
+        "name": "main",
+        "screen": "main", // "main", "secondary", or screen name
+        "layout": "dwindle", // "dwindle", "master", "monocle", "floating", "split", "split-vertical", "split-horizontal"
+      },
+      {
+        "name": "code",
+        "screen": "main",
+        "layout": "master",
+        // Window matching rules - windows matching these rules go to this workspace
+        "rules": [{ "appId": "com.microsoft.VSCode" }, { "app": "Cursor" }],
+      },
+    ],
+
+    // Applications/windows to ignore (never managed by tiling)
+    "ignore": [
+      { "appId": "com.apple.finder" }, // Finder
+      { "app": "System Settings" }, // System Settings
+      { "title": "Picture in Picture" }, // PiP windows
+    ],
+
+    // Animation settings for window transitions
+    "animations": {
+      "enabled": true,
+      "duration": 200, // Duration in milliseconds
+      "easing": "easeOutQuad", // "linear", "easeIn", "easeOut", "easeInOut", "easeOutQuad", "spring"
+    },
+
+    // Gap configuration (spacing between windows and screen edges)
+    // Can be a single number, per-axis, per-side, or per-screen
+    "gaps": {
+      // Inner gaps (between windows)
+      "inner": 8,
+      // Outer gaps (from screen edges) - can be uniform or per-side
+      "outer": {
+        "top": 8,
+        "right": 8,
+        "bottom": 8,
+        "left": 8,
+      },
+    },
+
+    // Master layout settings
+    "master": {
+      "ratio": 0.5, // Master window takes 50% of screen
+      "position": "left", // "left", "right", "top", "bottom", "auto"
+    },
+
+    // -------------------------------------------------------------------------
+    // Window Border Configuration (requires JankyBorders)
+    // -------------------------------------------------------------------------
+    // Borders provide visual feedback for focus state, layout mode, and
+    // floating windows. Colors can be solid, gradients, or glow effects.
+    //
+    "borders": {
+      // Enable or disable window borders
+      // Default: false
+      "enabled": true,
+
+      // Border style: "round" or "square"
+      // Default: "round"
+      "style": "round",
+
+      // Enable HiDPI/Retina support
+      // Default: true
+      "hidpi": true,
+
+      // Focused window border (solid color)
+      "focused": {
+        "width": 6,
+        "color": "#cba6f7", // Catppuccin Mauve
+      },
+
+      // Unfocused window border
+      // Set to `false` to hide borders on unfocused windows
+      "unfocused": false,
+
+      // Monocle layout border (glow effect)
+      // Glow creates a soft outer glow around the window
+      "monocle": {
+        "width": 6,
+        "glow": "#89b4fa", // Catppuccin Blue
+      },
+
+      // Floating window border (gradient)
+      // Gradient flows from one color to another
+      "floating": {
+        "width": 6,
+        "gradient": {
+          "from": "#89b4fa", // Catppuccin Blue
+          "to": "#a6e3a1", // Catppuccin Green
+          "angle": 135, // Gradient angle in degrees (45 or 135)
+        },
+      },
+
+      // Windows that should not have borders (in addition to tiling ignore rules)
+      "ignore": [{ "app": "Arc" }],
+    },
+  },
 }
