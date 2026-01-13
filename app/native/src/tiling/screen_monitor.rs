@@ -12,6 +12,8 @@
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use super::constants::timing::SCREEN_CHANGE_DELAY_MS;
+
 /// Callback function type for screen configuration changes.
 type ScreenChangeCallback = fn();
 
@@ -84,7 +86,7 @@ unsafe extern "C" fn display_reconfiguration_callback(
         // This ensures all CoreGraphics updates are complete
         std::thread::spawn(move || {
             // Brief delay to let macOS finish updating display state
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            std::thread::sleep(std::time::Duration::from_millis(SCREEN_CHANGE_DELAY_MS));
 
             callback();
 

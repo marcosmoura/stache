@@ -18,6 +18,9 @@
 
 use std::collections::HashMap;
 
+use super::constants::window_size::{
+    MAX_PANEL_HEIGHT, MAX_PANEL_WIDTH, MIN_TRACKABLE_SIZE, MIN_UNTITLED_WINDOW_SIZE,
+};
 use super::rules::{find_matching_workspace, matches_window};
 use super::state::{TrackedWindow, Workspace};
 use super::window::{WindowInfo, hide_app, unhide_app};
@@ -67,7 +70,7 @@ pub fn hide_workspace_windows(windows: &[&TrackedWindow]) -> (usize, Vec<i32>) {
     pids_to_hide.dedup();
 
     for pid in pids_to_hide {
-        if hide_app(pid) {
+        if hide_app(pid).is_ok() {
             hidden += windows.iter().filter(|w| w.pid == pid).count();
         } else {
             failures.push(pid);
@@ -98,7 +101,7 @@ pub fn show_workspace_windows(windows: &[&TrackedWindow]) -> (usize, Vec<i32>) {
     pids_to_show.dedup();
 
     for pid in pids_to_show {
-        if unhide_app(pid) {
+        if unhide_app(pid).is_ok() {
             shown += windows.iter().filter(|w| w.pid == pid).count();
         } else {
             failures.push(pid);
@@ -240,22 +243,6 @@ pub fn should_ignore_window(window: &WindowInfo, ignore_rules: &[WindowRule]) ->
     ignore_rules.iter().any(|rule| matches_window(rule, window))
 }
 
-/// Minimum size for a "real" window (in points).
-/// Windows smaller than this in BOTH dimensions are likely icons/badges.
-const MIN_WINDOW_SIZE: f64 = 50.0;
-
-/// Maximum height for a toolbar/panel-like window (in points).
-const MAX_PANEL_HEIGHT: f64 = 200.0;
-
-/// Maximum width for a small dialog/panel (in points).
-const MAX_PANEL_WIDTH: f64 = 450.0;
-
-/// Minimum size for an untitled window to be considered "real".
-/// Untitled windows smaller than this in BOTH dimensions are likely popups/previews.
-/// Note: Some apps (like Ghostty) don't set titles immediately when windows are created,
-/// so we use a lower threshold to avoid filtering legitimate windows.
-const MIN_UNTITLED_WINDOW_SIZE: f64 = 300.0;
-
 /// Checks if a window matches the built-in ignore list.
 fn should_ignore_builtin(window: &WindowInfo) -> bool {
     // Check bundle ID
@@ -300,7 +287,7 @@ fn is_auxiliary_window(window: &WindowInfo) -> bool {
     }
 
     // Very small windows (icons, badges, tooltips)
-    if width < MIN_WINDOW_SIZE && height < MIN_WINDOW_SIZE {
+    if width < MIN_TRACKABLE_SIZE && height < MIN_TRACKABLE_SIZE {
         return true;
     }
 

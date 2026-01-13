@@ -26,10 +26,8 @@
 //! - 12 windows: 3×4 grid
 
 use super::{Gaps, LayoutResult};
+use crate::tiling::constants::layout::MAX_GRID_WINDOWS;
 use crate::tiling::state::Rect;
-
-/// Maximum number of windows supported in grid layout.
-const MAX_WINDOWS: usize = 12;
 
 /// Grid layout - windows arranged in rows and columns.
 ///
@@ -49,8 +47,8 @@ pub fn layout(window_ids: &[u32], screen_frame: &Rect, gaps: &Gaps) -> LayoutRes
     }
 
     // Limit to maximum supported windows
-    let window_ids = if window_ids.len() > MAX_WINDOWS {
-        &window_ids[..MAX_WINDOWS]
+    let window_ids = if window_ids.len() > MAX_GRID_WINDOWS {
+        &window_ids[..MAX_GRID_WINDOWS]
     } else {
         window_ids
     };
@@ -685,7 +683,7 @@ mod tests {
         let ids: Vec<u32> = (1..=20).collect();
         let result = layout(&ids, &frame, &no_gaps());
 
-        assert_eq!(result.len(), MAX_WINDOWS);
+        assert_eq!(result.len(), MAX_GRID_WINDOWS);
     }
 
     #[test]

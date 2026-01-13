@@ -39,6 +39,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use super::constants::animation as anim_constants;
 use super::state::Rect;
 use super::window::{
     resolve_window_ax_elements, set_window_frames_by_id, set_window_frames_delta,
@@ -128,22 +129,14 @@ const QOS_CLASS_USER_INTERACTIVE: c_int = 0x21;
 // Constants
 // ============================================================================
 
-/// Minimum animation duration in milliseconds.
-const MIN_DURATION_MS: u32 = 100;
-
-/// Maximum animation duration in milliseconds.
-const MAX_DURATION_MS: u32 = 1000;
-
-/// Default frame rate if detection fails.
-const DEFAULT_FPS: u32 = 60;
+// Use constants from the centralized constants module
+use anim_constants::{
+    DEFAULT_FPS, MAX_DURATION_MS, MIN_DURATION_MS, MIN_DYNAMIC_DURATION_MS, SPIN_WAIT_THRESHOLD_US,
+    SPRING_POSITION_THRESHOLD,
+};
 
 /// Minimum distance (pixels) for animation. Below this, windows are moved instantly.
 const MIN_ANIMATION_DISTANCE: f64 = 5.0;
-
-/// Threshold below which we spin-wait instead of sleeping (microseconds).
-/// Sleeping has ~1ms minimum granularity on most systems, so for sub-millisecond
-/// waits we spin to achieve more precise timing.
-const SPIN_WAIT_THRESHOLD_US: u64 = 1000;
 
 // ============================================================================
 // Animation Cancellation
@@ -533,8 +526,7 @@ const SPRING_DAMPING_RATIO: f64 = 1.0;
 /// Spring mass (m). Fixed at 1.0 - stiffness is adjusted to control speed.
 const SPRING_MASS: f64 = 1.0;
 
-/// Spring animation position threshold for completion (1% of travel distance).
-const SPRING_POSITION_THRESHOLD: f64 = 0.01;
+// SPRING_POSITION_THRESHOLD is imported from constants module
 
 /// Settling time multiplier for critically damped springs.
 ///
@@ -804,8 +796,7 @@ fn apply_easing(t: f64, easing: EasingType) -> f64 {
 /// Movements >= this distance use the full configured duration.
 const REFERENCE_DISTANCE: f64 = 500.0;
 
-/// Minimum duration for very small movements (hardcoded).
-const MIN_DYNAMIC_DURATION_MS: u64 = 50;
+// MIN_DYNAMIC_DURATION_MS is imported from constants module
 
 /// Configuration for the animation system.
 #[derive(Debug, Clone)]

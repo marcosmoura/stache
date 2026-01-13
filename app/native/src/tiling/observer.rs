@@ -35,6 +35,7 @@ use core_foundation::base::TCFType;
 use core_foundation::runloop::{CFRunLoop, kCFRunLoopDefaultMode};
 use core_foundation::string::CFString;
 
+use super::error::{TilingError, TilingResult};
 use super::window::{AppInfo, get_running_apps};
 
 // ============================================================================
@@ -369,20 +370,23 @@ pub fn init(callback: fn(WindowEvent)) -> bool {
 ///
 /// * `app` - Information about the application to observe.
 ///
-/// # Returns
+/// # Errors
 ///
-/// `Ok(())` if successful, `Err` with a message otherwise.
+/// Returns `TilingError::Observer` if the observer system is not initialized
+/// or if the observer cannot be created.
 #[allow(clippy::significant_drop_tightening)] // Guard needs to be held for entire function
-pub fn add_observer(app: &AppInfo) -> Result<(), String> {
+pub fn add_observer(app: &AppInfo) -> TilingResult<()> {
     if !INITIALIZED.load(Ordering::SeqCst) {
-        return Err("Observer system not initialized".to_string());
+        return Err(TilingError::observer("Observer system not initialized"));
     }
 
     let mut state_guard = OBSERVER_STATE
         .lock()
-        .map_err(|e| format!("Failed to lock observer state: {e}"))?;
+        .map_err(|e| TilingError::observer(format!("Failed to lock observer state: {e}")))?;
 
-    let state = state_guard.as_mut().ok_or("Observer state not initialized")?;
+    let state = state_guard
+        .as_mut()
+        .ok_or_else(|| TilingError::observer("Observer state not initialized"))?;
 
     // Skip if already observing
     if state.observers.contains_key(&app.pid) {
@@ -395,14 +399,20 @@ pub fn add_observer(app: &AppInfo) -> Result<(), String> {
         unsafe { AXObserverCreate(app.pid, observer_callback, std::ptr::addr_of_mut!(observer)) };
 
     if result != K_AX_ERROR_SUCCESS || observer.is_null() {
-        return Err(format!("AXObserverCreate failed with error {result}"));
+        return Err(TilingError::accessibility(
+            result,
+            format!("AXObserverCreate failed for pid {}", app.pid),
+        ));
     }
 
     // Create the application element
     let app_element = unsafe { AXUIElementCreateApplication(app.pid) };
     if app_element.is_null() {
         unsafe { CFRelease(observer.cast()) };
-        return Err("Failed to create application element".to_string());
+        return Err(TilingError::null_pointer(format!(
+            "AXUIElementCreateApplication for pid {}",
+            app.pid
+        )));
     }
 
     // Add notifications
@@ -461,20 +471,23 @@ pub fn add_observer(app: &AppInfo) -> Result<(), String> {
 /// * `pid` - The process ID of the application
 /// * `name` - Optional name for logging
 ///
-/// # Returns
+/// # Errors
 ///
-/// `Ok(())` if successful, `Err` with a message otherwise.
+/// Returns `TilingError::Observer` if the observer system is not initialized
+/// or if the observer cannot be created.
 #[allow(clippy::significant_drop_tightening)] // Guard must be held for entire function
-pub fn add_observer_by_pid(pid: i32, _name: Option<&str>) -> Result<(), String> {
+pub fn add_observer_by_pid(pid: i32, _name: Option<&str>) -> TilingResult<()> {
     if !INITIALIZED.load(Ordering::SeqCst) {
-        return Err("Observer system not initialized".to_string());
+        return Err(TilingError::observer("Observer system not initialized"));
     }
 
     let mut state_guard = OBSERVER_STATE
         .lock()
-        .map_err(|e| format!("Failed to lock observer state: {e}"))?;
+        .map_err(|e| TilingError::observer(format!("Failed to lock observer state: {e}")))?;
 
-    let state = state_guard.as_mut().ok_or("Observer state not initialized")?;
+    let state = state_guard
+        .as_mut()
+        .ok_or_else(|| TilingError::observer("Observer state not initialized"))?;
 
     // Skip if already observing
     if state.observers.contains_key(&pid) {
@@ -487,14 +500,19 @@ pub fn add_observer_by_pid(pid: i32, _name: Option<&str>) -> Result<(), String> 
         unsafe { AXObserverCreate(pid, observer_callback, std::ptr::addr_of_mut!(observer)) };
 
     if result != K_AX_ERROR_SUCCESS || observer.is_null() {
-        return Err(format!("AXObserverCreate failed with error {result}"));
+        return Err(TilingError::accessibility(
+            result,
+            format!("AXObserverCreate failed for pid {pid}"),
+        ));
     }
 
     // Create the application element
     let app_element = unsafe { AXUIElementCreateApplication(pid) };
     if app_element.is_null() {
         unsafe { CFRelease(observer.cast()) };
-        return Err("Failed to create application element".to_string());
+        return Err(TilingError::null_pointer(format!(
+            "AXUIElementCreateApplication for pid {pid}"
+        )));
     }
 
     // Add notifications

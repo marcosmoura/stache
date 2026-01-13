@@ -17,6 +17,8 @@ use objc::runtime::{BOOL, Class, Object, YES};
 use objc::{msg_send, sel, sel_impl};
 use rayon::prelude::*;
 
+use super::constants::offscreen;
+use super::error::{TilingError, TilingResult};
 use super::state::{Rect, TrackedWindow};
 
 // ============================================================================
@@ -1026,18 +1028,28 @@ unsafe fn get_focused_window_unsafe() -> Option<WindowInfo> {
 
 /// Sets the frame (position and size) of a window by ID.
 ///
-/// Returns `true` if successful.
-pub fn set_window_frame(window_id: u32, frame: &Rect) -> bool {
+/// # Errors
+///
+/// Returns `TilingError::WindowNotFound` if the window ID is not found.
+/// Returns `TilingError::WindowOperation` if the AX element is unavailable or the frame cannot be set.
+pub fn set_window_frame(window_id: u32, frame: &Rect) -> TilingResult<()> {
     let windows = get_all_windows();
-    let Some(window) = windows.iter().find(|w| w.id == window_id) else {
-        return false;
-    };
+    let window = windows
+        .iter()
+        .find(|w| w.id == window_id)
+        .ok_or(TilingError::WindowNotFound(window_id))?;
 
-    let Some(ax_element) = window.ax_element else {
-        return false;
-    };
+    let ax_element = window
+        .ax_element
+        .ok_or_else(|| TilingError::window_op(format!("No AX element for window {window_id}")))?;
 
-    unsafe { set_ax_frame(ax_element, frame) }
+    if unsafe { set_ax_frame(ax_element, frame) } {
+        Ok(())
+    } else {
+        Err(TilingError::window_op(format!(
+            "Failed to set frame for window {window_id}"
+        )))
+    }
 }
 
 /// Sets the frame of a window using the app's PID and the window's current frame.
@@ -1156,15 +1168,15 @@ pub fn set_windows_for_pid(pid: i32, window_frames: &[(Rect, Rect)]) -> usize {
 /// * `new_frame` - The new frame to set
 /// * `max_attempts` - Maximum number of attempts
 ///
-/// # Returns
+/// # Errors
 ///
-/// `true` if the window was successfully repositioned.
+/// Returns `TilingError::WindowOperation` if the window cannot be repositioned after all attempts.
 pub fn set_window_frame_with_retry(
     pid: i32,
     current_frame: &Rect,
     new_frame: &Rect,
     max_attempts: u32,
-) -> bool {
+) -> TilingResult<()> {
     for attempt in 0..max_attempts {
         if set_window_frame_by_pid(pid, current_frame, new_frame) {
             if attempt > 0 {
@@ -1173,7 +1185,7 @@ pub fn set_window_frame_with_retry(
                     attempt + 1
                 );
             }
-            return true;
+            return Ok(());
         }
 
         if attempt < max_attempts - 1 {
@@ -1182,10 +1194,9 @@ pub fn set_window_frame_with_retry(
         }
     }
 
-    eprintln!(
-        "stache: tiling: set_window_frame_with_retry: failed after {max_attempts} attempts for pid {pid}"
-    );
-    false
+    Err(TilingError::window_op(format!(
+        "Failed to set window frame after {max_attempts} attempts for pid {pid}"
+    )))
 }
 
 /// Sets frames for multiple windows by their IDs.
@@ -1446,21 +1457,36 @@ pub fn set_window_frames_auto(
 /// Focuses a window by ID.
 ///
 /// This raises the window and focuses it.
-pub fn focus_window(window_id: u32) -> bool {
+///
+/// # Errors
+///
+/// Returns `TilingError::WindowNotFound` if the window ID is not found.
+/// Returns `TilingError::WindowOperation` if the app cannot be activated or window cannot be raised.
+pub fn focus_window(window_id: u32) -> TilingResult<()> {
     let windows = get_all_windows();
-    let Some(window) = windows.iter().find(|w| w.id == window_id) else {
-        return false;
-    };
+    let window = windows
+        .iter()
+        .find(|w| w.id == window_id)
+        .ok_or(TilingError::WindowNotFound(window_id))?;
 
     // First activate the app
     if !activate_app(window.pid) {
-        return false;
+        return Err(TilingError::window_op(format!(
+            "Failed to activate app for window {window_id} (pid {})",
+            window.pid
+        )));
     }
 
     // Then raise the specific window
-    window
-        .ax_element
-        .is_none_or(|ax_element| unsafe { raise_ax_window(ax_element) })
+    if let Some(ax_element) = window.ax_element
+        && !unsafe { raise_ax_window(ax_element) }
+    {
+        return Err(TilingError::window_op(format!(
+            "Failed to raise window {window_id}"
+        )));
+    }
+
+    Ok(())
 }
 
 /// Activates an application by PID.
@@ -1484,21 +1510,26 @@ fn activate_app(pid: i32) -> bool {
 ///
 /// This hides all windows of the app (like Cmd+H).
 /// Includes retry logic to handle race conditions with macOS activation.
-pub fn hide_app(pid: i32) -> bool {
+///
+/// # Errors
+///
+/// Returns `TilingError::WindowOperation` if the app cannot be found or hidden.
+pub fn hide_app(pid: i32) -> TilingResult<()> {
     unsafe {
-        let Some(app_class) = Class::get("NSRunningApplication") else {
-            return false;
-        };
+        let app_class = Class::get("NSRunningApplication")
+            .ok_or_else(|| TilingError::window_op("NSRunningApplication class not found"))?;
 
         let app: *mut Object = msg_send![app_class, runningApplicationWithProcessIdentifier: pid];
         if app.is_null() {
-            return false;
+            return Err(TilingError::window_op(format!(
+                "No running application for pid {pid}"
+            )));
         }
 
         // Check if already hidden
         let is_hidden: BOOL = msg_send![app, isHidden];
         if is_hidden == YES {
-            return true;
+            return Ok(());
         }
 
         // Try to hide with retry logic
@@ -1510,7 +1541,7 @@ pub fn hide_app(pid: i32) -> bool {
                 std::thread::sleep(std::time::Duration::from_millis(5));
                 let is_hidden: BOOL = msg_send![app, isHidden];
                 if is_hidden == YES {
-                    return true;
+                    return Ok(());
                 }
                 // Not hidden yet, retry after a brief delay
                 if attempt < 2 {
@@ -1524,24 +1555,41 @@ pub fn hide_app(pid: i32) -> bool {
 
         // Final check
         let is_hidden: BOOL = msg_send![app, isHidden];
-        is_hidden == YES
+        if is_hidden == YES {
+            Ok(())
+        } else {
+            Err(TilingError::window_op(format!(
+                "Failed to hide app with pid {pid} after 3 attempts"
+            )))
+        }
     }
 }
 
 /// Shows (unhides) an application by PID.
-pub fn unhide_app(pid: i32) -> bool {
+///
+/// # Errors
+///
+/// Returns `TilingError::WindowOperation` if the app cannot be found or unhidden.
+pub fn unhide_app(pid: i32) -> TilingResult<()> {
     unsafe {
-        let Some(app_class) = Class::get("NSRunningApplication") else {
-            return false;
-        };
+        let app_class = Class::get("NSRunningApplication")
+            .ok_or_else(|| TilingError::window_op("NSRunningApplication class not found"))?;
 
         let app: *mut Object = msg_send![app_class, runningApplicationWithProcessIdentifier: pid];
         if app.is_null() {
-            return false;
+            return Err(TilingError::window_op(format!(
+                "No running application for pid {pid}"
+            )));
         }
 
         let result: BOOL = msg_send![app, unhide];
-        result == YES
+        if result == YES {
+            Ok(())
+        } else {
+            Err(TilingError::window_op(format!(
+                "Failed to unhide app with pid {pid}"
+            )))
+        }
     }
 }
 
@@ -1549,29 +1597,39 @@ pub fn unhide_app(pid: i32) -> bool {
 ///
 /// Note: macOS doesn't support hiding individual windows directly.
 /// This hides the entire application.
-pub fn hide_window(window_id: u32) -> bool {
+///
+/// # Errors
+///
+/// Returns `TilingError::WindowNotFound` if the window ID is not found.
+/// Returns `TilingError::WindowOperation` if the app cannot be hidden.
+pub fn hide_window(window_id: u32) -> TilingResult<()> {
     let windows = get_all_windows();
-    windows
+    let window = windows
         .iter()
         .find(|w| w.id == window_id)
-        .is_some_and(|window| hide_app(window.pid))
+        .ok_or(TilingError::WindowNotFound(window_id))?;
+
+    hide_app(window.pid)
 }
 
 /// Shows a specific window by ID.
 ///
 /// Note: This unhides the entire application and focuses the window.
-pub fn show_window(window_id: u32) -> bool {
+///
+/// # Errors
+///
+/// Returns `TilingError::WindowNotFound` if the window ID is not found.
+/// Returns `TilingError::WindowOperation` if the app cannot be unhidden or window cannot be focused.
+pub fn show_window(window_id: u32) -> TilingResult<()> {
     let windows = get_all_windows();
-    windows
+    let window = windows
         .iter()
         .find(|w| w.id == window_id)
-        .is_some_and(|window| unhide_app(window.pid) && focus_window(window_id))
-}
+        .ok_or(TilingError::WindowNotFound(window_id))?;
 
-/// Off-screen position for hiding windows without minimizing them.
-/// This moves windows far off the visible screen area.
-const OFFSCREEN_X: f64 = -30000.0;
-const OFFSCREEN_Y: f64 = -30000.0;
+    unhide_app(window.pid)?;
+    focus_window(window_id)
+}
 
 /// Moves a window off-screen to hide it without minimizing.
 ///
@@ -1583,19 +1641,21 @@ const OFFSCREEN_Y: f64 = -30000.0;
 ///
 /// * `window_id` - The `CGWindowID` of the window to move off-screen
 ///
-/// # Returns
+/// # Errors
 ///
-/// `true` if the window was successfully moved off-screen.
-pub fn move_window_offscreen(window_id: u32) -> bool {
+/// Returns `TilingError::WindowNotFound` if the window ID is not found.
+/// Returns `TilingError::WindowOperation` if the window cannot be moved.
+pub fn move_window_offscreen(window_id: u32) -> TilingResult<()> {
     let windows = get_all_windows();
-    let Some(window) = windows.iter().find(|w| w.id == window_id) else {
-        return false;
-    };
+    let window = windows
+        .iter()
+        .find(|w| w.id == window_id)
+        .ok_or(TilingError::WindowNotFound(window_id))?;
 
     // Move to off-screen position, keeping the same size
     let offscreen_frame = super::state::Rect {
-        x: OFFSCREEN_X,
-        y: OFFSCREEN_Y,
+        x: offscreen::X,
+        y: offscreen::Y,
         width: window.frame.width,
         height: window.frame.height,
     };
