@@ -49,6 +49,7 @@ pub mod constants;
 pub mod drag_state;
 pub mod error;
 mod event_handlers;
+pub mod ffi;
 pub mod layout;
 pub mod manager;
 pub mod mouse_monitor;
