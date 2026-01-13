@@ -36,6 +36,7 @@ unsafe extern "C" {
         context: *mut c_void,
         work: extern "C" fn(*mut c_void),
     );
+    #[allow(dead_code)] // Used by dispatch_on_high_priority
     fn dispatch_get_global_queue(identifier: isize, flags: usize) -> DispatchQueue;
 }
 
@@ -99,6 +100,8 @@ where F: FnOnce() + Send + 'static {
 ///
 /// This function is safe to call from any thread. The closure must be `Send`
 /// because it will be transferred to a background thread.
+#[allow(dead_code)] // Reserved for future high-priority dispatch needs
+#[allow(clippy::cast_possible_wrap)] // QoS constants are small positive values
 pub fn dispatch_on_high_priority<F>(closure: F)
 where F: FnOnce() + Send + 'static {
     let ctx = Box::new(DispatchContext { closure: Some(closure) });

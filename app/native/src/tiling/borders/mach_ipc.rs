@@ -57,9 +57,10 @@ const MACH_MSG_OOL_DESCRIPTOR: u8 = 1;
 /// `JankyBorders` bootstrap service name.
 const BS_NAME: &str = "git.felix.borders";
 
-// Mach message header
+// Mach message header - field names match the C struct definition
 #[repr(C)]
 #[derive(Debug, Default)]
+#[allow(clippy::struct_field_names)] // Field names match macOS Mach API
 struct MachMsgHeader {
     msgh_bits: MachMsgBitsT,
     msgh_size: MachMsgSizeT,
@@ -206,13 +207,20 @@ impl JankyConnection {
     }
 
     /// Sends raw bytes to `JankyBorders`.
+    ///
+    /// # Safety Notes
+    ///
+    /// The casts to u32/MachMsgSizeT are safe because:
+    /// - `MachMessage` size is 44 bytes (verified at compile time)
+    /// - Mach message data lengths are always well within u32 range
+    #[allow(clippy::cast_possible_truncation)] // Sizes are always within u32 range
     fn send_raw(&self, data: &[u8]) -> bool {
+        // Verify struct size matches C at compile time
+        const _: () = assert!(size_of::<MachMessage>() == 44, "MachMessage size mismatch");
+
         if data.is_empty() || !self.is_valid() {
             return false;
         }
-
-        // Verify struct size matches C at compile time
-        const _: () = assert!(size_of::<MachMessage>() == 44, "MachMessage size mismatch");
 
         // Calculate message bits
         let bits = (MACH_MSG_TYPE_COPY_SEND & MACH_MSGH_BITS_REMOTE_MASK) | MACH_MSGH_BITS_COMPLEX;

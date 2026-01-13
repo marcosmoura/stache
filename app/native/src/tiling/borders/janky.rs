@@ -108,7 +108,10 @@ pub fn is_running() -> bool {
 ///
 /// `JankyBorders` uses a 32-bit hex format with alpha in the high byte.
 #[must_use]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub fn rgba_to_hex(rgba: &Rgba) -> String {
+    // RGBA values are normalized 0.0-1.0, so multiplying by 255 and rounding
+    // gives us safe u8 values (0-255)
     let a = (rgba.a * 255.0).round() as u8;
     let r = (rgba.r * 255.0).round() as u8;
     let g = (rgba.g * 255.0).round() as u8;
@@ -188,6 +191,9 @@ fn filter_changed_args<'a>(args: &[&'a str]) -> Vec<&'a str> {
             changed.push(*arg);
         }
     }
+
+    // Release the lock before returning to avoid holding it unnecessarily
+    drop(cache_guard);
 
     changed
 }
