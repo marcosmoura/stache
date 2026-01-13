@@ -2,6 +2,15 @@
 //!
 //! This module provides functions to enumerate, query, and manipulate windows
 //! using the macOS Accessibility API (`AXUIElement`).
+//!
+//! # FFI Safety
+//!
+//! This module uses the [`AXElement`] wrapper for safe memory management of
+//! `AXUIElementRef` handles. The wrapper provides automatic `CFRelease` on drop
+//! and `CFRetain` on clone.
+//!
+//! For performance-critical paths (animations), raw pointers are used internally
+//! but are obtained safely via [`AXElement::as_raw()`].
 
 use std::cell::OnceCell;
 use std::collections::HashMap;
@@ -21,10 +30,15 @@ use super::constants::offscreen;
 use super::error::{TilingError, TilingResult};
 use super::state::{Rect, TrackedWindow};
 
+// NOTE: The safe AXElement wrapper is available in super::ffi::AXElement
+// for new code that wants automatic memory management. The internal functions
+// in this module use raw AXUIElementRef for performance in animation hot paths.
+
 // ============================================================================
-// Accessibility API Types and FFI
+// FFI Types and Declarations
 // ============================================================================
 
+/// Raw pointer type for AX elements (used in performance-critical paths).
 type AXUIElementRef = *mut c_void;
 type AXError = i32;
 
@@ -46,18 +60,6 @@ struct SendableAXElement(AXUIElementRef);
 // SAFETY: AX API is thread-safe for different windows
 unsafe impl Send for SendableAXElement {}
 unsafe impl Sync for SendableAXElement {}
-
-// ============================================================================
-// CGS Private API (Window Server direct access)
-// ============================================================================
-//
-// These are private APIs that communicate directly with the Window Server.
-// They're faster than the Accessibility API but may break with macOS updates.
-// Use `STACHE_USE_CGS=1` environment variable to enable (experimental).
-
-// ============================================================================
-// Accessibility API
-// ============================================================================
 
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
