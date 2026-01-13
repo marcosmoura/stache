@@ -6,7 +6,9 @@ This document provides instructions for AI coding agents (Claude, GPT, Copilot, 
 
 **Stache** is a macOS-only Tauri 2.x desktop application that provides:
 
-- A custom status bar with Hyprspace tiling window manager integration
+- A custom status bar with workspace integration
+- **Tiling window manager** with multiple layouts (dwindle, monocle, master, split, grid, floating)
+- Window borders via JankyBorders integration
 - Dynamic wallpaper management with effects (blur, rounded corners)
 - Audio device auto-switching based on priority rules
 - Media playback controls and display
@@ -76,6 +78,29 @@ stache/
 │   │   │   │   ├── manager.rs     # Selection & cycling
 │   │   │   │   ├── processing.rs  # Blur, corners
 │   │   │   │   └── macos.rs       # macOS APIs
+│   │   │   ├── tiling/            # Tiling window manager
+│   │   │   │   ├── mod.rs         # Module root, init()
+│   │   │   │   ├── manager.rs     # TilingManager singleton
+│   │   │   │   ├── state.rs       # State types (Screen, Workspace, TrackedWindow)
+│   │   │   │   ├── window.rs      # Window operations (AX API)
+│   │   │   │   ├── workspace.rs   # Workspace management
+│   │   │   │   ├── screen.rs      # Screen detection (NSScreen)
+│   │   │   │   ├── observer.rs    # AXObserver for window events
+│   │   │   │   ├── rules.rs       # Window rule matching
+│   │   │   │   ├── animation.rs   # Window animation system
+│   │   │   │   ├── app_monitor.rs # App launch monitoring
+│   │   │   │   ├── screen_monitor.rs # Screen hotplug events
+│   │   │   │   ├── layout/        # Layout algorithms
+│   │   │   │   │   ├── dwindle.rs # Dwindle (recursive BSP)
+│   │   │   │   │   ├── monocle.rs # Monocle (fullscreen)
+│   │   │   │   │   ├── master.rs  # Master-stack
+│   │   │   │   │   ├── split.rs   # Split (h/v)
+│   │   │   │   │   ├── grid.rs    # Grid layout
+│   │   │   │   │   └── floating.rs # Floating + presets
+│   │   │   │   └── borders/       # Window borders
+│   │   │   │       ├── manager.rs # Border state tracking
+│   │   │   │       ├── janky.rs   # JankyBorders integration
+│   │   │   │       └── mach_ipc.rs # Mach IPC for JankyBorders
 │   │   │   ├── events.rs          # Event name constants
 │   │   │   ├── lib.rs             # Tauri app init
 │   │   │   └── main.rs            # Entry point
@@ -378,3 +403,61 @@ cargo clippy             # Lint check
 3. **Config changes need schema update** - Run `generate-schema.sh`
 4. **Path strings need expansion** - Use `utils::path::expand()` for user paths
 5. **Cross-window state** - Use `useStoreQuery` for state shared between windows
+
+## Tiling Window Manager
+
+The tiling module (`app/native/src/tiling/`) provides a full-featured window manager with:
+
+### Key Components
+
+- **TilingManager** (`manager.rs`): Singleton that orchestrates all tiling operations
+- **Workspaces** (`workspace.rs`): Virtual desktops with rules-based window assignment
+- **Layouts** (`layout/`): Dwindle, monocle, master, split, grid, and floating
+- **Borders** (`borders/`): JankyBorders integration for window border rendering
+
+### IPC Communication
+
+CLI commands communicate with the running app via `NSDistributedNotificationCenter`:
+
+```rust
+// CLI sends notification
+send_notification("TilingFocusWorkspace", Some("workspace_name"));
+
+// App handles in bar/ipc_listener.rs
+"TilingFocusWorkspace" => {
+    if let Some(manager) = tiling::get_manager() {
+        manager.write().focus_workspace(&workspace_name);
+    }
+}
+```
+
+### Border Updates
+
+Border colors are managed through JankyBorders. Key integration points:
+
+```rust
+// Update colors based on layout state
+janky::update_colors_for_workspace(is_monocle, is_floating);
+
+// Called after:
+// - Window focus changes
+// - Layout changes
+// - Window creation/app launch
+// - Startup (after layout determined)
+```
+
+### Adding a New Layout
+
+1. Create `app/native/src/tiling/layout/layout_name.rs`
+2. Implement `pub fn calculate(windows: &[&TrackedWindow], area: Rect, gaps: &Gaps) -> LayoutResult`
+3. Add to `LayoutType` enum in `config/types.rs`
+4. Add match arm in `layout/mod.rs` `calculate_layout()`
+5. Regenerate schema: `./scripts/generate-schema.sh`
+
+### Adding a New Tiling CLI Command
+
+1. Add IPC notification constant to `utils/ipc.rs`
+2. Add CLI command to `cli/commands.rs`
+3. Send notification in `main.rs` command handler
+4. Handle notification in `bar/ipc_listener.rs`
+5. Implement logic in `tiling/manager.rs`

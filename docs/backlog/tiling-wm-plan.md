@@ -36,6 +36,9 @@ app/native/src/
     ├── rules.rs            # Window rule matching logic
     ├── drag_state.rs       # Drag-and-drop state tracking
     ├── mouse_monitor.rs    # Mouse position monitoring
+    ├── app_monitor.rs      # App launch monitoring (NSWorkspaceDidLaunchApplicationNotification)
+    ├── screen_monitor.rs   # Screen hotplug event monitoring
+    ├── animation.rs        # Window animation system
 │
 │     ├── layout/
 │     │   ├── mod.rs          # Layout module root, calculate_layout()
@@ -813,6 +816,22 @@ If the bar is configured to have 28 of height and 12 of padding, that essentiall
   - **Solution**: Downgraded to `@wyw-in-js/vite@1.0.3` which works correctly with `rolldown-vite@7.3.1`
   - **Note**: Monitor upstream for fix in future versions
 
+- [x] Border colors not updating on window creation and app launch
+  - **Root cause**: Border colors were only updated on focus changes, not when new windows were tracked
+  - **Solution**: Added `update_border_colors_for_workspace()` calls in:
+    - `handle_window_created()` - after layout is applied
+    - `handle_app_launch()` - after windows are tracked
+    - `try_track_new_focused_window()` - after new windows are tracked
+  - **Note**: Manager locks are now properly dropped before calling JankyBorders
+
+- [x] Border color flash during startup with monocle layout
+  - **Root cause**: JankyBorders was initialized with default colors (focused) before the layout was determined
+  - **Solution**: Split `apply_config()` into two functions:
+    - `apply_config_without_colors()` - sets width/style/hidpi only (used at init)
+    - `apply_config()` - sets all config including colors
+  - Colors are now set in `apply_initial_layouts()` after determining the focused workspace's layout
+  - **Files changed**: `borders/janky.rs`, `borders/manager.rs`, `tiling/mod.rs`
+
 ---
 
 ## Event Definitions
@@ -884,7 +903,7 @@ CLI-to-app communication via `NSDistributedNotificationCenter`:
 - **JankyBorders Dependency**: Borders require JankyBorders to be installed (`brew install FelixKratz/formulae/borders`)
 - **Mach IPC Performance**: ~0.1-0.5ms latency vs ~20-50ms for JankyBorders CLI fallback
 - **Command Caching**: Duplicate commands are skipped to prevent border flickering
-- **Test Count**: 893 tests total
+- **Test Count**: 910 tests total
 - **Floating Presets**: Preset code lives in `layout/floating.rs` with inner gap support for 50% dimensions
 
 ---
@@ -893,7 +912,10 @@ CLI-to-app communication via `NSDistributedNotificationCenter`:
 
 | Date       | Change                                                                                                               |
 | ---------- | -------------------------------------------------------------------------------------------------------------------- |
-| 2026-01-13 | Milestone 14 complete: Fixed @wyw-in-js/vite build error by downgrading from 1.0.4 to 1.0.3                          |
+| 2026-01-13 | Milestone 14 complete: Border color fixes - startup flash prevention, window creation/app launch updates, 910 tests  |
+| 2026-01-13 | Fix: Border color flash during startup - split apply_config() to defer color setting until layout determined         |
+| 2026-01-13 | Fix: Border colors now update on window creation and app launch events                                               |
+| 2026-01-13 | Fixed @wyw-in-js/vite build error by downgrading from 1.0.4 to 1.0.3                                                 |
 | 2026-01-13 | Milestone 13 complete: Bugfixes - bar height/padding, preset restrictions, tab swap detection, cross-workspace hide  |
 | 2026-01-13 | Phase 13.4 complete: Tab swap detection, per-window minimize for cross-workspace apps, dynamic app tracking          |
 | 2026-01-13 | Phase 13.3 complete: Bar uses config height/padding, removed swap target highlight code (JankyBorders limitation)    |

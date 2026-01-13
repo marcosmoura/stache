@@ -271,6 +271,11 @@ You can disable borders for specific states by setting their color to `null` or 
 - Stache updates border colors based on focus state and layout type
 - Gradient colors are not supported (JankyBorders limitation)
 - Borders can be toggled at runtime via CLI commands
+- Border colors update correctly on:
+  - Window focus changes
+  - Layout changes (monocle/floating modes)
+  - Window creation and app launch events
+  - Startup (colors set after determining the focused workspace's layout to prevent flash)
 
 ### Complete Configuration Example
 
