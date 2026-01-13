@@ -4,9 +4,19 @@
 //! handling state management and coordination between screens,
 //! workspaces, and windows.
 
+mod helpers;
+
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
+// Re-export for use in other tiling modules during development
+#[allow(unused_imports)]
+pub use helpers::track_lock_time as debug_track_lock_time;
+use helpers::{
+    calculate_proportions_adjusting_adjacent, calculate_ratios_from_frames,
+    cumulative_ratios_to_proportions, frames_approximately_equal, proportions_to_cumulative_ratios,
+    track_lock_time,
+};
 use parking_lot::RwLock;
 use tauri::{AppHandle, Emitter, Runtime};
 
@@ -98,16 +108,9 @@ pub fn init_manager<R: Runtime>(app_handle: Option<AppHandle<R>>) -> bool {
 // Tiling Manager
 // ============================================================================
 
-/// Duration to ignore focus events after programmatic focus (in milliseconds).
-const FOCUS_COOLDOWN_MS: u128 = 25;
-
-/// Duration to ignore workspace switch requests after a recent switch (in milliseconds).
-/// This prevents race conditions where focus events during a switch trigger another switch.
-const WORKSPACE_SWITCH_COOLDOWN_MS: u128 = 25;
-
-/// Delay between hiding old workspace windows and showing new ones (in milliseconds).
-/// This gives macOS time to process the hide operation before we start showing windows.
-const HIDE_SHOW_DELAY_MS: u64 = 10;
+use super::constants::timing::{
+    FOCUS_COOLDOWN_MS, HIDE_SHOW_DELAY_MS, WORKSPACE_SWITCH_COOLDOWN_MS,
+};
 
 /// The central tiling window manager.
 ///
@@ -331,7 +334,9 @@ impl TilingManager {
 
         // Hide windows from migrated workspaces (they're now on hidden workspaces)
         for (window_id, _) in &windows_to_move {
-            super::window::hide_window(*window_id);
+            if let Err(e) = super::window::hide_window(*window_id) {
+                eprintln!("stache: tiling: failed to hide window {window_id}: {e}");
+            }
         }
 
         // Re-apply layout to the main screen's visible workspace
@@ -467,7 +472,9 @@ impl TilingManager {
                 self.state.windows_for_workspace(ws_name).iter().map(|w| w.id).collect();
 
             for window_id in &window_ids {
-                super::window::show_window(*window_id);
+                if let Err(e) = super::window::show_window(*window_id) {
+                    eprintln!("stache: tiling: failed to show window {window_id}: {e}");
+                }
             }
 
             // Apply layout
@@ -755,7 +762,12 @@ impl TilingManager {
             // This handles apps like Finder/Safari that have windows in multiple workspaces
             // We can't use app-level hiding because that would hide windows in the target workspace
             for window in windows_to_move_offscreen {
-                super::window::move_window_offscreen(window.id);
+                if let Err(e) = super::window::move_window_offscreen(window.id) {
+                    eprintln!(
+                        "stache: tiling: failed to move window {} offscreen: {e}",
+                        window.id
+                    );
+                }
             }
 
             // Hide borders for the current workspace
@@ -875,7 +887,7 @@ impl TilingManager {
         // Apply the calculated frames to windows
         let mut repositioned = 0;
         for (window_id, frame) in layout_result {
-            if set_window_frame(window_id, &frame) {
+            if set_window_frame(window_id, &frame).is_ok() {
                 repositioned += 1;
 
                 // Update the tracked window's frame in state
@@ -1339,14 +1351,12 @@ impl TilingManager {
             let tracked = Self::create_tracked_window(&window_info, &assignment.workspace_name);
             let workspace_name = tracked.workspace_name.clone();
 
-            // Add to state
-            self.add_window_to_state(tracked);
+            // Add to state (returns visibility status, saving a lookup)
+            let workspace_is_visible = self.add_window_to_state(tracked);
 
             // Create border for this window (visibility will be updated later during startup)
             // At this point, workspaces haven't had visibility set yet, so we'll create borders
             // as hidden and let the workspace visibility logic show/hide them.
-            let workspace_is_visible =
-                self.state.workspace_by_name(&workspace_name).is_some_and(|ws| ws.is_visible);
             self.create_border_for_window(
                 window_info.id,
                 &window_info.frame,
@@ -1370,14 +1380,18 @@ impl TilingManager {
     }
 
     /// Adds a tracked window to the state.
-    fn add_window_to_state(&mut self, window: TrackedWindow) {
+    ///
+    /// # Returns
+    ///
+    /// `true` if the workspace is visible, `false` otherwise.
+    fn add_window_to_state(&mut self, window: TrackedWindow) -> bool {
         let workspace_name = window.workspace_name.clone();
         let window_id = window.id;
 
         // Add to windows list
         self.state.windows.push(window);
 
-        // Add to workspace's window list
+        // Add to workspace's window list and return visibility
         if let Some(ws) = self.state.workspace_by_name_mut(&workspace_name)
             && !ws.window_ids.contains(&window_id)
         {
@@ -1386,6 +1400,9 @@ impl TilingManager {
             // Clear custom split ratios when window count changes
             // This prevents layout issues from stale ratios
             ws.split_ratios.clear();
+            ws.is_visible
+        } else {
+            false
         }
     }
 
@@ -1441,12 +1458,10 @@ impl TilingManager {
         let window_id = window_info.id;
         let window_frame = window_info.frame;
 
-        self.add_window_to_state(tracked);
+        // Add to state and get visibility status (single lookup)
+        let workspace_is_visible = self.add_window_to_state(tracked);
 
         // Apply layout if requested and workspace is visible
-        let workspace_is_visible =
-            self.state.workspace_by_name(&workspace_name).is_some_and(|ws| ws.is_visible);
-
         if apply_layout && workspace_is_visible {
             self.apply_layout_mut(&workspace_name);
         }
@@ -1555,28 +1570,29 @@ impl TilingManager {
         let window = self.state.windows.remove(idx);
         let workspace_name = window.workspace_name;
 
-        // Check if workspace is visible before we modify it
+        // Remove from workspace's window list and check visibility in single lookup
         let workspace_is_visible =
-            self.state.workspace_by_name(&workspace_name).is_some_and(|ws| ws.is_visible);
+            if let Some(ws) = self.state.workspace_by_name_mut(&workspace_name) {
+                let is_visible = ws.is_visible;
+                ws.window_ids.retain(|&id| id != window_id);
 
-        // Remove from workspace's window list
-        if let Some(ws) = self.state.workspace_by_name_mut(&workspace_name) {
-            ws.window_ids.retain(|&id| id != window_id);
+                // Clear custom split ratios when window count changes
+                ws.split_ratios.clear();
 
-            // Clear custom split ratios when window count changes
-            ws.split_ratios.clear();
-
-            // Update focused window index if needed
-            if let Some(focused_idx) = ws.focused_window_index
-                && focused_idx >= ws.window_ids.len()
-            {
-                ws.focused_window_index = if ws.window_ids.is_empty() {
-                    None
-                } else {
-                    Some(ws.window_ids.len() - 1)
-                };
-            }
-        }
+                // Update focused window index if needed
+                if let Some(focused_idx) = ws.focused_window_index
+                    && focused_idx >= ws.window_ids.len()
+                {
+                    ws.focused_window_index = if ws.window_ids.is_empty() {
+                        None
+                    } else {
+                        Some(ws.window_ids.len() - 1)
+                    };
+                }
+                is_visible
+            } else {
+                false
+            };
 
         // Remove from focus history
         self.focus_history.remove_window(window_id);
@@ -1670,15 +1686,11 @@ impl TilingManager {
     /// focused window is located.
     pub fn set_focused_window(&mut self, workspace_name: &str, window_id: u32) {
         // Get the previously focused window ID before updating
+        // Single lookup instead of redundant double lookup
         let old_focused_id = self
             .state
             .workspace_by_name(workspace_name)
-            .and_then(|ws| ws.focused_window_index)
-            .and_then(|idx| {
-                self.state
-                    .workspace_by_name(workspace_name)
-                    .and_then(|ws| ws.window_ids.get(idx).copied())
-            });
+            .and_then(|ws| ws.focused_window_index.and_then(|idx| ws.window_ids.get(idx).copied()));
 
         // First, update the focused window index in the workspace
         let screen_id = if let Some(ws) = self.state.workspace_by_name_mut(workspace_name)
@@ -1853,7 +1865,7 @@ impl TilingManager {
         let workspace_name = window.workspace_name.clone();
 
         // Focus the window
-        if super::window::focus_window(window_id) {
+        if super::window::focus_window(window_id).is_ok() {
             // Record this programmatic focus to debounce incoming focus events
             self.last_programmatic_focus = Some((window_id, Instant::now()));
             self.set_focused_window(&workspace_name, window_id);
@@ -2348,7 +2360,7 @@ impl TilingManager {
         self.switch_workspace(&target_workspace_owned);
 
         // Focus the moved window to ensure it remains focused
-        if super::window::focus_window(window_id) {
+        if super::window::focus_window(window_id).is_ok() {
             self.last_programmatic_focus = Some((window_id, std::time::Instant::now()));
             eprintln!("stache: tiling: focused moved window {window_id}");
         }
@@ -2473,7 +2485,9 @@ impl TilingManager {
                 .collect();
 
             for window_id in &windows_to_hide {
-                super::window::hide_window(*window_id);
+                if let Err(e) = super::window::hide_window(*window_id) {
+                    eprintln!("stache: tiling: failed to hide window {window_id}: {e}");
+                }
             }
         }
 
@@ -2712,238 +2726,6 @@ impl Default for TilingManager {
 }
 
 // ============================================================================
-// Helper Functions
-// ============================================================================
-
-/// Checks if two frames are approximately equal within a threshold.
-///
-/// This is used to avoid unnecessary window repositioning when the difference
-/// is imperceptible (e.g., due to floating point rounding).
-#[inline]
-fn frames_approximately_equal(a: &Rect, b: &Rect, threshold: f64) -> bool {
-    (a.x - b.x).abs() < threshold
-        && (a.y - b.y).abs() < threshold
-        && (a.width - b.width).abs() < threshold
-        && (a.height - b.height).abs() < threshold
-}
-
-/// Calculates split ratios from current window frames.
-///
-/// Given a list of windows and the screen frame, calculates the cumulative
-/// split ratios that would produce the current layout.
-///
-/// The ratio is calculated based on **where each split point should be**,
-/// taking into account that either window on each side of the split could
-/// have been resized:
-/// - Window i could have been resized (changing its end position)
-/// - Window i+1 could have been resized (changing its start position)
-///
-/// We use the **average** of both edges to find the intended split point,
-/// which works regardless of which window was resized.
-///
-/// # Arguments
-///
-/// * `windows` - Windows in order
-/// * `screen_frame` - The screen's visible frame
-/// * `gaps` - Gap configuration
-/// * `is_vertical` - Whether the split is vertical (top-to-bottom) or horizontal (left-to-right)
-///
-/// # Returns
-///
-/// A vector of N-1 ratios for N windows, representing cumulative split positions.
-#[allow(clippy::cast_precision_loss)] // Window counts won't exceed f64 precision
-fn calculate_ratios_from_frames(
-    windows: &[&TrackedWindow],
-    screen_frame: &Rect,
-    gaps: &Gaps,
-    is_vertical: bool,
-) -> Vec<f64> {
-    if windows.len() < 2 {
-        return Vec::new();
-    }
-
-    let count = windows.len();
-    let mut ratios = Vec::with_capacity(count - 1);
-
-    if is_vertical {
-        // Vertical split: calculate ratios based on Y positions
-        let total_gap = gaps.inner_v * (count - 1) as f64;
-        let available_height = screen_frame.height - total_gap;
-
-        if available_height <= 0.0 {
-            return Vec::new();
-        }
-
-        // For each split point between window i and window i+1
-        for i in 0..(count - 1) {
-            // Window i's bottom edge (where it ends)
-            let window_i_bottom = windows[i].frame.y + windows[i].frame.height;
-
-            // Window i+1's top edge (where it starts)
-            let window_next_top = windows[i + 1].frame.y;
-
-            // The split point is in the middle of the gap between windows.
-            // Average the two edges to find where the user intended the split.
-            // This works whether window i was resized (bottom moved) or
-            // window i+1 was resized (top moved).
-            let split_point_screen = f64::midpoint(window_i_bottom, window_next_top);
-
-            // Convert to ratio: account for screen offset and gaps before this point
-            // The split point in "ratio space" is the space used by windows 0..=i
-            let gaps_before_split = gaps.inner_v * (i as f64 + 0.5); // Half gap at the split
-            let split_in_available = split_point_screen - screen_frame.y - gaps_before_split;
-
-            let ratio = split_in_available / available_height;
-            ratios.push(ratio.clamp(0.05, 0.95));
-        }
-    } else {
-        // Horizontal split: calculate ratios based on X positions
-        let total_gap = gaps.inner_h * (count - 1) as f64;
-        let available_width = screen_frame.width - total_gap;
-
-        if available_width <= 0.0 {
-            return Vec::new();
-        }
-
-        // For each split point between window i and window i+1
-        for i in 0..(count - 1) {
-            // Window i's right edge (where it ends)
-            let window_i_right = windows[i].frame.x + windows[i].frame.width;
-
-            // Window i+1's left edge (where it starts)
-            let window_next_left = windows[i + 1].frame.x;
-
-            // The split point is in the middle of the gap between windows.
-            let split_point_screen = f64::midpoint(window_i_right, window_next_left);
-
-            // Convert to ratio
-            let gaps_before_split = gaps.inner_h * (i as f64 + 0.5);
-            let split_in_available = split_point_screen - screen_frame.x - gaps_before_split;
-
-            let ratio = split_in_available / available_width;
-            ratios.push(ratio.clamp(0.05, 0.95));
-        }
-    }
-
-    ratios
-}
-
-/// Converts cumulative split ratios to individual window proportions.
-///
-/// # Arguments
-///
-/// * `ratios` - Cumulative ratios (n-1 values for n windows)
-/// * `window_count` - Total number of windows
-///
-/// # Returns
-///
-/// Vector of individual proportions that sum to 1.0.
-/// If ratios is empty or wrong length, returns equal proportions.
-#[allow(clippy::cast_precision_loss)] // Window counts won't exceed f64 precision
-fn cumulative_ratios_to_proportions(ratios: &[f64], window_count: usize) -> Vec<f64> {
-    if window_count == 0 {
-        return Vec::new();
-    }
-
-    if window_count == 1 {
-        return vec![1.0];
-    }
-
-    // If no ratios or wrong length, return equal proportions
-    if ratios.len() != window_count - 1 {
-        let equal = 1.0 / window_count as f64;
-        return vec![equal; window_count];
-    }
-
-    // Convert cumulative ratios to individual proportions
-    let mut proportions = Vec::with_capacity(window_count);
-    let mut prev_ratio = 0.0;
-
-    for &ratio in ratios {
-        proportions.push(ratio - prev_ratio);
-        prev_ratio = ratio;
-    }
-
-    // Last window takes the remaining space
-    proportions.push(1.0 - prev_ratio);
-
-    proportions
-}
-
-/// Converts individual window proportions to cumulative split ratios.
-///
-/// # Arguments
-///
-/// * `proportions` - Individual window proportions
-///
-/// # Returns
-///
-/// Vector of cumulative ratios (n-1 values for n windows).
-fn proportions_to_cumulative_ratios(proportions: &[f64]) -> Vec<f64> {
-    if proportions.len() < 2 {
-        return Vec::new();
-    }
-
-    let mut ratios = Vec::with_capacity(proportions.len() - 1);
-    let mut cumulative = 0.0;
-
-    // Sum all but the last proportion
-    for proportion in proportions.iter().take(proportions.len() - 1) {
-        cumulative += proportion;
-        ratios.push(cumulative);
-    }
-
-    ratios
-}
-
-/// Calculates new proportions by only adjusting the resized window and its adjacent window.
-///
-/// This preserves all other windows at their current sizes.
-///
-/// # Arguments
-///
-/// * `current_proportions` - Current individual proportions
-/// * `resized_idx` - Index of the window that was resized
-/// * `adjacent_idx` - Index of the adjacent window to adjust
-/// * `delta` - The proportion change (positive = resized grew, negative = shrank)
-///
-/// # Returns
-///
-/// New proportions with only the resized and adjacent windows changed.
-fn calculate_proportions_adjusting_adjacent(
-    current_proportions: &[f64],
-    resized_idx: usize,
-    adjacent_idx: usize,
-    delta: f64,
-) -> Vec<f64> {
-    let mut new_proportions = current_proportions.to_vec();
-
-    // Apply the delta to the resized window
-    new_proportions[resized_idx] += delta;
-
-    // Apply the opposite delta to the adjacent window
-    new_proportions[adjacent_idx] -= delta;
-
-    // Clamp all proportions to valid range
-    let min_proportion = 0.05;
-    let max_proportion = 0.95;
-
-    for proportion in &mut new_proportions {
-        *proportion = proportion.clamp(min_proportion, max_proportion);
-    }
-
-    // Normalize to ensure they sum to 1.0
-    let sum: f64 = new_proportions.iter().sum();
-    if (sum - 1.0).abs() > 0.001 {
-        for proportion in &mut new_proportions {
-            *proportion /= sum;
-        }
-    }
-
-    new_proportions
-}
-
-// ============================================================================
 // Tests
 // ============================================================================
 
@@ -3015,51 +2797,5 @@ mod tests {
         assert_eq!(manager.state.focused_workspace, Some("test".to_string()));
     }
 
-    #[test]
-    fn test_frames_approximately_equal_identical() {
-        let a = Rect::new(100.0, 200.0, 800.0, 600.0);
-        let b = Rect::new(100.0, 200.0, 800.0, 600.0);
-        assert!(frames_approximately_equal(&a, &b, 2.0));
-    }
-
-    #[test]
-    fn test_frames_approximately_equal_within_threshold() {
-        let a = Rect::new(100.0, 200.0, 800.0, 600.0);
-        let b = Rect::new(101.0, 199.0, 801.0, 599.0); // All within 2 pixels
-        assert!(frames_approximately_equal(&a, &b, 2.0));
-    }
-
-    #[test]
-    fn test_frames_approximately_equal_outside_threshold() {
-        let a = Rect::new(100.0, 200.0, 800.0, 600.0);
-        let b = Rect::new(103.0, 200.0, 800.0, 600.0); // X differs by 3 pixels
-        assert!(!frames_approximately_equal(&a, &b, 2.0));
-    }
-
-    #[test]
-    fn test_frames_approximately_equal_all_dimensions() {
-        let a = Rect::new(0.0, 0.0, 100.0, 100.0);
-
-        // Each dimension just outside threshold
-        assert!(!frames_approximately_equal(
-            &a,
-            &Rect::new(3.0, 0.0, 100.0, 100.0),
-            2.0
-        ));
-        assert!(!frames_approximately_equal(
-            &a,
-            &Rect::new(0.0, 3.0, 100.0, 100.0),
-            2.0
-        ));
-        assert!(!frames_approximately_equal(
-            &a,
-            &Rect::new(0.0, 0.0, 103.0, 100.0),
-            2.0
-        ));
-        assert!(!frames_approximately_equal(
-            &a,
-            &Rect::new(0.0, 0.0, 100.0, 103.0),
-            2.0
-        ));
-    }
+    // Note: Helper function tests are now in helpers.rs
 }
