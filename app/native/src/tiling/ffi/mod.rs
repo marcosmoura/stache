@@ -12,6 +12,9 @@
 //!
 //! - [`ffi_try!`] - Returns early with an error if a pointer is null
 //! - [`ffi_try_opt!`] - Returns `None` if a pointer is null
+//!
+//! These macros are used in [`super::window`] to reduce null-check boilerplate
+//! in functions like `get_ax_string()`, `get_ax_position()`, etc.
 
 pub mod accessibility;
 

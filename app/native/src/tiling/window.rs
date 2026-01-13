@@ -5,12 +5,27 @@
 //!
 //! # FFI Safety
 //!
-//! This module uses the [`AXElement`] wrapper for safe memory management of
-//! `AXUIElementRef` handles. The wrapper provides automatic `CFRelease` on drop
-//! and `CFRetain` on clone.
+//! This module uses several safety mechanisms:
 //!
-//! For performance-critical paths (animations), raw pointers are used internally
-//! but are obtained safely via [`AXElement::as_raw()`].
+//! - **[`AXElement`]** wrapper in [`super::ffi::AXElement`] for new code that wants
+//!   automatic memory management (`CFRelease` on drop, `CFRetain` on clone)
+//! - **[`ffi_try_opt!`]** macro for concise null-pointer checks in Option-returning
+//!   functions
+//! - Internal raw pointer functions for performance-critical animation paths
+//!
+//! ## Interoperability
+//!
+//! The `AXElement` wrapper provides interop with raw pointers:
+//! - `AXElement::from_raw(ptr)` - Takes ownership of a raw pointer
+//! - `AXElement::from_raw_retained(ptr)` - Borrows (retains) a raw pointer
+//! - `AXElement::as_raw()` - Gets raw pointer without releasing
+//! - `AXElement::into_raw()` - Releases ownership to caller
+//!
+//! ## When to Use What
+//!
+//! - **New code**: Use `AXElement` for automatic memory management
+//! - **Animation hot paths**: Use raw pointers with `set_ax_frame_fast()` for performance
+//! - **Null checks**: Use `ffi_try_opt!(ptr)` to reduce boilerplate
 
 use std::cell::OnceCell;
 use std::collections::HashMap;
@@ -28,6 +43,8 @@ use rayon::prelude::*;
 
 use super::error::{TilingError, TilingResult};
 use super::state::{Rect, TrackedWindow};
+// Import the FFI null check macros
+use crate::ffi_try_opt;
 
 // NOTE: The safe AXElement wrapper is available in super::ffi::AXElement
 // for new code that wants automatic memory management. The internal functions
@@ -176,9 +193,7 @@ fn cf_raise() -> *const c_void { cached_cfstring!(CF_RAISE, "AXRaise") }
 /// Gets a string attribute from an `AXUIElement`.
 #[inline]
 unsafe fn get_ax_string(element: AXUIElementRef, attr: *const c_void) -> Option<String> {
-    if element.is_null() {
-        return None;
-    }
+    ffi_try_opt!(element);
 
     let mut value: *mut c_void = ptr::null_mut();
     let result = unsafe { AXUIElementCopyAttributeValue(element, attr, &raw mut value) };
@@ -203,9 +218,7 @@ unsafe fn get_ax_string(element: AXUIElementRef, attr: *const c_void) -> Option<
 /// Gets a boolean attribute from an `AXUIElement`.
 #[inline]
 unsafe fn get_ax_bool(element: AXUIElementRef, attr: *const c_void) -> Option<bool> {
-    if element.is_null() {
-        return None;
-    }
+    ffi_try_opt!(element);
 
     let mut value: *mut c_void = ptr::null_mut();
     let result = unsafe { AXUIElementCopyAttributeValue(element, attr, &raw mut value) };
@@ -224,9 +237,7 @@ unsafe fn get_ax_bool(element: AXUIElementRef, attr: *const c_void) -> Option<bo
 /// Gets the position (`AXPosition`) of an `AXUIElement` as (x, y).
 #[inline]
 unsafe fn get_ax_position(element: AXUIElementRef) -> Option<(f64, f64)> {
-    if element.is_null() {
-        return None;
-    }
+    ffi_try_opt!(element);
 
     let mut value: *mut c_void = ptr::null_mut();
     let result = unsafe { AXUIElementCopyAttributeValue(element, cf_position(), &raw mut value) };
@@ -258,9 +269,7 @@ unsafe fn get_ax_position(element: AXUIElementRef) -> Option<(f64, f64)> {
 /// Gets the size (`AXSize`) of an `AXUIElement` as (width, height).
 #[inline]
 unsafe fn get_ax_size(element: AXUIElementRef) -> Option<(f64, f64)> {
-    if element.is_null() {
-        return None;
-    }
+    ffi_try_opt!(element);
 
     let mut value: *mut c_void = ptr::null_mut();
     let result = unsafe { AXUIElementCopyAttributeValue(element, cf_size(), &raw mut value) };
@@ -297,6 +306,8 @@ unsafe fn get_ax_frame(element: AXUIElementRef) -> Option<Rect> {
 }
 
 /// Sets the position of an `AXUIElement`.
+///
+/// Returns `false` if the element is null or the operation fails.
 #[inline]
 unsafe fn set_ax_position(element: AXUIElementRef, x: f64, y: f64) -> bool {
     if element.is_null() {
@@ -417,6 +428,8 @@ unsafe fn set_ax_frame_delta(element: AXUIElementRef, new_frame: &Rect, prev_fra
 }
 
 /// Raises (brings to front) an `AXUIElement` window.
+///
+/// Returns `false` if the element is null or the action fails.
 #[inline]
 unsafe fn raise_ax_window(element: AXUIElementRef) -> bool {
     if element.is_null() {
@@ -834,6 +847,8 @@ fn generate_hidden_window_id(pid: i32, title: &str, frame: &Rect) -> u32 {
 }
 
 /// Gets AX windows for an application.
+///
+/// Returns an empty vector if the element is null or has no windows.
 unsafe fn get_app_ax_windows(app_element: AXUIElementRef) -> Vec<AXUIElementRef> {
     if app_element.is_null() {
         return Vec::new();
