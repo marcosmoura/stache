@@ -217,7 +217,7 @@ impl AXElement {
     /// - The pointer is a valid `AXUIElementRef`
     /// - The caller transfers ownership (does not call `CFRelease` separately)
     #[must_use]
-    pub unsafe fn from_raw(raw: AXUIElementRef) -> Option<Self> {
+    pub const unsafe fn from_raw(raw: AXUIElementRef) -> Option<Self> {
         if raw.is_null() {
             None
         } else {
@@ -248,13 +248,13 @@ impl AXElement {
     ///
     /// The returned pointer is valid as long as this `AXElement` is alive.
     #[must_use]
-    pub fn as_raw(&self) -> AXUIElementRef { self.raw }
+    pub const fn as_raw(&self) -> AXUIElementRef { self.raw }
 
     /// Consumes the `AXElement` and returns the raw pointer.
     ///
     /// The caller takes ownership and is responsible for calling `CFRelease`.
     #[must_use]
-    pub fn into_raw(self) -> AXUIElementRef {
+    pub const fn into_raw(self) -> AXUIElementRef {
         let raw = self.raw;
         std::mem::forget(self);
         raw
@@ -279,14 +279,14 @@ impl AXElement {
     /// }
     /// ```
     #[must_use]
-    pub fn windows(&self) -> Vec<AXElement> { unsafe { self.get_windows_internal() } }
+    pub fn windows(&self) -> Vec<Self> { unsafe { self.get_windows_internal() } }
 
     /// Gets the focused window of this application.
     ///
     /// Returns `None` if this is not an application element or if the
     /// application has no focused window.
     #[must_use]
-    pub fn focused_window(&self) -> Option<AXElement> {
+    pub fn focused_window(&self) -> Option<Self> {
         let mut value: *mut c_void = ptr::null_mut();
         let result =
             unsafe { AXUIElementCopyAttributeValue(self.raw, cf_focused_window(), &raw mut value) };
@@ -300,7 +300,7 @@ impl AXElement {
     }
 
     /// Internal implementation for getting windows.
-    unsafe fn get_windows_internal(&self) -> Vec<AXElement> {
+    unsafe fn get_windows_internal(&self) -> Vec<Self> {
         let mut value: *mut c_void = ptr::null_mut();
         let result =
             unsafe { AXUIElementCopyAttributeValue(self.raw, cf_windows(), &raw mut value) };
@@ -325,12 +325,12 @@ impl AXElement {
             if !window.is_null() && unsafe { CFGetTypeID(window) } == ax_type_id {
                 // Check if it's a real window (has AXWindow role)
                 let element_ref: AXUIElementRef = window.cast_mut();
-                if let Some(role) = unsafe { get_string_attr(element_ref, cf_role()) } {
-                    if role == "AXWindow" {
-                        // Retain since CFArrayGetValueAtIndex doesn't transfer ownership
-                        unsafe { CFRetain(window) };
-                        windows.push(Self { raw: window.cast_mut() });
-                    }
+                if let Some(role) = unsafe { get_string_attr(element_ref, cf_role()) }
+                    && role == "AXWindow"
+                {
+                    // Retain since CFArrayGetValueAtIndex doesn't transfer ownership
+                    unsafe { CFRetain(window) };
+                    windows.push(Self { raw: window.cast_mut() });
                 }
             }
         }
@@ -349,11 +349,11 @@ impl AXElement {
     #[must_use]
     pub fn title(&self) -> Option<String> { unsafe { get_string_attr(self.raw, cf_title()) } }
 
-    /// Gets the element's role (e.g., "AXWindow", "AXButton").
+    /// Gets the element's role (e.g., "`AXWindow`", "`AXButton`").
     #[must_use]
     pub fn role(&self) -> Option<String> { unsafe { get_string_attr(self.raw, cf_role()) } }
 
-    /// Gets the element's subrole (e.g., "AXStandardWindow").
+    /// Gets the element's subrole (e.g., "`AXStandardWindow`").
     #[must_use]
     pub fn subrole(&self) -> Option<String> { unsafe { get_string_attr(self.raw, cf_subrole()) } }
 

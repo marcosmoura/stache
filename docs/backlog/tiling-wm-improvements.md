@@ -248,9 +248,7 @@ Files with FFI (kept as-is):
 
 #### Phase 3.1: Worker Channel for Event Processing ⏸️ DEFERRED
 
-The current implementation uses isolated thread spawns for window polling in
-`handle_window_created()` and `handle_app_launch()`. These spawns are necessary
-because:
+The current implementation uses isolated thread spawns for window polling in `handle_window_created()` and `handle_app_launch()`. These spawns are necessary because:
 
 - The accessibility API needs time to register new windows
 - Polling in the main event handler would block other events
@@ -391,7 +389,7 @@ The `AXElement` wrapper is available for new code via `tiling::ffi::AXElement`.
 
 **Goal**: Optimize critical paths for smoother operation.
 
-#### Phase 7.1: Workspace Name Lookup Cache
+#### Phase 5.1: Workspace Name Lookup Cache
 
 - [ ] Add `workspace_index: HashMap<String, usize>` to `TilingState`
 - [ ] Update `workspace_index` when workspaces are added/removed/renamed
@@ -399,14 +397,14 @@ The `AXElement` wrapper is available for new code via `tiling::ffi::AXElement`.
 - [ ] Update `workspace_by_name_mut()` to use index
 - [ ] Benchmark improvement
 
-#### Phase 7.2: Batch JankyBorders Commands
+#### Phase 5.2: Batch JankyBorders Commands
 
 - [ ] Create `janky::set_multiple()` function
 - [ ] Batch color updates in `update_colors_for_state()`
 - [ ] Batch config updates in `apply_config()`
 - [ ] Reduce CLI/IPC round trips
 
-#### Phase 7.3: Pre-allocated Animation Buffers
+#### Phase 5.3: Pre-allocated Animation Buffers
 
 - [ ] Add thread-local frame buffer in `animation.rs`:
 
@@ -419,7 +417,7 @@ The `AXElement` wrapper is available for new code via `tiling::ffi::AXElement`.
 - [ ] Use buffer in animation frame rendering
 - [ ] Eliminate per-frame allocations
 
-#### Phase 7.4: Layout Result Caching
+#### Phase 5.4: Layout Result Caching
 
 - [ ] Add `CachedLayout` struct to `Workspace`:
   - [ ] `input_hash: u64` - hash of window_ids + ratios + screen + gaps
@@ -428,7 +426,7 @@ The `AXElement` wrapper is available for new code via `tiling::ffi::AXElement`.
 - [ ] Update `apply_layout_internal()` to check cache first
 - [ ] Invalidate cache on window add/remove/ratio change
 
-#### Phase 7.5: AXUIElement Resolution Caching
+#### Phase 5.5: AXUIElement Resolution Caching
 
 - [ ] Create `AXElementCache` struct:
   - [ ] `entries: HashMap<u32, CachedElement>`
@@ -437,7 +435,7 @@ The `AXElement` wrapper is available for new code via `tiling::ffi::AXElement`.
 - [ ] Update `resolve_window_ax_elements()` to use cache
 - [ ] Invalidate on window destroy
 
-#### Phase 7.6: Event Coalescing
+#### Phase 5.6: Event Coalescing
 
 - [ ] Create `EventCoalescer` struct:
   - [ ] `pending: HashMap<(u32, WindowEventType), Instant>`
@@ -446,7 +444,7 @@ The `AXElement` wrapper is available for new code via `tiling::ffi::AXElement`.
 - [ ] Filter rapid move/resize events
 - [ ] Ensure final position is always applied
 
-#### Phase 7.7: Screen and Window List Caching
+#### Phase 5.7: Screen and Window List Caching
 
 - [ ] Create `SystemInfoCache` struct:
   - [ ] `screens: Option<(Vec<Screen>, Instant)>` - TTL: 1s
@@ -456,7 +454,7 @@ The `AXElement` wrapper is available for new code via `tiling::ffi::AXElement`.
 - [ ] Update `get_cg_window_list()` to use cache
 - [ ] Add `invalidate_screen_cache()` for screen changes
 
-#### Phase 7.8: SmallVec for Hot Paths
+#### Phase 5.8: SmallVec for Hot Paths
 
 - [ ] Add `smallvec` dependency
 - [ ] Update `Workspace::window_ids` to `SmallVec<[u32; 16]>`
@@ -464,20 +462,20 @@ The `AXElement` wrapper is available for new code via `tiling::ffi::AXElement`.
 - [ ] Update layout return types to `SmallVec<[(u32, Rect); 16]>`
 - [ ] Update animation transition vectors
 
-#### Phase 7.9: Parallel Screen Layout Application
+#### Phase 5.9: Parallel Screen Layout Application
 
 - [ ] Use `rayon` for multi-screen layout application
 - [ ] Parallelize in `apply_layout_internal()` when multiple screens affected
 - [ ] Ensure thread-safe access to window operations
 
-#### Phase 7.10: Lazy Gap Resolution
+#### Phase 5.10: Lazy Gap Resolution
 
 - [ ] Add `gaps_cache: HashMap<String, Gaps>` to `TilingManager`
 - [ ] Compute gaps on initialization and screen change
 - [ ] Update `get_gaps_for_screen()` to use cache
 - [ ] Invalidate cache on config reload
 
-#### Phase 7.11: Observer Notification Filtering
+#### Phase 5.11: Observer Notification Filtering
 
 - [ ] Add `should_observe_app()` check before creating observer
 - [ ] Skip observers for apps matching ignore rules
@@ -534,7 +532,7 @@ The `AXElement` wrapper is available for new code via `tiling::ffi::AXElement`.
 
 **Goal**: Improve test coverage with integration tests, fuzz tests, and benchmarks.
 
-#### Phase 5.1: Add Integration Tests
+#### Phase 7.1: Add Integration Tests
 
 - [ ] Create `tests/tiling_integration.rs`:
   - [ ] `#[ignore]` attribute (requires accessibility permissions)
@@ -549,7 +547,7 @@ The `AXElement` wrapper is available for new code via `tiling::ffi::AXElement`.
   - [ ] `test_drag_and_drop_swap` - simulate drag, verify swap
 - [ ] Add CI configuration to run integration tests (optional, manual trigger)
 
-#### Phase 5.2: Add Fuzz Testing for Layouts
+#### Phase 7.2: Add Fuzz Testing for Layouts
 
 - [ ] Add `proptest` dependency
 - [ ] Create property tests in layout modules:
@@ -566,7 +564,7 @@ The `AXElement` wrapper is available for new code via `tiling::ffi::AXElement`.
   - [ ] Very small gaps, very large gaps
   - [ ] Zero-size screen (should handle gracefully)
 
-#### Phase 5.3: Add Benchmark Suite
+#### Phase 7.3: Add Benchmark Suite
 
 - [ ] Add `criterion` dependency
 - [ ] Create `benches/tiling_bench.rs`:
@@ -581,7 +579,7 @@ The `AXElement` wrapper is available for new code via `tiling::ffi::AXElement`.
 - [ ] Establish baseline measurements
 - [ ] Add benchmark comparison to CI (optional)
 
-#### Phase 5.4: Create Mock Infrastructure
+#### Phase 7.4: Create Mock Infrastructure
 
 - [ ] Create `tiling/testing.rs` (cfg(test) only):
   - [ ] `MockWindowManager` struct

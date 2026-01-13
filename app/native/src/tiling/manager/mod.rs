@@ -741,32 +741,23 @@ impl TilingManager {
                 self.focus_history.record(current_name, focused_id);
             }
 
-            // Separate windows into two groups:
-            // 1. Windows from apps that are ONLY in the source workspace -> hide the app
-            // 2. Windows from apps that have windows in BOTH workspaces -> move off-screen
+            // Hide apps that ONLY have windows in the source workspace.
+            // Apps with windows in both source and target workspaces are NOT hidden,
+            // because hiding at the app level would hide their windows in the target
+            // workspace too. Their source windows will simply remain visible in the
+            // background until the user switches back.
             let all_source_windows = self.state.windows_for_workspace(current_name);
 
-            let (windows_to_hide, windows_to_move_offscreen): (Vec<_>, Vec<_>) =
-                all_source_windows.into_iter().partition(|w| !pids_to_show.contains(&w.pid));
+            let windows_to_hide: Vec<_> = all_source_windows
+                .into_iter()
+                .filter(|w| !pids_to_show.contains(&w.pid))
+                .collect();
 
-            // Hide apps that only have windows in the source workspace
             if !windows_to_hide.is_empty() {
                 let (hidden, _failures) = hide_workspace_windows(&windows_to_hide);
                 if hidden > 0 {
                     // Give macOS time to process the hide operation before showing new windows.
                     std::thread::sleep(std::time::Duration::from_millis(HIDE_SHOW_DELAY_MS));
-                }
-            }
-
-            // Move windows from cross-workspace apps off-screen
-            // This handles apps like Finder/Safari that have windows in multiple workspaces
-            // We can't use app-level hiding because that would hide windows in the target workspace
-            for window in windows_to_move_offscreen {
-                if let Err(e) = super::window::move_window_offscreen(window.id) {
-                    eprintln!(
-                        "stache: tiling: failed to move window {} offscreen: {e}",
-                        window.id
-                    );
                 }
             }
 
@@ -785,9 +776,6 @@ impl TilingManager {
         // Step 2: Show windows
         let windows_to_show: Vec<&TrackedWindow> = self.state.windows_for_workspace(name);
         show_workspace_windows(&windows_to_show);
-
-        // Note: Windows from cross-workspace apps were moved off-screen (not minimized)
-        // so they don't need special restoration - the layout will position them correctly.
 
         // Step 3: Immediately re-apply layout (no delay) to fix any position overrides
         self.apply_layout_forced(name);

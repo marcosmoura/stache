@@ -10,7 +10,7 @@
 //! - `window_size` - Window size thresholds for filtering
 //! - `layout` - Layout calculation thresholds
 //! - `animation` - Animation system parameters
-//! - `offscreen` - Off-screen positioning for hidden windows
+
 //!
 //! # Modification Guidelines
 //!
@@ -91,7 +91,7 @@ pub mod layout {
     ///
     /// Prevents micro-adjustments that would be imperceptible to users
     /// but waste CPU cycles.
-    pub const REPOSITION_THRESHOLD_PX: f64 = 1.0;
+    pub const REPOSITION_THRESHOLD_PX: f64 = 2.0;
 
     /// Maximum windows for grid layout optimization.
     ///
@@ -133,18 +133,6 @@ pub mod animation {
     ///
     /// How long to wait for vsync as a multiple of the frame duration.
     pub const VSYNC_TIMEOUT_MULTIPLIER: f64 = 2.0;
-}
-
-/// Off-screen positioning constants.
-pub mod offscreen {
-    /// X coordinate for off-screen windows.
-    ///
-    /// Windows are moved here when they need to be hidden without
-    /// using app-level hiding (for cross-workspace apps).
-    pub const X: f64 = -30000.0;
-
-    /// Y coordinate for off-screen windows.
-    pub const Y: f64 = -30000.0;
 }
 
 // ============================================================================
@@ -203,13 +191,6 @@ mod tests {
         // Spring threshold should be small but positive
         assert!(animation::SPRING_POSITION_THRESHOLD > 0.0);
         assert!(animation::SPRING_POSITION_THRESHOLD < 1.0);
-    }
-
-    #[test]
-    fn test_offscreen_coordinates_are_far() {
-        // Offscreen coordinates should be very negative
-        assert!(offscreen::X < -10000.0);
-        assert!(offscreen::Y < -10000.0);
     }
 
     #[test]

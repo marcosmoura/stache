@@ -26,7 +26,6 @@ use objc::runtime::{BOOL, Class, Object, YES};
 use objc::{msg_send, sel, sel_impl};
 use rayon::prelude::*;
 
-use super::constants::offscreen;
 use super::error::{TilingError, TilingResult};
 use super::state::{Rect, TrackedWindow};
 
@@ -1631,38 +1630,6 @@ pub fn show_window(window_id: u32) -> TilingResult<()> {
 
     unhide_app(window.pid)?;
     focus_window(window_id)
-}
-
-/// Moves a window off-screen to hide it without minimizing.
-///
-/// This is used for cross-workspace apps where we can't use app-level hiding
-/// (because that would hide windows in the target workspace too) and we don't
-/// want to minimize windows.
-///
-/// # Arguments
-///
-/// * `window_id` - The `CGWindowID` of the window to move off-screen
-///
-/// # Errors
-///
-/// Returns `TilingError::WindowNotFound` if the window ID is not found.
-/// Returns `TilingError::WindowOperation` if the window cannot be moved.
-pub fn move_window_offscreen(window_id: u32) -> TilingResult<()> {
-    let windows = get_all_windows();
-    let window = windows
-        .iter()
-        .find(|w| w.id == window_id)
-        .ok_or(TilingError::WindowNotFound(window_id))?;
-
-    // Move to off-screen position, keeping the same size
-    let offscreen_frame = super::state::Rect {
-        x: offscreen::X,
-        y: offscreen::Y,
-        width: window.frame.width,
-        height: window.frame.height,
-    };
-
-    set_window_frame(window_id, &offscreen_frame)
 }
 
 /// Waits for windows from a specific app to become ready (have valid AX frames).
