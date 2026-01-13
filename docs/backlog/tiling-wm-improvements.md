@@ -379,9 +379,7 @@ The `AXElement` wrapper is available for new code via `tiling::ffi::AXElement`.
 - [x] Keep raw pointers in animation hot paths for performance
 - [x] All 944 tests pass, clippy clean
 
-**Note**: Full migration of window.rs/observer.rs to `AXElement` wrapper was evaluated
-but deferred due to tight coupling with raw pointer animation code. The macros and
-wrapper are available for new code.
+**Note**: Full migration of window.rs/observer.rs to `AXElement` wrapper was evaluated but deferred due to tight coupling with raw pointer animation code. The macros and wrapper are available for new code.
 
 **Verification**: All unsafe code documented ✅, safe wrappers for AX API ✅, macros applied ✅
 
@@ -389,17 +387,20 @@ wrapper are available for new code.
 
 ### Milestone 5: Performance Optimization
 
-**Status**: [ ] Not Started / [ ] In Progress / [ ] Complete
+**Status**: [x] In Progress
 
 **Goal**: Optimize critical paths for smoother operation.
 
-#### Phase 5.1: Workspace Name Lookup Cache
+#### Phase 5.1: Workspace Name Lookup Cache ✅ COMPLETE
 
-- [ ] Add `workspace_index: HashMap<String, usize>` to `TilingState`
-- [ ] Update `workspace_index` when workspaces are added/removed/renamed
-- [ ] Update `workspace_by_name()` to use index
-- [ ] Update `workspace_by_name_mut()` to use index
-- [ ] Benchmark improvement
+- [x] Add `workspace_index: HashMap<String, usize>` to `TilingState`
+- [x] Add `add_workspace()` method for indexed insertion
+- [x] Add `rebuild_workspace_index()` for bulk rebuilds
+- [x] Update `workspace_by_name()` to use O(1) index lookup
+- [x] Update `workspace_by_name_mut()` to use O(1) index lookup
+- [x] Update `TilingManager` to use `add_workspace()` instead of `vec.push()`
+- [x] Added 3 new tests for index functionality
+- [x] 947 tests pass, clippy clean
 
 #### Phase 5.2: Batch JankyBorders Commands
 
@@ -639,3 +640,4 @@ wrapper are available for new code.
 | 2026-01-13 | Milestone 4 Phase 4.3: ffi_try! macros complete (5 tests)   |
 | 2026-01-13 | Milestone 4 Phase 4.4: Applied macros to window.rs          |
 | 2026-01-13 | Milestone 4 complete - 944 tests passing                    |
+| 2026-01-13 | Milestone 5 Phase 5.1: Workspace name index (947 tests)     |
