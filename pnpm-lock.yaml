@@ -102,8 +102,8 @@ importers:
         specifier: ^4.0.17
         version: 4.0.17(vitest@4.0.17)
       '@wyw-in-js/vite':
-        specifier: ^1.0.4
-        version: 1.0.4(rolldown-vite@7.3.1(@types/node@25.0.8)(jiti@2.6.1)(yaml@2.8.2))(typescript@5.9.3)
+        specifier: ^1.0.3
+        version: 1.0.3(rolldown-vite@7.3.1(@types/node@25.0.8)(jiti@2.6.1)(yaml@2.8.2))(typescript@5.9.3)
       babel-plugin-module-resolver:
         specifier: ^5.0.2
         version: 5.0.2
@@ -993,6 +993,12 @@ packages:
         integrity: sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA==,
       }
 
+  '@types/debug@4.1.12':
+    resolution:
+      {
+        integrity: sha512-vIChWdVG3LG1SMxEvI/AK+FWJthlrqlTu7fbrlywTkkaONwk/UAGaULXRlf8vkzFBLVm0zkMdCquhL5aOjhXPQ==,
+      }
+
   '@types/deep-eql@4.0.2':
     resolution:
       {
@@ -1009,6 +1015,12 @@ packages:
     resolution:
       {
         integrity: sha512-5+fP8P8MFNC+AyZCDxrB2pkZFPGzqQWUzpSeuuVLvm8VMcorNYavBqoFcxK8bQz4Qsbn4oUEEem4wDLfcysGHA==,
+      }
+
+  '@types/ms@2.1.0':
+    resolution:
+      {
+        integrity: sha512-GsCCIZDE/p3i96vtEqx+7dBUGXrc7zeSK3wwPHIaRThS+9OhWIXRqzs4d6k1SVU8g91DrNRWxWUGhp5KXQb2VA==,
       }
 
   '@types/node@20.19.29':
@@ -1456,10 +1468,10 @@ packages:
       }
     engines: { node: '>=16.0.0' }
 
-  '@wyw-in-js/processor-utils@1.0.3':
+  '@wyw-in-js/processor-utils@1.0.2':
     resolution:
       {
-        integrity: sha512-dEYbOGTBmpMOG5dseEczQ5zyXwlrTFtVxXToZ6EhkdeU8e0R55AM0J+aAfM6g6owTga97zd2xH3qo1ThFDPDQg==,
+        integrity: sha512-Ea3OTiymBcNxa0fQdPzQO1u5U0tEpmbHR5SWiyhoG3KdnXqSoFvbPcZjZyW+Sk3pkyfFA7NNuNaImRke6nMBzg==,
       }
     engines: { node: '>=16.0.0' }
 
@@ -1470,24 +1482,24 @@ packages:
       }
     engines: { node: '>=16.0.0' }
 
-  '@wyw-in-js/shared@1.0.3':
+  '@wyw-in-js/shared@1.0.2':
     resolution:
       {
-        integrity: sha512-zehN94zrHsMwu1dcwNAqdmpBAuqJ/S9Ii4xqmDaDtBKCdjdh/WWTZROH3yl8k7iRGBlntmJa3KoUmYFNUnddjQ==,
+        integrity: sha512-dJav2LPYFVzhgDRKeoVlqMG7LJxGL2809hbpqo6cdzYM+5iysPzE8nCIF7ZJc6EUojTQZpA464oI1pQ265unyw==,
       }
     engines: { node: '>=16.0.0' }
 
-  '@wyw-in-js/transform@1.0.4':
+  '@wyw-in-js/transform@1.0.3':
     resolution:
       {
-        integrity: sha512-6RxjAeZ8Puxnci0FdwHWatuaHRz4BHwj5IThF8B3ePJyJHuXFRd9ZBSCZxKaZ8DBoG1nV8alrJ0Pq55imBYRxg==,
+        integrity: sha512-o7vgM348O1qBLzjoEQgcvFLwKOWpBVkZfHiGBhzD4ZsUKNN7mXzQgVG+wexXdxu4rEXrXjmhsDeV6mBBh7j9+g==,
       }
     engines: { node: '>=16.0.0' }
 
-  '@wyw-in-js/vite@1.0.4':
+  '@wyw-in-js/vite@1.0.3':
     resolution:
       {
-        integrity: sha512-BhslUn7GODxzhFueqQZae6p5RVgh9lJp4dmNey6WaKmNAAwcIR/KXIPdn+0l4ypedtchsJYZeSELh04g41WVnw==,
+        integrity: sha512-ENBfMYCidss4BGeavjdoYrK6TL+AwA3OmtcSXNuCSasbe1k8RQjvxjwnipQEUrrdOwc8UVzOsHR35ULCBHHntA==,
       }
     engines: { node: '>=16.0.0' }
     peerDependencies:
@@ -4516,11 +4528,17 @@ snapshots:
       '@types/deep-eql': 4.0.2
       assertion-error: 2.0.1
 
+  '@types/debug@4.1.12':
+    dependencies:
+      '@types/ms': 2.1.0
+
   '@types/deep-eql@4.0.2': {}
 
   '@types/estree@1.0.8': {}
 
   '@types/json-schema@7.0.15': {}
+
+  '@types/ms@2.1.0': {}
 
   '@types/node@20.19.29':
     dependencies:
@@ -4839,10 +4857,10 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@wyw-in-js/processor-utils@1.0.3':
+  '@wyw-in-js/processor-utils@1.0.2':
     dependencies:
       '@babel/generator': 7.28.6
-      '@wyw-in-js/shared': 1.0.3
+      '@wyw-in-js/shared': 1.0.2
     transitivePeerDependencies:
       - supports-color
 
@@ -4854,15 +4872,16 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@wyw-in-js/shared@1.0.3':
+  '@wyw-in-js/shared@1.0.2':
     dependencies:
+      '@types/debug': 4.1.12
       debug: 4.4.3
       find-up: 5.0.0
       minimatch: 9.0.5
     transitivePeerDependencies:
       - supports-color
 
-  '@wyw-in-js/transform@1.0.4(typescript@5.9.3)':
+  '@wyw-in-js/transform@1.0.3(typescript@5.9.3)':
     dependencies:
       '@babel/core': 7.28.6
       '@babel/generator': 7.28.6
@@ -4871,8 +4890,8 @@ snapshots:
       '@babel/template': 7.28.6
       '@babel/traverse': 7.28.6
       '@babel/types': 7.28.6
-      '@wyw-in-js/processor-utils': 1.0.3
-      '@wyw-in-js/shared': 1.0.3
+      '@wyw-in-js/processor-utils': 1.0.2
+      '@wyw-in-js/shared': 1.0.2
       cosmiconfig: 8.3.6(typescript@5.9.3)
       happy-dom: 20.1.0
       source-map: 0.7.6
@@ -4884,10 +4903,10 @@ snapshots:
       - typescript
       - utf-8-validate
 
-  '@wyw-in-js/vite@1.0.4(rolldown-vite@7.3.1(@types/node@25.0.8)(jiti@2.6.1)(yaml@2.8.2))(typescript@5.9.3)':
+  '@wyw-in-js/vite@1.0.3(rolldown-vite@7.3.1(@types/node@25.0.8)(jiti@2.6.1)(yaml@2.8.2))(typescript@5.9.3)':
     dependencies:
-      '@wyw-in-js/shared': 1.0.3
-      '@wyw-in-js/transform': 1.0.4(typescript@5.9.3)
+      '@wyw-in-js/shared': 1.0.2
+      '@wyw-in-js/transform': 1.0.3(typescript@5.9.3)
       vite: rolldown-vite@7.3.1(@types/node@25.0.8)(jiti@2.6.1)(yaml@2.8.2)
     transitivePeerDependencies:
       - bufferutil
