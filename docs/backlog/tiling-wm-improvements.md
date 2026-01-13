@@ -369,21 +369,21 @@ The `AXElement` wrapper is available for new code via `tiling::ffi::AXElement`.
   - `ffi_try!(ptr, error)` - returns `Err(error)` if null
 - [x] Create `ffi_try_opt!` macro for `Option` returns
 - [x] Added 5 unit tests for the macros
-- [ ] Apply macros to reduce boilerplate in FFI code (DEFERRED to Phase 4.4)
 
-#### Phase 4.4: Apply FFI Improvements (DEFERRED)
+#### Phase 4.4: Apply FFI Improvements ✅ COMPLETE
 
-Future work to apply the new FFI helpers and wrappers:
+- [x] Apply `ffi_try_opt!` macro to `window.rs` helper functions:
+  - `get_ax_string()`, `get_ax_bool()`, `get_ax_position()`, `get_ax_size()`
+- [x] Document `AXElement` wrapper interop in `window.rs` module docs
+- [x] Review `observer.rs` - null checks are part of larger logic, macros not applicable
+- [x] Keep raw pointers in animation hot paths for performance
+- [x] All 944 tests pass, clippy clean
 
-- [ ] Migrate `window.rs` to use `AXElement` wrapper where applicable
-- [ ] Migrate `observer.rs` to use `AXElement` wrapper where applicable
-- [ ] Apply `ffi_try!`/`ffi_try_opt!` macros to reduce boilerplate
-- [ ] Ensure no performance regressions in animation paths
+**Note**: Full migration of window.rs/observer.rs to `AXElement` wrapper was evaluated
+but deferred due to tight coupling with raw pointer animation code. The macros and
+wrapper are available for new code.
 
-**Note**: This phase is optional and can be done incrementally as new code is written
-or existing code is modified. The wrappers and macros are available for use.
-
-**Verification**: All unsafe code documented ✅, safe wrappers for AX API ✅, macros available ✅
+**Verification**: All unsafe code documented ✅, safe wrappers for AX API ✅, macros applied ✅
 
 ---
 
@@ -637,4 +637,5 @@ or existing code is modified. The wrappers and macros are available for use.
 | 2026-01-13 | Milestone 4 Phase 4.1: AXElement wrapper complete (7 tests) |
 | 2026-01-13 | Milestone 4 Phase 4.2: Safety documentation complete        |
 | 2026-01-13 | Milestone 4 Phase 4.3: ffi_try! macros complete (5 tests)   |
+| 2026-01-13 | Milestone 4 Phase 4.4: Applied macros to window.rs          |
 | 2026-01-13 | Milestone 4 complete - 944 tests passing                    |
