@@ -3,6 +3,8 @@
 //! This module defines the core data structures used to track screens,
 //! workspaces, and windows in the tiling system.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::config::LayoutType;
@@ -314,12 +316,23 @@ pub struct TilingState {
     pub focused_workspace: Option<String>,
     /// ID of the currently focused screen.
     pub focused_screen_id: Option<u32>,
+
+    /// Index for O(1) workspace lookup by name.
+    ///
+    /// Maps lowercase workspace names to their index in `workspaces`.
+    /// This is maintained automatically by `add_workspace()` and `rebuild_workspace_index()`.
+    #[serde(skip)]
+    workspace_index: HashMap<String, usize>,
 }
 
 impl TilingState {
     /// Creates a new empty tiling state.
     #[must_use]
     pub fn new() -> Self { Self::default() }
+
+    // ========================================================================
+    // Screen Methods
+    // ========================================================================
 
     /// Finds a screen by ID.
     #[must_use]
@@ -355,14 +368,66 @@ impl TilingState {
     #[must_use]
     pub fn main_screen(&self) -> Option<&Screen> { self.screens.iter().find(|s| s.is_main) }
 
-    /// Finds a workspace by name.
+    // ========================================================================
+    // Workspace Methods
+    // ========================================================================
+
+    /// Adds a workspace and updates the index.
+    ///
+    /// This is the preferred way to add workspaces as it maintains the index.
+    pub fn add_workspace(&mut self, workspace: Workspace) {
+        let key = workspace.name.to_ascii_lowercase();
+        let index = self.workspaces.len();
+        self.workspaces.push(workspace);
+        self.workspace_index.insert(key, index);
+    }
+
+    /// Rebuilds the workspace index from scratch.
+    ///
+    /// Call this after bulk modifications to `workspaces` or after deserialization.
+    pub fn rebuild_workspace_index(&mut self) {
+        self.workspace_index.clear();
+        for (index, workspace) in self.workspaces.iter().enumerate() {
+            let key = workspace.name.to_ascii_lowercase();
+            self.workspace_index.insert(key, index);
+        }
+    }
+
+    /// Finds a workspace by name using O(1) index lookup.
+    ///
+    /// Falls back to linear search if the index is stale.
     #[must_use]
     pub fn workspace_by_name(&self, name: &str) -> Option<&Workspace> {
+        let key = name.to_ascii_lowercase();
+
+        // Try index lookup first (O(1))
+        if let Some(&index) = self.workspace_index.get(&key)
+            && let Some(workspace) = self.workspaces.get(index)
+            && workspace.name.eq_ignore_ascii_case(name)
+        {
+            // Index hit and name verified
+            return Some(workspace);
+        }
+
+        // Fallback to linear search if index miss or stale
         self.workspaces.iter().find(|w| w.name.eq_ignore_ascii_case(name))
     }
 
-    /// Finds a workspace by name (mutable).
+    /// Finds a workspace by name (mutable) using O(1) index lookup.
+    ///
+    /// Falls back to linear search if the index is stale.
     pub fn workspace_by_name_mut(&mut self, name: &str) -> Option<&mut Workspace> {
+        let key = name.to_ascii_lowercase();
+
+        // Try index lookup first (O(1))
+        if let Some(&index) = self.workspace_index.get(&key) {
+            // Check if the index is valid and name matches
+            if self.workspaces.get(index).is_some_and(|w| w.name.eq_ignore_ascii_case(name)) {
+                return self.workspaces.get_mut(index);
+            }
+        }
+
+        // Fallback to linear search if index miss or stale
         self.workspaces.iter_mut().find(|w| w.name.eq_ignore_ascii_case(name))
     }
 
@@ -377,6 +442,10 @@ impl TilingState {
     pub fn workspaces_for_screen(&self, screen_id: u32) -> Vec<&Workspace> {
         self.workspaces.iter().filter(|w| w.screen_id == screen_id).collect()
     }
+
+    // ========================================================================
+    // Window Methods
+    // ========================================================================
 
     /// Finds a window by ID.
     #[must_use]
@@ -586,12 +655,8 @@ mod tests {
     #[test]
     fn test_tiling_state_workspace_by_name() {
         let mut state = TilingState::new();
-        state
-            .workspaces
-            .push(Workspace::new("coding".to_string(), 1, LayoutType::Dwindle));
-        state
-            .workspaces
-            .push(Workspace::new("browser".to_string(), 1, LayoutType::Monocle));
+        state.add_workspace(Workspace::new("coding".to_string(), 1, LayoutType::Dwindle));
+        state.add_workspace(Workspace::new("browser".to_string(), 1, LayoutType::Monocle));
 
         assert!(state.workspace_by_name("coding").is_some());
         assert!(state.workspace_by_name("Coding").is_some()); // Case insensitive
@@ -599,11 +664,59 @@ mod tests {
     }
 
     #[test]
-    fn test_tiling_state_focused_workspace() {
+    fn test_tiling_state_workspace_index_o1_lookup() {
         let mut state = TilingState::new();
+        // Add many workspaces
+        for i in 0..100 {
+            state.add_workspace(Workspace::new(format!("ws{i}"), 1, LayoutType::Dwindle));
+        }
+
+        // Lookups should be O(1) via index
+        assert!(state.workspace_by_name("ws0").is_some());
+        assert!(state.workspace_by_name("ws50").is_some());
+        assert!(state.workspace_by_name("ws99").is_some());
+        assert!(state.workspace_by_name("WS50").is_some()); // Case insensitive
+    }
+
+    #[test]
+    fn test_tiling_state_workspace_index_rebuild() {
+        let mut state = TilingState::new();
+        // Add directly to vec (bypassing index)
         state
             .workspaces
-            .push(Workspace::new("coding".to_string(), 1, LayoutType::Dwindle));
+            .push(Workspace::new("test1".to_string(), 1, LayoutType::Dwindle));
+        state
+            .workspaces
+            .push(Workspace::new("test2".to_string(), 1, LayoutType::Monocle));
+
+        // Index is empty, but fallback should work
+        assert!(state.workspace_by_name("test1").is_some());
+
+        // Rebuild index
+        state.rebuild_workspace_index();
+
+        // Now index-based lookup works
+        assert!(state.workspace_by_name("test1").is_some());
+        assert!(state.workspace_by_name("test2").is_some());
+    }
+
+    #[test]
+    fn test_tiling_state_workspace_by_name_mut_with_index() {
+        let mut state = TilingState::new();
+        state.add_workspace(Workspace::new("coding".to_string(), 1, LayoutType::Dwindle));
+
+        // Mutable lookup via index
+        if let Some(ws) = state.workspace_by_name_mut("coding") {
+            ws.is_focused = true;
+        }
+
+        assert!(state.workspace_by_name("coding").unwrap().is_focused);
+    }
+
+    #[test]
+    fn test_tiling_state_focused_workspace() {
+        let mut state = TilingState::new();
+        state.add_workspace(Workspace::new("coding".to_string(), 1, LayoutType::Dwindle));
 
         assert!(state.focused_workspace().is_none());
 
@@ -615,9 +728,9 @@ mod tests {
     #[test]
     fn test_tiling_state_workspaces_for_screen() {
         let mut state = TilingState::new();
-        state.workspaces.push(Workspace::new("ws1".to_string(), 1, LayoutType::Dwindle));
-        state.workspaces.push(Workspace::new("ws2".to_string(), 1, LayoutType::Dwindle));
-        state.workspaces.push(Workspace::new("ws3".to_string(), 2, LayoutType::Dwindle));
+        state.add_workspace(Workspace::new("ws1".to_string(), 1, LayoutType::Dwindle));
+        state.add_workspace(Workspace::new("ws2".to_string(), 1, LayoutType::Dwindle));
+        state.add_workspace(Workspace::new("ws3".to_string(), 2, LayoutType::Dwindle));
 
         let screen1_ws = state.workspaces_for_screen(1);
         assert_eq!(screen1_ws.len(), 2);

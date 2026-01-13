@@ -522,7 +522,7 @@ impl TilingManager {
                         ws_config.screen.clone(),
                         ws_config.layout,
                     );
-                    self.state.workspaces.push(workspace);
+                    self.state.add_workspace(workspace);
                 }
             }
         }
@@ -535,10 +535,14 @@ impl TilingManager {
     fn create_default_workspaces(&mut self) {
         let default_layout = LayoutType::default();
 
-        for (i, screen) in self.state.screens.iter().enumerate() {
+        // Collect screen info first to avoid borrow issues
+        let screen_info: Vec<(usize, u32)> =
+            self.state.screens.iter().enumerate().map(|(i, s)| (i, s.id)).collect();
+
+        for (i, screen_id) in screen_info {
             let name = format!("workspace-{}", i + 1);
-            let workspace = Workspace::new(name, screen.id, default_layout);
-            self.state.workspaces.push(workspace);
+            let workspace = Workspace::new(name, screen_id, default_layout);
+            self.state.add_workspace(workspace);
         }
     }
 
@@ -554,7 +558,7 @@ impl TilingManager {
             if !has_workspace {
                 let name = format!("default-{screen_id}");
                 let workspace = Workspace::new(name, screen_id, default_layout);
-                self.state.workspaces.push(workspace);
+                self.state.add_workspace(workspace);
             }
         }
     }
