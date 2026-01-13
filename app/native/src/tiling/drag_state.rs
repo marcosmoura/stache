@@ -13,6 +13,23 @@
 //! 5. `finish_operation()` is called:
 //!    - For moves: reapply layout (tiled windows snap back, floating stay)
 //!    - For resizes: find which window changed, calculate new ratios
+//!
+//! # Memory Ordering
+//!
+//! This module uses `Acquire`/`Release` ordering for atomic operations:
+//!
+//! - **`Release`** on store: Ensures all writes to `CURRENT_OPERATION` (via the mutex)
+//!   happen-before the atomic flag is set. Readers who see the flag will also see
+//!   the complete operation state.
+//!
+//! - **`Acquire`** on load: Ensures the reader sees all writes that happened-before
+//!   the corresponding `Release` store. This guarantees that if `is_operation_in_progress()`
+//!   returns `true`, the operation details are fully visible.
+//!
+//! This is weaker than `SeqCst` but sufficient because:
+//! 1. The `Mutex` on `CURRENT_OPERATION` provides the main synchronization
+//! 2. The atomics provide a fast path check before acquiring the mutex
+//! 3. There's a single writer (event thread) and multiple readers (query threads)
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -81,8 +98,11 @@ static CURRENT_OPERATION: Mutex<Option<DragInfo>> = Mutex::new(None);
 // ============================================================================
 
 /// Returns whether a drag/resize operation is currently in progress.
+///
+/// Uses `Acquire` ordering to ensure visibility of the operation state
+/// written before the corresponding `Release` store.
 #[must_use]
-pub fn is_operation_in_progress() -> bool { OPERATION_IN_PROGRESS.load(Ordering::SeqCst) }
+pub fn is_operation_in_progress() -> bool { OPERATION_IN_PROGRESS.load(Ordering::Acquire) }
 
 /// Gets the current operation info, if any.
 #[must_use]
@@ -119,8 +139,11 @@ pub fn start_operation(
         };
 
         *guard = Some(info);
-        OPERATION_DRAG_SEQUENCE.store(drag_sequence, Ordering::SeqCst);
-        OPERATION_IN_PROGRESS.store(true, Ordering::SeqCst);
+        // Store sequence first, then set in-progress flag.
+        // Release ordering ensures the mutex writes are visible to readers
+        // who observe the flag as true via Acquire load.
+        OPERATION_DRAG_SEQUENCE.store(drag_sequence, Ordering::Release);
+        OPERATION_IN_PROGRESS.store(true, Ordering::Release);
     }
 }
 
@@ -131,7 +154,9 @@ pub fn cancel_operation() {
     if let Ok(mut guard) = CURRENT_OPERATION.lock() {
         *guard = None;
     }
-    OPERATION_IN_PROGRESS.store(false, Ordering::SeqCst);
+    // Release ordering ensures the mutex write (clearing the operation)
+    // happens-before readers see the flag as false.
+    OPERATION_IN_PROGRESS.store(false, Ordering::Release);
 }
 
 /// Finishes the current operation and returns the info for processing.
@@ -145,7 +170,9 @@ pub fn cancel_operation() {
 /// The completed operation info, or `None` if no operation was in progress.
 pub fn finish_operation() -> Option<DragInfo> {
     let info = CURRENT_OPERATION.lock().ok().and_then(|mut guard| guard.take());
-    OPERATION_IN_PROGRESS.store(false, Ordering::SeqCst);
+    // Release ordering ensures the mutex write (taking the operation)
+    // happens-before readers see the flag as false.
+    OPERATION_IN_PROGRESS.store(false, Ordering::Release);
     info
 }
 
@@ -153,8 +180,10 @@ pub fn finish_operation() -> Option<DragInfo> {
 ///
 /// Used to detect if the operation is stale (a new drag started before
 /// we processed the end of the previous one).
+///
+/// Uses `Acquire` ordering to pair with the `Release` store in `start_operation()`.
 #[must_use]
-pub fn operation_drag_sequence() -> u32 { OPERATION_DRAG_SEQUENCE.load(Ordering::SeqCst) }
+pub fn operation_drag_sequence() -> u32 { OPERATION_DRAG_SEQUENCE.load(Ordering::Acquire) }
 
 // ============================================================================
 // Tests

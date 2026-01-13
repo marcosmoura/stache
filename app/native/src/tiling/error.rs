@@ -21,7 +21,7 @@
 //! fn focus_window(id: u32) -> TilingResult<()> {
 //!     let element = get_ax_element(id)
 //!         .ok_or(TilingError::WindowNotFound(id))?;
-//!     
+//!
 //!     set_focused_element(&element)
 //!         .map_err(|code| TilingError::accessibility(code, "Failed to focus window"))
 //! }
