@@ -107,6 +107,20 @@ pub mod cache {
     /// This TTL ensures we periodically refresh the cache while still benefiting
     /// from caching during rapid operations like animations.
     pub const AX_ELEMENT_TTL_SECS: u64 = 5;
+
+    /// TTL for cached screen information (milliseconds).
+    ///
+    /// Screen configuration changes infrequently (hotplug, resolution changes),
+    /// so a longer TTL is safe. The cache is also explicitly invalidated on
+    /// screen configuration change events.
+    pub const SCREEN_TTL_MS: u64 = 1000;
+
+    /// TTL for cached CG window list (milliseconds).
+    ///
+    /// Window list changes frequently as windows are created/destroyed, so we
+    /// use a short TTL. This still helps during rapid operations like animations
+    /// where multiple queries might happen within a frame.
+    pub const CG_WINDOW_LIST_TTL_MS: u64 = 50;
 }
 
 /// Animation system constants.
@@ -215,5 +229,19 @@ mod tests {
         // AX element TTL should be long enough to be useful but not too stale
         assert!(cache::AX_ELEMENT_TTL_SECS >= 1);
         assert!(cache::AX_ELEMENT_TTL_SECS <= 60);
+
+        // Screen TTL should be long enough to reduce overhead but not too stale
+        // (1 second is reasonable since screen changes are infrequent)
+        assert!(cache::SCREEN_TTL_MS >= 100);
+        assert!(cache::SCREEN_TTL_MS <= 10000);
+
+        // CG window list TTL should be short since windows change frequently
+        // but long enough to coalesce rapid queries (e.g., during animations)
+        assert!(cache::CG_WINDOW_LIST_TTL_MS >= 10);
+        assert!(cache::CG_WINDOW_LIST_TTL_MS <= 500);
+
+        // Screen TTL should be longer than CG window list TTL
+        // (screen changes are less frequent than window changes)
+        assert!(cache::SCREEN_TTL_MS > cache::CG_WINDOW_LIST_TTL_MS);
     }
 }

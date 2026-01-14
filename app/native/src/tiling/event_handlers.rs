@@ -904,6 +904,9 @@ fn handle_app_shown(pid: i32) {
 ///
 /// This is called by the screen monitor when displays are added or removed.
 pub fn handle_screen_change() {
+    // Invalidate screen cache immediately to ensure fresh data
+    super::screen::invalidate_screen_cache();
+
     let Some(manager) = get_manager() else {
         eprintln!("stache: tiling: screen change: manager not available");
         return;

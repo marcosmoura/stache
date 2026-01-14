@@ -2,11 +2,91 @@
 //!
 //! This module provides functions to detect and enumerate connected displays
 //! using macOS's `NSScreen` API.
+//!
+//! # Caching
+//!
+//! Screen information is cached with a 1-second TTL to reduce overhead from
+//! repeated queries. The cache is automatically invalidated when screen
+//! configuration changes are detected (hotplug, resolution change, etc.).
+
+use std::sync::RwLock;
+use std::time::{Duration, Instant};
 
 use objc::runtime::{Class, Object};
 use objc::{msg_send, sel, sel_impl};
 
+use super::constants::cache::SCREEN_TTL_MS;
 use super::state::{Rect, Screen};
+
+// ============================================================================
+// Screen Cache
+// ============================================================================
+
+/// Cached screen information with timestamp.
+struct ScreenCache {
+    /// Cached screen list.
+    screens: Vec<Screen>,
+    /// When the cache was last updated.
+    cached_at: Instant,
+    /// Cache TTL.
+    ttl: Duration,
+}
+
+impl ScreenCache {
+    /// Creates a new empty cache.
+    fn new(ttl_ms: u64) -> Self {
+        let now = Instant::now();
+        Self {
+            screens: Vec::new(),
+            // Start expired - use checked_sub with fallback to now
+            cached_at: now.checked_sub(Duration::from_secs(3600)).unwrap_or(now),
+            ttl: Duration::from_millis(ttl_ms),
+        }
+    }
+
+    /// Checks if the cache is valid.
+    fn is_valid(&self) -> bool { !self.screens.is_empty() && self.cached_at.elapsed() < self.ttl }
+
+    /// Gets cached screens if valid.
+    fn get(&self) -> Option<Vec<Screen>> {
+        if self.is_valid() {
+            Some(self.screens.clone())
+        } else {
+            None
+        }
+    }
+
+    /// Updates the cache with new data.
+    fn update(&mut self, screens: Vec<Screen>) {
+        self.screens = screens;
+        self.cached_at = Instant::now();
+    }
+
+    /// Invalidates the cache.
+    fn invalidate(&mut self) {
+        self.screens.clear();
+        let now = Instant::now();
+        self.cached_at = now.checked_sub(Duration::from_secs(3600)).unwrap_or(now);
+    }
+}
+
+/// Global screen cache (lazily initialized).
+static SCREEN_CACHE: RwLock<Option<ScreenCache>> = RwLock::new(None);
+
+/// Gets the screen cache, initializing if necessary.
+#[allow(clippy::significant_drop_tightening)] // MutexGuard must outlive the cache reference
+fn with_cache<F, R>(f: F) -> R
+where F: FnOnce(&mut ScreenCache) -> R {
+    let mut binding = SCREEN_CACHE.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let cache = binding.get_or_insert_with(|| ScreenCache::new(SCREEN_TTL_MS));
+    f(cache)
+}
+
+/// Invalidates the screen cache.
+///
+/// Call this when screen configuration changes (hotplug, resolution change, etc.)
+/// to ensure the next `get_all_screens()` call fetches fresh data.
+pub fn invalidate_screen_cache() { with_cache(ScreenCache::invalidate); }
 
 // ============================================================================
 // Objective-C Type Definitions
@@ -51,6 +131,12 @@ impl From<NSRect> for Rect {
 /// Returns a vector of `Screen` objects representing all connected displays.
 /// The first screen in the array is the main screen (with the menu bar).
 ///
+/// # Caching
+///
+/// Results are cached for 1 second to reduce overhead from repeated queries.
+/// The cache is invalidated via `invalidate_screen_cache()` when screen
+/// configuration changes are detected.
+///
 /// # Returns
 ///
 /// A vector of screens, or an empty vector if screen detection fails.
@@ -61,7 +147,20 @@ impl From<NSRect> for Rect {
 /// used by `CGWindowList` and the Accessibility API. This is converted from
 /// macOS's native `NSScreen` coordinates which use a bottom-left origin.
 #[must_use]
-pub fn get_all_screens() -> Vec<Screen> { unsafe { get_all_screens_unsafe() } }
+pub fn get_all_screens() -> Vec<Screen> {
+    // Check cache first
+    if let Some(screens) = with_cache(|cache| cache.get()) {
+        return screens;
+    }
+
+    // Cache miss - fetch fresh data
+    let screens = unsafe { get_all_screens_unsafe() };
+
+    // Update cache
+    with_cache(|cache| cache.update(screens.clone()));
+
+    screens
+}
 
 /// Internal implementation for screen detection.
 ///
@@ -577,5 +676,121 @@ mod tests {
         assert!((converted.y - (-1120.0)).abs() < f64::EPSILON);
         assert!((converted.width - 1440.0).abs() < f64::EPSILON);
         assert!((converted.height - 2560.0).abs() < f64::EPSILON);
+    }
+
+    // ========================================================================
+    // Screen Cache Tests
+    // ========================================================================
+
+    #[test]
+    fn test_screen_cache_new() {
+        let cache = ScreenCache::new(1000);
+        assert!(!cache.is_valid(), "New cache should be invalid");
+        assert!(cache.get().is_none(), "New cache should return None");
+    }
+
+    #[test]
+    fn test_screen_cache_update_and_get() {
+        let mut cache = ScreenCache::new(1000);
+
+        let screens = vec![Screen {
+            id: 1,
+            name: "Test Screen".to_string(),
+            frame: Rect::new(0.0, 0.0, 1920.0, 1080.0),
+            visible_frame: Rect::new(0.0, 25.0, 1920.0, 1055.0),
+            scale_factor: 2.0,
+            is_main: true,
+            is_builtin: false,
+        }];
+
+        cache.update(screens.clone());
+
+        assert!(cache.is_valid(), "Cache should be valid after update");
+        let cached = cache.get();
+        assert!(cached.is_some(), "Cache should return data");
+        assert_eq!(cached.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_screen_cache_invalidate() {
+        let mut cache = ScreenCache::new(1000);
+
+        let screens = vec![Screen {
+            id: 1,
+            name: "Test Screen".to_string(),
+            frame: Rect::new(0.0, 0.0, 1920.0, 1080.0),
+            visible_frame: Rect::new(0.0, 25.0, 1920.0, 1055.0),
+            scale_factor: 2.0,
+            is_main: true,
+            is_builtin: false,
+        }];
+
+        cache.update(screens);
+        assert!(cache.is_valid());
+
+        cache.invalidate();
+        assert!(!cache.is_valid(), "Cache should be invalid after invalidate");
+        assert!(cache.get().is_none(), "Invalidated cache should return None");
+    }
+
+    #[test]
+    fn test_screen_cache_ttl_expiration() {
+        // Create cache with 0ms TTL (immediate expiration)
+        let mut cache = ScreenCache::new(0);
+
+        let screens = vec![Screen {
+            id: 1,
+            name: "Test Screen".to_string(),
+            frame: Rect::new(0.0, 0.0, 1920.0, 1080.0),
+            visible_frame: Rect::new(0.0, 25.0, 1920.0, 1055.0),
+            scale_factor: 2.0,
+            is_main: true,
+            is_builtin: false,
+        }];
+
+        cache.update(screens);
+
+        // Cache should be expired immediately
+        assert!(!cache.is_valid(), "Cache with 0 TTL should be invalid");
+        assert!(cache.get().is_none(), "Expired cache should return None");
+    }
+
+    #[test]
+    fn test_screen_cache_empty_screens_invalid() {
+        let mut cache = ScreenCache::new(1000);
+
+        // Update with empty vector
+        cache.update(Vec::new());
+
+        // Empty cache should be considered invalid
+        assert!(!cache.is_valid(), "Cache with empty screens should be invalid");
+        assert!(cache.get().is_none(), "Empty cache should return None");
+    }
+
+    #[test]
+    fn test_invalidate_screen_cache_function() {
+        // This tests the public invalidation function
+        // First ensure cache is populated via get_all_screens
+        let _ = get_all_screens();
+
+        // Invalidate the cache
+        invalidate_screen_cache();
+
+        // The next call should fetch fresh data (we can't easily verify this,
+        // but at least ensure it doesn't panic)
+        let screens = get_all_screens();
+        assert!(
+            !screens.is_empty(),
+            "Should still get screens after invalidation"
+        );
+    }
+
+    #[test]
+    fn test_screen_cache_constant() {
+        use super::super::constants::cache::SCREEN_TTL_MS;
+
+        // TTL should be reasonable (between 100ms and 10s)
+        assert!(SCREEN_TTL_MS >= 100);
+        assert!(SCREEN_TTL_MS <= 10000);
     }
 }

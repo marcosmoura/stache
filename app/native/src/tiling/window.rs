@@ -375,6 +375,119 @@ pub fn invalidate_ax_element_cache(window_id: u32) { get_ax_cache().remove(windo
 pub fn clear_ax_element_cache() { get_ax_cache().clear(); }
 
 // ============================================================================
+// CG Window List Cache
+// ============================================================================
+
+use super::constants::cache::CG_WINDOW_LIST_TTL_MS;
+
+/// Cached CG window list with timestamp.
+struct CGWindowListCache {
+    /// Cached on-screen window list.
+    on_screen: Option<(Vec<CGWindowInfo>, Instant)>,
+    /// Cached all windows list.
+    all_windows: Option<(Vec<CGWindowInfo>, Instant)>,
+    /// Cache TTL.
+    ttl: Duration,
+}
+
+impl CGWindowListCache {
+    /// Creates a new empty cache.
+    const fn new(ttl_ms: u64) -> Self {
+        Self {
+            on_screen: None,
+            all_windows: None,
+            ttl: Duration::from_millis(ttl_ms),
+        }
+    }
+
+    /// Gets cached on-screen windows if valid.
+    fn get_on_screen(&self) -> Option<Vec<CGWindowInfo>> {
+        self.on_screen.as_ref().and_then(|(windows, cached_at)| {
+            if cached_at.elapsed() < self.ttl {
+                Some(windows.clone())
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Gets cached all windows if valid.
+    fn get_all(&self) -> Option<Vec<CGWindowInfo>> {
+        self.all_windows.as_ref().and_then(|(windows, cached_at)| {
+            if cached_at.elapsed() < self.ttl {
+                Some(windows.clone())
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Updates the on-screen windows cache.
+    fn update_on_screen(&mut self, windows: Vec<CGWindowInfo>) {
+        self.on_screen = Some((windows, Instant::now()));
+    }
+
+    /// Updates the all windows cache.
+    fn update_all(&mut self, windows: Vec<CGWindowInfo>) {
+        self.all_windows = Some((windows, Instant::now()));
+    }
+
+    /// Invalidates all cached data.
+    #[allow(dead_code)]
+    fn invalidate(&mut self) {
+        self.on_screen = None;
+        self.all_windows = None;
+    }
+}
+
+/// Global CG window list cache.
+static CG_WINDOW_LIST_CACHE: RwLock<Option<CGWindowListCache>> = RwLock::new(None);
+
+/// Gets cached on-screen window list, or fetches if cache miss.
+fn get_cached_cg_window_list(on_screen_only: bool) -> Vec<CGWindowInfo> {
+    // Try to get from cache first
+    if let Ok(cache) = CG_WINDOW_LIST_CACHE.read()
+        && let Some(ref c) = *cache
+    {
+        let cached = if on_screen_only {
+            c.get_on_screen()
+        } else {
+            c.get_all()
+        };
+        if let Some(windows) = cached {
+            return windows;
+        }
+    }
+
+    // Cache miss - fetch fresh data
+    let windows = get_cg_window_list_uncached(on_screen_only);
+
+    // Update cache
+    if let Ok(mut cache) = CG_WINDOW_LIST_CACHE.write() {
+        let c = cache.get_or_insert_with(|| CGWindowListCache::new(CG_WINDOW_LIST_TTL_MS));
+        if on_screen_only {
+            c.update_on_screen(windows.clone());
+        } else {
+            c.update_all(windows.clone());
+        }
+    }
+
+    windows
+}
+
+/// Invalidates the CG window list cache.
+///
+/// Call this when windows are created/destroyed to ensure fresh data.
+#[allow(dead_code)]
+pub fn invalidate_cg_window_list_cache() {
+    if let Ok(mut cache) = CG_WINDOW_LIST_CACHE.write()
+        && let Some(ref mut c) = *cache
+    {
+        c.invalidate();
+    }
+}
+
+// ============================================================================
 // AXUIElement Attribute Helpers
 // ============================================================================
 
@@ -731,18 +844,27 @@ pub struct CGWindowInfo {
 ///
 /// This provides window IDs and basic info, but more details require
 /// the Accessibility API (`AXUIElement`).
+///
+/// # Caching
+///
+/// Results are cached for 50ms to reduce overhead from repeated queries
+/// within the same frame or rapid operations.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-pub fn get_cg_window_list() -> Vec<CGWindowInfo> { get_cg_window_list_internal(true) }
+pub fn get_cg_window_list() -> Vec<CGWindowInfo> { get_cached_cg_window_list(true) }
 
 /// Gets ALL windows (including hidden/minimized) using `CGWindowListCopyWindowInfo`.
 ///
 /// Use this for initial tracking to ensure hidden windows are also tracked.
+///
+/// # Caching
+///
+/// Results are cached for 50ms to reduce overhead from repeated queries.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-pub fn get_cg_window_list_all() -> Vec<CGWindowInfo> { get_cg_window_list_internal(false) }
+pub fn get_cg_window_list_all() -> Vec<CGWindowInfo> { get_cached_cg_window_list(false) }
 
-/// Internal function to get window list with configurable options.
+/// Internal function to get window list without caching.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn get_cg_window_list_internal(on_screen_only: bool) -> Vec<CGWindowInfo> {
+fn get_cg_window_list_uncached(on_screen_only: bool) -> Vec<CGWindowInfo> {
     unsafe {
         let options = if on_screen_only {
             K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS
@@ -2727,5 +2849,204 @@ mod tests {
 
         // Both should point to the same instance (same address)
         assert!(std::ptr::eq(cache1, cache2));
+    }
+
+    // ========================================================================
+    // CG Window List Cache Tests
+    // ========================================================================
+
+    #[test]
+    fn test_cg_window_list_cache_new() {
+        let cache = CGWindowListCache::new(50);
+        assert!(
+            cache.get_on_screen().is_none(),
+            "New cache should have no on-screen data"
+        );
+        assert!(
+            cache.get_all().is_none(),
+            "New cache should have no all-windows data"
+        );
+    }
+
+    #[test]
+    fn test_cg_window_list_cache_update_on_screen() {
+        let mut cache = CGWindowListCache::new(1000);
+
+        let windows = vec![CGWindowInfo {
+            id: 1,
+            pid: 100,
+            title: "Test".to_string(),
+            app_name: "TestApp".to_string(),
+            frame: Rect::new(0.0, 0.0, 800.0, 600.0),
+            layer: 0,
+        }];
+
+        cache.update_on_screen(windows);
+
+        let cached = cache.get_on_screen();
+        assert!(cached.is_some(), "Should have cached on-screen data");
+        assert_eq!(cached.unwrap().len(), 1);
+
+        // All windows cache should still be empty
+        assert!(
+            cache.get_all().is_none(),
+            "All-windows cache should be unaffected"
+        );
+    }
+
+    #[test]
+    fn test_cg_window_list_cache_update_all() {
+        let mut cache = CGWindowListCache::new(1000);
+
+        let windows = vec![
+            CGWindowInfo {
+                id: 1,
+                pid: 100,
+                title: "Test1".to_string(),
+                app_name: "TestApp".to_string(),
+                frame: Rect::new(0.0, 0.0, 800.0, 600.0),
+                layer: 0,
+            },
+            CGWindowInfo {
+                id: 2,
+                pid: 100,
+                title: "Test2".to_string(),
+                app_name: "TestApp".to_string(),
+                frame: Rect::new(100.0, 100.0, 800.0, 600.0),
+                layer: 0,
+            },
+        ];
+
+        cache.update_all(windows);
+
+        let cached = cache.get_all();
+        assert!(cached.is_some(), "Should have cached all-windows data");
+        assert_eq!(cached.unwrap().len(), 2);
+
+        // On-screen cache should still be empty
+        assert!(
+            cache.get_on_screen().is_none(),
+            "On-screen cache should be unaffected"
+        );
+    }
+
+    #[test]
+    fn test_cg_window_list_cache_invalidate() {
+        let mut cache = CGWindowListCache::new(1000);
+
+        let windows = vec![CGWindowInfo {
+            id: 1,
+            pid: 100,
+            title: "Test".to_string(),
+            app_name: "TestApp".to_string(),
+            frame: Rect::default(),
+            layer: 0,
+        }];
+
+        cache.update_on_screen(windows.clone());
+        cache.update_all(windows);
+
+        assert!(cache.get_on_screen().is_some());
+        assert!(cache.get_all().is_some());
+
+        cache.invalidate();
+
+        assert!(
+            cache.get_on_screen().is_none(),
+            "On-screen should be None after invalidate"
+        );
+        assert!(
+            cache.get_all().is_none(),
+            "All-windows should be None after invalidate"
+        );
+    }
+
+    #[test]
+    fn test_cg_window_list_cache_ttl_expiration() {
+        // Create cache with 0ms TTL (immediate expiration)
+        let mut cache = CGWindowListCache::new(0);
+
+        let windows = vec![CGWindowInfo {
+            id: 1,
+            pid: 100,
+            title: "Test".to_string(),
+            app_name: "TestApp".to_string(),
+            frame: Rect::default(),
+            layer: 0,
+        }];
+
+        cache.update_on_screen(windows.clone());
+        cache.update_all(windows);
+
+        // Both should be expired immediately
+        assert!(
+            cache.get_on_screen().is_none(),
+            "On-screen cache with 0 TTL should be None"
+        );
+        assert!(
+            cache.get_all().is_none(),
+            "All-windows cache with 0 TTL should be None"
+        );
+    }
+
+    #[test]
+    fn test_cg_window_list_cache_independent_ttls() {
+        // Updates to one cache don't affect the other's timestamps
+        let mut cache = CGWindowListCache::new(1000);
+
+        let windows1 = vec![CGWindowInfo {
+            id: 1,
+            pid: 100,
+            title: "Window1".to_string(),
+            app_name: "App".to_string(),
+            frame: Rect::default(),
+            layer: 0,
+        }];
+
+        let windows2 = vec![CGWindowInfo {
+            id: 2,
+            pid: 200,
+            title: "Window2".to_string(),
+            app_name: "App".to_string(),
+            frame: Rect::default(),
+            layer: 0,
+        }];
+
+        // Update on-screen first
+        cache.update_on_screen(windows1);
+
+        // Later update all-windows
+        cache.update_all(windows2);
+
+        // Both should be valid
+        let on_screen = cache.get_on_screen();
+        let all = cache.get_all();
+
+        assert!(on_screen.is_some());
+        assert!(all.is_some());
+        assert_eq!(on_screen.unwrap()[0].id, 1);
+        assert_eq!(all.unwrap()[0].id, 2);
+    }
+
+    #[test]
+    fn test_invalidate_cg_window_list_cache_function() {
+        // Test the public invalidation function
+        invalidate_cg_window_list_cache();
+
+        // Should not panic, and subsequent calls should work
+        let windows = get_cg_window_list();
+        // We can't assert much about the result since it depends on system state,
+        // but it should be a valid (possibly empty) vector - just verify it returns
+        let _ = windows;
+    }
+
+    #[test]
+    fn test_cg_window_list_cache_constant() {
+        use super::super::constants::cache::CG_WINDOW_LIST_TTL_MS;
+
+        // TTL should be short (between 10ms and 500ms)
+        // This is intentionally short because window lists change frequently
+        assert!(CG_WINDOW_LIST_TTL_MS >= 10);
+        assert!(CG_WINDOW_LIST_TTL_MS <= 500);
     }
 }

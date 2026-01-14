@@ -10,9 +10,9 @@
 //! second). Processing each event is wasteful since:
 //! - The user is still dragging (intermediate positions don't matter)
 //! - Layout recalculations are expensive
-//! - Border updates are handled by JankyBorders anyway
+//! - Border updates are handled by `JankyBorders` anyway
 //!
-//! The coalescer tracks the last processed time for each (pid, event_type) pair.
+//! The coalescer tracks the last processed time for each (pid, `event_type`) pair.
 //! Events within the coalesce window (default 4ms) are skipped. The final event
 //! is guaranteed to be processed because `on_mouse_up()` always triggers processing.
 //!
@@ -32,7 +32,7 @@ use super::observer::WindowEventType;
 // Types
 // ============================================================================
 
-/// Key for tracking coalesced events: (pid, event_type discriminant).
+/// Key for tracking coalesced events: (pid, `event_type` discriminant).
 type CoalesceKey = (i32, u8);
 
 /// Entry tracking the last processed time for an event.
@@ -61,10 +61,10 @@ impl CoalesceEntry {
 
 /// Thread-safe event coalescer for reducing rapid event processing.
 ///
-/// Tracks the last processed time for each (pid, event_type) combination
+/// Tracks the last processed time for each (pid, `event_type`) combination
 /// and allows skipping events that arrive too quickly.
 struct EventCoalescer {
-    /// Map of (pid, event_type) -> last processed entry.
+    /// Map of (pid, `event_type`) -> last processed entry.
     entries: RwLock<HashMap<CoalesceKey, CoalesceEntry>>,
     /// Duration to wait between processing events of the same type.
     coalesce_window: Duration,
@@ -89,19 +89,18 @@ impl EventCoalescer {
         let key = make_key(pid, event_type);
 
         // Fast path: check if we should skip without write lock
-        if let Ok(entries) = self.entries.read() {
-            if let Some(entry) = entries.get(&key) {
-                if !entry.should_process(self.coalesce_window) {
-                    return false;
-                }
-            }
+        if let Ok(entries) = self.entries.read()
+            && let Some(entry) = entries.get(&key)
+            && !entry.should_process(self.coalesce_window)
+        {
+            return false;
         }
 
         // Need to process - update the entry
         if let Ok(mut entries) = self.entries.write() {
             entries
                 .entry(key)
-                .and_modify(|e| e.mark_processed())
+                .and_modify(CoalesceEntry::mark_processed)
                 .or_insert_with(CoalesceEntry::new);
         }
 
@@ -128,7 +127,7 @@ impl EventCoalescer {
 }
 
 /// Creates a coalesce key from pid and event type.
-fn make_key(pid: i32, event_type: WindowEventType) -> CoalesceKey {
+const fn make_key(pid: i32, event_type: WindowEventType) -> CoalesceKey {
     // Use the discriminant of the enum as a cheap u8 identifier
     let event_discriminant = match event_type {
         WindowEventType::Created => 0,
