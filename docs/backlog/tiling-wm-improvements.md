@@ -454,14 +454,19 @@ The `AXElement` wrapper is available for new code via `tiling::ffi::AXElement`.
 - [x] Added 15 new tests for cache functionality
 - [x] 986 tests pass, clippy clean
 
-#### Phase 5.6: Event Coalescing
+#### Phase 5.6: Event Coalescing ✅ COMPLETE
 
-- [ ] Create `EventCoalescer` struct:
-  - [ ] `pending: HashMap<(u32, WindowEventType), Instant>`
-  - [ ] `coalesce_window: Duration` (4ms)
-- [ ] Add coalescer to event handling path
-- [ ] Filter rapid move/resize events
-- [ ] Ensure final position is always applied
+- [x] Create `EventCoalescer` struct in `event_coalescer.rs`:
+  - [x] `entries: RwLock<HashMap<CoalesceKey, CoalesceEntry>>` for thread-safe tracking
+  - [x] `CoalesceKey = (pid, event_type_discriminant)` for efficient lookups
+  - [x] `coalesce_window: Duration` (4ms from `constants::timing::EVENT_COALESCE_MS`)
+- [x] Add coalescer to event handling path:
+  - [x] `should_process_move()` and `should_process_resize()` public API
+  - [x] Integrated into `handle_window_moved()` and `handle_window_resized()`
+- [x] Filter rapid move/resize events within coalesce window
+- [x] Final position always applied via existing `on_mouse_up()` handler
+- [x] Added 14 new tests for coalescer functionality
+- [x] 1000 tests pass, clippy clean
 
 #### Phase 5.7: Screen and Window List Caching
 
@@ -659,3 +664,4 @@ The `AXElement` wrapper is available for new code via `tiling::ffi::AXElement`.
 | 2026-01-14 | Milestone 5 Phase 5.3: Animation buffer infrastructure (953 tests) |
 | 2026-01-14 | Milestone 5 Phase 5.4: Layout result caching (971 tests)           |
 | 2026-01-14 | Milestone 5 Phase 5.5: AXUIElement resolution caching (986 tests)  |
+| 2026-01-14 | Milestone 5 Phase 5.6: Event coalescing (1000 tests)               |
