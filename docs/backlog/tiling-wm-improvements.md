@@ -485,13 +485,21 @@ The `AXElement` wrapper is available for new code via `tiling::ffi::AXElement`.
 - [x] Added 15 new tests for cache implementations
 - [x] 1015 tests pass, clippy clean
 
-#### Phase 5.8: SmallVec for Hot Paths
+#### Phase 5.8: SmallVec for Hot Paths ✓
 
-- [ ] Add `smallvec` dependency
-- [ ] Update `Workspace::window_ids` to `SmallVec<[u32; 16]>`
-- [ ] Update `Workspace::ratios` to `SmallVec<[f64; 16]>`
-- [ ] Update layout return types to `SmallVec<[(u32, Rect); 16]>`
-- [ ] Update animation transition vectors
+- [x] Add `smallvec` dependency with `serde` and `const_new` features
+- [x] Update `LayoutResult` type alias to `SmallVec<[(u32, Rect); 16]>`
+- [x] Add `LAYOUT_INLINE_CAP` constant (16) for inline storage capacity
+- [x] Update all layout algorithms (dwindle, floating, grid, master, monocle, split)
+- [x] Update `LayoutCache` to store `SmallVec` positions
+- [x] Update manager to use `LayoutResult` type
+- [x] 1015 tests pass, clippy clean
+
+**Deferred**: `Workspace::window_ids` and `split_ratios` remain as `Vec` because:
+
+- Changing them would break `const fn` APIs for `Workspace::new()` methods
+- Workspace state changes less frequently than layout calculations
+- The main performance benefit (avoiding heap allocation during layout) is achieved
 
 #### Phase 5.9: Parallel Screen Layout Application
 
