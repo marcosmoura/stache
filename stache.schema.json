@@ -9,6 +9,8 @@
       "description": "Bar configuration for status bar UI components.\n\nContains settings for weather.",
       "$ref": "#/$defs/BarConfig",
       "default": {
+        "height": 28,
+        "padding": 12,
         "weather": {
           "apiKeys": "",
           "defaultLocation": ""
@@ -70,15 +72,24 @@
             "durationMs": 200,
             "easing": "ease-out"
           },
-          "colors": {
-            "floating": "#94e2d5",
-            "focused": "#b4befe",
-            "monocle": "#cba6f7",
-            "unfocused": "#313244"
-          },
           "enabled": false,
+          "floating": {
+            "color": "#94e2d5",
+            "width": 4
+          },
+          "focused": {
+            "color": "#b4befe",
+            "width": 4
+          },
           "ignore": [],
-          "width": 4
+          "monocle": {
+            "color": "#cba6f7",
+            "width": 4
+          },
+          "unfocused": {
+            "color": "#6c7086",
+            "width": 4
+          }
         },
         "enabled": false,
         "floating": {
@@ -178,9 +189,25 @@
       }
     },
     "BarConfig": {
-      "description": "Bar configuration for the status bar UI components.\n\nContains settings for bar-specific features like weather.",
+      "description": "Bar configuration for the status bar UI components.\n\nContains settings for bar-specific features like weather and dimensions.\nThe bar dimensions are used by the tiling window manager to account for\nthe status bar when calculating window layouts on the main screen.",
       "type": "object",
       "properties": {
+        "height": {
+          "description": "Height of the status bar in pixels.\nDefault: 28",
+          "type": "integer",
+          "format": "uint16",
+          "default": 28,
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "padding": {
+          "description": "Padding around the status bar in pixels.\nThis is added to the height when calculating the top gap for tiling.\nDefault: 12",
+          "type": "integer",
+          "format": "uint16",
+          "default": 12,
+          "maximum": 65535,
+          "minimum": 0
+        },
         "weather": {
           "description": "Weather status bar configuration.",
           "$ref": "#/$defs/WeatherConfig",
@@ -209,87 +236,102 @@
         }
       }
     },
-    "BorderColor": {
-      "description": "Border color definition.\n\nCan be a solid color or a gradient for more visual effects.",
+    "BorderStateConfig": {
+      "description": "Border state configuration - either disabled or with specific settings.\n\nCan be:\n- `false` to disable borders for this state\n- An object with `width` and either `color` (solid), `gradient`, or `glow`",
       "anyOf": [
         {
-          "description": "A solid color specified as a hex string (e.g., \"#FF0000\" or \"#F00\").",
-          "type": "string"
+          "description": "Disabled - don't draw border for this state.\nUse `false` in config to disable.",
+          "type": "boolean"
         },
         {
-          "description": "A gradient with start and end colors and optional angle.",
+          "description": "Enabled with solid color.",
           "type": "object",
           "properties": {
-            "angle": {
-              "description": "Angle in degrees (0 = left to right, 90 = bottom to top).\nDefault: 0",
-              "type": ["number", "null"],
-              "format": "double"
-            },
-            "from": {
-              "description": "Starting color (hex string).",
+            "color": {
+              "description": "Solid color (hex string).",
               "type": "string"
             },
-            "to": {
-              "description": "Ending color (hex string).",
-              "type": "string"
+            "width": {
+              "description": "Border width in pixels.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
             }
           },
-          "required": ["from", "to"]
+          "required": ["width", "color"]
+        },
+        {
+          "description": "Enabled with gradient color.",
+          "type": "object",
+          "properties": {
+            "gradient": {
+              "description": "Gradient configuration.",
+              "$ref": "#/$defs/GradientConfig"
+            },
+            "width": {
+              "description": "Border width in pixels.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "required": ["width", "gradient"]
+        },
+        {
+          "description": "Enabled with glow effect.",
+          "type": "object",
+          "properties": {
+            "glow": {
+              "description": "Glow color (hex string).",
+              "type": "string"
+            },
+            "width": {
+              "description": "Border width in pixels.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "required": ["width", "glow"]
         }
       ]
     },
-    "BorderColors": {
-      "description": "Colors for different window states.",
-      "type": "object",
-      "properties": {
-        "floating": {
-          "description": "Color for floating windows.\nDefault: Catppuccin Mocha teal (#94e2d5)",
-          "$ref": "#/$defs/BorderColor",
-          "default": "#94e2d5"
-        },
-        "focused": {
-          "description": "Color for the focused window.\nDefault: Catppuccin Mocha lavender (#b4befe)",
-          "$ref": "#/$defs/BorderColor",
-          "default": "#b4befe"
-        },
-        "monocle": {
-          "description": "Color for windows in monocle layout.\nDefault: Catppuccin Mocha mauve (#cba6f7)",
-          "$ref": "#/$defs/BorderColor",
-          "default": "#cba6f7"
-        },
-        "unfocused": {
-          "description": "Color for unfocused windows.\nDefault: Catppuccin Mocha surface0 (#313244)",
-          "$ref": "#/$defs/BorderColor",
-          "default": "#313244"
-        }
-      }
-    },
     "BordersConfig": {
-      "description": "Window border configuration.\n\nBorders are rendered as transparent overlay windows that frame managed windows.\nThey provide visual feedback for focus state, layout mode, and floating status.",
+      "description": "Window border configuration.\n\nBorders are rendered as transparent overlay windows that frame managed windows.\nThey provide visual feedback for focus state, layout mode, and floating status.\n\nEach border state (focused, unfocused, monocle, floating) can be:\n- `false` to disable borders for that state\n- An object with `width` and either `color` (solid) or `gradient`\n\n# Example\n\n```jsonc\n{\n  \"borders\": {\n    \"enabled\": true,\n    \"focused\": { \"width\": 4, \"color\": \"#89b4fa\" },\n    \"unfocused\": false,\n    \"monocle\": { \"width\": 4, \"color\": \"#cba6f7\" },\n    \"floating\": {\n      \"width\": 4,\n      \"gradient\": { \"from\": \"#89b4fa\", \"to\": \"#a6e3a1\", \"angle\": 180 }\n    }\n  }\n}\n```",
       "type": "object",
       "properties": {
         "animation": {
-          "description": "Animation settings for border color transitions.",
+          "description": "Animation settings for border color transitions.\nNote: Animation is handled by `JankyBorders` and may not be configurable.",
           "$ref": "#/$defs/BorderAnimationConfig",
           "default": {
             "durationMs": 200,
             "easing": "ease-out"
           }
         },
-        "colors": {
-          "description": "Colors for different window states.",
-          "$ref": "#/$defs/BorderColors",
-          "default": {
-            "floating": "#94e2d5",
-            "focused": "#b4befe",
-            "monocle": "#cba6f7",
-            "unfocused": "#313244"
-          }
-        },
         "enabled": {
-          "description": "Whether window borders are enabled.\nDefault: false",
+          "description": "Whether window borders are enabled globally.\nDefault: false",
           "type": "boolean",
           "default": false
+        },
+        "floating": {
+          "description": "Border configuration for floating windows.",
+          "$ref": "#/$defs/BorderStateConfig",
+          "default": {
+            "color": "#94e2d5",
+            "width": 4
+          }
+        },
+        "focused": {
+          "description": "Border configuration for focused windows.",
+          "$ref": "#/$defs/BorderStateConfig",
+          "default": {
+            "color": "#b4befe",
+            "width": 4
+          }
+        },
+        "hidpi": {
+          "description": "Enable HiDPI/Retina support for borders.\nDefault: true",
+          "type": ["boolean", "null"]
         },
         "ignore": {
           "description": "Rules for windows that should not have borders.\nThese rules are checked in addition to the global tiling ignore rules.",
@@ -299,12 +341,25 @@
             "$ref": "#/$defs/WindowRule"
           }
         },
-        "width": {
-          "description": "Border width in pixels.\nDefault: 4",
-          "type": "integer",
-          "format": "uint32",
-          "default": 4,
-          "minimum": 0
+        "monocle": {
+          "description": "Border configuration for windows in monocle layout.",
+          "$ref": "#/$defs/BorderStateConfig",
+          "default": {
+            "color": "#cba6f7",
+            "width": 4
+          }
+        },
+        "style": {
+          "description": "Border style: \"round\" or \"square\".\nDefault: \"round\"",
+          "type": ["string", "null"]
+        },
+        "unfocused": {
+          "description": "Border configuration for unfocused windows.\nSet to `false` to hide borders on unfocused windows.",
+          "$ref": "#/$defs/BorderStateConfig",
+          "default": {
+            "color": "#6c7086",
+            "width": 4
+          }
         }
       }
     },
@@ -525,6 +580,27 @@
           }
         }
       ]
+    },
+    "GradientConfig": {
+      "description": "Gradient color configuration.",
+      "type": "object",
+      "properties": {
+        "angle": {
+          "description": "Angle in degrees (0 = left to right, 90 = bottom to top).\nDefault: 90",
+          "type": "number",
+          "format": "double",
+          "default": 90.0
+        },
+        "from": {
+          "description": "Starting color (hex string).",
+          "type": "string"
+        },
+        "to": {
+          "description": "Ending color (hex string).",
+          "type": "string"
+        }
+      },
+      "required": ["from", "to"]
     },
     "LayoutType": {
       "description": "Layout type for workspaces.",
@@ -875,15 +951,24 @@
               "durationMs": 200,
               "easing": "ease-out"
             },
-            "colors": {
-              "floating": "#94e2d5",
-              "focused": "#b4befe",
-              "monocle": "#cba6f7",
-              "unfocused": "#313244"
-            },
             "enabled": false,
+            "floating": {
+              "color": "#94e2d5",
+              "width": 4
+            },
+            "focused": {
+              "color": "#b4befe",
+              "width": 4
+            },
             "ignore": [],
-            "width": 4
+            "monocle": {
+              "color": "#cba6f7",
+              "width": 4
+            },
+            "unfocused": {
+              "color": "#6c7086",
+              "width": 4
+            }
           }
         },
         "enabled": {
