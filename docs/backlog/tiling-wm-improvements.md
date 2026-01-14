@@ -422,14 +422,22 @@ The `AXElement` wrapper is available for new code via `tiling::ffi::AXElement`.
 - [x] Added 4 new tests for buffer functionality
 - [x] 953 tests pass, clippy clean
 
-#### Phase 5.4: Layout Result Caching
+#### Phase 5.4: Layout Result Caching ✅ COMPLETE
 
-- [ ] Add `CachedLayout` struct to `Workspace`:
-  - [ ] `input_hash: u64` - hash of window_ids + ratios + screen + gaps
-  - [ ] `positions: Vec<(u32, Rect)>` - calculated positions
-- [ ] Implement `compute_layout_hash()` method
-- [ ] Update `apply_layout_internal()` to check cache first
-- [ ] Invalidate cache on window add/remove/ratio change
+- [x] Add `LayoutCache` struct to `Workspace`:
+  - [x] `input_hash: u64` - hash of layout inputs
+  - [x] `positions: Vec<(u32, Rect)>` - cached layout positions
+  - [x] `is_valid()`, `update()`, `invalidate()` methods
+- [x] Implement `compute_layout_hash()` function:
+  - Hashes: layout type, window IDs, screen frame, master ratio, split ratios, gaps hash
+- [x] Add `Gaps::compute_hash()` for gap configuration hashing
+- [x] Update `apply_layout_internal()` to check cache first:
+  - Compute hash, check `layout_cache.is_valid(hash)`, return cached if valid
+  - Calculate and update cache on miss or force=true
+- [x] Add cache invalidation on state changes:
+  - Window add/remove, layout change, ratio changes, window swaps, send-to-workspace
+- [x] Added 18 new tests for cache and hash functionality
+- [x] 971 tests pass, clippy clean
 
 #### Phase 5.5: AXUIElement Resolution Caching
 
@@ -643,3 +651,4 @@ The `AXElement` wrapper is available for new code via `tiling::ffi::AXElement`.
 | 2026-01-13 | Milestone 5 Phase 5.1: Workspace name index (947 tests)            |
 | 2026-01-13 | Milestone 5 Phase 5.2: Batch JankyBorders commands (949 tests)     |
 | 2026-01-14 | Milestone 5 Phase 5.3: Animation buffer infrastructure (953 tests) |
+| 2026-01-14 | Milestone 5 Phase 5.4: Layout result caching (971 tests)           |
