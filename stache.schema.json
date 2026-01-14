@@ -68,10 +68,6 @@
           "enabled": false
         },
         "borders": {
-          "animation": {
-            "durationMs": 200,
-            "easing": "ease-out"
-          },
           "enabled": false,
           "floating": {
             "color": "#94e2d5",
@@ -218,24 +214,6 @@
         }
       }
     },
-    "BorderAnimationConfig": {
-      "description": "Animation configuration for border transitions.",
-      "type": "object",
-      "properties": {
-        "durationMs": {
-          "description": "Animation duration in milliseconds.\nDefault: 200",
-          "type": "integer",
-          "format": "uint32",
-          "default": 200,
-          "minimum": 0
-        },
-        "easing": {
-          "description": "Easing function for color transitions.\nDefault: \"ease-out\"",
-          "$ref": "#/$defs/EasingType",
-          "default": "ease-out"
-        }
-      }
-    },
     "BorderStateConfig": {
       "description": "Border state configuration - either disabled or with specific settings.\n\nCan be:\n- `false` to disable borders for this state\n- An object with `width` and either `color` (solid), `gradient`, or `glow`",
       "anyOf": [
@@ -300,14 +278,6 @@
       "description": "Window border configuration.\n\nBorders are rendered as transparent overlay windows that frame managed windows.\nThey provide visual feedback for focus state, layout mode, and floating status.\n\nEach border state (focused, unfocused, monocle, floating) can be:\n- `false` to disable borders for that state\n- An object with `width` and either `color` (solid) or `gradient`\n\n# Example\n\n```jsonc\n{\n  \"borders\": {\n    \"enabled\": true,\n    \"focused\": { \"width\": 4, \"color\": \"#89b4fa\" },\n    \"unfocused\": false,\n    \"monocle\": { \"width\": 4, \"color\": \"#cba6f7\" },\n    \"floating\": {\n      \"width\": 4,\n      \"gradient\": { \"from\": \"#89b4fa\", \"to\": \"#a6e3a1\", \"angle\": 180 }\n    }\n  }\n}\n```",
       "type": "object",
       "properties": {
-        "animation": {
-          "description": "Animation settings for border color transitions.\nNote: Animation is handled by `JankyBorders` and may not be configurable.",
-          "$ref": "#/$defs/BorderAnimationConfig",
-          "default": {
-            "durationMs": 200,
-            "easing": "ease-out"
-          }
-        },
         "enabled": {
           "description": "Whether window borders are enabled globally.\nDefault: false",
           "type": "boolean",
@@ -947,10 +917,6 @@
           "description": "Window border configuration.\nBorders provide visual feedback for focus state and layout mode.",
           "$ref": "#/$defs/BordersConfig",
           "default": {
-            "animation": {
-              "durationMs": 200,
-              "easing": "ease-out"
-            },
             "enabled": false,
             "floating": {
               "color": "#94e2d5",
@@ -1095,7 +1061,7 @@
       }
     },
     "WindowRule": {
-      "description": "Window matching rule for workspace assignment.\n\nAll specified properties must match (AND logic).\nAt least one property must be specified.",
+      "description": "Window matching rule for workspace assignment.\n\nAll specified properties must match (AND logic).\nAt least one property must be specified.\n\n# Performance\n\nCall [`WindowRule::prepare()`] after loading rules from config to pre-compute\nlowercase versions of string fields. This avoids repeated `to_lowercase()` calls\nduring window matching.",
       "type": "object",
       "properties": {
         "app-id": {

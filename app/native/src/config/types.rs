@@ -1084,28 +1084,6 @@ impl BorderStateConfig {
     }
 }
 
-/// Animation configuration for border transitions.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(default, rename_all = "camelCase")]
-pub struct BorderAnimationConfig {
-    /// Animation duration in milliseconds.
-    /// Default: 200
-    pub duration_ms: u32,
-
-    /// Easing function for color transitions.
-    /// Default: "ease-out"
-    pub easing: EasingType,
-}
-
-impl Default for BorderAnimationConfig {
-    fn default() -> Self {
-        Self {
-            duration_ms: 200,
-            easing: EasingType::EaseOut,
-        }
-    }
-}
-
 /// Window border configuration.
 ///
 /// Borders are rendered as transparent overlay windows that frame managed windows.
@@ -1161,10 +1139,6 @@ pub struct BordersConfig {
     /// Border configuration for floating windows.
     pub floating: BorderStateConfig,
 
-    /// Animation settings for border color transitions.
-    /// Note: Animation is handled by `JankyBorders` and may not be configurable.
-    pub animation: BorderAnimationConfig,
-
     /// Rules for windows that should not have borders.
     /// These rules are checked in addition to the global tiling ignore rules.
     #[serde(default)]
@@ -1181,7 +1155,6 @@ impl Default for BordersConfig {
             unfocused: BorderStateConfig::default_unfocused(),
             monocle: BorderStateConfig::default_monocle(),
             floating: BorderStateConfig::default_floating(),
-            animation: BorderAnimationConfig::default(),
             ignore: Vec::new(),
         }
     }
@@ -2520,37 +2493,6 @@ mod tests {
         };
         assert!(gradient.is_gradient());
     }
-
-    // ========================================================================
-    // BorderAnimationConfig tests
-    // ========================================================================
-
-    #[test]
-    fn test_border_animation_config_default() {
-        let config = BorderAnimationConfig::default();
-        assert_eq!(config.duration_ms, 200);
-        assert_eq!(config.easing, EasingType::EaseOut);
-    }
-
-    #[test]
-    fn test_border_animation_config_serialization() {
-        let config = BorderAnimationConfig {
-            duration_ms: 300,
-            easing: EasingType::Spring,
-        };
-        let json = serde_json::to_string(&config).unwrap();
-        assert!(json.contains("300"));
-        assert!(json.contains("spring"));
-    }
-
-    #[test]
-    fn test_border_animation_config_deserialization() {
-        let json = r#"{"durationMs": 150, "easing": "ease-in-out"}"#;
-        let config: BorderAnimationConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(config.duration_ms, 150);
-        assert_eq!(config.easing, EasingType::EaseInOut);
-    }
-
     // ========================================================================
     // BorderStateConfig tests
     // ========================================================================
@@ -2667,17 +2609,11 @@ mod tests {
             "enabled": true,
             "focused": { "width": 4, "color": "#89b4fa" },
             "unfocused": false,
-            "animation": {
-                "durationMs": 300,
-                "easing": "spring"
-            }
         }"##;
         let config: BordersConfig = serde_json::from_str(json).unwrap();
         assert!(config.enabled);
         assert!(config.focused.is_enabled());
         assert!(!config.unfocused.is_enabled());
-        assert_eq!(config.animation.duration_ms, 300);
-        assert_eq!(config.animation.easing, EasingType::Spring);
     }
 
     #[test]
