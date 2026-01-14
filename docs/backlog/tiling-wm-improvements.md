@@ -439,14 +439,20 @@ The `AXElement` wrapper is available for new code via `tiling::ffi::AXElement`.
 - [x] Added 18 new tests for cache and hash functionality
 - [x] 971 tests pass, clippy clean
 
-#### Phase 5.5: AXUIElement Resolution Caching
+#### Phase 5.5: AXUIElement Resolution Caching ✅ COMPLETE
 
-- [ ] Create `AXElementCache` struct:
-  - [ ] `entries: HashMap<u32, CachedElement>`
-  - [ ] TTL: 5 seconds
-- [ ] Add cache to `AnimationSystem` or global
-- [ ] Update `resolve_window_ax_elements()` to use cache
-- [ ] Invalidate on window destroy
+- [x] Create `AXElementCache` struct in `window.rs`:
+  - [x] `entries: RwLock<HashMap<u32, CachedAXEntry>>` for thread-safe access
+  - [x] `CachedAXEntry` with `CachedAXPtr` wrapper (Send+Sync) and timestamp
+  - [x] TTL: 5 seconds (configurable via `constants::cache::AX_ELEMENT_TTL_SECS`)
+- [x] Add global cache via `OnceLock<AXElementCache>` singleton
+- [x] Update `resolve_window_ax_elements()` to use cache:
+  - Check cache first via `get_multiple()`
+  - Only query `get_all_windows()` for cache misses
+  - Update cache with newly resolved elements
+- [x] Add `invalidate_ax_element_cache()` called from `untrack_window_internal()`
+- [x] Added 15 new tests for cache functionality
+- [x] 986 tests pass, clippy clean
 
 #### Phase 5.6: Event Coalescing
 
@@ -652,3 +658,4 @@ The `AXElement` wrapper is available for new code via `tiling::ffi::AXElement`.
 | 2026-01-13 | Milestone 5 Phase 5.2: Batch JankyBorders commands (949 tests)     |
 | 2026-01-14 | Milestone 5 Phase 5.3: Animation buffer infrastructure (953 tests) |
 | 2026-01-14 | Milestone 5 Phase 5.4: Layout result caching (971 tests)           |
+| 2026-01-14 | Milestone 5 Phase 5.5: AXUIElement resolution caching (986 tests)  |
