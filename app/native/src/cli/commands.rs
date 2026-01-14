@@ -350,6 +350,8 @@ pub enum CliLayoutType {
     Monocle,
     /// Master layout - one large window with stack.
     Master,
+    /// Grid layout - windows arranged in a grid.
+    Grid,
     /// Floating layout - windows can be freely moved.
     Floating,
 }
@@ -516,7 +518,7 @@ pub struct TilingWorkspaceArgs {
 
     /// Change the layout of the focused workspace.
     ///
-    /// Layout: dwindle, split, split-vertical, split-horizontal, monocle, master, floating.
+    /// Layout: dwindle, split, split-vertical, split-horizontal, monocle, master, grid, floating.
     #[arg(long, value_name = "LAYOUT", value_enum)]
     pub layout: Option<CliLayoutType>,
 
@@ -1222,6 +1224,7 @@ impl Cli {
                 CliLayoutType::SplitHorizontal => "split-horizontal",
                 CliLayoutType::Monocle => "monocle",
                 CliLayoutType::Master => "master",
+                CliLayoutType::Grid => "grid",
                 CliLayoutType::Floating => "floating",
             };
             ipc::send_notification(&StacheNotification::TilingSetLayout(layout_str.to_string()));
