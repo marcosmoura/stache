@@ -1,9 +1,0 @@
-{
-  "languages": {
-    "Rust": {
-      "hard_tabs": false,
-      "tab_size": 4
-    }
-  },
-  "project_name": "Stache"
-}
