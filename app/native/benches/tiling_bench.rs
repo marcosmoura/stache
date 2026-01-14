@@ -64,34 +64,24 @@ fn test_window(bundle_id: &str, app_name: &str, title: &str) -> WindowInfo {
     )
 }
 
+/// Helper to create a window rule with cached lowercase fields populated.
+fn make_rule(app_id: Option<&str>, app_name: Option<&str>, title: Option<&str>) -> WindowRule {
+    let mut rule = WindowRule::default();
+    rule.app_id = app_id.map(String::from);
+    rule.app_name = app_name.map(String::from);
+    rule.title = title.map(String::from);
+    rule.prepare();
+    rule
+}
+
 /// Creates test window rules for benchmarking.
 fn test_rules() -> Vec<WindowRule> {
     vec![
-        WindowRule {
-            app_id: Some("com.apple.finder".to_string()),
-            app_name: None,
-            title: None,
-        },
-        WindowRule {
-            app_id: Some("com.apple.Safari".to_string()),
-            app_name: None,
-            title: Some("Settings".to_string()),
-        },
-        WindowRule {
-            app_id: None,
-            app_name: Some("Terminal".to_string()),
-            title: None,
-        },
-        WindowRule {
-            app_id: Some("com.microsoft.VSCode".to_string()),
-            app_name: None,
-            title: None,
-        },
-        WindowRule {
-            app_id: Some("com.googlecode.iterm2".to_string()),
-            app_name: None,
-            title: None,
-        },
+        make_rule(Some("com.apple.finder"), None, None),
+        make_rule(Some("com.apple.Safari"), None, Some("Settings")),
+        make_rule(None, Some("Terminal"), None),
+        make_rule(Some("com.microsoft.VSCode"), None, None),
+        make_rule(Some("com.googlecode.iterm2"), None, None),
     ]
 }
 
