@@ -468,15 +468,22 @@ The `AXElement` wrapper is available for new code via `tiling::ffi::AXElement`.
 - [x] Added 14 new tests for coalescer functionality
 - [x] 1000 tests pass, clippy clean
 
-#### Phase 5.7: Screen and Window List Caching
+#### Phase 5.7: Screen and Window List Caching ✓
 
-- [ ] Create `SystemInfoCache` struct:
-  - [ ] `screens: Option<(Vec<Screen>, Instant)>` - TTL: 1s
-  - [ ] `windows: Option<(Vec<CGWindowInfo>, Instant)>` - TTL: 50ms
-- [ ] Add cache to `TilingManager` or global
-- [ ] Update `get_all_screens()` to use cache
-- [ ] Update `get_cg_window_list()` to use cache
-- [ ] Add `invalidate_screen_cache()` for screen changes
+- [x] Screen cache implementation:
+  - [x] `ScreenCache` struct in `screen.rs` with TTL-based validity
+  - [x] 1-second TTL via `constants::cache::SCREEN_TTL_MS`
+  - [x] `invalidate_screen_cache()` public API for explicit invalidation
+  - [x] Cache integration in `get_all_screens()` with hit/miss handling
+- [x] CG window list cache implementation:
+  - [x] `CGWindowListCache` struct in `window.rs`
+  - [x] Separate caches for on-screen and all-windows queries
+  - [x] 50ms TTL via `constants::cache::CG_WINDOW_LIST_TTL_MS`
+  - [x] `invalidate_cg_window_list_cache()` for explicit invalidation
+  - [x] Cache integration in `get_cg_window_list()` and `get_cg_window_list_all()`
+- [x] Screen cache invalidation integrated into `handle_screen_change()`
+- [x] Added 15 new tests for cache implementations
+- [x] 1015 tests pass, clippy clean
 
 #### Phase 5.8: SmallVec for Hot Paths
 
