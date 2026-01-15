@@ -1,0 +1,37 @@
+{
+  // Tiling configuration with custom gaps for integration tests
+  "tiling": {
+    "enabled": true,
+    "workspaces": [
+      {
+        "name": "main",
+        "layout": "dwindle",
+        "screen": "main"
+      }
+    ],
+    "gaps": {
+      "inner": {
+        "horizontal": 10,
+        "vertical": 8
+      },
+      "outer": {
+        "top": 48,
+        "right": 12,
+        "bottom": 12,
+        "left": 12
+      }
+    },
+    "animations": {
+      "enabled": false
+    },
+    "borders": {
+      "enabled": false
+    }
+  },
+  "notunes": {
+    "enabled": false
+  },
+  "menuAnywhere": {
+    "enabled": false
+  }
+}

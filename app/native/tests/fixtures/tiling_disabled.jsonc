@@ -1,0 +1,12 @@
+{
+  // Configuration with tiling disabled for integration tests
+  "tiling": {
+    "enabled": false
+  },
+  "notunes": {
+    "enabled": false
+  },
+  "menuAnywhere": {
+    "enabled": false
+  }
+}

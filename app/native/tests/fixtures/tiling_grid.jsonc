@@ -1,0 +1,30 @@
+{
+  // Grid layout test configuration
+  // Single grid workspace without any rules - windows stay where created
+  "tiling": {
+    "enabled": true,
+    "workspaces": [
+      {
+        "name": "main",
+        "layout": "grid",
+        "screen": "main"
+      }
+    ],
+    "gaps": {
+      "inner": 8,
+      "outer": 12
+    },
+    "animations": {
+      "enabled": false
+    },
+    "borders": {
+      "enabled": false
+    }
+  },
+  "notunes": {
+    "enabled": false
+  },
+  "menuAnywhere": {
+    "enabled": false
+  }
+}

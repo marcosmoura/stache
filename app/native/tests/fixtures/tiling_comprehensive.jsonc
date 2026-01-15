@@ -1,0 +1,122 @@
+{
+  // Comprehensive tiling configuration for integration tests
+  // Simulates a realistic multi-workspace setup with various layouts
+  // Only uses Dictionary and TextEdit as test applications
+  "tiling": {
+    "enabled": true,
+    "workspaces": [
+      {
+        // Default workspace for general windows
+        "name": "general",
+        "layout": "dwindle",
+        "screen": "main"
+      },
+      {
+        // Workspace for Dictionary windows (code/dev work)
+        "name": "code",
+        "layout": "dwindle",
+        "screen": "main",
+        "rules": [
+          { "appId": "com.apple.Dictionary" },
+          { "appName": "Dictionary" }
+        ]
+      },
+      {
+        // Workspace for TextEdit windows (documentation)
+        "name": "docs",
+        "layout": "split",
+        "screen": "main",
+        "rules": [
+          { "appId": "com.apple.TextEdit" },
+          { "appName": "TextEdit" }
+        ]
+      },
+      {
+        // Full-screen workspace (monocle layout)
+        "name": "focus",
+        "layout": "monocle",
+        "screen": "main"
+      },
+      {
+        // Grid workspace for multiple windows
+        "name": "grid",
+        "layout": "grid",
+        "screen": "main"
+      },
+      {
+        // Master-stack workspace
+        "name": "master",
+        "layout": "master",
+        "screen": "main"
+      },
+      {
+        // Floating workspace with presets
+        "name": "float",
+        "layout": "floating",
+        "screen": "main"
+      }
+    ],
+    "gaps": {
+      "inner": 8,
+      "outer": 12
+    },
+    "floating": {
+      "presets": [
+        {
+          "name": "centered",
+          "width": "60%",
+          "height": "70%",
+          "center": true
+        },
+        {
+          "name": "full",
+          "width": "100%",
+          "height": "100%",
+          "x": 0,
+          "y": 0
+        },
+        {
+          "name": "left-half",
+          "width": "50%",
+          "height": "100%",
+          "x": 0,
+          "y": 0
+        },
+        {
+          "name": "right-half",
+          "width": "50%",
+          "height": "100%",
+          "x": "50%",
+          "y": 0
+        },
+        {
+          "name": "top-half",
+          "width": "100%",
+          "height": "50%",
+          "x": 0,
+          "y": 0
+        },
+        {
+          "name": "bottom-half",
+          "width": "100%",
+          "height": "50%",
+          "x": 0,
+          "y": "50%"
+        }
+      ]
+    },
+    "animations": {
+      "enabled": false
+    },
+    "borders": {
+      "enabled": false
+    }
+  },
+  // Disable other features for testing
+  "notunes": {
+    "enabled": false
+  },
+  "menuAnywhere": {
+    "enabled": false
+  }
+}

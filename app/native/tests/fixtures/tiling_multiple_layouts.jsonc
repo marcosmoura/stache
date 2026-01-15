@@ -1,0 +1,58 @@
+{
+  // Tiling configuration with multiple layout types for integration tests
+  "tiling": {
+    "enabled": true,
+    "workspaces": [
+      {
+        "name": "dwindle-ws",
+        "layout": "dwindle",
+        "screen": "main"
+      },
+      {
+        "name": "monocle-ws",
+        "layout": "monocle",
+        "screen": "main"
+      },
+      {
+        "name": "master-ws",
+        "layout": "master",
+        "screen": "main"
+      },
+      {
+        "name": "grid-ws",
+        "layout": "grid",
+        "screen": "main"
+      },
+      {
+        "name": "split-ws",
+        "layout": "split",
+        "screen": "main"
+      },
+      {
+        "name": "floating-ws",
+        "layout": "floating",
+        "screen": "main"
+      }
+    ],
+    "gaps": {
+      "inner": 8,
+      "outer": 12
+    },
+    "master": {
+      "ratio": 60,
+      "position": "left"
+    },
+    "animations": {
+      "enabled": false
+    },
+    "borders": {
+      "enabled": false
+    }
+  },
+  "notunes": {
+    "enabled": false
+  },
+  "menuAnywhere": {
+    "enabled": false
+  }
+}
