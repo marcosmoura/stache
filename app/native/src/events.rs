@@ -137,6 +137,11 @@ pub mod tiling {
     ///
     /// Payload: `{ enabled: bool }`
     pub const INITIALIZED: &str = "stache://tiling/initialized";
+
+    /// Emitted when window focus changes.
+    ///
+    /// Payload: `{ windowId: u32, workspace: String }`
+    pub const WINDOW_FOCUS_CHANGED: &str = "stache://tiling/window-focus-changed";
 }
 
 #[cfg(test)]
@@ -162,6 +167,7 @@ mod tests {
             tiling::WINDOW_UNTRACKED,
             tiling::SCREENS_CHANGED,
             tiling::INITIALIZED,
+            tiling::WINDOW_FOCUS_CHANGED,
         ];
 
         for event in events {
@@ -196,6 +202,7 @@ mod tests {
             (tiling::WINDOW_UNTRACKED, "tiling", "window-untracked"),
             (tiling::SCREENS_CHANGED, "tiling", "screens-changed"),
             (tiling::INITIALIZED, "tiling", "initialized"),
+            (tiling::WINDOW_FOCUS_CHANGED, "tiling", "window-focus-changed"),
         ];
 
         for (event, module, name) in events {

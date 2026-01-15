@@ -5,7 +5,7 @@ export type App = {
   displayName: string;
 };
 
-export type FocusedApp = Omit<App, 'displayName'> | undefined;
+export type FocusedApp = Omit<App, 'displayName'> | null | undefined;
 
 export type AppListProps = {
   apps: App[];

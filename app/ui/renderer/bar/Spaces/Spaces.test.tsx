@@ -5,8 +5,8 @@ import { createQueryClientWrapper, createTestQueryClient } from '@/tests/utils';
 
 import { Spaces } from './Spaces';
 
-const workspaceQueryKey = ['hyprspace_workspace_data'];
-const appsQueryKey = ['hyprspace_workspace_apps'];
+const workspaceQueryKey = ['tiling_workspace_data'];
+const appsQueryKey = ['tiling_workspace_apps'];
 
 const setWorkspaceQueryData = (
   queryClient: ReturnType<typeof createTestQueryClient>,

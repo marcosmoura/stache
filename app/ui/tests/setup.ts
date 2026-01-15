@@ -12,9 +12,42 @@ const defaultInvokeMocks: Record<string, unknown> = {
   get_cpu_info: { usage: 25, temperature: 50 },
   is_system_awake: false,
   get_weather_config: {},
-  get_hyprspace_workspaces: [{ workspace: 'terminal' }],
-  get_hyprspace_focused_workspace: { workspace: 'terminal' },
-  get_hyprspace_focused_window: [{ appName: 'Ghostty', title: 'zsh' }],
+  get_tiling_workspaces: [
+    {
+      name: 'terminal',
+      screenId: 1,
+      screenName: 'Built-in Display',
+      layout: 'dwindle',
+      isVisible: true,
+      isFocused: true,
+      windowCount: 1,
+      windowIds: [1],
+    },
+  ],
+  get_tiling_focused_workspace: 'terminal',
+  get_tiling_focused_window: {
+    id: 1,
+    pid: 123,
+    appId: 'com.mitchellh.ghostty',
+    appName: 'Ghostty',
+    title: 'zsh',
+    workspace: 'terminal',
+    isFocused: true,
+  },
+  get_tiling_current_workspace_windows: [
+    {
+      id: 1,
+      pid: 123,
+      appId: 'com.mitchellh.ghostty',
+      appName: 'Ghostty',
+      title: 'zsh',
+      workspace: 'terminal',
+      isFocused: true,
+    },
+  ],
+  focus_tiling_workspace: undefined,
+  focus_tiling_window: undefined,
+  is_tiling_enabled: true,
 };
 
 // Mock window.__TAURI_INTERNALS__ for @tauri-store/zustand and other plugins
@@ -75,6 +108,12 @@ vi.mock('@tauri-apps/api/core', () => ({
 }));
 
 vi.mock('@tauri-apps/api/event', () => ({
-  listen: vi.fn().mockResolvedValue(() => {}),
+  listen: vi.fn().mockImplementation((event: string, callback: (payload: unknown) => void) => {
+    // Immediately trigger the tiling initialized event so Renderer becomes ready
+    if (event === 'stache://tiling/initialized') {
+      setTimeout(() => callback({ payload: { enabled: true } }), 0);
+    }
+    return Promise.resolve(() => {});
+  }),
   emitTo: vi.fn().mockResolvedValue(undefined),
 }));

@@ -27,7 +27,7 @@ Displays your virtual workspaces and the current active window.
 
 **Requirements:**
 
-- Tiling window manager integration (Hyprspace, yabai, aerospace)
+- Tiling window manager integration
 - Event notifications from your window manager
 
 **Integration:**

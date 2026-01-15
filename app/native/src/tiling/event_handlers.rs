@@ -761,9 +761,34 @@ pub fn handle_window_focused(pid: i32) {
     let target_ws = mgr.get_workspace(&window_workspace);
 
     if let Some(target) = target_ws {
+        // Check if the focused workspace is changing (even if target is already visible)
+        let previous_focused_workspace = mgr.state().focused_workspace.clone();
+        let focused_workspace_changing =
+            previous_focused_workspace.as_ref() != Some(&window_workspace);
+
+        // Get screen info for events
+        let screen_name =
+            mgr.get_screen(target.screen_id).map(|s| s.name.clone()).unwrap_or_default();
+
         if target.is_visible {
-            // Workspace is already visible, just update the focused window
+            // Workspace is already visible on its screen, just update the focused window
             mgr.set_focused_window(&window_workspace, focused.id);
+
+            // Get data for events before dropping lock
+            let workspace_name = window_workspace.clone();
+            let window_id = focused.id;
+            drop(mgr);
+
+            // If the focused workspace changed (cross-screen focus), emit workspace changed
+            if focused_workspace_changing {
+                super::emit_workspace_changed(
+                    &workspace_name,
+                    &screen_name,
+                    previous_focused_workspace.as_deref(),
+                );
+            }
+            // Always emit focus changed event
+            super::emit_window_focus_changed(window_id, &workspace_name);
             return;
         }
 
@@ -773,7 +798,27 @@ pub fn handle_window_focused(pid: i32) {
         }
 
         // Workspace is not visible - switch to it
+        let previous_visible_workspace = mgr
+            .get_workspaces()
+            .iter()
+            .find(|ws| ws.screen_id == target.screen_id && ws.is_visible)
+            .map(|ws| ws.name.clone());
+
         mgr.switch_workspace(&window_workspace);
+
+        // Get data for events before dropping lock
+        let workspace_name = window_workspace.clone();
+        let window_id = focused.id;
+        drop(mgr);
+
+        // Emit workspace changed event
+        super::emit_workspace_changed(
+            &workspace_name,
+            &screen_name,
+            previous_visible_workspace.as_deref(),
+        );
+        // Also emit focus changed event
+        super::emit_window_focus_changed(window_id, &workspace_name);
     }
 }
 

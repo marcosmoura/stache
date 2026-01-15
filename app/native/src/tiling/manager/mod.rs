@@ -849,6 +849,29 @@ impl TilingManager {
         // Record this workspace switch to debounce subsequent focus events
         self.record_workspace_switch();
 
+        // Focus a window in the target workspace to ensure proper focus
+        // Try focus history first, then fall back to the first window
+        let window_to_focus = self.focus_history.get(name).or_else(|| {
+            self.state.workspace_by_name(name).and_then(|ws| ws.window_ids.first().copied())
+        });
+
+        if let Some(window_id) = window_to_focus {
+            // Invalidate CG cache since we just showed windows
+            super::window::invalidate_cg_window_list_cache();
+
+            // Focus the window
+            if super::window::focus_window(window_id).is_ok() {
+                // Update focused window index
+                if let Some(ws) = self.state.workspace_by_name_mut(name)
+                    && let Some(idx) = ws.window_ids.iter().position(|&id| id == window_id)
+                {
+                    ws.focused_window_index = Some(idx);
+                }
+                // Record programmatic focus to debounce incoming focus events
+                self.last_programmatic_focus = Some((window_id, Instant::now()));
+            }
+        }
+
         Some(WorkspaceSwitchInfo {
             workspace: name.to_string(),
             screen: screen_name,
@@ -1930,19 +1953,24 @@ impl TilingManager {
     pub fn focus_window_by_id(&mut self, window_id: u32) -> bool {
         // Find the window
         let Some(window) = self.state.window_by_id(window_id) else {
+            eprintln!("stache: tiling: focus_window_by_id: window {window_id} not found in state");
             return false;
         };
 
         let workspace_name = window.workspace_name.clone();
 
         // Focus the window
-        if super::window::focus_window(window_id).is_ok() {
-            // Record this programmatic focus to debounce incoming focus events
-            self.last_programmatic_focus = Some((window_id, Instant::now()));
-            self.set_focused_window(&workspace_name, window_id);
-            true
-        } else {
-            false
+        match super::window::focus_window(window_id) {
+            Ok(()) => {
+                // Record this programmatic focus to debounce incoming focus events
+                self.last_programmatic_focus = Some((window_id, Instant::now()));
+                self.set_focused_window(&workspace_name, window_id);
+                true
+            }
+            Err(e) => {
+                eprintln!("stache: tiling: focus_window_by_id: focus_window failed: {e}");
+                false
+            }
         }
     }
 
@@ -1990,6 +2018,7 @@ impl TilingManager {
         let window_ids = workspace.window_ids.clone();
 
         if window_ids.is_empty() {
+            eprintln!("stache: tiling: focus_next: no windows in workspace");
             return None;
         }
 
@@ -1997,13 +2026,19 @@ impl TilingManager {
         let next_idx = (current_idx + 1) % window_ids.len();
         let next_window_id = window_ids[next_idx];
 
+        eprintln!(
+            "stache: tiling: focus_next: current_idx={current_idx}, next_idx={next_idx}, window_id={next_window_id}, window_ids={window_ids:?}"
+        );
+
         if self.focus_window_by_id(next_window_id) {
             // Update the focused index
             if let Some(ws) = self.state.workspace_by_name_mut(&workspace_name) {
                 ws.focused_window_index = Some(next_idx);
             }
+            eprintln!("stache: tiling: focus_next: success, new index={next_idx}");
             Some(next_window_id)
         } else {
+            eprintln!("stache: tiling: focus_next: focus_window_by_id failed");
             None
         }
     }

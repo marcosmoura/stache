@@ -143,6 +143,7 @@ thread_local! {
     static CF_HIDDEN: OnceCell<CFString> = const { OnceCell::new() };
     static CF_MAIN: OnceCell<CFString> = const { OnceCell::new() };
     static CF_RAISE: OnceCell<CFString> = const { OnceCell::new() };
+    static CF_FRONTMOST: OnceCell<CFString> = const { OnceCell::new() };
 }
 
 /// Gets or creates a cached `CFString`.
@@ -187,6 +188,9 @@ fn cf_main() -> *const c_void { cached_cfstring!(CF_MAIN, "AXMain") }
 
 #[inline]
 fn cf_raise() -> *const c_void { cached_cfstring!(CF_RAISE, "AXRaise") }
+
+#[inline]
+fn cf_frontmost() -> *const c_void { cached_cfstring!(CF_FRONTMOST, "AXFrontmost") }
 
 // ============================================================================
 // AXUIElement Resolution Cache
@@ -737,6 +741,40 @@ unsafe fn raise_ax_window(element: AXUIElementRef) -> bool {
         return false;
     }
     let result = unsafe { AXUIElementPerformAction(element, cf_raise()) };
+    result == K_AX_ERROR_SUCCESS
+}
+
+/// Sets the `AXMain` attribute on a window to make it the main window of its app.
+///
+/// This is important for windows from the same application that are stacked
+/// (like in monocle layout). Setting `AXMain` ensures the window becomes the
+/// active window of the app.
+///
+/// Returns `false` if the element is null or the attribute cannot be set.
+#[inline]
+unsafe fn set_ax_main(element: AXUIElementRef) -> bool {
+    if element.is_null() {
+        return false;
+    }
+    let true_value = CFBoolean::true_value();
+    let result = unsafe {
+        AXUIElementSetAttributeValue(element, cf_main(), true_value.as_concrete_TypeRef().cast())
+    };
+    result == K_AX_ERROR_SUCCESS
+}
+
+/// Sets the `AXFocused` attribute on a window to give it keyboard focus.
+///
+/// Returns `false` if the element is null or the attribute cannot be set.
+#[inline]
+unsafe fn set_ax_focused(element: AXUIElementRef) -> bool {
+    if element.is_null() {
+        return false;
+    }
+    let true_value = CFBoolean::true_value();
+    let result = unsafe {
+        AXUIElementSetAttributeValue(element, cf_focused(), true_value.as_concrete_TypeRef().cast())
+    };
     result == K_AX_ERROR_SUCCESS
 }
 
@@ -1843,18 +1881,20 @@ pub fn focus_window(window_id: u32) -> TilingResult<()> {
         .find(|w| w.id == window_id)
         .ok_or(TilingError::WindowNotFound(window_id))?;
 
-    // First activate the app
-    if !activate_app(window.pid) {
+    let Some(ax_element) = window.ax_element else {
         return Err(TilingError::window_op(format!(
-            "Failed to activate app for window {window_id} (pid {})",
-            window.pid
+            "Window {window_id} has no AX element"
         )));
-    }
+    };
 
-    // Then raise the specific window
-    if let Some(ax_element) = window.ax_element
-        && !unsafe { raise_ax_window(ax_element) }
-    {
+    // First, make the app frontmost using AX API (faster than NSRunningApplication)
+    unsafe { set_app_frontmost(window.pid) };
+
+    // Set as main window (this makes it the key window of the app)
+    let _ = unsafe { set_ax_main(ax_element) };
+
+    // Raise the window (brings to front in z-order)
+    if !unsafe { raise_ax_window(ax_element) } {
         return Err(TilingError::window_op(format!(
             "Failed to raise window {window_id}"
         )));
@@ -1863,7 +1903,47 @@ pub fn focus_window(window_id: u32) -> TilingResult<()> {
     Ok(())
 }
 
-/// Activates an application by PID.
+/// Makes an application frontmost using the Accessibility API.
+/// This is faster than NSRunningApplication activateWithOptions:.
+unsafe fn set_app_frontmost(pid: i32) {
+    let app_element = unsafe { AXUIElementCreateApplication(pid) };
+    if app_element.is_null() {
+        return;
+    }
+
+    // Set AXFrontmost to true
+    let true_value = CFBoolean::true_value();
+    let _ = unsafe {
+        AXUIElementSetAttributeValue(
+            app_element,
+            cf_frontmost(),
+            true_value.as_concrete_TypeRef().cast(),
+        )
+    };
+
+    unsafe { CFRelease(app_element.cast()) };
+}
+
+/// Activates an application by PID using a faster, non-blocking approach.
+fn activate_app_fast(pid: i32) {
+    unsafe {
+        let Some(app_class) = Class::get("NSRunningApplication") else {
+            return;
+        };
+
+        let app: *mut Object = msg_send![app_class, runningApplicationWithProcessIdentifier: pid];
+        if app.is_null() {
+            return;
+        }
+
+        // Use just NSApplicationActivateIgnoringOtherApps (2) without AllWindows
+        // This is faster and sufficient for our use case
+        let _: BOOL = msg_send![app, activateWithOptions: 2u64];
+    }
+}
+
+/// Activates an application by PID (blocking, slow - use activate_app_fast instead).
+#[allow(dead_code)]
 fn activate_app(pid: i32) -> bool {
     unsafe {
         let Some(app_class) = Class::get("NSRunningApplication") else {

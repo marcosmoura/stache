@@ -38,9 +38,9 @@ pub enum StacheError {
     /// Battery operation failed.
     #[error("Battery error: {0}")]
     BatteryError(String),
-    /// Hyprspace/AeroSpace operation failed.
-    #[error("Hyprspace error: {0}")]
-    HyprspaceError(String),
+    /// Tiling window manager operation failed.
+    #[error("Tiling error: {0}")]
+    TilingError(String),
     /// Shell command execution failed.
     #[error("Shell error: {0}")]
     ShellError(String),
@@ -144,10 +144,10 @@ mod tests {
     }
 
     #[test]
-    fn test_hyprspace_error_display() {
-        let err = StacheError::HyprspaceError("Workspace not found".to_string());
+    fn test_tiling_error_display() {
+        let err = StacheError::TilingError("Workspace not found".to_string());
         let msg = err.to_string();
-        assert!(msg.contains("Hyprspace error"));
+        assert!(msg.contains("Tiling error"));
     }
 
     #[test]

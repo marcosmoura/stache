@@ -43,13 +43,6 @@ pub struct Cli {
 #[derive(Subcommand, Debug)]
 #[command(next_display_order = None)]
 pub enum Commands {
-    /// Send events to the running Stache desktop app.
-    ///
-    /// These commands notify the running Stache instance about external changes
-    /// detected by your automation tools (e.g., yabai, aerospace, skhd).
-    #[command(subcommand)]
-    Event(EventCommands),
-
     /// Wallpaper management commands.
     #[command(subcommand)]
     Wallpaper(WallpaperCommands),
@@ -227,32 +220,6 @@ pub enum WallpaperCommands {
     /// Returns a JSON array of wallpaper paths from the configured wallpaper
     /// directory or list.
     List,
-}
-
-// ============================================================================
-// Event Commands
-// ============================================================================
-
-/// Event subcommands for notifying the running Stache instance.
-#[derive(Subcommand, Debug)]
-#[command(next_display_order = None)]
-pub enum EventCommands {
-    /// Notify Stache that the focused window changed.
-    ///
-    /// Use when your automation detects a window-focus change.
-    /// Triggers Hyprspace queries to refresh current workspace and app state.
-    #[command(name = "window-focus-changed")]
-    WindowFocusChanged,
-
-    /// Notify Stache that the active workspace changed.
-    ///
-    /// Requires the new workspace name so Stache can update its Hyprspace view
-    /// and trigger a window refresh.
-    #[command(name = "workspace-changed")]
-    WorkspaceChanged {
-        /// Workspace identifier reported by hyprspace (e.g. coding).
-        name: String,
-    },
 }
 
 // ============================================================================
@@ -568,7 +535,6 @@ impl Cli {
         }
 
         match &self.command {
-            Commands::Event(event_cmd) => Self::execute_event(event_cmd)?,
             Commands::Wallpaper(wallpaper_cmd) => Self::execute_wallpaper(wallpaper_cmd)?,
             Commands::Cache(cache_cmd) => Self::execute_cache(cache_cmd)?,
             Commands::Audio(audio_cmd) => Self::execute_audio(audio_cmd)?,
@@ -604,24 +570,6 @@ impl Cli {
     fn print_completions<G: Generator>(generator: G) {
         let mut cmd = Self::command();
         generate(generator, &mut cmd, "stache", &mut io::stdout());
-    }
-
-    /// Execute event subcommands.
-    fn execute_event(cmd: &EventCommands) -> Result<(), StacheError> {
-        let notification = match cmd {
-            EventCommands::WindowFocusChanged => StacheNotification::WindowFocusChanged,
-            EventCommands::WorkspaceChanged { name } => {
-                StacheNotification::WorkspaceChanged(name.clone())
-            }
-        };
-
-        if ipc::send_notification(&notification) {
-            Ok(())
-        } else {
-            Err(StacheError::IpcError(
-                "Failed to send notification to Stache app".to_string(),
-            ))
-        }
     }
 
     /// Execute cache subcommands.
@@ -1605,26 +1553,6 @@ mod tests {
                 assert!(output);
             }
             _ => panic!("Expected Audio List command"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parses_event_window_focus_changed() {
-        let cli = Cli::try_parse_from(["stache", "event", "window-focus-changed"]).unwrap();
-        match cli.command {
-            Commands::Event(EventCommands::WindowFocusChanged) => {}
-            _ => panic!("Expected Event WindowFocusChanged command"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parses_event_workspace_changed() {
-        let cli = Cli::try_parse_from(["stache", "event", "workspace-changed", "coding"]).unwrap();
-        match cli.command {
-            Commands::Event(EventCommands::WorkspaceChanged { name }) => {
-                assert_eq!(name, "coding");
-            }
-            _ => panic!("Expected Event WorkspaceChanged command"),
         }
     }
 

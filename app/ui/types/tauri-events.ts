@@ -70,3 +70,28 @@ export const AppEvents = {
   /** Emitted to signal that the app should reload. Payload: void */
   RELOAD: 'stache://app/reload',
 } as const;
+
+/**
+ * Tiling window manager events
+ *
+ * These events are emitted by the tiling module to notify the frontend
+ * about workspace, window, and layout changes.
+ */
+export const TilingEvents = {
+  /** Emitted when the focused workspace changes. Payload: { workspace: string, screen: string } */
+  WORKSPACE_CHANGED: 'stache://tiling/workspace-changed',
+  /** Emitted when windows in a workspace change (added/removed). Payload: { workspace: string, windows: number[] } */
+  WORKSPACE_WINDOWS_CHANGED: 'stache://tiling/workspace-windows-changed',
+  /** Emitted when a workspace's layout changes. Payload: { workspace: string, layout: string } */
+  LAYOUT_CHANGED: 'stache://tiling/layout-changed',
+  /** Emitted when a new window is tracked. Payload: { windowId: number, workspace: string } */
+  WINDOW_TRACKED: 'stache://tiling/window-tracked',
+  /** Emitted when a window is no longer tracked. Payload: { windowId: number } */
+  WINDOW_UNTRACKED: 'stache://tiling/window-untracked',
+  /** Emitted when screens are connected or disconnected. Payload: Screen[] */
+  SCREENS_CHANGED: 'stache://tiling/screens-changed',
+  /** Emitted when the tiling manager finishes initialization. Payload: { enabled: boolean } */
+  INITIALIZED: 'stache://tiling/initialized',
+  /** Emitted when window focus changes. Payload: { windowId: number, workspace: string } */
+  WINDOW_FOCUS_CHANGED: 'stache://tiling/window-focus-changed',
+} as const;

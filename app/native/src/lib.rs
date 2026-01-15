@@ -73,15 +73,17 @@ pub fn run() {
             bar::components::apps::open_app,
             bar::components::battery::get_battery_info,
             bar::components::cpu::get_cpu_info,
-            bar::components::hyprspace::focus_window_by_window_id,
-            bar::components::hyprspace::get_hyprspace_current_workspace_windows,
-            bar::components::hyprspace::get_hyprspace_focused_window,
-            bar::components::hyprspace::get_hyprspace_focused_workspace,
-            bar::components::hyprspace::get_hyprspace_workspaces,
-            bar::components::hyprspace::go_to_hyprspace_workspace,
             bar::components::keepawake::is_system_awake,
             bar::components::keepawake::toggle_system_awake,
             bar::components::media::get_current_media_info,
+            bar::components::tiling::focus_tiling_window,
+            bar::components::tiling::focus_tiling_workspace,
+            bar::components::tiling::get_tiling_current_workspace_windows,
+            bar::components::tiling::get_tiling_focused_window,
+            bar::components::tiling::get_tiling_focused_workspace,
+            bar::components::tiling::get_tiling_windows,
+            bar::components::tiling::get_tiling_workspaces,
+            bar::components::tiling::is_tiling_enabled,
             bar::components::weather::get_weather_config,
             bar::window::get_bar_window_frame,
         ])
@@ -94,9 +96,6 @@ pub fn run() {
 
             // Start watching the config file for changes
             config::watch_config_file(app.handle().clone());
-
-            // Initialize tiling window manager
-            tiling::init_with_handle(Some(app.handle().clone()));
 
             // Start IPC socket server for CLI queries
             utils::ipc_socket::start_server(tiling::handle_ipc_query);
@@ -121,6 +120,9 @@ pub fn run() {
 
             // Initialize MenuAnywhere (summon menu bar at cursor)
             menu_anywhere::init(app.handle().clone());
+
+            // Initialize tiling window manager
+            tiling::init(app.handle().clone());
 
             Ok(())
         })

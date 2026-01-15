@@ -66,6 +66,8 @@ pub mod workspace;
 pub mod testing;
 
 // Re-export commonly used types
+use std::sync::Mutex;
+
 pub use animation::{
     AnimationConfig, AnimationSystem, WindowTransition, begin_animation, cancel_animation,
     get_interrupted_position,
@@ -79,7 +81,6 @@ pub use rules::{
 };
 pub use screen::{get_all_screens, get_main_screen, get_screen_by_name, get_screen_count};
 pub use state::{Point, Rect, Screen, TilingState, TrackedWindow, Workspace};
-use tauri::{AppHandle, Runtime};
 pub use window::{
     AppInfo, CGWindowInfo, WindowInfo, focus_window, get_all_windows,
     get_all_windows_including_hidden, get_cg_window_list, get_cg_window_list_all,
@@ -93,7 +94,60 @@ pub use workspace::{
 };
 
 use crate::config::get_config;
-use crate::is_accessibility_granted;
+use crate::{events, is_accessibility_granted};
+
+// ============================================================================
+// App Handle for Emitting Events
+// ============================================================================
+
+/// Stored Tauri app handle for emitting events from event handlers.
+static APP_HANDLE: Mutex<Option<tauri::AppHandle>> = Mutex::new(None);
+
+/// Stores the Tauri app handle for later use in event emission.
+fn store_app_handle(handle: tauri::AppHandle) {
+    if let Ok(mut stored) = APP_HANDLE.lock() {
+        *stored = Some(handle);
+    }
+}
+
+/// Emits a window focus changed event to the frontend.
+///
+/// This is called from event handlers when focus changes due to user interaction
+/// (clicking on windows, etc.) rather than programmatic commands.
+pub fn emit_window_focus_changed(window_id: u32, workspace: &str) {
+    if let Ok(handle) = APP_HANDLE.lock()
+        && let Some(ref app) = *handle
+    {
+        use tauri::Emitter;
+        let _ = app.emit(
+            events::tiling::WINDOW_FOCUS_CHANGED,
+            serde_json::json!({
+                "windowId": window_id,
+                "workspace": workspace,
+            }),
+        );
+    }
+}
+
+/// Emits a workspace changed event to the frontend.
+///
+/// This is called from event handlers when workspace visibility changes due to
+/// focusing a window on a different workspace.
+pub fn emit_workspace_changed(workspace: &str, screen: &str, previous_workspace: Option<&str>) {
+    if let Ok(handle) = APP_HANDLE.lock()
+        && let Some(ref app) = *handle
+    {
+        use tauri::Emitter;
+        let _ = app.emit(
+            events::tiling::WORKSPACE_CHANGED,
+            serde_json::json!({
+                "workspace": workspace,
+                "screen": screen,
+                "previousWorkspace": previous_workspace,
+            }),
+        );
+    }
+}
 
 // ============================================================================
 // Initialization
@@ -114,7 +168,7 @@ use crate::is_accessibility_granted;
 /// - If `tiling.enabled` is `false` in config, this function returns immediately
 /// - If accessibility permissions are not granted, returns early (warning already logged in lib.rs)
 /// - On successful initialization, begins tracking windows and managing workspaces
-pub fn init_with_handle<R: Runtime>(app_handle: Option<AppHandle<R>>) {
+pub fn init(app_handle: tauri::AppHandle) {
     let config = get_config();
 
     // Tiling is disabled by default
@@ -127,8 +181,11 @@ pub fn init_with_handle<R: Runtime>(app_handle: Option<AppHandle<R>>) {
         return;
     }
 
+    // Store the app handle for event emission from event handlers
+    store_app_handle(app_handle.clone());
+
     // Initialize the tiling manager
-    if !init_manager(app_handle) {
+    if !init_manager(Some(app_handle)) {
         return;
     }
 
@@ -171,11 +228,6 @@ pub fn init_with_handle<R: Runtime>(app_handle: Option<AppHandle<R>>) {
 
     eprintln!("stache: tiling: initialization complete");
 }
-
-/// Initializes the tiling window manager without an app handle.
-///
-/// This is a convenience function for cases where we don't need to emit events.
-pub fn init() { init_with_handle::<tauri::Wry>(None); }
 
 // ============================================================================
 // Window Tracking

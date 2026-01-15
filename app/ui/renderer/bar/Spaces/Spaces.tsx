@@ -31,7 +31,7 @@ const SpacesContent = () => {
 
 const SpacesFallback = () => (
   <Stack>
-    <Surface className={styles.fallback}>Hyprspace Loading...</Surface>
+    <Surface className={styles.fallback}>Loading...</Surface>
   </Stack>
 );
 

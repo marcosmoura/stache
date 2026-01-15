@@ -744,7 +744,6 @@ Implement configurable borders around tiled windows to provide visual feedback f
 | Decision                  | Resolution                                           |
 | ------------------------- | ---------------------------------------------------- |
 | Accessibility Permissions | Prompt using unified `utils/accessibility.rs` module |
-| Hyprspace Integration     | Keep separate, user will integrate later             |
 | Default Behavior          | Disabled by default (`enabled: false`)               |
 | Window Restore on Quit    | No persistence, rely on macOS auto-unhide            |
 | Status Bar Events         | Emit events via `events.rs`, UI handled separately   |

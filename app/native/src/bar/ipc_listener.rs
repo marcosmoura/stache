@@ -73,6 +73,7 @@ fn handle_notification<R: Runtime>(app_handle: &AppHandle<R>, notification: Stac
                     begin_animation();
                     if let Some(info) = mgr.switch_workspace(&workspace) {
                         eprintln!("stache: tiling: switched to workspace: {}", info.workspace);
+                        let workspace_name = info.workspace.clone();
                         drop(mgr); // Release lock before emitting
 
                         // Emit WORKSPACE_CHANGED event
@@ -86,6 +87,12 @@ fn handle_notification<R: Runtime>(app_handle: &AppHandle<R>, notification: Stac
                         ) {
                             eprintln!("stache: tiling: failed to emit workspace-changed: {e}");
                         }
+
+                        // Emit WINDOW_FOCUS_CHANGED event (UI will refetch focused window)
+                        let _ = app_handle.emit(
+                            events::tiling::WINDOW_FOCUS_CHANGED,
+                            serde_json::json!({ "workspace": workspace_name }),
+                        );
                     } else {
                         eprintln!("stache: tiling: workspace not found: {workspace}");
                     }
@@ -138,6 +145,7 @@ fn handle_notification<R: Runtime>(app_handle: &AppHandle<R>, notification: Stac
         }
 
         StacheNotification::TilingWindowFocus(target) => {
+            let app_handle = app_handle.clone();
             std::thread::spawn(move || {
                 if let Some(manager) = crate::tiling::get_manager() {
                     cancel_animation();
@@ -145,6 +153,23 @@ fn handle_notification<R: Runtime>(app_handle: &AppHandle<R>, notification: Stac
                     begin_animation();
                     if let Some(window_id) = mgr.focus_window_in_direction(&target) {
                         eprintln!("stache: tiling: focused window {window_id}");
+
+                        // Get workspace name for the event
+                        let workspace_name =
+                            mgr.state().focused_workspace.clone().unwrap_or_default();
+
+                        drop(mgr); // Release lock before emitting
+
+                        // Emit WINDOW_FOCUS_CHANGED event
+                        if let Err(e) = app_handle.emit(
+                            events::tiling::WINDOW_FOCUS_CHANGED,
+                            serde_json::json!({
+                                "windowId": window_id,
+                                "workspace": workspace_name,
+                            }),
+                        ) {
+                            eprintln!("stache: tiling: failed to emit window-focus-changed: {e}");
+                        }
                     } else {
                         eprintln!("stache: tiling: failed to focus window: {target}");
                     }

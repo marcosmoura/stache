@@ -4,15 +4,10 @@ import { useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
 import { invoke } from '@tauri-apps/api/core';
 
 import { useMediaQuery, useTauriEvent } from '@/hooks';
-import { SpacesEvents } from '@/types';
+import { TilingEvents } from '@/types';
 import { LAPTOP_MEDIA_QUERY } from '@/utils/media-query';
 
-import type {
-  HyprspaceWorkspacePayload,
-  WorkspaceWindows,
-  FocusedAppPayload,
-  Workspaces,
-} from './Spaces.types';
+import type { TilingWorkspace, TilingWindow, Workspaces } from './Spaces.types';
 
 const workspaceOrder = [
   'terminal',
@@ -30,43 +25,47 @@ const workspaceOrder = [
 const emptyWorkspaces: Workspaces = [];
 const emptyApps: { appName: string; windowId: number; windowTitle: string }[] = [];
 
-const getSortedWorkspaces = (workspaces: HyprspaceWorkspacePayload[] | undefined) => {
+const getSortedWorkspaces = (workspaces: TilingWorkspace[] | undefined) => {
   if (!workspaces) {
     return null;
   }
 
   return [...workspaces].sort(
-    (a, b) => workspaceOrder.indexOf(a.workspace) - workspaceOrder.indexOf(b.workspace),
+    (a, b) => workspaceOrder.indexOf(a.name) - workspaceOrder.indexOf(b.name),
   );
 };
 
 const fetchWorkspacesData = async () => {
-  const workspaces = await invoke<HyprspaceWorkspacePayload[]>('get_hyprspace_workspaces');
-  const { workspace: focusedWorkspace } = await invoke<HyprspaceWorkspacePayload>(
-    'get_hyprspace_focused_workspace',
-  );
+  const workspaces = await invoke<TilingWorkspace[]>('get_tiling_workspaces');
+  const focusedWorkspace = await invoke<string | null>('get_tiling_focused_workspace');
 
   return {
-    workspacesData: getSortedWorkspaces(workspaces)?.map(({ workspace }) => workspace),
+    workspacesData: getSortedWorkspaces(workspaces)?.map(({ name }) => name),
     focusedWorkspace,
   };
 };
 
 const fetchAppsData = async () => {
-  const windows = await invoke<WorkspaceWindows>('get_hyprspace_current_workspace_windows');
-  const [{ appName, windowId, windowTitle }] = await invoke<FocusedAppPayload>(
-    'get_hyprspace_focused_window',
-  );
+  const windows = await invoke<TilingWindow[]>('get_tiling_current_workspace_windows');
+  const focusedWindow = await invoke<TilingWindow | null>('get_tiling_focused_window');
 
-  const apps = windows.map(({ appName, windowId, windowTitle }) => ({
+  const apps = windows.map(({ appName, id, title }) => ({
     appName,
-    windowId,
-    windowTitle,
+    windowId: id,
+    windowTitle: title,
   }));
+
+  const focusedApp = focusedWindow
+    ? {
+        appName: focusedWindow.appName,
+        windowId: focusedWindow.id,
+        windowTitle: focusedWindow.title,
+      }
+    : null;
 
   return {
     appsList: apps,
-    focusedApp: { appName, windowId, windowTitle },
+    focusedApp,
   };
 };
 
@@ -99,12 +98,12 @@ export const useSpaces = () => {
   const lastFocusChangedRefreshRef = useRef<Date | null>(null);
 
   const { data: workspaceQueryData } = useSuspenseQuery({
-    queryKey: ['hyprspace_workspace_data'],
+    queryKey: ['tiling_workspace_data'],
     queryFn: fetchWorkspacesData,
     notifyOnChangeProps: ['data'],
   });
   const { data: appQueryData } = useSuspenseQuery({
-    queryKey: ['hyprspace_workspace_apps'],
+    queryKey: ['tiling_workspace_apps'],
     queryFn: fetchAppsData,
     notifyOnChangeProps: ['data'],
   });
@@ -158,18 +157,19 @@ export const useSpaces = () => {
 
     lastFocusChangedRefreshRef.current = now;
 
-    queryClient.invalidateQueries({ queryKey: ['hyprspace_workspace_apps'] });
+    queryClient.invalidateQueries({ queryKey: ['tiling_workspace_apps'] });
   }, [queryClient]);
 
   const onWorkspaceChanged = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: ['hyprspace_workspace_data'] });
+    queryClient.invalidateQueries({ queryKey: ['tiling_workspace_data'] });
+    queryClient.invalidateQueries({ queryKey: ['tiling_workspace_apps'] });
   }, [queryClient]);
 
   const onSpaceClick = useCallback(
     (name: string) => () =>
       invokeWithErrorHandling<void>(
-        'go_to_hyprspace_workspace',
-        { workspace: name },
+        'focus_tiling_workspace',
+        { name },
         'Error switching workspace',
       ),
     [],
@@ -177,16 +177,16 @@ export const useSpaces = () => {
 
   const onAppClick = useCallback(
     (windowId: number) => () =>
-      invokeWithErrorHandling<void>(
-        'focus_window_by_window_id',
-        { windowId: windowId.toString() },
-        'Error focusing app window',
-      ),
+      invokeWithErrorHandling<void>('focus_tiling_window', { windowId }, 'Error focusing window'),
     [],
   );
 
-  useTauriEvent(SpacesEvents.WINDOW_FOCUS_CHANGED, onWindowFocusChanged);
-  useTauriEvent<string>(SpacesEvents.WORKSPACE_CHANGED, onWorkspaceChanged);
+  // Listen for tiling events
+  useTauriEvent(TilingEvents.WORKSPACE_WINDOWS_CHANGED, onWindowFocusChanged);
+  useTauriEvent(TilingEvents.WINDOW_TRACKED, onWindowFocusChanged);
+  useTauriEvent(TilingEvents.WINDOW_UNTRACKED, onWindowFocusChanged);
+  useTauriEvent(TilingEvents.WINDOW_FOCUS_CHANGED, onWindowFocusChanged);
+  useTauriEvent(TilingEvents.WORKSPACE_CHANGED, onWorkspaceChanged);
 
   return {
     apps,
