@@ -1,0 +1,27 @@
+# Nextest configuration for Stache
+# https://nexte.st/docs/configuration/
+
+[store]
+dir = "target/nextest"
+
+# Test groups for controlling concurrency
+[test-groups.integration]
+# Integration tests must run sequentially - they create real windows on screen
+max-threads = 1
+
+# Default profile settings
+[profile.default]
+# Fail fast on first failure for quicker feedback
+fail-fast = true
+
+# Override settings for integration tests
+[[profile.default.overrides]]
+# Match all tests in the integration test binary
+filter = 'package(stache) & binary(integration)'
+test-group = 'integration'
+# Integration tests need more time
+slow-timeout = { period = "30s", terminate-after = 3 }
+
+# CI profile with stricter settings
+[profile.ci]
+fail-fast = false
