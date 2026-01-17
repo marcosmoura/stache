@@ -1549,6 +1549,9 @@ impl TilingManager {
             self.apply_layout_mut(&workspace_name);
         }
 
+        // Emit events for the new window
+        super::emit_window_tracked(window_id, &workspace_name);
+
         // Create border for this window if borders are enabled
         self.create_border_for_window(
             window_id,
@@ -1556,6 +1559,11 @@ impl TilingManager {
             &workspace_name,
             workspace_is_visible,
         );
+
+        // Get the window IDs for the workspace to emit the workspace windows changed event
+        if let Some(ws) = self.state.workspace_by_name(&workspace_name) {
+            super::emit_workspace_windows_changed(&workspace_name, &ws.window_ids);
+        }
 
         Some(workspace_name)
     }
@@ -1690,6 +1698,14 @@ impl TilingManager {
         // Re-apply layout if requested and workspace is visible
         if apply_layout && workspace_is_visible {
             self.apply_layout_mut(&workspace_name);
+        }
+
+        // Emit events for the untracked window
+        super::emit_window_untracked(window_id, &workspace_name);
+
+        // Get the window IDs for the workspace to emit the workspace windows changed event
+        if let Some(ws) = self.state.workspace_by_name(&workspace_name) {
+            super::emit_workspace_windows_changed(&workspace_name, &ws.window_ids);
         }
     }
 

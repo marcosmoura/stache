@@ -149,6 +149,60 @@ pub fn emit_workspace_changed(workspace: &str, screen: &str, previous_workspace:
     }
 }
 
+/// Emits a window tracked event to the frontend.
+///
+/// This is called when a new window is tracked by the tiling manager.
+pub fn emit_window_tracked(window_id: u32, workspace: &str) {
+    if let Ok(handle) = APP_HANDLE.lock()
+        && let Some(ref app) = *handle
+    {
+        use tauri::Emitter;
+        let _ = app.emit(
+            events::tiling::WINDOW_TRACKED,
+            serde_json::json!({
+                "windowId": window_id,
+                "workspace": workspace,
+            }),
+        );
+    }
+}
+
+/// Emits a window untracked event to the frontend.
+///
+/// This is called when a window is no longer tracked by the tiling manager.
+pub fn emit_window_untracked(window_id: u32, workspace: &str) {
+    if let Ok(handle) = APP_HANDLE.lock()
+        && let Some(ref app) = *handle
+    {
+        use tauri::Emitter;
+        let _ = app.emit(
+            events::tiling::WINDOW_UNTRACKED,
+            serde_json::json!({
+                "windowId": window_id,
+                "workspace": workspace,
+            }),
+        );
+    }
+}
+
+/// Emits a workspace windows changed event to the frontend.
+///
+/// This is called when windows are added to or removed from a workspace.
+pub fn emit_workspace_windows_changed(workspace: &str, window_ids: &[u32]) {
+    if let Ok(handle) = APP_HANDLE.lock()
+        && let Some(ref app) = *handle
+    {
+        use tauri::Emitter;
+        let _ = app.emit(
+            events::tiling::WORKSPACE_WINDOWS_CHANGED,
+            serde_json::json!({
+                "workspace": workspace,
+                "windows": window_ids,
+            }),
+        );
+    }
+}
+
 // ============================================================================
 // Initialization
 // ============================================================================
