@@ -179,7 +179,7 @@ impl StacheNotification {
 /// # Returns
 ///
 /// `true` if the notification was sent successfully, `false` otherwise.
-#[must_use] 
+#[must_use]
 pub fn send_notification(notification: &StacheNotification) -> bool {
     // SAFETY: We are calling well-defined Objective-C APIs via FFI:
     // - NSDistributedNotificationCenter is thread-safe and can be called from any thread

@@ -29,7 +29,7 @@ type ShortcutCommandMap = Arc<HashMap<Shortcut, ShortcutCommands>>;
 /// # Returns
 ///
 /// Returns a configured `TauriPlugin` that can be added to the Tauri app builder.
-#[must_use] 
+#[must_use]
 pub fn create_hotkey_plugin<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
     let config = get_config();
     let keybindings = &config.keybindings;

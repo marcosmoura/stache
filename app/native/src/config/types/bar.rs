@@ -65,7 +65,6 @@ pub struct BarConfig {
     pub weather: WeatherConfig,
 }
 
-
 impl BarConfig {
     /// Returns whether the status bar is enabled.
     #[must_use]

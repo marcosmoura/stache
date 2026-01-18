@@ -221,7 +221,7 @@ fn get_last_media_payload() -> Option<Value> {
 }
 
 #[tauri::command]
-#[must_use] 
+#[must_use]
 pub fn get_current_media_info() -> Option<Value> { get_last_media_payload() }
 
 fn save_artwork_and_emit(
