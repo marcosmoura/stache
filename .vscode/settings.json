@@ -9,6 +9,5 @@
   },
   "editor.experimental.preferTreeSitter.typescript": false,
   "oxc.enable": false,
-  "rust-analyzer.cargo.features": ["integration-tests"],
   "stylelint.validate": ["css", "typescript"]
 }

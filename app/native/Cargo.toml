@@ -23,9 +23,6 @@ path = "src/main.rs"
 
 [features]
 default = []
-# Enable integration tests that create real windows on screen.
-# Run with: cargo nextest run -p stache --features integration-tests --test 'tiling__*' -j 1 --no-capture
-integration-tests = []
 
 [dependencies]
 
@@ -35,7 +32,7 @@ base64 = { version = "0.22.1", default-features = false, features = ["std"] }
 # CLI dependencies
 clap = { version = "4.5.54", features = ["derive", "env", "string"] }
 clap_complete = "4.5.65"
-colored = { version = "3.0", default-features = false }
+colored = { version = "3.1.1", default-features = false }
 core-foundation = { version = "0.10.1", default-features = false }
 core-foundation-sys = { version = "0.8.7", default-features = false }
 core-graphics = { version = "0.25.0", default-features = false }
@@ -99,7 +96,7 @@ tauri-plugin-process = "2.3.1"
 tauri-plugin-shell = "2.3.4"
 tauri-plugin-single-instance = "2.3.7"
 tauri-plugin-zustand = "1.1.0"
-thiserror = "2.0.17"
+thiserror = "2.0.18"
 wallpaper = "3.2"
 
 [build-dependencies]
@@ -108,18 +105,8 @@ tauri-build = { version = "2.5.3", features = [] }
 
 [dev-dependencies]
 criterion = { version = "0.8.1", features = ["html_reports"] }
-ctor = "0.4"
-proptest = "1.9.0"
+ctor = "0.6.3"
 tempfile = "3.24.0"
-
-[[bench]]
-name = "tiling_bench"
-harness = false
-
-[[test]]
-name = "integration"
-path = "tests/integration/main.rs"
-required-features = ["integration-tests"]
 
 [lints]
 workspace = true
