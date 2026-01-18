@@ -40,6 +40,11 @@ const fn calculate_window_frame(
     (padding, padding, width, height)
 }
 
+/// Gets the current bar window frame dimensions.
+///
+/// # Errors
+///
+/// Returns an error if the bar window or screen size cannot be determined.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 pub fn get_bar_window_frame(app: tauri::AppHandle) -> Result<WindowFrame, StacheError> {

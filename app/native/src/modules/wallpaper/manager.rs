@@ -399,6 +399,10 @@ pub fn get_manager() -> Option<&'static Arc<WallpaperManager>> { MANAGER.get() }
 /// Performs a wallpaper action using the global manager.
 ///
 /// This is the main entry point for CLI commands.
+///
+/// # Errors
+///
+/// Returns an error if the wallpaper manager is not initialized or the action fails.
 pub fn perform_action(action: &WallpaperAction) -> Result<(), WallpaperManagerError> {
     let manager = get_manager().ok_or(WallpaperManagerError::NotInitialized)?;
 

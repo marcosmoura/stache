@@ -144,6 +144,10 @@ fn remove_socket() {
 /// # Arguments
 ///
 /// * `handler` - A function that processes queries and returns responses.
+///
+/// # Panics
+///
+/// Panics if the server thread cannot be spawned.
 pub fn start_server<F>(handler: F)
 where F: Fn(IpcQuery) -> IpcResponse + Send + Sync + 'static {
     if SERVER_RUNNING.swap(true, Ordering::SeqCst) {
@@ -290,6 +294,11 @@ impl std::error::Error for IpcError {}
 /// # Returns
 ///
 /// The response from the app, or an error if the app is not running.
+///
+/// # Errors
+///
+/// Returns an error if the app is not running, connection fails, times out,
+/// or the response cannot be parsed.
 #[allow(clippy::needless_pass_by_value)] // Simpler API for callers
 pub fn send_query(query: IpcQuery) -> Result<IpcResponse, IpcError> {
     let mut last_error = IpcError::AppNotRunning;

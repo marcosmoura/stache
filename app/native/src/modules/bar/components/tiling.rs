@@ -112,6 +112,10 @@ fn to_window_info(w: &tiling::TrackedWindow, focused_window_id: Option<u32>) -> 
 /// Gets all workspaces from the tiling manager.
 ///
 /// Returns workspaces for all screens, or for a specific screen if specified.
+///
+/// # Errors
+///
+/// Returns an error if the tiling manager is not available or the screen is not found.
 #[tauri::command]
 pub fn get_tiling_workspaces(screen: Option<String>) -> Result<Vec<WorkspaceInfo>, StacheError> {
     with_manager_read(|mgr| {
@@ -159,6 +163,10 @@ pub fn get_tiling_workspaces(screen: Option<String>) -> Result<Vec<WorkspaceInfo
 /// Can filter by workspace name.
 ///
 /// Only returns tiled (non-minimized) windows.
+///
+/// # Errors
+///
+/// Returns an error if the tiling manager is not available.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // Tauri commands require owned values
 pub fn get_tiling_windows(workspace: Option<String>) -> Result<Vec<WindowInfo>, StacheError> {
@@ -183,12 +191,20 @@ pub fn get_tiling_windows(workspace: Option<String>) -> Result<Vec<WindowInfo>, 
 }
 
 /// Gets the currently focused workspace name.
+///
+/// # Errors
+///
+/// Returns an error if the tiling manager is not available.
 #[tauri::command]
 pub fn get_tiling_focused_workspace() -> Result<Option<String>, StacheError> {
     with_manager_read(|mgr| Ok(mgr.state().focused_workspace.clone()))
 }
 
 /// Gets the currently focused window.
+///
+/// # Errors
+///
+/// Returns an error if the tiling manager is not available.
 #[tauri::command]
 pub fn get_tiling_focused_window() -> Result<Option<WindowInfo>, StacheError> {
     with_manager_read(|mgr| {
@@ -207,6 +223,10 @@ pub fn get_tiling_focused_window() -> Result<Option<WindowInfo>, StacheError> {
 }
 
 /// Switches to a workspace by name.
+///
+/// # Errors
+///
+/// Returns an error if the workspace is not found or the tiling manager is not available.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // Tauri commands require owned values
 pub fn focus_tiling_workspace(app: AppHandle, name: String) -> Result<(), StacheError> {
@@ -242,6 +262,10 @@ pub fn focus_tiling_workspace(app: AppHandle, name: String) -> Result<(), Stache
 }
 
 /// Focuses a window by its ID.
+///
+/// # Errors
+///
+/// Returns an error if the window is not found or the tiling manager is not available.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // Tauri commands require owned AppHandle
 pub fn focus_tiling_window(app: AppHandle, window_id: u32) -> Result<(), StacheError> {
@@ -285,6 +309,10 @@ pub fn is_tiling_enabled() -> bool { tiling::get_manager().is_some_and(|m| m.rea
 /// and then getting windows for that workspace.
 ///
 /// Only returns tiled (non-minimized) windows.
+///
+/// # Errors
+///
+/// Returns an error if the tiling manager is not available.
 #[tauri::command]
 pub fn get_tiling_current_workspace_windows() -> Result<Vec<WindowInfo>, StacheError> {
     with_manager_read(|mgr| {

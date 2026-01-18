@@ -117,12 +117,22 @@ impl KeepAwakeController {
     }
 }
 
+/// Toggles the system awake state.
+///
+/// # Errors
+///
+/// Returns an error if the awake state cannot be toggled.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 pub fn toggle_system_awake(state: tauri::State<KeepAwakeController>) -> Result<bool, StacheError> {
     state.toggle_impl().map_err(StacheError::CommandError)
 }
 
+/// Checks if the system is currently being kept awake.
+///
+/// # Errors
+///
+/// Returns an error if the awake state cannot be determined.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 pub fn is_system_awake(state: tauri::State<KeepAwakeController>) -> Result<bool, StacheError> {

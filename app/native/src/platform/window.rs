@@ -181,6 +181,10 @@ pub fn set_window_always_on_top(window: &WebviewWindow) {
 }
 
 /// Gets the screen size for the window's primary monitor.
+///
+/// # Errors
+///
+/// Returns an error if the primary monitor cannot be determined.
 pub fn get_screen_size(window: &WebviewWindow) -> Result<(f64, f64), Box<dyn std::error::Error>> {
     let monitor = window.primary_monitor()?.ok_or("No primary monitor found")?;
 

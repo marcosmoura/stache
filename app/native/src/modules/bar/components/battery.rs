@@ -121,6 +121,11 @@ impl From<Battery> for BatteryInfo {
     }
 }
 
+/// Gets the current battery information.
+///
+/// # Errors
+///
+/// Returns an error if the battery manager cannot be initialized or no battery is found.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 pub fn get_battery_info(app_handle: tauri::AppHandle) -> Result<BatteryInfo, StacheError> {

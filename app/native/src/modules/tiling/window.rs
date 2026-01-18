@@ -956,7 +956,13 @@ impl EnhancedUIGuard {
     ///
     /// Returns `None` if the app element is null or enhanced UI was not enabled
     /// (in which case no restoration is needed).
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `app_element` is a valid `AXUIElementRef` or null.
+    /// Null pointers are handled safely and return `None`.
     #[must_use]
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn new(app_element: AXUIElementRef) -> Option<Self> {
         if app_element.is_null() {
             return None;
@@ -986,13 +992,11 @@ impl EnhancedUIGuard {
                     return None;
                 }
                 // Try to create guard; if enhanced UI wasn't enabled, we need to release the element
-                if let Some(guard) = Self::new(app_element) {
-                    Some(guard)
-                } else {
+                Self::new(app_element).or_else(|| {
                     // Release the unused app element
                     unsafe { CFRelease(app_element.cast()) };
                     None
-                }
+                })
             })
             .collect()
     }
