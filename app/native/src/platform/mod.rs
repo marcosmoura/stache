@@ -4,7 +4,7 @@
 //!
 //! - [`accessibility`] - Accessibility permission utilities
 //! - [`objc`] - Objective-C helper utilities
-//! - [`window`] - Window manipulation via `SkyLight` and AppKit
+//! - [`window`] - Window manipulation via `SkyLight` and `AppKit`
 //! - [`ipc`] - Inter-process communication mechanisms
 
 pub mod accessibility;

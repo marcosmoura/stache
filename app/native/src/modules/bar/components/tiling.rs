@@ -276,6 +276,7 @@ pub fn focus_tiling_window(app: AppHandle, window_id: u32) -> Result<(), StacheE
 ///
 /// This is used by the frontend to check if it should render tiling-dependent UI.
 #[tauri::command]
+#[must_use] 
 pub fn is_tiling_enabled() -> bool { tiling::get_manager().is_some_and(|m| m.read().is_enabled()) }
 
 /// Gets windows for the currently focused workspace.

@@ -1,4 +1,4 @@
-//! NoTunes configuration types.
+//! `NoTunes` configuration types.
 //!
 //! Configuration for preventing Apple Music auto-launch and launching alternatives.
 

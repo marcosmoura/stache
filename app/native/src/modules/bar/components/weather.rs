@@ -46,6 +46,7 @@ impl WeatherConfigInfo {
 /// environment file. The env file path is resolved relative to the config
 /// file's directory.
 #[tauri::command]
+#[must_use] 
 pub fn get_weather_config() -> WeatherConfigInfo {
     let config = get_config();
     let config_path = get_config_path();

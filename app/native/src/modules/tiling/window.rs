@@ -876,7 +876,7 @@ unsafe fn set_ax_focused(element: AXUIElementRef) -> bool {
 
 /// Gets the `AXEnhancedUserInterface` attribute from an application element.
 ///
-/// This attribute is enabled by some apps for VoiceOver support. When enabled,
+/// This attribute is enabled by some apps for `VoiceOver` support. When enabled,
 /// it can significantly slow down accessibility operations. Temporarily disabling
 /// it during batch window operations improves performance.
 ///
@@ -1895,7 +1895,7 @@ pub fn set_window_frame_with_retry(
 /// # Performance Optimization
 ///
 /// This function temporarily disables `AXEnhancedUserInterface` for affected apps
-/// during the batch operation. Apps with enhanced UI enabled (common for VoiceOver
+/// during the batch operation. Apps with enhanced UI enabled (common for `VoiceOver`
 /// support) can be 2-10x slower for accessibility operations. The enhanced UI state
 /// is automatically restored when the function returns.
 ///

@@ -120,7 +120,7 @@ pub fn set_position(window: &WebviewWindow, x: f64, y: f64, width: f64, height: 
     let _ = window.set_position(Position::Logical(LogicalPosition { x, y }));
 }
 
-/// Makes a window sticky (visible on all spaces) using SkyLight.
+/// Makes a window sticky (visible on all spaces) using `SkyLight`.
 pub fn set_window_sticky(window: &WebviewWindow) {
     let _ = window.set_resizable(false);
     let _ = window.set_focusable(true);

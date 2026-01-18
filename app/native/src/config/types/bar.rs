@@ -46,6 +46,7 @@ impl WeatherConfig {
 /// the status bar when calculating window layouts on the main screen.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default, rename_all = "camelCase")]
+#[derive(Default)]
 pub struct BarConfig {
     /// Whether the status bar is enabled.
     /// Default: false
@@ -64,16 +65,6 @@ pub struct BarConfig {
     pub weather: WeatherConfig,
 }
 
-impl Default for BarConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            height: 0,
-            padding: 0,
-            weather: WeatherConfig::default(),
-        }
-    }
-}
 
 impl BarConfig {
     /// Returns whether the status bar is enabled.

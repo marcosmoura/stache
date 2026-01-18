@@ -1,4 +1,4 @@
-//! MenuAnywhere configuration types.
+//! `MenuAnywhere` configuration types.
 //!
 //! Configuration for summoning app menus at cursor position.
 
