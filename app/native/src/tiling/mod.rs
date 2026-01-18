@@ -189,17 +189,23 @@ pub fn emit_window_untracked(window_id: u32, workspace: &str) {
 ///
 /// This is called when windows are added to or removed from a workspace.
 pub fn emit_workspace_windows_changed(workspace: &str, window_ids: &[u32]) {
+    eprintln!(
+        "stache: tiling: emit_workspace_windows_changed: workspace={workspace}, window_ids={window_ids:?}"
+    );
     if let Ok(handle) = APP_HANDLE.lock()
         && let Some(ref app) = *handle
     {
         use tauri::Emitter;
-        let _ = app.emit(
+        let result = app.emit(
             events::tiling::WORKSPACE_WINDOWS_CHANGED,
             serde_json::json!({
                 "workspace": workspace,
                 "windows": window_ids,
             }),
         );
+        eprintln!("stache: tiling: emit_workspace_windows_changed: emit result={result:?}");
+    } else {
+        eprintln!("stache: tiling: emit_workspace_windows_changed: no app handle available");
     }
 }
 

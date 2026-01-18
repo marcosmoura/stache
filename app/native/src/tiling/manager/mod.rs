@@ -911,8 +911,14 @@ impl TilingManager {
             return 0;
         }
 
-        // Get window IDs in order
-        let window_ids: Vec<u32> = workspace.window_ids.clone();
+        // Get window IDs in order, filtering out minimized windows
+        // Minimized windows should not participate in tiling layout
+        let window_ids: Vec<u32> = workspace
+            .window_ids
+            .iter()
+            .copied()
+            .filter(|&id| self.state.window_by_id(id).is_some_and(|w| !w.is_minimized))
+            .collect();
         if window_ids.is_empty() {
             return 0;
         }
@@ -986,8 +992,14 @@ impl TilingManager {
             return 0;
         }
 
-        // Get window IDs in order
-        let window_ids: Vec<u32> = workspace.window_ids.clone();
+        // Get window IDs in order, filtering out minimized windows
+        // Minimized windows should not participate in tiling layout
+        let window_ids: Vec<u32> = workspace
+            .window_ids
+            .iter()
+            .copied()
+            .filter(|&id| self.state.window_by_id(id).is_some_and(|w| !w.is_minimized))
+            .collect();
         if window_ids.is_empty() {
             return 0;
         }
@@ -1123,9 +1135,15 @@ impl TilingManager {
         workspace.split_ratios.clear();
         workspace.layout_cache.invalidate();
 
-        // Get window IDs before applying layout
-        let window_ids: Vec<u32> = workspace.window_ids.clone();
+        // Get window IDs and focused index before dropping workspace borrow
+        let all_window_ids: Vec<u32> = workspace.window_ids.clone();
         let focused_idx = workspace.focused_window_index;
+
+        // Filter out minimized windows (need separate borrow of self.state)
+        let window_ids: Vec<u32> = all_window_ids
+            .into_iter()
+            .filter(|&id| self.state.window_by_id(id).is_some_and(|w| !w.is_minimized))
+            .collect();
 
         // Apply the new layout
         self.apply_layout_mut(workspace_name);
@@ -1446,6 +1464,18 @@ impl TilingManager {
                 workspace_is_visible,
             );
         }
+
+        // Emit workspace windows changed events for all workspaces with tiled windows
+        // This ensures the UI is updated with the correct (non-minimized) window count
+        let workspace_names: Vec<String> =
+            self.state.workspaces.iter().map(|ws| ws.name.clone()).collect();
+
+        for workspace_name in workspace_names {
+            let tiled_ids = self.get_tiled_window_ids(&workspace_name);
+            if !tiled_ids.is_empty() {
+                super::emit_workspace_windows_changed(&workspace_name, &tiled_ids);
+            }
+        }
     }
 
     /// Creates a `TrackedWindow` from `WindowInfo`.
@@ -1458,6 +1488,7 @@ impl TilingManager {
             info.title.clone(),
             info.frame,
             workspace_name.to_string(),
+            info.is_minimized,
         )
     }
 
@@ -1560,10 +1591,9 @@ impl TilingManager {
             workspace_is_visible,
         );
 
-        // Get the window IDs for the workspace to emit the workspace windows changed event
-        if let Some(ws) = self.state.workspace_by_name(&workspace_name) {
-            super::emit_workspace_windows_changed(&workspace_name, &ws.window_ids);
-        }
+        // Emit workspace windows changed event with only tiled (non-minimized) windows
+        let tiled_ids = self.get_tiled_window_ids(&workspace_name);
+        super::emit_workspace_windows_changed(&workspace_name, &tiled_ids);
 
         Some(workspace_name)
     }
@@ -1703,10 +1733,9 @@ impl TilingManager {
         // Emit events for the untracked window
         super::emit_window_untracked(window_id, &workspace_name);
 
-        // Get the window IDs for the workspace to emit the workspace windows changed event
-        if let Some(ws) = self.state.workspace_by_name(&workspace_name) {
-            super::emit_workspace_windows_changed(&workspace_name, &ws.window_ids);
-        }
+        // Emit workspace windows changed event with only tiled (non-minimized) windows
+        let tiled_ids = self.get_tiled_window_ids(&workspace_name);
+        super::emit_workspace_windows_changed(&workspace_name, &tiled_ids);
     }
 
     /// Removes the border for a window.
@@ -1750,6 +1779,44 @@ impl TilingManager {
         if let Some(window) = self.state.windows.iter_mut().find(|w| w.id == window_id) {
             window.title = title;
         }
+    }
+
+    /// Sets a window's minimized state and re-applies layout for the workspace.
+    ///
+    /// When a window is minimized, it should be excluded from layout calculations.
+    /// When unminimized, it should be re-included.
+    pub fn set_window_minimized(&mut self, window_id: u32, minimized: bool) {
+        eprintln!(
+            "stache: tiling: set_window_minimized: window_id={window_id}, minimized={minimized}"
+        );
+
+        // Find the window and update its state
+        let workspace_name = if let Some(window) = self.state.window_by_id_mut(window_id) {
+            // Skip if state hasn't changed
+            if window.is_minimized == minimized {
+                eprintln!("stache: tiling: set_window_minimized: state unchanged, skipping");
+                return;
+            }
+            window.is_minimized = minimized;
+            window.workspace_name.clone()
+        } else {
+            eprintln!("stache: tiling: set_window_minimized: window not found");
+            return;
+        };
+
+        eprintln!(
+            "stache: tiling: set_window_minimized: workspace={workspace_name}, applying layout"
+        );
+
+        // Re-apply layout to re-tile remaining windows
+        self.apply_layout_forced(&workspace_name);
+
+        // Emit workspace windows changed event with only tiled (non-minimized) windows
+        let tiled_ids = self.get_tiled_window_ids(&workspace_name);
+        eprintln!(
+            "stache: tiling: set_window_minimized: emitting workspace_windows_changed with tiled_ids={tiled_ids:?}"
+        );
+        super::emit_workspace_windows_changed(&workspace_name, &tiled_ids);
     }
 
     /// Swaps a tracked window's ID with a new ID.
@@ -1950,6 +2017,34 @@ impl TilingManager {
     #[must_use]
     pub fn get_window(&self, id: u32) -> Option<&TrackedWindow> { self.state.window_by_id(id) }
 
+    /// Gets the tiled (non-minimized) window IDs for a workspace.
+    ///
+    /// This returns window IDs that should participate in tiling layout
+    /// and focus navigation, excluding minimized windows.
+    #[must_use]
+    pub fn get_tiled_window_ids(&self, workspace_name: &str) -> Vec<u32> {
+        let Some(workspace) = self.state.workspace_by_name(workspace_name) else {
+            return Vec::new();
+        };
+
+        workspace
+            .window_ids
+            .iter()
+            .copied()
+            .filter(|&id| self.state.window_by_id(id).is_some_and(|w| !w.is_minimized))
+            .collect()
+    }
+
+    /// Gets the tiled (non-minimized) window IDs for the focused workspace.
+    #[must_use]
+    pub fn get_focused_tiled_window_ids(&self) -> Vec<u32> {
+        self.state
+            .focused_workspace
+            .as_ref()
+            .map(|name| self.get_tiled_window_ids(name))
+            .unwrap_or_default()
+    }
+
     // ========================================================================
     // Window Focus Commands
     // ========================================================================
@@ -2024,27 +2119,43 @@ impl TilingManager {
     pub fn focus_next_window(&mut self) -> Option<u32> {
         let workspace = self.state.focused_workspace()?;
         let workspace_name = workspace.name.clone();
-        let window_ids = workspace.window_ids.clone();
 
-        if window_ids.is_empty() {
-            eprintln!("stache: tiling: focus_next: no windows in workspace");
+        // Get only tiled (non-minimized) window IDs
+        let tiled_window_ids = self.get_tiled_window_ids(&workspace_name);
+
+        if tiled_window_ids.is_empty() {
+            eprintln!("stache: tiling: focus_next: no tiled windows in workspace");
             return None;
         }
 
-        let current_idx = workspace.focused_window_index.unwrap_or(0);
-        let next_idx = (current_idx + 1) % window_ids.len();
-        let next_window_id = window_ids[next_idx];
+        // Get currently focused window ID
+        let workspace = self.state.focused_workspace()?;
+        let current_focused_id = workspace
+            .focused_window_index
+            .and_then(|idx| workspace.window_ids.get(idx).copied());
+
+        // Find current window's position in the tiled list
+        let current_tiled_idx = current_focused_id
+            .and_then(|id| tiled_window_ids.iter().position(|&wid| wid == id))
+            .unwrap_or(0);
+
+        // Get next window in tiled list (cycling)
+        let next_tiled_idx = (current_tiled_idx + 1) % tiled_window_ids.len();
+        let next_window_id = tiled_window_ids[next_tiled_idx];
 
         eprintln!(
-            "stache: tiling: focus_next: current_idx={current_idx}, next_idx={next_idx}, window_id={next_window_id}, window_ids={window_ids:?}"
+            "stache: tiling: focus_next: current_tiled_idx={current_tiled_idx}, next_tiled_idx={next_tiled_idx}, window_id={next_window_id}, tiled_window_ids={tiled_window_ids:?}"
         );
 
         if self.focus_window_by_id(next_window_id) {
-            // Update the focused index
-            if let Some(ws) = self.state.workspace_by_name_mut(&workspace_name) {
-                ws.focused_window_index = Some(next_idx);
+            // Update the focused index in the original window_ids list
+            if let Some(ws) = self.state.workspace_by_name_mut(&workspace_name)
+                && let Some(original_idx) =
+                    ws.window_ids.iter().position(|&id| id == next_window_id)
+            {
+                ws.focused_window_index = Some(original_idx);
             }
-            eprintln!("stache: tiling: focus_next: success, new index={next_idx}");
+            eprintln!("stache: tiling: focus_next: success");
             Some(next_window_id)
         } else {
             eprintln!("stache: tiling: focus_next: focus_window_by_id failed");
@@ -2060,24 +2171,40 @@ impl TilingManager {
     pub fn focus_previous_window(&mut self) -> Option<u32> {
         let workspace = self.state.focused_workspace()?;
         let workspace_name = workspace.name.clone();
-        let window_ids = workspace.window_ids.clone();
 
-        if window_ids.is_empty() {
+        // Get only tiled (non-minimized) window IDs
+        let tiled_window_ids = self.get_tiled_window_ids(&workspace_name);
+
+        if tiled_window_ids.is_empty() {
             return None;
         }
 
-        let current_idx = workspace.focused_window_index.unwrap_or(0);
-        let prev_idx = if current_idx == 0 {
-            window_ids.len() - 1
+        // Get currently focused window ID
+        let workspace = self.state.focused_workspace()?;
+        let current_focused_id = workspace
+            .focused_window_index
+            .and_then(|idx| workspace.window_ids.get(idx).copied());
+
+        // Find current window's position in the tiled list
+        let current_tiled_idx = current_focused_id
+            .and_then(|id| tiled_window_ids.iter().position(|&wid| wid == id))
+            .unwrap_or(0);
+
+        // Get previous window in tiled list (cycling)
+        let prev_tiled_idx = if current_tiled_idx == 0 {
+            tiled_window_ids.len() - 1
         } else {
-            current_idx - 1
+            current_tiled_idx - 1
         };
-        let prev_window_id = window_ids[prev_idx];
+        let prev_window_id = tiled_window_ids[prev_tiled_idx];
 
         if self.focus_window_by_id(prev_window_id) {
-            // Update the focused index
-            if let Some(ws) = self.state.workspace_by_name_mut(&workspace_name) {
-                ws.focused_window_index = Some(prev_idx);
+            // Update the focused index in the original window_ids list
+            if let Some(ws) = self.state.workspace_by_name_mut(&workspace_name)
+                && let Some(original_idx) =
+                    ws.window_ids.iter().position(|&id| id == prev_window_id)
+            {
+                ws.focused_window_index = Some(original_idx);
             }
             Some(prev_window_id)
         } else {
@@ -2122,26 +2249,33 @@ impl TilingManager {
     fn focus_window_spatial(&mut self, direction: &str) -> Option<u32> {
         let workspace = self.state.focused_workspace()?;
         let workspace_name = workspace.name.clone();
-        let window_ids = workspace.window_ids.clone();
 
-        if window_ids.is_empty() {
+        // Get only tiled (non-minimized) window IDs
+        let tiled_window_ids = self.get_tiled_window_ids(&workspace_name);
+
+        if tiled_window_ids.is_empty() {
             return None;
         }
 
         // Get current focused window
+        let workspace = self.state.focused_workspace()?;
         let focused_idx = workspace.focused_window_index.unwrap_or(0);
-        let focused_id = window_ids.get(focused_idx)?;
+        let focused_id = workspace.window_ids.get(focused_idx)?;
 
         let focused_window = self.state.window_by_id(*focused_id)?.clone();
 
-        // Find the best candidate in the specified direction
-        let candidate = self.find_window_in_direction(&focused_window, direction, &window_ids);
+        // Find the best candidate in the specified direction (using tiled windows only)
+        let candidate =
+            self.find_window_in_direction(&focused_window, direction, &tiled_window_ids);
 
-        if let Some((window_id, new_idx)) = candidate
+        if let Some((window_id, _tiled_idx)) = candidate
             && self.focus_window_by_id(window_id)
         {
-            if let Some(ws) = self.state.workspace_by_name_mut(&workspace_name) {
-                ws.focused_window_index = Some(new_idx);
+            // Update the focused index in the original window_ids list
+            if let Some(ws) = self.state.workspace_by_name_mut(&workspace_name)
+                && let Some(original_idx) = ws.window_ids.iter().position(|&id| id == window_id)
+            {
+                ws.focused_window_index = Some(original_idx);
             }
             return Some(window_id);
         }
@@ -2236,36 +2370,68 @@ impl TilingManager {
         };
 
         let workspace_name = workspace.name.clone();
-        let window_ids = workspace.window_ids.clone();
+        let all_window_ids = workspace.window_ids.clone();
 
-        if window_ids.len() < 2 {
+        // Get only tiled (non-minimized) window IDs for finding swap targets
+        let tiled_window_ids = self.get_tiled_window_ids(&workspace_name);
+
+        if tiled_window_ids.len() < 2 {
             return false;
         }
 
         let focused_idx = workspace.focused_window_index.unwrap_or(0);
-        let Some(&focused_id) = window_ids.get(focused_idx) else {
+        let Some(&focused_id) = all_window_ids.get(focused_idx) else {
             return false;
         };
 
-        // Find the target window to swap with
+        // Check if focused window is minimized (can't swap a minimized window)
+        if self.state.window_by_id(focused_id).is_some_and(|w| w.is_minimized) {
+            return false;
+        }
+
+        // Find the target window to swap with (only considering tiled windows)
         let target = match direction.to_lowercase().as_str() {
             "next" => {
-                let next_idx = (focused_idx + 1) % window_ids.len();
-                Some((window_ids[next_idx], next_idx))
+                // Find current position in tiled list and get next
+                let current_tiled_idx =
+                    tiled_window_ids.iter().position(|&id| id == focused_id).unwrap_or(0);
+                let next_tiled_idx = (current_tiled_idx + 1) % tiled_window_ids.len();
+                let target_id = tiled_window_ids[next_tiled_idx];
+                // Find the target's position in the original list
+                all_window_ids
+                    .iter()
+                    .position(|&id| id == target_id)
+                    .map(|idx| (target_id, idx))
             }
             "previous" | "prev" => {
-                let prev_idx = if focused_idx == 0 {
-                    window_ids.len() - 1
+                // Find current position in tiled list and get previous
+                let current_tiled_idx =
+                    tiled_window_ids.iter().position(|&id| id == focused_id).unwrap_or(0);
+                let prev_tiled_idx = if current_tiled_idx == 0 {
+                    tiled_window_ids.len() - 1
                 } else {
-                    focused_idx - 1
+                    current_tiled_idx - 1
                 };
-                Some((window_ids[prev_idx], prev_idx))
+                let target_id = tiled_window_ids[prev_tiled_idx];
+                // Find the target's position in the original list
+                all_window_ids
+                    .iter()
+                    .position(|&id| id == target_id)
+                    .map(|idx| (target_id, idx))
             }
             "up" | "down" | "left" | "right" => {
                 let Some(focused_window) = self.state.window_by_id(focused_id).cloned() else {
                     return false;
                 };
-                self.find_window_in_direction(&focused_window, direction, &window_ids)
+                // Find in tiled windows only
+                self.find_window_in_direction(&focused_window, direction, &tiled_window_ids)
+                    .and_then(|(target_id, _)| {
+                        // Map back to original list index
+                        all_window_ids
+                            .iter()
+                            .position(|&id| id == target_id)
+                            .map(|idx| (target_id, idx))
+                    })
             }
             _ => None,
         };

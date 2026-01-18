@@ -39,10 +39,10 @@ pub fn handle_window_event(event: WindowEvent) {
         WindowEventType::AppShown => handle_app_shown(event.pid),
         WindowEventType::Moved => handle_window_moved(event.pid),
         WindowEventType::Resized => handle_window_resized(event.pid),
+        WindowEventType::Minimized => handle_window_minimized(event.pid),
+        WindowEventType::Unminimized => handle_window_unminimized(event.pid),
         // Events we track but don't need special handling for
-        WindowEventType::Minimized
-        | WindowEventType::Unminimized
-        | WindowEventType::TitleChanged
+        WindowEventType::TitleChanged
         | WindowEventType::Unfocused
         | WindowEventType::AppDeactivated => {}
     }
@@ -932,6 +932,119 @@ fn handle_app_activated(pid: i32) {
 const fn handle_app_hidden(_pid: i32) {
     // Currently no special handling needed
     // Windows remain tracked but hidden
+}
+
+// ============================================================================
+// Window Minimize/Unminimize Handlers
+// ============================================================================
+
+/// Handles a window being minimized.
+///
+/// When a window is minimized, it should be excluded from tiling layout.
+/// This allows remaining windows to re-tile into the freed space.
+fn handle_window_minimized(pid: i32) {
+    eprintln!("stache: tiling: handle_window_minimized called for pid={pid}");
+
+    let Some(manager) = get_manager() else {
+        eprintln!("stache: tiling: handle_window_minimized: no manager");
+        return;
+    };
+
+    // Cancel any running animation before acquiring lock
+    cancel_animation();
+
+    let mut mgr = manager.write();
+    begin_animation();
+    if !mgr.is_enabled() {
+        eprintln!("stache: tiling: handle_window_minimized: manager not enabled");
+        return;
+    }
+
+    // Get tracked windows for this PID that are not already marked as minimized
+    let windows_to_check: Vec<u32> = mgr
+        .get_windows()
+        .iter()
+        .filter(|w| w.pid == pid && !w.is_minimized)
+        .map(|w| w.id)
+        .collect();
+
+    eprintln!("stache: tiling: handle_window_minimized: windows_to_check={windows_to_check:?}");
+
+    // Query the system to find which window is now minimized
+    // Use get_all_windows_including_hidden to see minimized windows
+    let system_windows = window::get_all_windows_including_hidden();
+
+    for window_id in windows_to_check {
+        // Check if this window is now minimized according to the system
+        let system_window = system_windows.iter().find(|w| w.id == window_id);
+        let is_now_minimized = system_window.is_some_and(|w| w.is_minimized);
+
+        eprintln!(
+            "stache: tiling: handle_window_minimized: window_id={window_id}, found_in_system={}, is_minimized={is_now_minimized}",
+            system_window.is_some()
+        );
+
+        if is_now_minimized {
+            eprintln!(
+                "stache: tiling: handle_window_minimized: marking window {window_id} as minimized"
+            );
+            mgr.set_window_minimized(window_id, true);
+        }
+    }
+}
+
+/// Handles a window being unminimized (restored).
+///
+/// When a window is restored from the dock, it should be re-included in
+/// the tiling layout.
+fn handle_window_unminimized(pid: i32) {
+    eprintln!("stache: tiling: handle_window_unminimized called for pid={pid}");
+
+    let Some(manager) = get_manager() else {
+        eprintln!("stache: tiling: handle_window_unminimized: no manager");
+        return;
+    };
+
+    // Cancel any running animation before acquiring lock
+    cancel_animation();
+
+    let mut mgr = manager.write();
+    begin_animation();
+    if !mgr.is_enabled() {
+        eprintln!("stache: tiling: handle_window_unminimized: manager not enabled");
+        return;
+    }
+
+    // Get tracked windows for this PID that are currently marked as minimized
+    let minimized_windows: Vec<u32> = mgr
+        .get_windows()
+        .iter()
+        .filter(|w| w.pid == pid && w.is_minimized)
+        .map(|w| w.id)
+        .collect();
+
+    eprintln!("stache: tiling: handle_window_unminimized: minimized_windows={minimized_windows:?}");
+
+    // Query the system to find which window is now unminimized
+    let system_windows = window::get_all_windows_including_hidden();
+
+    for window_id in minimized_windows {
+        // Check if this window is now NOT minimized according to the system
+        let system_window = system_windows.iter().find(|w| w.id == window_id);
+        let is_now_unminimized = system_window.is_some_and(|w| !w.is_minimized);
+
+        eprintln!(
+            "stache: tiling: handle_window_unminimized: window_id={window_id}, found_in_system={}, is_unminimized={is_now_unminimized}",
+            system_window.is_some()
+        );
+
+        if is_now_unminimized {
+            eprintln!(
+                "stache: tiling: handle_window_unminimized: marking window {window_id} as not minimized"
+            );
+            mgr.set_window_minimized(window_id, false);
+        }
+    }
 }
 
 /// Handles an application being terminated (quit).

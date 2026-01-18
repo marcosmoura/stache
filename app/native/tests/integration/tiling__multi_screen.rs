@@ -325,7 +325,8 @@ fn test_send_window_to_main_screen() {
     require_multiple_screens!(&test);
 
     let main = test.main_screen();
-    let secondary = test.secondary_screen().expect("Should have secondary screen");
+
+    test.secondary_screen().expect("Should have secondary screen");
 
     // Create TextEdit on secondary screen (via rules)
     let _ = test.create_window("TextEdit");

@@ -134,6 +134,9 @@ pub fn get_tiling_workspaces(screen: Option<String>) -> Result<Vec<WorkspaceInfo
                     .get_screen(ws.screen_id)
                     .map_or_else(|| "unknown".to_string(), |s| s.name.clone());
 
+                // Get only tiled (non-minimized) window IDs
+                let tiled_window_ids = mgr.get_tiled_window_ids(&ws.name);
+
                 WorkspaceInfo {
                     name: ws.name.clone(),
                     screen_id: ws.screen_id,
@@ -141,8 +144,8 @@ pub fn get_tiling_workspaces(screen: Option<String>) -> Result<Vec<WorkspaceInfo
                     layout: format!("{:?}", ws.layout).to_lowercase(),
                     is_visible: ws.is_visible,
                     is_focused: ws.is_focused,
-                    window_count: ws.window_ids.len(),
-                    window_ids: ws.window_ids.clone(),
+                    window_count: tiled_window_ids.len(),
+                    window_ids: tiled_window_ids,
                 }
             })
             .collect();
@@ -154,19 +157,23 @@ pub fn get_tiling_workspaces(screen: Option<String>) -> Result<Vec<WorkspaceInfo
 /// Gets all windows from the tiling manager.
 ///
 /// Can filter by workspace name.
+///
+/// Only returns tiled (non-minimized) windows.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // Tauri commands require owned values
 pub fn get_tiling_windows(workspace: Option<String>) -> Result<Vec<WindowInfo>, StacheError> {
     with_manager_read(|mgr| {
         let focused_window_id = tiling::get_focused_window().map(|w| w.id);
 
+        // Filter out minimized windows - they should not appear in the UI
         let windows: Vec<WindowInfo> = mgr
             .get_windows()
             .iter()
             .filter(|w| {
-                workspace
-                    .as_ref()
-                    .is_none_or(|ws_name| w.workspace_name.eq_ignore_ascii_case(ws_name))
+                !w.is_minimized
+                    && workspace
+                        .as_ref()
+                        .is_none_or(|ws_name| w.workspace_name.eq_ignore_ascii_case(ws_name))
             })
             .map(|w| to_window_info(w, focused_window_id))
             .collect();
@@ -275,6 +282,8 @@ pub fn is_tiling_enabled() -> bool { tiling::get_manager().is_some_and(|m| m.rea
 ///
 /// This is a convenience function that combines getting the focused workspace
 /// and then getting windows for that workspace.
+///
+/// Only returns tiled (non-minimized) windows.
 #[tauri::command]
 pub fn get_tiling_current_workspace_windows() -> Result<Vec<WindowInfo>, StacheError> {
     with_manager_read(|mgr| {
@@ -284,10 +293,13 @@ pub fn get_tiling_current_workspace_windows() -> Result<Vec<WindowInfo>, StacheE
 
         let focused_window_id = tiling::get_focused_window().map(|w| w.id);
 
+        // Filter out minimized windows - they should not appear in the UI
         let windows: Vec<WindowInfo> = mgr
             .get_windows()
             .iter()
-            .filter(|w| w.workspace_name.eq_ignore_ascii_case(&focused_workspace))
+            .filter(|w| {
+                w.workspace_name.eq_ignore_ascii_case(&focused_workspace) && !w.is_minimized
+            })
             .map(|w| to_window_info(w, focused_window_id))
             .collect();
 

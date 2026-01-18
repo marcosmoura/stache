@@ -2503,6 +2503,7 @@ impl WindowInfo {
             self.title.clone(),
             self.frame,
             workspace_name.to_string(),
+            self.is_minimized,
         )
     }
 

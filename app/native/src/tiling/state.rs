@@ -408,6 +408,7 @@ impl TrackedWindow {
         title: String,
         frame: Rect,
         workspace_name: String,
+        is_minimized: bool,
     ) -> Self {
         Self {
             id,
@@ -416,7 +417,7 @@ impl TrackedWindow {
             app_name,
             title,
             frame,
-            is_minimized: false,
+            is_minimized,
             is_hidden: false,
             is_floating: false,
             workspace_name,
@@ -579,6 +580,12 @@ impl TilingState {
         self.windows.iter().find(|w| w.id == id)
     }
 
+    /// Finds a window by ID (mutable).
+    #[must_use]
+    pub fn window_by_id_mut(&mut self, id: u32) -> Option<&mut TrackedWindow> {
+        self.windows.iter_mut().find(|w| w.id == id)
+    }
+
     /// Returns windows for a given workspace.
     #[must_use]
     pub fn windows_for_workspace(&self, workspace_name: &str) -> Vec<&TrackedWindow> {
@@ -706,6 +713,7 @@ mod tests {
             "Apple".to_string(),
             Rect::new(100.0, 100.0, 800.0, 600.0),
             "browser".to_string(),
+            false,
         );
         assert_eq!(window.id, 123);
         assert_eq!(window.pid, 456);
@@ -876,6 +884,7 @@ mod tests {
             "Title1".to_string(),
             Rect::default(),
             "coding".to_string(),
+            false,
         ));
         state.windows.push(TrackedWindow::new(
             2,
@@ -885,6 +894,7 @@ mod tests {
             "Title2".to_string(),
             Rect::default(),
             "coding".to_string(),
+            false,
         ));
         state.windows.push(TrackedWindow::new(
             3,
@@ -894,6 +904,7 @@ mod tests {
             "Title3".to_string(),
             Rect::default(),
             "browser".to_string(),
+            false,
         ));
 
         let coding_windows = state.windows_for_workspace("coding");
