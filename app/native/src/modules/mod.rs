@@ -9,7 +9,7 @@
 //! - [`hotkey`] - Global keyboard shortcut handling
 //! - [`menu_anywhere`] - Summon app menus at cursor position
 //! - [`notunes`] - Prevent Apple Music from auto-launching
-//! - [`tiling`] - Tiling window manager
+//! - [`tiling`] - Tiling window manager (reactive architecture)
 //! - [`wallpaper`] - Dynamic wallpaper management
 //! - [`widgets`] - Widget overlay windows
 

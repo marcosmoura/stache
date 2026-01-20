@@ -142,6 +142,11 @@ pub mod tiling {
     ///
     /// Payload: `{ windowId: u32, workspace: String }`
     pub const WINDOW_FOCUS_CHANGED: &str = "stache://tiling/window-focus-changed";
+
+    /// Emitted when a window's title changes.
+    ///
+    /// Payload: `{ windowId: u32, title: String }`
+    pub const WINDOW_TITLE_CHANGED: &str = "stache://tiling/window-title-changed";
 }
 
 #[cfg(test)]
@@ -168,6 +173,7 @@ mod tests {
             tiling::SCREENS_CHANGED,
             tiling::INITIALIZED,
             tiling::WINDOW_FOCUS_CHANGED,
+            tiling::WINDOW_TITLE_CHANGED,
         ];
 
         for event in events {
@@ -203,6 +209,7 @@ mod tests {
             (tiling::SCREENS_CHANGED, "tiling", "screens-changed"),
             (tiling::INITIALIZED, "tiling", "initialized"),
             (tiling::WINDOW_FOCUS_CHANGED, "tiling", "window-focus-changed"),
+            (tiling::WINDOW_TITLE_CHANGED, "tiling", "window-title-changed"),
         ];
 
         for (event, module, name) in events {

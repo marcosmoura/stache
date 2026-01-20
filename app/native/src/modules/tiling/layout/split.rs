@@ -9,8 +9,8 @@
 
 use smallvec::SmallVec;
 
-use super::{Gaps, LayoutResult};
-use crate::tiling::state::Rect;
+use super::{Gaps, LAYOUT_INLINE_CAP, LayoutResult};
+use crate::modules::tiling::state::Rect;
 
 /// Auto-split layout - splits based on screen orientation.
 ///
@@ -151,8 +151,6 @@ fn layout_horizontal_with_ratios(
     gaps: &Gaps,
     ratios: &[f64],
 ) -> LayoutResult {
-    use super::LAYOUT_INLINE_CAP;
-
     let count = window_ids.len();
     let total_gap = gaps.inner_h * (count - 1) as f64;
     let available_width = screen_frame.width - total_gap;
@@ -186,8 +184,6 @@ fn layout_vertical_with_ratios(
     gaps: &Gaps,
     ratios: &[f64],
 ) -> LayoutResult {
-    use super::LAYOUT_INLINE_CAP;
-
     let count = window_ids.len();
     let total_gap = gaps.inner_v * (count - 1) as f64;
     let available_height = screen_frame.height - total_gap;
@@ -212,6 +208,10 @@ fn layout_vertical_with_ratios(
 
     result
 }
+
+// ============================================================================
+// Tests
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -285,6 +285,22 @@ mod tests {
 
         assert!((left.width - frame.width * 0.7).abs() < 1.0);
         assert!((right.width - frame.width * 0.3).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_horizontal_three_windows_custom_ratios() {
+        let frame = screen_frame();
+        // 50% for first, 30% for second, 20% for third
+        let ratios = vec![0.5, 0.8]; // Cumulative: 0.5, 0.8, 1.0
+        let result = layout_horizontal(&[1, 2, 3], &frame, &no_gaps(), &ratios);
+
+        let (_, w1) = result[0];
+        let (_, w2) = result[1];
+        let (_, w3) = result[2];
+
+        assert!((w1.width - frame.width * 0.5).abs() < 1.0);
+        assert!((w2.width - frame.width * 0.3).abs() < 1.0);
+        assert!((w3.width - frame.width * 0.2).abs() < 1.0);
     }
 
     // ========================================================================
@@ -397,5 +413,39 @@ mod tests {
         // Horizontal split = side by side
         assert_eq!(w1.height, frame.height);
         assert_eq!(w2.height, frame.height);
+    }
+
+    // ========================================================================
+    // Many Windows Tests
+    // ========================================================================
+
+    #[test]
+    fn test_horizontal_many_windows() {
+        let frame = screen_frame();
+        let ids: Vec<u32> = (1..=5).collect();
+        let result = layout_horizontal(&ids, &frame, &no_gaps(), &[]);
+
+        assert_eq!(result.len(), 5);
+
+        let expected_width = frame.width / 5.0;
+        for (_, w) in &result {
+            assert!((w.width - expected_width).abs() < 1.0);
+            assert_eq!(w.height, frame.height);
+        }
+    }
+
+    #[test]
+    fn test_vertical_many_windows() {
+        let frame = screen_frame();
+        let ids: Vec<u32> = (1..=5).collect();
+        let result = layout_vertical(&ids, &frame, &no_gaps(), &[]);
+
+        assert_eq!(result.len(), 5);
+
+        let expected_height = frame.height / 5.0;
+        for (_, w) in &result {
+            assert_eq!(w.width, frame.width);
+            assert!((w.height - expected_height).abs() < 1.0);
+        }
     }
 }

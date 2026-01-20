@@ -1,29 +1,49 @@
-//! Gap configuration and handling for layouts.
+//! Gap configuration for layout calculations.
+//!
+//! Gaps define the spacing between windows (inner) and around the edges
+//! of the screen (outer). This module provides a self-contained `Gaps`
+//! struct that can be used independently of the v1 configuration system.
 
 use std::hash::{Hash, Hasher};
 
 use crate::config::{GapsConfig, GapsConfigValue};
-use crate::tiling::state::Rect;
+use crate::modules::tiling::state::Rect;
 
-/// Resolved gap values for layout calculations.
+/// Gap values for layout calculations.
+///
+/// Inner gaps define spacing between windows.
+/// Outer gaps define spacing from screen edges.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Gaps {
-    /// Inner gap between windows (horizontal).
+    /// Horizontal gap between windows.
     pub inner_h: f64,
-    /// Inner gap between windows (vertical).
+    /// Vertical gap between windows.
     pub inner_v: f64,
-    /// Outer gap from screen top edge.
+    /// Gap from screen top edge.
     pub outer_top: f64,
-    /// Outer gap from screen right edge.
+    /// Gap from screen right edge.
     pub outer_right: f64,
-    /// Outer gap from screen bottom edge.
+    /// Gap from screen bottom edge.
     pub outer_bottom: f64,
-    /// Outer gap from screen left edge.
+    /// Gap from screen left edge.
     pub outer_left: f64,
 }
 
 impl Gaps {
-    /// Creates gaps with uniform inner and outer values.
+    /// Create new gaps with all values set to zero.
+    #[must_use]
+    pub const fn zero() -> Self {
+        Self {
+            inner_h: 0.0,
+            inner_v: 0.0,
+            outer_top: 0.0,
+            outer_right: 0.0,
+            outer_bottom: 0.0,
+            outer_left: 0.0,
+        }
+    }
+
+    /// Create gaps with uniform inner and outer values.
     #[must_use]
     pub const fn uniform(inner: f64, outer: f64) -> Self {
         Self {
@@ -34,6 +54,71 @@ impl Gaps {
             outer_bottom: outer,
             outer_left: outer,
         }
+    }
+
+    /// Create gaps with separate inner and outer values for each direction.
+    #[must_use]
+    pub const fn new(
+        inner_h: f64,
+        inner_v: f64,
+        outer_top: f64,
+        outer_right: f64,
+        outer_bottom: f64,
+        outer_left: f64,
+    ) -> Self {
+        Self {
+            inner_h,
+            inner_v,
+            outer_top,
+            outer_right,
+            outer_bottom,
+            outer_left,
+        }
+    }
+
+    /// Returns true if all gaps are zero.
+    #[must_use]
+    pub fn is_zero(&self) -> bool {
+        self.inner_h == 0.0
+            && self.inner_v == 0.0
+            && self.outer_top == 0.0
+            && self.outer_right == 0.0
+            && self.outer_bottom == 0.0
+            && self.outer_left == 0.0
+    }
+
+    /// Apply outer gaps to a screen frame, returning the usable area.
+    #[must_use]
+    pub fn apply_outer(&self, frame: &Rect) -> Rect {
+        Rect::new(
+            frame.x + self.outer_left,
+            frame.y + self.outer_top,
+            frame.width - self.outer_left - self.outer_right,
+            frame.height - self.outer_top - self.outer_bottom,
+        )
+    }
+
+    /// Compute a hash of the gap values for cache validation.
+    #[must_use]
+    pub fn compute_hash(&self) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+
+        let mut hasher = DefaultHasher::new();
+        self.inner_h.to_bits().hash(&mut hasher);
+        self.inner_v.to_bits().hash(&mut hasher);
+        self.outer_top.to_bits().hash(&mut hasher);
+        self.outer_right.to_bits().hash(&mut hasher);
+        self.outer_bottom.to_bits().hash(&mut hasher);
+        self.outer_left.to_bits().hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// Create gaps with an additional offset added to the top outer gap.
+    /// Useful for accounting for the status bar.
+    #[must_use]
+    pub const fn with_top_offset(mut self, offset: f64) -> Self {
+        self.outer_top += offset;
+        self
     }
 
     /// Resolves gaps from configuration for a specific screen.
@@ -60,7 +145,9 @@ impl Gaps {
                 // Find matching screen config
                 let screen_config = screens.iter().find(|s| {
                     s.screen.eq_ignore_ascii_case(screen_name)
-                        || (s.screen.eq_ignore_ascii_case("main") && is_main_screen)
+                        || ((s.screen.eq_ignore_ascii_case("main")
+                            || s.screen.eq_ignore_ascii_case("primary"))
+                            && is_main_screen)
                         || (s.screen.eq_ignore_ascii_case("secondary") && !is_main_screen)
                 });
 
@@ -105,48 +192,23 @@ impl Gaps {
             outer_left: f64::from(outer_left),
         }
     }
-
-    /// Returns true if all gaps are zero.
-    #[must_use]
-    pub fn is_zero(&self) -> bool {
-        self.inner_h == 0.0
-            && self.inner_v == 0.0
-            && self.outer_top == 0.0
-            && self.outer_right == 0.0
-            && self.outer_bottom == 0.0
-            && self.outer_left == 0.0
-    }
-
-    /// Applies outer gaps to a screen frame, returning the usable area.
-    #[must_use]
-    pub fn apply_outer(&self, frame: &Rect) -> Rect {
-        Rect::new(
-            frame.x + self.outer_left,
-            frame.y + self.outer_top,
-            frame.width - self.outer_left - self.outer_right,
-            frame.height - self.outer_top - self.outer_bottom,
-        )
-    }
-
-    /// Computes a hash of the gap values for cache validation.
-    #[must_use]
-    pub fn compute_hash(&self) -> u64 {
-        use std::collections::hash_map::DefaultHasher;
-
-        let mut hasher = DefaultHasher::new();
-        self.inner_h.to_bits().hash(&mut hasher);
-        self.inner_v.to_bits().hash(&mut hasher);
-        self.outer_top.to_bits().hash(&mut hasher);
-        self.outer_right.to_bits().hash(&mut hasher);
-        self.outer_bottom.to_bits().hash(&mut hasher);
-        self.outer_left.to_bits().hash(&mut hasher);
-        hasher.finish()
-    }
 }
+
+// ============================================================================
+// Tests
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_gaps_zero() {
+        let gaps = Gaps::zero();
+        assert!(gaps.is_zero());
+        assert_eq!(gaps.inner_h, 0.0);
+        assert_eq!(gaps.outer_top, 0.0);
+    }
 
     #[test]
     fn test_gaps_uniform() {
@@ -157,11 +219,24 @@ mod tests {
         assert_eq!(gaps.outer_right, 20.0);
         assert_eq!(gaps.outer_bottom, 20.0);
         assert_eq!(gaps.outer_left, 20.0);
+        assert!(!gaps.is_zero());
+    }
+
+    #[test]
+    fn test_gaps_new() {
+        let gaps = Gaps::new(5.0, 10.0, 15.0, 20.0, 25.0, 30.0);
+        assert_eq!(gaps.inner_h, 5.0);
+        assert_eq!(gaps.inner_v, 10.0);
+        assert_eq!(gaps.outer_top, 15.0);
+        assert_eq!(gaps.outer_right, 20.0);
+        assert_eq!(gaps.outer_bottom, 25.0);
+        assert_eq!(gaps.outer_left, 30.0);
     }
 
     #[test]
     fn test_gaps_is_zero() {
         assert!(Gaps::default().is_zero());
+        assert!(Gaps::zero().is_zero());
         assert!(!Gaps::uniform(10.0, 0.0).is_zero());
         assert!(!Gaps::uniform(0.0, 10.0).is_zero());
     }
@@ -179,45 +254,22 @@ mod tests {
     }
 
     #[test]
-    fn test_from_config_global_with_bar_offset_main_screen() {
-        let config = GapsConfigValue::Global(GapsConfig {
-            inner: crate::config::GapValue::Uniform(10),
-            outer: crate::config::GapValue::Uniform(20),
-        });
+    fn test_gaps_apply_outer_asymmetric() {
+        let gaps = Gaps::new(0.0, 0.0, 50.0, 20.0, 20.0, 20.0);
+        let frame = Rect::new(0.0, 0.0, 1000.0, 800.0);
+        let usable = gaps.apply_outer(&frame);
 
-        // Main screen should have bar offset added to top
-        let gaps = Gaps::from_config(&config, "Main Display", true, 40.0);
-        assert_eq!(gaps.outer_top, 60.0); // 20 + 40 bar offset
-        assert_eq!(gaps.outer_right, 20.0);
-        assert_eq!(gaps.outer_bottom, 20.0);
-        assert_eq!(gaps.outer_left, 20.0);
+        assert_eq!(usable.x, 20.0); // outer_left
+        assert_eq!(usable.y, 50.0); // outer_top
+        assert_eq!(usable.width, 960.0); // 1000 - 20 - 20
+        assert_eq!(usable.height, 730.0); // 800 - 50 - 20
     }
 
     #[test]
-    fn test_from_config_global_with_bar_offset_secondary_screen() {
-        let config = GapsConfigValue::Global(GapsConfig {
-            inner: crate::config::GapValue::Uniform(10),
-            outer: crate::config::GapValue::Uniform(20),
-        });
-
-        // Secondary screen should NOT have bar offset added
-        let gaps = Gaps::from_config(&config, "Secondary Display", false, 40.0);
-        assert_eq!(gaps.outer_top, 20.0); // No bar offset
-        assert_eq!(gaps.outer_right, 20.0);
-        assert_eq!(gaps.outer_bottom, 20.0);
-        assert_eq!(gaps.outer_left, 20.0);
-    }
-
-    #[test]
-    fn test_from_config_zero_bar_offset() {
-        let config = GapsConfigValue::Global(GapsConfig {
-            inner: crate::config::GapValue::Uniform(10),
-            outer: crate::config::GapValue::Uniform(20),
-        });
-
-        // Zero bar offset should not change anything
-        let gaps = Gaps::from_config(&config, "Main Display", true, 0.0);
-        assert_eq!(gaps.outer_top, 20.0);
+    fn test_gaps_with_top_offset() {
+        let gaps = Gaps::uniform(10.0, 20.0).with_top_offset(40.0);
+        assert_eq!(gaps.outer_top, 60.0); // 20 + 40
+        assert_eq!(gaps.outer_bottom, 20.0); // unchanged
     }
 
     #[test]
@@ -237,22 +289,8 @@ mod tests {
 
     #[test]
     fn test_compute_hash_different_outer_values() {
-        let gaps1 = Gaps {
-            inner_h: 10.0,
-            inner_v: 10.0,
-            outer_top: 20.0,
-            outer_right: 20.0,
-            outer_bottom: 20.0,
-            outer_left: 20.0,
-        };
-        let gaps2 = Gaps {
-            inner_h: 10.0,
-            inner_v: 10.0,
-            outer_top: 25.0, // Different top
-            outer_right: 20.0,
-            outer_bottom: 20.0,
-            outer_left: 20.0,
-        };
+        let gaps1 = Gaps::new(10.0, 10.0, 20.0, 20.0, 20.0, 20.0);
+        let gaps2 = Gaps::new(10.0, 10.0, 25.0, 20.0, 20.0, 20.0);
         assert_ne!(gaps1.compute_hash(), gaps2.compute_hash());
     }
 }

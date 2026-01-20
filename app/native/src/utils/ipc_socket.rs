@@ -62,10 +62,10 @@ static SERVER_RUNNING: AtomicBool = AtomicBool::new(false);
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum IpcQuery {
-    /// Query all screens.
+    /// Query all screens (v1).
     Screens,
 
-    /// Query workspaces with optional filters.
+    /// Query workspaces with optional filters (v1).
     Workspaces {
         #[serde(skip_serializing_if = "Option::is_none")]
         screen: Option<String>,
@@ -73,7 +73,7 @@ pub enum IpcQuery {
         focused_screen: bool,
     },
 
-    /// Query windows with optional filters.
+    /// Query windows with optional filters (v1).
     Windows {
         #[serde(skip_serializing_if = "Option::is_none")]
         screen: Option<String>,
@@ -87,6 +87,32 @@ pub enum IpcQuery {
 
     /// Ping to check if app is running.
     Ping,
+
+    // ========================================================================
+    // Tiling v2 queries
+    // ========================================================================
+    /// Query overall tiling v2 state.
+    #[serde(rename = "v2State")]
+    V2State,
+
+    /// Query all screens (v2).
+    #[serde(rename = "v2Screens")]
+    V2Screens,
+
+    /// Query all workspaces (v2).
+    #[serde(rename = "v2Workspaces")]
+    V2Workspaces,
+
+    /// Query windows (v2) with optional workspace filter.
+    #[serde(rename = "v2Windows")]
+    V2Windows {
+        #[serde(skip_serializing_if = "Option::is_none", rename = "workspaceId")]
+        workspace_id: Option<String>,
+    },
+
+    /// Check if tiling v2 is enabled.
+    #[serde(rename = "v2Enabled")]
+    V2Enabled,
 }
 
 /// Response from App to CLI.

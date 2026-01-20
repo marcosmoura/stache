@@ -4,34 +4,11 @@
 //! which is used to query and manipulate windows. The main type is [`AXElement`],
 //! which wraps an `AXUIElementRef` and provides automatic memory management.
 //!
-//! # Example
-//!
-//! ```rust,ignore
-//! use stache::tiling::ffi::AXElement;
-//!
-//! // Create an element for an application
-//! if let Some(app) = AXElement::application(pid) {
-//!     // Get all windows
-//!     for window in app.windows() {
-//!         if let Some(title) = window.title() {
-//!             println!("Window: {}", title);
-//!         }
-//!     }
-//! }
-//! ```
-//!
 //! # Thread Safety
 //!
 //! The macOS Accessibility API is thread-safe for operations on different
 //! elements. `AXElement` implements `Send` and `Sync` to allow use across
-//! threads. However, users should avoid concurrent modifications to the
-//! same window from multiple threads.
-//!
-//! # Memory Management
-//!
-//! `AXElement` uses RAII to manage the underlying `AXUIElementRef`. When an
-//! `AXElement` is dropped, it automatically calls `CFRelease`. Cloning an
-//! `AXElement` calls `CFRetain` to increment the reference count.
+//! threads.
 
 use std::cell::OnceCell;
 use std::ffi::c_void;
@@ -41,8 +18,7 @@ use core_foundation::base::TCFType;
 use core_foundation::boolean::CFBoolean;
 use core_foundation::string::CFString;
 
-use crate::tiling::error::{TilingError, TilingResult};
-use crate::tiling::state::Rect;
+use crate::modules::tiling::state::Rect;
 
 // ============================================================================
 // FFI Declarations
@@ -75,6 +51,8 @@ unsafe extern "C" {
     fn AXUIElementPerformAction(element: AXUIElementRef, action: *const c_void) -> AXError;
     fn AXValueCreate(value_type: i32, value: *const c_void) -> *mut c_void;
     fn AXValueGetValue(value: *const c_void, value_type: i32, value_ptr: *mut c_void) -> bool;
+    /// Private API to get CGWindowID from an AXUIElement.
+    fn _AXUIElementGetWindow(element: AXUIElementRef, window_id: *mut u32) -> AXError;
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -96,17 +74,22 @@ const K_AX_VALUE_TYPE_CG_SIZE: i32 = 2;
 
 thread_local! {
     static CF_WINDOWS: OnceCell<CFString> = const { OnceCell::new() };
+    static CF_CHILDREN: OnceCell<CFString> = const { OnceCell::new() };
     static CF_TITLE: OnceCell<CFString> = const { OnceCell::new() };
     static CF_ROLE: OnceCell<CFString> = const { OnceCell::new() };
     static CF_SUBROLE: OnceCell<CFString> = const { OnceCell::new() };
     static CF_POSITION: OnceCell<CFString> = const { OnceCell::new() };
     static CF_SIZE: OnceCell<CFString> = const { OnceCell::new() };
+    static CF_MINIMUM_SIZE: OnceCell<CFString> = const { OnceCell::new() };
     static CF_FOCUSED: OnceCell<CFString> = const { OnceCell::new() };
     static CF_FOCUSED_WINDOW: OnceCell<CFString> = const { OnceCell::new() };
     static CF_MINIMIZED: OnceCell<CFString> = const { OnceCell::new() };
     static CF_HIDDEN: OnceCell<CFString> = const { OnceCell::new() };
     static CF_MAIN: OnceCell<CFString> = const { OnceCell::new() };
     static CF_RAISE: OnceCell<CFString> = const { OnceCell::new() };
+    static CF_FULLSCREEN: OnceCell<CFString> = const { OnceCell::new() };
+    static CF_TABS: OnceCell<CFString> = const { OnceCell::new() };
+    static CF_TAB_GROUP_ROLE: OnceCell<CFString> = const { OnceCell::new() };
 }
 
 /// Gets or creates a cached `CFString`.
@@ -118,6 +101,9 @@ macro_rules! cached_cfstring {
 
 #[inline]
 fn cf_windows() -> *const c_void { cached_cfstring!(CF_WINDOWS, "AXWindows") }
+
+#[inline]
+fn cf_children() -> *const c_void { cached_cfstring!(CF_CHILDREN, "AXChildren") }
 
 #[inline]
 fn cf_title() -> *const c_void { cached_cfstring!(CF_TITLE, "AXTitle") }
@@ -133,6 +119,9 @@ fn cf_position() -> *const c_void { cached_cfstring!(CF_POSITION, "AXPosition") 
 
 #[inline]
 fn cf_size() -> *const c_void { cached_cfstring!(CF_SIZE, "AXSize") }
+
+#[inline]
+fn cf_minimum_size() -> *const c_void { cached_cfstring!(CF_MINIMUM_SIZE, "AXMinimumSize") }
 
 #[inline]
 fn cf_focused() -> *const c_void { cached_cfstring!(CF_FOCUSED, "AXFocused") }
@@ -152,6 +141,15 @@ fn cf_main() -> *const c_void { cached_cfstring!(CF_MAIN, "AXMain") }
 #[inline]
 fn cf_raise() -> *const c_void { cached_cfstring!(CF_RAISE, "AXRaise") }
 
+#[inline]
+fn cf_fullscreen() -> *const c_void { cached_cfstring!(CF_FULLSCREEN, "AXFullScreen") }
+
+#[inline]
+fn cf_tabs() -> *const c_void { cached_cfstring!(CF_TABS, "AXTabs") }
+
+#[inline]
+fn cf_tab_group_role() -> *const c_void { cached_cfstring!(CF_TAB_GROUP_ROLE, "AXTabGroup") }
+
 // ============================================================================
 // AXElement
 // ============================================================================
@@ -159,22 +157,7 @@ fn cf_raise() -> *const c_void { cached_cfstring!(CF_RAISE, "AXRaise") }
 /// A safe wrapper around `AXUIElementRef`.
 ///
 /// This type provides automatic memory management (via `Drop`) and a safe
-/// interface to the macOS Accessibility API. It can represent either an
-/// application element or a window element.
-///
-/// # Safety
-///
-/// The underlying `AXUIElementRef` is a Core Foundation type that uses
-/// reference counting. `AXElement` manages this automatically:
-/// - Creating an `AXElement` takes ownership of the reference
-/// - Cloning increments the reference count via `CFRetain`
-/// - Dropping decrements the reference count via `CFRelease`
-///
-/// # Thread Safety
-///
-/// The Accessibility API is thread-safe for operations on different elements.
-/// `AXElement` implements `Send` and `Sync` to allow use in parallel operations
-/// (e.g., positioning multiple windows simultaneously).
+/// interface to the macOS Accessibility API.
 pub struct AXElement {
     /// The underlying `AXUIElementRef`. Never null for a valid `AXElement`.
     raw: AXUIElementRef,
@@ -186,17 +169,6 @@ impl AXElement {
     // ========================================================================
 
     /// Creates an `AXElement` for an application by its process ID.
-    ///
-    /// Returns `None` if the application cannot be accessed (e.g., if the
-    /// process doesn't exist or accessibility permissions are not granted).
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// if let Some(app) = AXElement::application(pid) {
-    ///     // Work with the application
-    /// }
-    /// ```
     #[must_use]
     pub fn application(pid: i32) -> Option<Self> {
         let raw = unsafe { AXUIElementCreateApplication(pid) };
@@ -209,13 +181,11 @@ impl AXElement {
 
     /// Creates an `AXElement` from a raw pointer, taking ownership.
     ///
-    /// Returns `None` if the pointer is null.
-    ///
     /// # Safety
     ///
     /// The caller must ensure that:
     /// - The pointer is a valid `AXUIElementRef`
-    /// - The caller transfers ownership (does not call `CFRelease` separately)
+    /// - The caller transfers ownership
     #[must_use]
     pub const unsafe fn from_raw(raw: AXUIElementRef) -> Option<Self> {
         if raw.is_null() {
@@ -227,13 +197,9 @@ impl AXElement {
 
     /// Creates an `AXElement` from a raw pointer, retaining it.
     ///
-    /// Returns `None` if the pointer is null.
-    ///
     /// # Safety
     ///
-    /// The caller must ensure that:
-    /// - The pointer is a valid `AXUIElementRef`
-    /// - The original reference is still valid and owned by someone else
+    /// The caller must ensure the pointer is valid.
     #[must_use]
     pub unsafe fn from_raw_retained(raw: AXUIElementRef) -> Option<Self> {
         if raw.is_null() {
@@ -245,8 +211,6 @@ impl AXElement {
     }
 
     /// Returns the raw `AXUIElementRef` without transferring ownership.
-    ///
-    /// The returned pointer is valid as long as this `AXElement` is alive.
     #[must_use]
     pub const fn as_raw(&self) -> AXUIElementRef { self.raw }
 
@@ -265,26 +229,10 @@ impl AXElement {
     // ========================================================================
 
     /// Gets all windows belonging to this application.
-    ///
-    /// Returns an empty vector if this is not an application element or if
-    /// the application has no windows.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// if let Some(app) = AXElement::application(pid) {
-    ///     for window in app.windows() {
-    ///         println!("Found window: {:?}", window.title());
-    ///     }
-    /// }
-    /// ```
     #[must_use]
     pub fn windows(&self) -> Vec<Self> { unsafe { self.get_windows_internal() } }
 
     /// Gets the focused window of this application.
-    ///
-    /// Returns `None` if this is not an application element or if the
-    /// application has no focused window.
     #[must_use]
     pub fn focused_window(&self) -> Option<Self> {
         let mut value: *mut c_void = ptr::null_mut();
@@ -344,8 +292,6 @@ impl AXElement {
     // ========================================================================
 
     /// Gets the window title.
-    ///
-    /// Returns `None` if the element has no title attribute.
     #[must_use]
     pub fn title(&self) -> Option<String> { unsafe { get_string_attr(self.raw, cf_title()) } }
 
@@ -379,6 +325,12 @@ impl AXElement {
     #[must_use]
     pub fn is_main(&self) -> Option<bool> { unsafe { get_bool_attr(self.raw, cf_main()) } }
 
+    /// Returns whether this window is in fullscreen mode.
+    #[must_use]
+    pub fn is_fullscreen(&self) -> Option<bool> {
+        unsafe { get_bool_attr(self.raw, cf_fullscreen()) }
+    }
+
     // ========================================================================
     // Geometry
     // ========================================================================
@@ -399,12 +351,21 @@ impl AXElement {
         Some(Rect::new(x, y, width, height))
     }
 
+    /// Gets the minimum size of this element as (width, height).
+    ///
+    /// Not all windows support this attribute. Returns `None` if the
+    /// attribute is not available or cannot be read.
+    #[must_use]
+    pub fn minimum_size(&self) -> Option<(f64, f64)> {
+        unsafe { get_size_attr_with_key(self.raw, cf_minimum_size()) }
+    }
+
     /// Sets the position of this element.
     ///
     /// # Errors
     ///
     /// Returns an error if the position cannot be set.
-    pub fn set_position(&self, x: f64, y: f64) -> TilingResult<()> {
+    pub fn set_position(&self, x: f64, y: f64) -> Result<(), String> {
         unsafe { set_position_attr(self.raw, x, y) }
     }
 
@@ -413,21 +374,16 @@ impl AXElement {
     /// # Errors
     ///
     /// Returns an error if the size cannot be set.
-    pub fn set_size(&self, width: f64, height: f64) -> TilingResult<()> {
+    pub fn set_size(&self, width: f64, height: f64) -> Result<(), String> {
         unsafe { set_size_attr(self.raw, width, height) }
     }
 
     /// Sets the frame (position and size) of this element.
     ///
-    /// This performs the operations in the optimal order for reliable resizing:
-    /// 1. Set size first (allows window to shrink)
-    /// 2. Set position
-    /// 3. Set size again (some apps need this)
-    ///
     /// # Errors
     ///
     /// Returns an error if the frame cannot be set.
-    pub fn set_frame(&self, frame: &Rect) -> TilingResult<()> {
+    pub fn set_frame(&self, frame: &Rect) -> Result<(), String> {
         // Order matters for reliable resizing
         let size_1 = self.set_size(frame.width, frame.height);
         let pos = self.set_position(frame.x, frame.y);
@@ -437,21 +393,62 @@ impl AXElement {
         if pos.is_ok() && (size_1.is_ok() || size_2.is_ok()) {
             Ok(())
         } else {
-            Err(TilingError::window_op("Failed to set window frame"))
+            Err("Failed to set window frame".to_string())
         }
     }
 
     /// Sets the frame using the fast path (2 AX calls instead of 3).
     ///
-    /// Use this during animations where windows move in small increments.
-    ///
     /// # Errors
     ///
     /// Returns an error if the frame cannot be set.
-    pub fn set_frame_fast(&self, frame: &Rect) -> TilingResult<()> {
+    pub fn set_frame_fast(&self, frame: &Rect) -> Result<(), String> {
         self.set_position(frame.x, frame.y)?;
         self.set_size(frame.width, frame.height)?;
         Ok(())
+    }
+
+    /// Sets the frame and verifies it was applied correctly.
+    ///
+    /// Returns `Ok(Some(actual_frame))` if the window couldn't reach the target size
+    /// (e.g., due to minimum size constraints), with the actual resulting frame.
+    /// Returns `Ok(None)` if the frame was applied as requested.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the frame operation completely failed.
+    pub fn set_frame_verified(&self, target: &Rect) -> Result<Option<Rect>, String> {
+        self.set_frame(target)?;
+
+        // Query actual frame to verify
+        let Some(actual) = self.frame() else {
+            return Ok(None); // Can't verify, assume success
+        };
+
+        // Check if size differs significantly (more than 1 pixel)
+        let width_diff = (actual.width - target.width).abs();
+        let height_diff = (actual.height - target.height).abs();
+
+        if width_diff > 1.0 || height_diff > 1.0 {
+            Ok(Some(actual))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Checks if the target size would violate this window's minimum size constraints.
+    ///
+    /// Returns `Some((min_width, min_height))` if the window has minimum size constraints
+    /// and the target would violate them. Returns `None` if constraints are met or unknown.
+    #[must_use]
+    pub fn check_minimum_size(&self, target_width: f64, target_height: f64) -> Option<(f64, f64)> {
+        let (min_w, min_h) = self.minimum_size()?;
+
+        if target_width < min_w || target_height < min_h {
+            Some((min_w, min_h))
+        } else {
+            None
+        }
     }
 
     // ========================================================================
@@ -463,10 +460,139 @@ impl AXElement {
     /// # Errors
     ///
     /// Returns an error if the window cannot be raised.
-    pub fn raise(&self) -> TilingResult<()> {
+    pub fn raise(&self) -> Result<(), String> {
         let result = unsafe { AXUIElementPerformAction(self.raw, cf_raise()) };
-        ax_result_to_tiling_result(result, "raise window")
+        ax_result_to_error(result, "raise window")
     }
+
+    // ========================================================================
+    // Window ID
+    // ========================================================================
+
+    /// Gets the `CGWindowID` for this window element.
+    ///
+    /// This uses a private API (`_AXUIElementGetWindow`) to get the exact
+    /// mapping from AX element to window ID.
+    #[must_use]
+    pub fn window_id(&self) -> Option<u32> {
+        let mut window_id: u32 = 0;
+        let result = unsafe { _AXUIElementGetWindow(self.raw, &raw mut window_id) };
+        if result == K_AX_ERROR_SUCCESS && window_id != 0 {
+            Some(window_id)
+        } else {
+            None
+        }
+    }
+
+    // ========================================================================
+    // Tab Detection
+    // ========================================================================
+
+    /// Gets the children of this element.
+    #[must_use]
+    pub fn children(&self) -> Vec<Self> {
+        let mut value: *mut c_void = ptr::null_mut();
+        let result =
+            unsafe { AXUIElementCopyAttributeValue(self.raw, cf_children(), &raw mut value) };
+
+        if result != K_AX_ERROR_SUCCESS || value.is_null() {
+            return Vec::new();
+        }
+
+        let count = unsafe { CFArrayGetCount(value) };
+        if count <= 0 {
+            unsafe { CFRelease(value) };
+            return Vec::new();
+        }
+
+        let ax_type_id = unsafe { AXUIElementGetTypeID() };
+
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let mut children = Vec::with_capacity(count as usize);
+
+        for i in 0..count {
+            let child = unsafe { CFArrayGetValueAtIndex(value, i) };
+            if !child.is_null() && unsafe { CFGetTypeID(child) } == ax_type_id {
+                // Retain since CFArrayGetValueAtIndex doesn't transfer ownership
+                unsafe { CFRetain(child) };
+                children.push(Self { raw: child.cast_mut() });
+            }
+        }
+
+        unsafe { CFRelease(value) };
+        children
+    }
+
+    /// Finds a tab group child element if one exists.
+    ///
+    /// Tab groups are UI elements with role "AXTabGroup" that contain tabs.
+    /// This is used for detecting native macOS tabs in applications like Finder.
+    #[must_use]
+    pub fn find_tab_group(&self) -> Option<Self> {
+        let tab_group_role = "AXTabGroup";
+
+        for child in self.children() {
+            if let Some(role) = child.role() {
+                if role == tab_group_role {
+                    return Some(child);
+                }
+            }
+            // Also check in AXGroup children (Safari 14+ puts tabs in an AXGroup)
+            if let Some(role) = child.role() {
+                if role == "AXGroup" {
+                    // Check if this group has an AXTabs attribute
+                    if child.has_tabs_attribute() {
+                        return Some(child);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Checks if this element has an AXTabs attribute.
+    #[must_use]
+    fn has_tabs_attribute(&self) -> bool {
+        let mut value: *mut c_void = ptr::null_mut();
+        let result = unsafe { AXUIElementCopyAttributeValue(self.raw, cf_tabs(), &raw mut value) };
+
+        if result == K_AX_ERROR_SUCCESS && !value.is_null() {
+            unsafe { CFRelease(value) };
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Gets the number of tabs in this tab group element.
+    ///
+    /// Returns 0 if this is not a tab group or has no tabs.
+    #[must_use]
+    pub fn tab_count(&self) -> usize {
+        let mut value: *mut c_void = ptr::null_mut();
+        let result = unsafe { AXUIElementCopyAttributeValue(self.raw, cf_tabs(), &raw mut value) };
+
+        if result != K_AX_ERROR_SUCCESS || value.is_null() {
+            return 0;
+        }
+
+        let count = unsafe { CFArrayGetCount(value) };
+        unsafe { CFRelease(value) };
+
+        #[allow(clippy::cast_sign_loss)]
+        if count > 0 { count as usize } else { 0 }
+    }
+
+    /// Gets the tab count for this window (if it has tabs).
+    ///
+    /// This searches for a tab group child and returns its tab count.
+    /// Returns 0 if the window has no tabs or 1 if it's a single tab.
+    #[must_use]
+    pub fn window_tab_count(&self) -> usize { self.find_tab_group().map_or(0, |tg| tg.tab_count()) }
+
+    /// Checks if this window has multiple tabs.
+    #[must_use]
+    pub fn has_multiple_tabs(&self) -> bool { self.window_tab_count() > 1 }
 }
 
 // ============================================================================
@@ -489,12 +615,7 @@ impl Clone for AXElement {
 }
 
 // SAFETY: The Accessibility API is thread-safe for operations on different elements.
-// Each AXElement represents a unique UI element reference.
 unsafe impl Send for AXElement {}
-
-// SAFETY: Concurrent reads are safe. Concurrent writes to the same window
-// may result in undefined behavior at the OS level, but won't cause memory
-// unsafety in Rust.
 unsafe impl Sync for AXElement {}
 
 impl std::fmt::Debug for AXElement {
@@ -585,12 +706,20 @@ unsafe fn get_position_attr(element: AXUIElementRef) -> Option<(f64, f64)> {
 
 /// Gets the size attribute from an element.
 unsafe fn get_size_attr(element: AXUIElementRef) -> Option<(f64, f64)> {
+    unsafe { get_size_attr_with_key(element, cf_size()) }
+}
+
+/// Gets a size attribute from an element using the specified attribute key.
+unsafe fn get_size_attr_with_key(
+    element: AXUIElementRef,
+    attr_key: *const c_void,
+) -> Option<(f64, f64)> {
     if element.is_null() {
         return None;
     }
 
     let mut value: *mut c_void = ptr::null_mut();
-    let result = unsafe { AXUIElementCopyAttributeValue(element, cf_size(), &raw mut value) };
+    let result = unsafe { AXUIElementCopyAttributeValue(element, attr_key, &raw mut value) };
 
     if result != K_AX_ERROR_SUCCESS || value.is_null() {
         return None;
@@ -610,45 +739,45 @@ unsafe fn get_size_attr(element: AXUIElementRef) -> Option<(f64, f64)> {
 }
 
 /// Sets the position attribute on an element.
-unsafe fn set_position_attr(element: AXUIElementRef, x: f64, y: f64) -> TilingResult<()> {
+unsafe fn set_position_attr(element: AXUIElementRef, x: f64, y: f64) -> Result<(), String> {
     if element.is_null() {
-        return Err(TilingError::window_op("Null element"));
+        return Err("Null element".to_string());
     }
 
     let point = core_graphics::geometry::CGPoint::new(x, y);
     let value = unsafe { AXValueCreate(K_AX_VALUE_TYPE_CG_POINT, (&raw const point).cast()) };
 
     if value.is_null() {
-        return Err(TilingError::window_op("Failed to create AXValue for position"));
+        return Err("Failed to create AXValue for position".to_string());
     }
 
     let result = unsafe { AXUIElementSetAttributeValue(element, cf_position(), value.cast()) };
     unsafe { CFRelease(value.cast()) };
 
-    ax_result_to_tiling_result(result, "set position")
+    ax_result_to_error(result, "set position")
 }
 
 /// Sets the size attribute on an element.
-unsafe fn set_size_attr(element: AXUIElementRef, width: f64, height: f64) -> TilingResult<()> {
+unsafe fn set_size_attr(element: AXUIElementRef, width: f64, height: f64) -> Result<(), String> {
     if element.is_null() {
-        return Err(TilingError::window_op("Null element"));
+        return Err("Null element".to_string());
     }
 
     let size = core_graphics::geometry::CGSize::new(width, height);
     let value = unsafe { AXValueCreate(K_AX_VALUE_TYPE_CG_SIZE, (&raw const size).cast()) };
 
     if value.is_null() {
-        return Err(TilingError::window_op("Failed to create AXValue for size"));
+        return Err("Failed to create AXValue for size".to_string());
     }
 
     let result = unsafe { AXUIElementSetAttributeValue(element, cf_size(), value.cast()) };
     unsafe { CFRelease(value.cast()) };
 
-    ax_result_to_tiling_result(result, "set size")
+    ax_result_to_error(result, "set size")
 }
 
-/// Converts an AX error code to a `TilingResult`.
-fn ax_result_to_tiling_result(result: AXError, operation: &str) -> TilingResult<()> {
+/// Converts an AX error code to a `Result`.
+fn ax_result_to_error(result: AXError, operation: &str) -> Result<(), String> {
     if result == K_AX_ERROR_SUCCESS {
         Ok(())
     } else {
@@ -660,10 +789,7 @@ fn ax_result_to_tiling_result(result: AXError, operation: &str) -> TilingResult<
             K_AX_ERROR_CANNOT_COMPLETE => "Cannot complete operation",
             _ => "Unknown error",
         };
-        Err(TilingError::accessibility(
-            result,
-            format!("{operation}: {message}"),
-        ))
+        Err(format!("{operation}: {message} (error {result})"))
     }
 }
 
@@ -677,9 +803,7 @@ mod tests {
 
     #[test]
     fn test_ax_element_application_invalid_pid() {
-        // PID 0 should return None (no such process)
         let result = AXElement::application(0);
-        // Note: This might actually succeed on some systems, so we just check it doesn't panic
         drop(result);
     }
 
@@ -696,20 +820,19 @@ mod tests {
     }
 
     #[test]
-    fn test_ax_result_to_tiling_result_success() {
-        let result = ax_result_to_tiling_result(K_AX_ERROR_SUCCESS, "test");
+    fn test_ax_result_to_error_success() {
+        let result = ax_result_to_error(K_AX_ERROR_SUCCESS, "test");
         assert!(result.is_ok());
     }
 
     #[test]
-    fn test_ax_result_to_tiling_result_error() {
-        let result = ax_result_to_tiling_result(K_AX_ERROR_INVALID_UI_ELEMENT, "test");
+    fn test_ax_result_to_error_error() {
+        let result = ax_result_to_error(K_AX_ERROR_INVALID_UI_ELEMENT, "test");
         assert!(result.is_err());
     }
 
     #[test]
     fn test_ax_error_constants_are_negative() {
-        // AX error codes are negative
         assert!(K_AX_ERROR_INVALID_UI_ELEMENT < 0);
         assert!(K_AX_ERROR_ATTRIBUTE_UNSUPPORTED < 0);
         assert!(K_AX_ERROR_ACTION_UNSUPPORTED < 0);
@@ -719,7 +842,6 @@ mod tests {
 
     #[test]
     fn test_cached_cfstring_thread_local() {
-        // Just verify the cached CFString functions don't panic
         let _ = cf_windows();
         let _ = cf_title();
         let _ = cf_role();

@@ -3,13 +3,12 @@
 //! These commands provide a bridge between the internal tiling manager and the UI,
 //! allowing the Spaces component to query workspace and window information.
 
-use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 use crate::error::StacheError;
 use crate::events;
-use crate::tiling::{self, TilingManager};
+use crate::modules::tiling;
 
 // ============================================================================
 // Response Types
@@ -58,54 +57,6 @@ pub struct WindowInfo {
 }
 
 // ============================================================================
-// Helper Functions
-// ============================================================================
-
-/// Result type for manager access operations.
-type ManagerResult<T> = Result<T, StacheError>;
-
-/// Gets the tiling manager with read access, validating it's initialized and enabled.
-fn with_manager_read<F, T>(f: F) -> ManagerResult<T>
-where F: FnOnce(RwLockReadGuard<'_, TilingManager>) -> ManagerResult<T> {
-    let manager = tiling::get_manager()
-        .ok_or_else(|| StacheError::TilingError("Tiling not initialized".to_string()))?;
-
-    let mgr = manager.read();
-    if !mgr.is_enabled() {
-        return Err(StacheError::TilingError("Tiling not enabled".to_string()));
-    }
-
-    f(mgr)
-}
-
-/// Gets the tiling manager with write access, validating it's initialized and enabled.
-fn with_manager_write<F, T>(f: F) -> ManagerResult<T>
-where F: FnOnce(RwLockWriteGuard<'_, TilingManager>) -> ManagerResult<T> {
-    let manager = tiling::get_manager()
-        .ok_or_else(|| StacheError::TilingError("Tiling not initialized".to_string()))?;
-
-    let mgr = manager.write();
-    if !mgr.is_enabled() {
-        return Err(StacheError::TilingError("Tiling not enabled".to_string()));
-    }
-
-    f(mgr)
-}
-
-/// Converts a tracked window to a `WindowInfo` struct.
-fn to_window_info(w: &tiling::TrackedWindow, focused_window_id: Option<u32>) -> WindowInfo {
-    WindowInfo {
-        id: w.id,
-        pid: w.pid,
-        app_id: w.app_id.clone(),
-        app_name: w.app_name.clone(),
-        title: w.title.clone(),
-        workspace: w.workspace_name.clone(),
-        is_focused: focused_window_id == Some(w.id),
-    }
-}
-
-// ============================================================================
 // Tauri Commands
 // ============================================================================
 
@@ -117,45 +68,61 @@ fn to_window_info(w: &tiling::TrackedWindow, focused_window_id: Option<u32>) -> 
 ///
 /// Returns an error if the tiling manager is not available or the screen is not found.
 #[tauri::command]
-pub fn get_tiling_workspaces(screen: Option<String>) -> Result<Vec<WorkspaceInfo>, StacheError> {
-    with_manager_read(|mgr| {
-        // Determine screen filter
-        let filter_screen_id: Option<u32> = if let Some(name) = screen {
-            match mgr.get_screen_by_name(&name) {
-                Some(s) => Some(s.id),
-                None => return Err(StacheError::TilingError(format!("Screen '{name}' not found"))),
+pub async fn get_tiling_workspaces(
+    _screen: Option<String>,
+) -> Result<Vec<WorkspaceInfo>, StacheError> {
+    use tiling::actor::{QueryResult, StateQuery};
+
+    let handle = tiling::init::get_handle()
+        .ok_or_else(|| StacheError::TilingError("Tiling not initialized".to_string()))?;
+
+    // Get all workspaces
+    let workspaces_result = handle
+        .query(StateQuery::GetAllWorkspaces)
+        .await
+        .map_err(|e| StacheError::TilingError(e.to_string()))?;
+
+    let workspaces = match workspaces_result {
+        QueryResult::Workspaces(ws) => ws,
+        _ => return Err(StacheError::TilingError("Unexpected query result".to_string())),
+    };
+
+    // Get all screens for name lookup
+    let screens_result = handle
+        .query(StateQuery::GetAllScreens)
+        .await
+        .map_err(|e| StacheError::TilingError(e.to_string()))?;
+
+    let screens = match screens_result {
+        QueryResult::Screens(s) => s,
+        _ => Vec::new(),
+    };
+
+    // Convert to WorkspaceInfo format
+    let infos: Vec<WorkspaceInfo> = workspaces
+        .into_iter()
+        .map(|ws| {
+            let screen_name = screens
+                .iter()
+                .find(|s| s.id == ws.screen_id)
+                .map_or_else(|| "unknown".to_string(), |s| s.name.clone());
+
+            let tiled_window_ids: Vec<u32> = ws.window_ids.clone();
+
+            WorkspaceInfo {
+                name: ws.name,
+                screen_id: ws.screen_id,
+                screen_name,
+                layout: tiling::commands::layout_to_string_pub(ws.layout),
+                is_visible: ws.is_visible,
+                is_focused: ws.is_focused,
+                window_count: tiled_window_ids.len(),
+                window_ids: tiled_window_ids,
             }
-        } else {
-            None
-        };
+        })
+        .collect();
 
-        let workspaces: Vec<WorkspaceInfo> = mgr
-            .get_workspaces()
-            .iter()
-            .filter(|ws| filter_screen_id.is_none_or(|id| ws.screen_id == id))
-            .map(|ws| {
-                let screen_name = mgr
-                    .get_screen(ws.screen_id)
-                    .map_or_else(|| "unknown".to_string(), |s| s.name.clone());
-
-                // Get only tiled (non-minimized) window IDs
-                let tiled_window_ids = mgr.get_tiled_window_ids(&ws.name);
-
-                WorkspaceInfo {
-                    name: ws.name.clone(),
-                    screen_id: ws.screen_id,
-                    screen_name,
-                    layout: format!("{:?}", ws.layout).to_lowercase(),
-                    is_visible: ws.is_visible,
-                    is_focused: ws.is_focused,
-                    window_count: tiled_window_ids.len(),
-                    window_ids: tiled_window_ids,
-                }
-            })
-            .collect();
-
-        Ok(workspaces)
-    })
+    Ok(infos)
 }
 
 /// Gets all windows from the tiling manager.
@@ -169,25 +136,79 @@ pub fn get_tiling_workspaces(screen: Option<String>) -> Result<Vec<WorkspaceInfo
 /// Returns an error if the tiling manager is not available.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // Tauri commands require owned values
-pub fn get_tiling_windows(workspace: Option<String>) -> Result<Vec<WindowInfo>, StacheError> {
-    with_manager_read(|mgr| {
-        let focused_window_id = tiling::get_focused_window().map(|w| w.id);
+pub async fn get_tiling_windows(workspace: Option<String>) -> Result<Vec<WindowInfo>, StacheError> {
+    use tiling::actor::{QueryResult, StateQuery};
 
-        // Filter out minimized windows - they should not appear in the UI
-        let windows: Vec<WindowInfo> = mgr
-            .get_windows()
-            .iter()
-            .filter(|w| {
-                !w.is_minimized
-                    && workspace
-                        .as_ref()
-                        .is_none_or(|ws_name| w.workspace_name.eq_ignore_ascii_case(ws_name))
-            })
-            .map(|w| to_window_info(w, focused_window_id))
-            .collect();
+    let handle = tiling::init::get_handle()
+        .ok_or_else(|| StacheError::TilingError("Tiling not initialized".to_string()))?;
 
-        Ok(windows)
-    })
+    // Get focused window ID
+    let focus_result = handle
+        .query(StateQuery::GetFocusState)
+        .await
+        .map_err(|e| StacheError::TilingError(e.to_string()))?;
+
+    let focused_window_id = match focus_result {
+        QueryResult::Focus(f) => f.focused_window_id,
+        _ => None,
+    };
+
+    // Get all windows
+    let windows_result = handle
+        .query(StateQuery::GetAllWindows)
+        .await
+        .map_err(|e| StacheError::TilingError(e.to_string()))?;
+
+    let windows = match windows_result {
+        QueryResult::Windows(w) => w,
+        _ => return Err(StacheError::TilingError("Unexpected query result".to_string())),
+    };
+
+    // Get all workspaces for name lookup
+    let workspaces_result = handle
+        .query(StateQuery::GetAllWorkspaces)
+        .await
+        .map_err(|e| StacheError::TilingError(e.to_string()))?;
+
+    let workspaces = match workspaces_result {
+        QueryResult::Workspaces(ws) => ws,
+        _ => Vec::new(),
+    };
+
+    // Convert to WindowInfo format
+    let infos: Vec<WindowInfo> = windows
+        .into_iter()
+        .filter(|w| !w.is_minimized && !w.is_hidden)
+        .filter(|w| {
+            if let Some(ref ws_name) = workspace {
+                // Find the workspace name for this window
+                workspaces
+                    .iter()
+                    .find(|ws| ws.id == w.workspace_id)
+                    .is_some_and(|ws| ws.name.eq_ignore_ascii_case(ws_name))
+            } else {
+                true
+            }
+        })
+        .map(|w| {
+            let workspace_name = workspaces
+                .iter()
+                .find(|ws| ws.id == w.workspace_id)
+                .map_or_else(|| "unknown".to_string(), |ws| ws.name.clone());
+
+            WindowInfo {
+                id: w.id,
+                pid: w.pid,
+                app_id: w.app_id,
+                app_name: w.app_name,
+                title: w.title,
+                workspace: workspace_name,
+                is_focused: focused_window_id == Some(w.id),
+            }
+        })
+        .collect();
+
+    Ok(infos)
 }
 
 /// Gets the currently focused workspace name.
@@ -196,8 +217,22 @@ pub fn get_tiling_windows(workspace: Option<String>) -> Result<Vec<WindowInfo>, 
 ///
 /// Returns an error if the tiling manager is not available.
 #[tauri::command]
-pub fn get_tiling_focused_workspace() -> Result<Option<String>, StacheError> {
-    with_manager_read(|mgr| Ok(mgr.state().focused_workspace.clone()))
+pub async fn get_tiling_focused_workspace() -> Result<Option<String>, StacheError> {
+    use tiling::actor::{QueryResult, StateQuery};
+
+    let handle = tiling::init::get_handle()
+        .ok_or_else(|| StacheError::TilingError("Tiling not initialized".to_string()))?;
+
+    let result = handle
+        .query(StateQuery::GetFocusedWorkspace)
+        .await
+        .map_err(|e| StacheError::TilingError(e.to_string()))?;
+
+    match result {
+        QueryResult::Workspace(Some(ws)) => Ok(Some(ws.name)),
+        QueryResult::Workspace(None) => Ok(None),
+        _ => Err(StacheError::TilingError("Unexpected query result".to_string())),
+    }
 }
 
 /// Gets the currently focused window.
@@ -206,20 +241,63 @@ pub fn get_tiling_focused_workspace() -> Result<Option<String>, StacheError> {
 ///
 /// Returns an error if the tiling manager is not available.
 #[tauri::command]
-pub fn get_tiling_focused_window() -> Result<Option<WindowInfo>, StacheError> {
-    with_manager_read(|mgr| {
-        let Some(focused) = tiling::get_focused_window() else {
-            return Ok(None);
-        };
+pub async fn get_tiling_focused_window() -> Result<Option<WindowInfo>, StacheError> {
+    use tiling::actor::{QueryResult, StateQuery};
 
-        let window_info = mgr
-            .get_windows()
-            .iter()
-            .find(|w| w.id == focused.id)
-            .map(|w| to_window_info(w, Some(focused.id)));
+    let handle = tiling::init::get_handle()
+        .ok_or_else(|| StacheError::TilingError("Tiling not initialized".to_string()))?;
 
-        Ok(window_info)
-    })
+    // Get focus state
+    let focus_result = handle
+        .query(StateQuery::GetFocusState)
+        .await
+        .map_err(|e| StacheError::TilingError(e.to_string()))?;
+
+    let focused_window_id = match focus_result {
+        QueryResult::Focus(f) => f.focused_window_id,
+        _ => return Ok(None),
+    };
+
+    let Some(window_id) = focused_window_id else {
+        return Ok(None);
+    };
+
+    // Get the window
+    let window_result = handle
+        .query(StateQuery::GetWindow { id: window_id })
+        .await
+        .map_err(|e| StacheError::TilingError(e.to_string()))?;
+
+    let window = match window_result {
+        QueryResult::Window(Some(w)) => w,
+        _ => return Ok(None),
+    };
+
+    // Get workspaces for name lookup
+    let workspaces_result = handle
+        .query(StateQuery::GetAllWorkspaces)
+        .await
+        .map_err(|e| StacheError::TilingError(e.to_string()))?;
+
+    let workspaces = match workspaces_result {
+        QueryResult::Workspaces(ws) => ws,
+        _ => Vec::new(),
+    };
+
+    let workspace_name = workspaces
+        .iter()
+        .find(|ws| ws.id == window.workspace_id)
+        .map_or_else(|| "unknown".to_string(), |ws| ws.name.clone());
+
+    Ok(Some(WindowInfo {
+        id: window.id,
+        pid: window.pid,
+        app_id: window.app_id,
+        app_name: window.app_name,
+        title: window.title,
+        workspace: workspace_name,
+        is_focused: true,
+    }))
 }
 
 /// Switches to a workspace by name.
@@ -229,7 +307,9 @@ pub fn get_tiling_focused_window() -> Result<Option<WindowInfo>, StacheError> {
 /// Returns an error if the workspace is not found or the tiling manager is not available.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // Tauri commands require owned values
-pub fn focus_tiling_workspace(app: AppHandle, name: String) -> Result<(), StacheError> {
+pub async fn focus_tiling_workspace(app: AppHandle, name: String) -> Result<(), StacheError> {
+    use tiling::actor::StateMessage;
+
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err(StacheError::InvalidArguments(
@@ -237,26 +317,18 @@ pub fn focus_tiling_workspace(app: AppHandle, name: String) -> Result<(), Stache
         ));
     }
 
-    let (switch_info,) = with_manager_write(|mut mgr| {
-        if mgr.get_workspace(&name).is_none() {
-            return Err(StacheError::TilingError(format!("Workspace '{name}' not found")));
-        }
+    let handle = tiling::init::get_handle()
+        .ok_or_else(|| StacheError::TilingError("Tiling not initialized".to_string()))?;
 
-        let info = mgr.switch_workspace(&name);
+    let _ = handle.send(StateMessage::SwitchWorkspace { name: name.clone() });
 
-        Ok((info,))
-    })?;
-
-    // Emit workspace changed event if switch was successful
-    if let Some(info) = switch_info {
-        let _ = app.emit(
-            events::tiling::WORKSPACE_CHANGED,
-            serde_json::json!({
-                "workspace": info.workspace,
-                "screen": info.screen,
-            }),
-        );
-    }
+    // Emit workspace changed event
+    let _ = app.emit(
+        events::tiling::WORKSPACE_CHANGED,
+        serde_json::json!({
+            "workspace": name,
+        }),
+    );
 
     Ok(())
 }
@@ -268,21 +340,44 @@ pub fn focus_tiling_workspace(app: AppHandle, name: String) -> Result<(), Stache
 /// Returns an error if the window is not found or the tiling manager is not available.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // Tauri commands require owned AppHandle
-pub fn focus_tiling_window(app: AppHandle, window_id: u32) -> Result<(), StacheError> {
-    let workspace_name = with_manager_write(|mut mgr| {
-        let window = mgr
-            .get_windows()
-            .iter()
-            .find(|w| w.id == window_id)
-            .map(|w| w.workspace_name.clone());
+pub async fn focus_tiling_window(app: AppHandle, window_id: u32) -> Result<(), StacheError> {
+    use tiling::actor::{QueryResult, StateQuery};
+    use tiling::effects::window_ops;
 
-        let Some(workspace) = window else {
-            return Err(StacheError::TilingError(format!("Window {window_id} not found")));
-        };
+    let handle = tiling::init::get_handle()
+        .ok_or_else(|| StacheError::TilingError("Tiling not initialized".to_string()))?;
 
-        mgr.focus_window_by_id(window_id);
-        Ok(workspace)
-    })?;
+    // Get workspace name for the event
+    let window_result = handle
+        .query(StateQuery::GetWindow { id: window_id })
+        .await
+        .map_err(|e| StacheError::TilingError(e.to_string()))?;
+
+    let workspace_name = if let QueryResult::Window(Some(w)) = window_result {
+        // Get workspace name
+        let workspaces_result = handle
+            .query(StateQuery::GetAllWorkspaces)
+            .await
+            .map_err(|e| StacheError::TilingError(e.to_string()))?;
+
+        match workspaces_result {
+            QueryResult::Workspaces(ws) => ws
+                .iter()
+                .find(|ws| ws.id == w.workspace_id)
+                .map_or_else(|| "unknown".to_string(), |ws| ws.name.clone()),
+            _ => "unknown".to_string(),
+        }
+    } else {
+        return Err(StacheError::TilingError(format!("Window {window_id} not found")));
+    };
+
+    // Focus the window via AX API (this will trigger an AXFocusedWindowChanged event
+    // which will update the state automatically via the observer)
+    if !window_ops::focus_window(window_id) {
+        return Err(StacheError::TilingError(format!(
+            "Failed to focus window {window_id}"
+        )));
+    }
 
     // Emit focus changed event
     let _ = app.emit(
@@ -301,7 +396,7 @@ pub fn focus_tiling_window(app: AppHandle, window_id: u32) -> Result<(), StacheE
 /// This is used by the frontend to check if it should render tiling-dependent UI.
 #[tauri::command]
 #[must_use]
-pub fn is_tiling_enabled() -> bool { tiling::get_manager().is_some_and(|m| m.read().is_enabled()) }
+pub fn is_tiling_enabled() -> bool { tiling::commands::is_tiling_enabled() }
 
 /// Gets windows for the currently focused workspace.
 ///
@@ -314,26 +409,61 @@ pub fn is_tiling_enabled() -> bool { tiling::get_manager().is_some_and(|m| m.rea
 ///
 /// Returns an error if the tiling manager is not available.
 #[tauri::command]
-pub fn get_tiling_current_workspace_windows() -> Result<Vec<WindowInfo>, StacheError> {
-    with_manager_read(|mgr| {
-        let Some(focused_workspace) = mgr.state().focused_workspace.clone() else {
-            return Ok(Vec::new());
-        };
+pub async fn get_tiling_current_workspace_windows() -> Result<Vec<WindowInfo>, StacheError> {
+    use tiling::actor::{QueryResult, StateQuery};
 
-        let focused_window_id = tiling::get_focused_window().map(|w| w.id);
+    let handle = tiling::init::get_handle()
+        .ok_or_else(|| StacheError::TilingError("Tiling not initialized".to_string()))?;
 
-        // Filter out minimized windows - they should not appear in the UI
-        let windows: Vec<WindowInfo> = mgr
-            .get_windows()
-            .iter()
-            .filter(|w| {
-                w.workspace_name.eq_ignore_ascii_case(&focused_workspace) && !w.is_minimized
-            })
-            .map(|w| to_window_info(w, focused_window_id))
-            .collect();
+    // Get focused workspace
+    let focused_ws_result = handle
+        .query(StateQuery::GetFocusedWorkspace)
+        .await
+        .map_err(|e| StacheError::TilingError(e.to_string()))?;
 
-        Ok(windows)
-    })
+    let focused_workspace = match focused_ws_result {
+        QueryResult::Workspace(Some(ws)) => ws,
+        _ => return Ok(Vec::new()),
+    };
+
+    // Get focused window ID
+    let focus_result = handle
+        .query(StateQuery::GetFocusState)
+        .await
+        .map_err(|e| StacheError::TilingError(e.to_string()))?;
+
+    let focused_window_id = match focus_result {
+        QueryResult::Focus(f) => f.focused_window_id,
+        _ => None,
+    };
+
+    // Get all windows
+    let windows_result = handle
+        .query(StateQuery::GetAllWindows)
+        .await
+        .map_err(|e| StacheError::TilingError(e.to_string()))?;
+
+    let windows = match windows_result {
+        QueryResult::Windows(w) => w,
+        _ => return Ok(Vec::new()),
+    };
+
+    // Filter to focused workspace and non-minimized windows
+    let infos: Vec<WindowInfo> = windows
+        .into_iter()
+        .filter(|w| w.workspace_id == focused_workspace.id && !w.is_minimized && !w.is_hidden)
+        .map(|w| WindowInfo {
+            id: w.id,
+            pid: w.pid,
+            app_id: w.app_id,
+            app_name: w.app_name,
+            title: w.title,
+            workspace: focused_workspace.name.clone(),
+            is_focused: focused_window_id == Some(w.id),
+        })
+        .collect();
+
+    Ok(infos)
 }
 
 #[cfg(test)]

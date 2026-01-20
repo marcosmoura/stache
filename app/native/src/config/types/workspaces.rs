@@ -97,7 +97,7 @@ pub struct WorkspaceConfig {
     #[serde(default)]
     pub layout: LayoutType,
 
-    /// Screen assignment: "main", "secondary", or screen name.
+    /// Screen assignment: "main"/"primary", "secondary", or screen name.
     /// Default: "main"
     #[serde(default = "default_screen")]
     pub screen: String,

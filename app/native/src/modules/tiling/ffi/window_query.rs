@@ -11,29 +11,11 @@
 //! - SLS Query: ~1-5ms for 50+ windows
 //! - CGWindowList: ~5-15ms for 50+ windows
 //! - Individual AX queries: ~100-400ms for 50+ windows
-//!
-//! # Example
-//!
-//! ```rust,ignore
-//! use stache::tiling::ffi::window_query::WindowQuery;
-//!
-//! // Query all windows on screen
-//! if let Some(query) = WindowQuery::all_on_screen() {
-//!     for window in query.iter() {
-//!         println!("Window {} at {:?}", window.id, window.bounds);
-//!     }
-//! }
-//! ```
-//!
-//! # Thread Safety
-//!
-//! Window queries should be performed on the main thread for best results.
-//! The query objects are `Send` but not `Sync`.
 
 use std::ffi::c_void;
 
 use super::skylight::{CGRect, get_connection_id};
-use crate::tiling::state::Rect;
+use crate::modules::tiling::state::Rect;
 
 // ============================================================================
 // FFI Declarations
@@ -42,7 +24,6 @@ use crate::tiling::state::Rect;
 type CFTypeRef = *mut c_void;
 type CFArrayRef = *const c_void;
 
-// Window query option flags
 /// Include windows that are currently visible on screen.
 const K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY: u32 = 1 << 0;
 /// Exclude windows with a window layer of 0 (desktop).
@@ -50,60 +31,18 @@ const K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS: u32 = 1 << 4;
 
 #[link(name = "SkyLight", kind = "framework")]
 unsafe extern "C" {
-    // Creates a window query for the specified windows.
-    //
-    // # Arguments
-    //
-    // * `cid` - Connection ID
-    // * `count` - Number of window IDs to query (0 for all)
-    // * `window_ids` - Array of window IDs to query (NULL for all)
-    // * `options` - Query options
-    //
-    // # Returns
-    //
-    // A query result, or null on failure.
     fn SLSWindowQueryWindows(
         cid: u32,
         window_ids: CFArrayRef,
         count: u32,
         options: u32,
     ) -> CFTypeRef;
-
-    // Creates a window iterator from a query result.
-    //
-    // # Arguments
-    //
-    // * `query` - Query result from SLSWindowQueryWindows
-    //
-    // # Returns
-    //
-    // An iterator, or null on failure.
     fn SLSWindowQueryResultCopyWindows(query: CFTypeRef) -> CFTypeRef;
-
-    // Advances the iterator to the next window.
-    //
-    // # Arguments
-    //
-    // * `iterator` - Window iterator
-    //
-    // # Returns
-    //
-    // true if there is a next window, false if iteration is complete.
     fn SLSWindowIteratorAdvance(iterator: CFTypeRef) -> bool;
-
-    // Gets the window ID from the current iterator position.
     fn SLSWindowIteratorGetWindowID(iterator: CFTypeRef) -> u32;
-
-    // Gets the window bounds from the current iterator position.
     fn SLSWindowIteratorGetBounds(iterator: CFTypeRef) -> CGRect;
-
-    // Gets the process ID from the current iterator position.
     fn SLSWindowIteratorGetPID(iterator: CFTypeRef) -> i32;
-
-    // Gets the window level from the current iterator position.
     fn SLSWindowIteratorGetLevel(iterator: CFTypeRef) -> i32;
-
-    // Gets the window tags from the current iterator position.
     fn SLSWindowIteratorGetTags(iterator: CFTypeRef) -> u64;
 }
 
@@ -133,8 +72,6 @@ pub struct WindowInfo {
 
 impl WindowInfo {
     /// Returns whether this window is visible.
-    ///
-    /// Checks the window tags for the visibility flag.
     #[must_use]
     pub const fn is_visible(&self) -> bool {
         // Tag bit 0x0010_0000 indicates visible window
@@ -156,7 +93,6 @@ impl WindowInfo {
 /// Efficient batch window query using SkyLight APIs.
 ///
 /// Provides an iterator interface for enumerating windows with their properties.
-/// This is much faster than querying individual windows via the Accessibility API.
 pub struct WindowQuery {
     /// Query result handle.
     query: CFTypeRef,
@@ -170,10 +106,6 @@ impl WindowQuery {
     /// Queries all windows currently on screen.
     ///
     /// This excludes desktop elements and other system windows.
-    ///
-    /// # Returns
-    ///
-    /// A window query, or `None` if the query failed.
     #[must_use]
     pub fn all_on_screen() -> Option<Self> {
         let cid = get_connection_id();
@@ -198,10 +130,6 @@ impl WindowQuery {
     }
 
     /// Queries all windows (including off-screen).
-    ///
-    /// # Returns
-    ///
-    /// A window query, or `None` if the query failed.
     #[must_use]
     pub fn all() -> Option<Self> {
         let cid = get_connection_id();
@@ -231,8 +159,6 @@ impl WindowQuery {
     }
 
     /// Collects all windows into a vector.
-    ///
-    /// This is a convenience method that consumes the iterator.
     #[must_use]
     pub fn collect_all(&self) -> Vec<WindowInfo> { self.iter().collect() }
 }
@@ -311,7 +237,7 @@ mod tests {
             pid: 100,
             bounds: Rect::new(0.0, 0.0, 100.0, 100.0),
             level: 0,
-            tags: 0x100000, // Visible flag
+            tags: 0x10_0000, // Visible flag
         };
         assert!(visible.is_visible());
 

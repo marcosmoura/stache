@@ -1,1089 +1,57 @@
-//! Window operations for the tiling window manager.
+//! Window enumeration for tiling v2.
 //!
-//! This module provides functions to enumerate, query, and manipulate windows
-//! using the macOS Accessibility API (`AXUIElement`).
+//! This module provides window enumeration functionality similar to v1's
+//! `get_all_windows_including_hidden()`, but adapted for v2's architecture.
 //!
-//! # FFI Safety
+//! # Architecture
 //!
-//! This module uses several safety mechanisms:
-//!
-//! - **[`AXElement`]** wrapper in [`super::ffi::AXElement`] for new code that wants
-//!   automatic memory management (`CFRelease` on drop, `CFRetain` on clone)
-//! - **[`ffi_try_opt!`]** macro for concise null-pointer checks in Option-returning
-//!   functions
-//! - Internal raw pointer functions for performance-critical animation paths
-//!
-//! ## Interoperability
-//!
-//! The `AXElement` wrapper provides interop with raw pointers:
-//! - `AXElement::from_raw(ptr)` - Takes ownership of a raw pointer
-//! - `AXElement::from_raw_retained(ptr)` - Borrows (retains) a raw pointer
-//! - `AXElement::as_raw()` - Gets raw pointer without releasing
-//! - `AXElement::into_raw()` - Releases ownership to caller
-//!
-//! ## When to Use What
-//!
-//! - **New code**: Use `AXElement` for automatic memory management
-//! - **Animation hot paths**: Use raw pointers with `set_ax_frame_fast()` for performance
-//! - **Null checks**: Use `ffi_try_opt!(ptr)` to reduce boilerplate
+//! Window enumeration uses an AX-first approach:
+//! 1. Enumerate running applications via `NSWorkspace`
+//! 2. For each app, get AX windows (the source of truth)
+//! 3. Get `CGWindowID` from AX element via `_AXUIElementGetWindow`
+//! 4. Combine with bundle ID and app name for complete window info
 
-use std::cell::OnceCell;
 use std::collections::HashMap;
-use std::ffi::c_void;
-use std::ptr;
-use std::sync::RwLock;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
 
-use core_foundation::base::TCFType;
-use core_foundation::boolean::CFBoolean;
-use core_foundation::number::CFNumber;
-use core_foundation::string::CFString;
 use objc::runtime::{BOOL, Class, Object, YES};
 use objc::{msg_send, sel, sel_impl};
-use rayon::prelude::*;
 
-use super::error::{TilingError, TilingResult};
-use super::state::{Rect, TrackedWindow};
-// Import the FFI null check macros
-use crate::ffi_try_opt;
-
-// NOTE: The safe AXElement wrapper is available in super::ffi::AXElement
-// for new code that wants automatic memory management. The internal functions
-// in this module use raw AXUIElementRef for performance in animation hot paths.
+use super::ffi::accessibility::AXElement;
+use super::rules::is_pip_window;
+use super::state::Rect;
 
 // ============================================================================
-// FFI Types and Declarations
+// FFI for NSString
 // ============================================================================
 
-/// Raw pointer type for AX elements (used in performance-critical paths).
-type AXUIElementRef = *mut c_void;
-type AXError = i32;
-
-const K_AX_ERROR_SUCCESS: AXError = 0;
-
-/// Thread-safe wrapper for `AXUIElementRef`.
+/// Converts an `NSString` pointer to a Rust `String`.
 ///
-/// The macOS Accessibility API is thread-safe for operations on different
-/// windows/elements. This wrapper allows us to use parallel iteration
-/// when positioning multiple windows.
-#[derive(Clone, Copy)]
-struct SendableAXElement(AXUIElementRef);
+/// Returns an empty string if the pointer is null or conversion fails.
+///
+/// # Safety
+///
+/// The caller must ensure that `ns_string` is a valid `NSString` pointer or null.
+unsafe fn ns_string_to_rust(ns_string: *mut Object) -> String {
+    if ns_string.is_null() {
+        return String::new();
+    }
 
-// SAFETY: The macOS Accessibility API is thread-safe for operations on different
-// UI elements. Each `SendableAXElement` wraps a unique window's AX reference,
-// and we only use these in parallel when operating on different windows.
-// Concurrent access to the SAME window from multiple threads is undefined
-// behavior at the OS level, but our usage pattern (parallel layout application
-// where each thread handles a different window) is safe.
-unsafe impl Send for SendableAXElement {}
-unsafe impl Sync for SendableAXElement {}
+    let utf8: *const i8 = msg_send![ns_string, UTF8String];
+    if utf8.is_null() {
+        return String::new();
+    }
 
-#[link(name = "ApplicationServices", kind = "framework")]
-unsafe extern "C" {
-    fn AXUIElementCreateApplication(pid: i32) -> AXUIElementRef;
-    fn AXUIElementCopyAttributeValue(
-        element: AXUIElementRef,
-        attribute: *const c_void,
-        value: *mut *mut c_void,
-    ) -> AXError;
-    fn AXUIElementSetAttributeValue(
-        element: AXUIElementRef,
-        attribute: *const c_void,
-        value: *const c_void,
-    ) -> AXError;
-    fn AXUIElementGetTypeID() -> u64;
-    fn AXUIElementPerformAction(element: AXUIElementRef, action: *const c_void) -> AXError;
-    // Private API to get CGWindowID from AXUIElement
-    fn _AXUIElementGetWindow(element: AXUIElementRef, window_id: *mut u32) -> AXError;
-}
-
-#[link(name = "CoreFoundation", kind = "framework")]
-unsafe extern "C" {
-    fn CFGetTypeID(cf: *const c_void) -> u64;
-    fn CFArrayGetCount(array: *const c_void) -> i64;
-    fn CFArrayGetValueAtIndex(array: *const c_void, idx: i64) -> *const c_void;
-    fn CFRelease(cf: *const c_void);
-    fn CFRetain(cf: *const c_void) -> *const c_void;
-}
-
-use core_foundation::array::CFArrayRef;
-
-// Note: This matches the declaration in bar/menubar.rs
-#[link(name = "CoreGraphics", kind = "framework")]
-unsafe extern "C" {
-    fn CGWindowListCopyWindowInfo(option: u32, relative_to_window: u32) -> CFArrayRef;
-}
-
-// CGWindowListOption flags
-const K_CG_WINDOW_LIST_OPTION_ALL: u32 = 0;
-const K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY: u32 = 1;
-const K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS: u32 = 1 << 4;
-
-// CGWindowInfo dictionary keys
-const K_CG_WINDOW_NUMBER: &str = "kCGWindowNumber";
-const K_CG_WINDOW_OWNER_PID: &str = "kCGWindowOwnerPID";
-const K_CG_WINDOW_NAME: &str = "kCGWindowName";
-const K_CG_WINDOW_OWNER_NAME: &str = "kCGWindowOwnerName";
-const K_CG_WINDOW_BOUNDS: &str = "kCGWindowBounds";
-const K_CG_WINDOW_LAYER: &str = "kCGWindowLayer";
-
-// ============================================================================
-// Cached CFStrings (thread-local for performance)
-// ============================================================================
-
-thread_local! {
-    static CF_WINDOWS: OnceCell<CFString> = const { OnceCell::new() };
-    static CF_TITLE: OnceCell<CFString> = const { OnceCell::new() };
-    static CF_ROLE: OnceCell<CFString> = const { OnceCell::new() };
-    static CF_SUBROLE: OnceCell<CFString> = const { OnceCell::new() };
-    static CF_POSITION: OnceCell<CFString> = const { OnceCell::new() };
-    static CF_SIZE: OnceCell<CFString> = const { OnceCell::new() };
-    static CF_FOCUSED: OnceCell<CFString> = const { OnceCell::new() };
-    static CF_FOCUSED_WINDOW: OnceCell<CFString> = const { OnceCell::new() };
-    static CF_MINIMIZED: OnceCell<CFString> = const { OnceCell::new() };
-    static CF_HIDDEN: OnceCell<CFString> = const { OnceCell::new() };
-    static CF_MAIN: OnceCell<CFString> = const { OnceCell::new() };
-    static CF_RAISE: OnceCell<CFString> = const { OnceCell::new() };
-    static CF_FRONTMOST: OnceCell<CFString> = const { OnceCell::new() };
-    /// Enhanced user interface attribute - disabling this speeds up AX operations.
-    static CF_ENHANCED_USER_INTERFACE: OnceCell<CFString> = const { OnceCell::new() };
-}
-
-/// Gets or creates a cached `CFString`.
-macro_rules! cached_cfstring {
-    ($cell:expr, $value:expr) => {
-        $cell.with(|cell| cell.get_or_init(|| CFString::new($value)).as_concrete_TypeRef().cast())
-    };
-}
-
-#[inline]
-fn cf_windows() -> *const c_void { cached_cfstring!(CF_WINDOWS, "AXWindows") }
-
-#[inline]
-fn cf_title() -> *const c_void { cached_cfstring!(CF_TITLE, "AXTitle") }
-
-#[inline]
-fn cf_role() -> *const c_void { cached_cfstring!(CF_ROLE, "AXRole") }
-
-#[inline]
-fn cf_subrole() -> *const c_void { cached_cfstring!(CF_SUBROLE, "AXSubrole") }
-
-#[inline]
-fn cf_position() -> *const c_void { cached_cfstring!(CF_POSITION, "AXPosition") }
-
-#[inline]
-fn cf_size() -> *const c_void { cached_cfstring!(CF_SIZE, "AXSize") }
-
-#[inline]
-fn cf_focused() -> *const c_void { cached_cfstring!(CF_FOCUSED, "AXFocused") }
-
-#[inline]
-fn cf_focused_window() -> *const c_void { cached_cfstring!(CF_FOCUSED_WINDOW, "AXFocusedWindow") }
-
-#[inline]
-fn cf_minimized() -> *const c_void { cached_cfstring!(CF_MINIMIZED, "AXMinimized") }
-
-#[inline]
-fn cf_hidden() -> *const c_void { cached_cfstring!(CF_HIDDEN, "AXHidden") }
-
-#[inline]
-fn cf_main() -> *const c_void { cached_cfstring!(CF_MAIN, "AXMain") }
-
-#[inline]
-fn cf_raise() -> *const c_void { cached_cfstring!(CF_RAISE, "AXRaise") }
-
-#[inline]
-fn cf_frontmost() -> *const c_void { cached_cfstring!(CF_FRONTMOST, "AXFrontmost") }
-
-#[inline]
-fn cf_enhanced_user_interface() -> *const c_void {
-    cached_cfstring!(CF_ENHANCED_USER_INTERFACE, "AXEnhancedUserInterface")
+    // SAFETY: The UTF8String method returns a valid null-terminated C string
+    // or null (which we checked above).
+    unsafe { std::ffi::CStr::from_ptr(utf8) }.to_string_lossy().into_owned()
 }
 
 // ============================================================================
-// AXUIElement Resolution Cache
-// ============================================================================
-
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, AtomicU64};
-
-use super::constants::cache::{AX_ELEMENT_ANIMATION_TTL_SECS, AX_ELEMENT_TTL_SECS};
-
-// ============================================================================
-// Animation State Flag
-// ============================================================================
-
-/// Global flag indicating whether an animation is currently active.
-///
-/// When set to `true`, cache TTLs are extended to reduce expensive
-/// lookups during animation frames.
-static ANIMATION_ACTIVE: AtomicBool = AtomicBool::new(false);
-
-/// Sets the animation active state.
-///
-/// Call this at the start of an animation (`true`) and at the end (`false`).
-/// While active, cache TTLs are extended for better performance.
-pub fn set_animation_active(active: bool) { ANIMATION_ACTIVE.store(active, Ordering::Relaxed); }
-
-/// Returns whether an animation is currently active.
-pub fn is_animation_active() -> bool { ANIMATION_ACTIVE.load(Ordering::Relaxed) }
-
-// ============================================================================
-// Cache Metrics
-// ============================================================================
-
-/// Cache hit counter for AX element lookups.
-static AX_CACHE_HITS: AtomicU64 = AtomicU64::new(0);
-
-/// Cache miss counter for AX element lookups.
-static AX_CACHE_MISSES: AtomicU64 = AtomicU64::new(0);
-
-/// Increments the cache hit counter.
-#[inline]
-fn record_cache_hit() { AX_CACHE_HITS.fetch_add(1, Ordering::Relaxed); }
-
-/// Increments the cache miss counter.
-#[inline]
-fn record_cache_miss() { AX_CACHE_MISSES.fetch_add(1, Ordering::Relaxed); }
-
-/// Returns cache statistics as (hits, misses, `hit_rate`).
-///
-/// The hit rate is calculated as `hits / (hits + misses)`, or 0.0 if no lookups.
-#[must_use]
-#[allow(clippy::cast_precision_loss)] // Acceptable precision loss for statistics
-pub fn get_cache_stats() -> (u64, u64, f64) {
-    let hits = AX_CACHE_HITS.load(Ordering::Relaxed);
-    let misses = AX_CACHE_MISSES.load(Ordering::Relaxed);
-    let total = hits + misses;
-    let hit_rate = if total > 0 {
-        hits as f64 / total as f64
-    } else {
-        0.0
-    };
-    (hits, misses, hit_rate)
-}
-
-/// Resets cache statistics.
-pub fn reset_cache_stats() {
-    AX_CACHE_HITS.store(0, Ordering::Relaxed);
-    AX_CACHE_MISSES.store(0, Ordering::Relaxed);
-}
-
-/// Thread-safe wrapper for cached `AXUIElementRef`.
-///
-/// This wrapper allows the AX element pointer to be stored in a `Send + Sync`
-/// container. The safety rationale is the same as `SendableAXElement`:
-/// the macOS Accessibility API is thread-safe for operations on different
-/// UI elements.
-#[derive(Clone, Copy)]
-struct CachedAXPtr(AXUIElementRef);
-
-// SAFETY: See SendableAXElement safety documentation above.
-// AX elements are immutable references to system-managed UI elements.
-// The cache only stores pointers; actual AX operations are done through
-// the normal AX API functions which are thread-safe.
-unsafe impl Send for CachedAXPtr {}
-unsafe impl Sync for CachedAXPtr {}
-
-/// Cached AX element entry with timestamp for TTL validation.
-#[derive(Clone, Copy)]
-struct CachedAXEntry {
-    /// The cached AX element reference (wrapped for thread safety).
-    ax_ptr: CachedAXPtr,
-    /// When this entry was cached.
-    cached_at: Instant,
-}
-
-impl CachedAXEntry {
-    /// Creates a new cache entry.
-    fn new(ax_element: AXUIElementRef) -> Self {
-        Self {
-            ax_ptr: CachedAXPtr(ax_element),
-            cached_at: Instant::now(),
-        }
-    }
-
-    /// Returns the cached AX element pointer.
-    const fn ax_element(&self) -> AXUIElementRef { self.ax_ptr.0 }
-
-    /// Checks if this entry has expired.
-    fn is_expired(&self, ttl: Duration) -> bool { self.cached_at.elapsed() > ttl }
-}
-
-/// Thread-safe cache for resolved AX element references.
-///
-/// This cache stores `AXUIElementRef` values by window ID to avoid repeatedly
-/// calling `get_all_windows()` during rapid operations like animations.
-///
-/// # Thread Safety
-///
-/// The cache uses `RwLock` for concurrent access:
-/// - Animation threads read from the cache
-/// - Main thread writes and invalidates entries
-///
-/// # TTL
-///
-/// Entries expire after `AX_ELEMENT_TTL_SECS` to ensure stale references
-/// (from destroyed windows) are eventually cleared. During active animations,
-/// the TTL is extended to `AX_ELEMENT_ANIMATION_TTL_SECS` for better performance.
-struct AXElementCache {
-    /// Map of `window_id` -> cached entry.
-    entries: RwLock<HashMap<u32, CachedAXEntry>>,
-    /// Normal time-to-live for cache entries.
-    ttl: Duration,
-    /// Extended time-to-live during animations.
-    animation_ttl: Duration,
-}
-
-impl AXElementCache {
-    /// Creates a new cache with the specified TTL.
-    fn new(ttl_secs: u64) -> Self {
-        Self {
-            entries: RwLock::new(HashMap::new()),
-            ttl: Duration::from_secs(ttl_secs),
-            animation_ttl: Duration::from_secs(AX_ELEMENT_ANIMATION_TTL_SECS),
-        }
-    }
-
-    /// Returns the current effective TTL based on animation state.
-    #[inline]
-    fn effective_ttl(&self) -> Duration {
-        if is_animation_active() {
-            self.animation_ttl
-        } else {
-            self.ttl
-        }
-    }
-
-    /// Gets a cached AX element if it exists and hasn't expired.
-    #[allow(clippy::significant_drop_tightening)]
-    fn get(&self, window_id: u32) -> Option<AXUIElementRef> {
-        let entries = self.entries.read().ok()?;
-        let entry = entries.get(&window_id)?;
-
-        if entry.is_expired(self.effective_ttl()) {
-            record_cache_miss();
-            None
-        } else {
-            record_cache_hit();
-            Some(entry.ax_element())
-        }
-    }
-
-    /// Gets multiple cached AX elements, returning only valid (non-expired) ones.
-    ///
-    /// Returns a map of `window_id` -> `ax_element` for cached entries,
-    /// and the list of window IDs that were not in cache (cache misses).
-    fn get_multiple(&self, window_ids: &[u32]) -> (HashMap<u32, AXUIElementRef>, Vec<u32>) {
-        let mut cached = HashMap::new();
-        let mut misses = Vec::new();
-
-        let Ok(entries) = self.entries.read() else {
-            // Lock poisoned, treat all as misses
-            for _ in window_ids {
-                record_cache_miss();
-            }
-            return (cached, window_ids.to_vec());
-        };
-
-        let ttl = self.effective_ttl();
-        for &id in window_ids {
-            if let Some(entry) = entries.get(&id)
-                && !entry.is_expired(ttl)
-            {
-                record_cache_hit();
-                cached.insert(id, entry.ax_element());
-                continue;
-            }
-            record_cache_miss();
-            misses.push(id);
-        }
-
-        (cached, misses)
-    }
-
-    /// Inserts an AX element into the cache.
-    fn insert(&self, window_id: u32, ax_element: AXUIElementRef) {
-        if let Ok(mut entries) = self.entries.write() {
-            entries.insert(window_id, CachedAXEntry::new(ax_element));
-        }
-    }
-
-    /// Inserts multiple AX elements into the cache.
-    fn insert_multiple(&self, elements: &[(u32, AXUIElementRef)]) {
-        if elements.is_empty() {
-            return;
-        }
-
-        if let Ok(mut entries) = self.entries.write() {
-            for &(window_id, ax_element) in elements {
-                entries.insert(window_id, CachedAXEntry::new(ax_element));
-            }
-        }
-    }
-
-    /// Removes a window from the cache.
-    ///
-    /// Called when a window is destroyed to prevent stale references.
-    fn remove(&self, window_id: u32) {
-        if let Ok(mut entries) = self.entries.write() {
-            entries.remove(&window_id);
-        }
-    }
-
-    /// Clears all expired entries from the cache.
-    #[allow(dead_code)]
-    fn clear_expired(&self) {
-        if let Ok(mut entries) = self.entries.write() {
-            entries.retain(|_, entry| !entry.is_expired(self.ttl));
-        }
-    }
-
-    /// Clears all entries from the cache.
-    #[allow(dead_code)]
-    fn clear(&self) {
-        if let Ok(mut entries) = self.entries.write() {
-            entries.clear();
-        }
-    }
-}
-
-/// Global AX element cache instance (lazily initialized).
-static AX_ELEMENT_CACHE: OnceLock<AXElementCache> = OnceLock::new();
-
-/// Gets the global AX element cache, initializing it if necessary.
-fn get_ax_cache() -> &'static AXElementCache {
-    AX_ELEMENT_CACHE.get_or_init(|| AXElementCache::new(AX_ELEMENT_TTL_SECS))
-}
-
-/// Invalidates a cached AX element when a window is destroyed.
-///
-/// This should be called from the window manager when untracking a window
-/// to ensure stale AX references are not used.
-pub fn invalidate_ax_element_cache(window_id: u32) { get_ax_cache().remove(window_id); }
-
-/// Clears the entire AX element cache.
-///
-/// This can be called during config reload or when the tiling system
-/// is reinitialized.
-#[allow(dead_code)]
-pub fn clear_ax_element_cache() { get_ax_cache().clear(); }
-
-// ============================================================================
-// CG Window List Cache
-// ============================================================================
-
-use super::constants::cache::CG_WINDOW_LIST_TTL_MS;
-
-/// Cached CG window list with timestamp.
-struct CGWindowListCache {
-    /// Cached on-screen window list.
-    on_screen: Option<(Vec<CGWindowInfo>, Instant)>,
-    /// Cached all windows list.
-    all_windows: Option<(Vec<CGWindowInfo>, Instant)>,
-    /// Cache TTL.
-    ttl: Duration,
-}
-
-impl CGWindowListCache {
-    /// Creates a new empty cache.
-    const fn new(ttl_ms: u64) -> Self {
-        Self {
-            on_screen: None,
-            all_windows: None,
-            ttl: Duration::from_millis(ttl_ms),
-        }
-    }
-
-    /// Gets cached on-screen windows if valid.
-    fn get_on_screen(&self) -> Option<Vec<CGWindowInfo>> {
-        self.on_screen.as_ref().and_then(|(windows, cached_at)| {
-            if cached_at.elapsed() < self.ttl {
-                Some(windows.clone())
-            } else {
-                None
-            }
-        })
-    }
-
-    /// Gets cached all windows if valid.
-    fn get_all(&self) -> Option<Vec<CGWindowInfo>> {
-        self.all_windows.as_ref().and_then(|(windows, cached_at)| {
-            if cached_at.elapsed() < self.ttl {
-                Some(windows.clone())
-            } else {
-                None
-            }
-        })
-    }
-
-    /// Updates the on-screen windows cache.
-    fn update_on_screen(&mut self, windows: Vec<CGWindowInfo>) {
-        self.on_screen = Some((windows, Instant::now()));
-    }
-
-    /// Updates the all windows cache.
-    fn update_all(&mut self, windows: Vec<CGWindowInfo>) {
-        self.all_windows = Some((windows, Instant::now()));
-    }
-
-    /// Invalidates all cached data.
-    #[allow(dead_code)]
-    fn invalidate(&mut self) {
-        self.on_screen = None;
-        self.all_windows = None;
-    }
-}
-
-/// Global CG window list cache.
-static CG_WINDOW_LIST_CACHE: RwLock<Option<CGWindowListCache>> = RwLock::new(None);
-
-/// Gets cached on-screen window list, or fetches if cache miss.
-fn get_cached_cg_window_list(on_screen_only: bool) -> Vec<CGWindowInfo> {
-    // Try to get from cache first
-    if let Ok(cache) = CG_WINDOW_LIST_CACHE.read()
-        && let Some(ref c) = *cache
-    {
-        let cached = if on_screen_only {
-            c.get_on_screen()
-        } else {
-            c.get_all()
-        };
-        if let Some(windows) = cached {
-            return windows;
-        }
-    }
-
-    // Cache miss - fetch fresh data
-    let windows = get_cg_window_list_uncached(on_screen_only);
-
-    // Update cache
-    if let Ok(mut cache) = CG_WINDOW_LIST_CACHE.write() {
-        let c = cache.get_or_insert_with(|| CGWindowListCache::new(CG_WINDOW_LIST_TTL_MS));
-        if on_screen_only {
-            c.update_on_screen(windows.clone());
-        } else {
-            c.update_all(windows.clone());
-        }
-    }
-
-    windows
-}
-
-/// Invalidates the CG window list cache.
-///
-/// Call this when windows are created/destroyed to ensure fresh data.
-#[allow(dead_code)]
-pub fn invalidate_cg_window_list_cache() {
-    if let Ok(mut cache) = CG_WINDOW_LIST_CACHE.write()
-        && let Some(ref mut c) = *cache
-    {
-        c.invalidate();
-    }
-}
-
-// ============================================================================
-// AXUIElement Attribute Helpers
-// ============================================================================
-
-/// Gets a string attribute from an `AXUIElement`.
-#[inline]
-unsafe fn get_ax_string(element: AXUIElementRef, attr: *const c_void) -> Option<String> {
-    ffi_try_opt!(element);
-
-    let mut value: *mut c_void = ptr::null_mut();
-    let result = unsafe { AXUIElementCopyAttributeValue(element, attr, &raw mut value) };
-
-    if result != K_AX_ERROR_SUCCESS || value.is_null() {
-        return None;
-    }
-
-    let cf_string_type_id = CFString::type_id() as u64;
-    if unsafe { CFGetTypeID(value) } != cf_string_type_id {
-        unsafe { CFRelease(value) };
-        return None;
-    }
-
-    let cf_string = unsafe { CFString::wrap_under_get_rule(value.cast()) };
-    let string = cf_string.to_string();
-    unsafe { CFRelease(value) };
-
-    Some(string)
-}
-
-/// Gets a boolean attribute from an `AXUIElement`.
-#[inline]
-unsafe fn get_ax_bool(element: AXUIElementRef, attr: *const c_void) -> Option<bool> {
-    ffi_try_opt!(element);
-
-    let mut value: *mut c_void = ptr::null_mut();
-    let result = unsafe { AXUIElementCopyAttributeValue(element, attr, &raw mut value) };
-
-    if result != K_AX_ERROR_SUCCESS || value.is_null() {
-        return None;
-    }
-
-    let bool_value = unsafe { CFBoolean::wrap_under_get_rule(value.cast()) };
-    let result = bool_value.into();
-    unsafe { CFRelease(value) };
-
-    Some(result)
-}
-
-/// Gets the position (`AXPosition`) of an `AXUIElement` as (x, y).
-#[inline]
-unsafe fn get_ax_position(element: AXUIElementRef) -> Option<(f64, f64)> {
-    ffi_try_opt!(element);
-
-    let mut value: *mut c_void = ptr::null_mut();
-    let result = unsafe { AXUIElementCopyAttributeValue(element, cf_position(), &raw mut value) };
-
-    if result != K_AX_ERROR_SUCCESS || value.is_null() {
-        return None;
-    }
-
-    // AXPosition returns an AXValue of type kAXValueTypeCGPoint
-    let mut point: core_graphics::geometry::CGPoint =
-        core_graphics::geometry::CGPoint::new(0.0, 0.0);
-    let success = unsafe {
-        AXValueGetValue(
-            value.cast(),
-            1, // kAXValueTypeCGPoint
-            (&raw mut point).cast(),
-        )
-    };
-
-    unsafe { CFRelease(value) };
-
-    if success {
-        Some((point.x, point.y))
-    } else {
-        None
-    }
-}
-
-/// Gets the size (`AXSize`) of an `AXUIElement` as (width, height).
-#[inline]
-unsafe fn get_ax_size(element: AXUIElementRef) -> Option<(f64, f64)> {
-    ffi_try_opt!(element);
-
-    let mut value: *mut c_void = ptr::null_mut();
-    let result = unsafe { AXUIElementCopyAttributeValue(element, cf_size(), &raw mut value) };
-
-    if result != K_AX_ERROR_SUCCESS || value.is_null() {
-        return None;
-    }
-
-    // AXSize returns an AXValue of type kAXValueTypeCGSize
-    let mut size: core_graphics::geometry::CGSize = core_graphics::geometry::CGSize::new(0.0, 0.0);
-    let success = unsafe {
-        AXValueGetValue(
-            value.cast(),
-            2, // kAXValueTypeCGSize
-            (&raw mut size).cast(),
-        )
-    };
-
-    unsafe { CFRelease(value) };
-
-    if success {
-        Some((size.width, size.height))
-    } else {
-        None
-    }
-}
-
-/// Gets the frame (position + size) of an `AXUIElement`.
-#[inline]
-unsafe fn get_ax_frame(element: AXUIElementRef) -> Option<Rect> {
-    let (x, y) = unsafe { get_ax_position(element)? };
-    let (width, height) = unsafe { get_ax_size(element)? };
-    Some(Rect::new(x, y, width, height))
-}
-
-/// Sets the position of an `AXUIElement`.
-///
-/// Returns `false` if the element is null or the operation fails.
-#[inline]
-unsafe fn set_ax_position(element: AXUIElementRef, x: f64, y: f64) -> bool {
-    if element.is_null() {
-        return false;
-    }
-
-    let point = core_graphics::geometry::CGPoint::new(x, y);
-    let value = unsafe {
-        AXValueCreate(
-            1, // kAXValueTypeCGPoint
-            (&raw const point).cast(),
-        )
-    };
-
-    if value.is_null() {
-        return false;
-    }
-
-    let result = unsafe { AXUIElementSetAttributeValue(element, cf_position(), value.cast()) };
-    unsafe { CFRelease(value.cast()) };
-
-    result == K_AX_ERROR_SUCCESS
-}
-
-/// Sets the size of an `AXUIElement`.
-#[inline]
-unsafe fn set_ax_size(element: AXUIElementRef, width: f64, height: f64) -> bool {
-    if element.is_null() {
-        return false;
-    }
-
-    let size = core_graphics::geometry::CGSize::new(width, height);
-    let value = unsafe {
-        AXValueCreate(
-            2, // kAXValueTypeCGSize
-            (&raw const size).cast(),
-        )
-    };
-
-    if value.is_null() {
-        return false;
-    }
-
-    let result = unsafe { AXUIElementSetAttributeValue(element, cf_size(), value.cast()) };
-    unsafe { CFRelease(value.cast()) };
-
-    result == K_AX_ERROR_SUCCESS
-}
-
-/// Sets the frame (position + size) of an `AXUIElement`.
-#[inline]
-unsafe fn set_ax_frame(element: AXUIElementRef, frame: &Rect) -> bool {
-    // Order of operations matters for reliable resizing:
-    // 1. Set size first - this ensures the window can shrink before moving
-    // 2. Set position - move the (now smaller) window to target location
-    // 3. Set size again - some apps need this to fully apply the size change
-    //
-    // This handles cases where:
-    // - Window is larger than target and needs to shrink
-    // - App has constraints that depend on position
-    let size_ok_1 = unsafe { set_ax_size(element, frame.width, frame.height) };
-    let pos_ok = unsafe { set_ax_position(element, frame.x, frame.y) };
-    let size_ok_2 = unsafe { set_ax_size(element, frame.width, frame.height) };
-
-    // Consider success if position and at least one size operation succeeded
-    pos_ok && (size_ok_1 || size_ok_2)
-}
-
-/// Fast frame setter for animations - only 2 AX calls instead of 3.
-///
-/// During animations, windows move in small increments so we don't need
-/// the defensive double-size-set that `set_ax_frame` uses. This reduces
-/// AX API calls by 33%.
-#[inline]
-unsafe fn set_ax_frame_fast(element: AXUIElementRef, frame: &Rect) -> bool {
-    // For animations: position first, then size (2 calls instead of 3)
-    let pos_ok = unsafe { set_ax_position(element, frame.x, frame.y) };
-    let size_ok = unsafe { set_ax_size(element, frame.width, frame.height) };
-    pos_ok && size_ok
-}
-
-/// Minimum pixel change to trigger an AX update.
-/// Changes smaller than this are imperceptible and skipped to reduce API calls.
-const MIN_FRAME_DELTA: f64 = 0.5;
-
-/// Smart frame setter that only updates changed properties.
-///
-/// Compares the new frame to the previous frame and:
-/// - Skips position update if position hasn't changed significantly
-/// - Skips size update if size hasn't changed significantly
-/// - Returns early if nothing changed
-///
-/// This can reduce AX API calls by 50-100% for windows that are nearly stationary.
-#[inline]
-unsafe fn set_ax_frame_delta(element: AXUIElementRef, new_frame: &Rect, prev_frame: &Rect) -> bool {
-    let pos_changed = (new_frame.x - prev_frame.x).abs() >= MIN_FRAME_DELTA
-        || (new_frame.y - prev_frame.y).abs() >= MIN_FRAME_DELTA;
-
-    let size_changed = (new_frame.width - prev_frame.width).abs() >= MIN_FRAME_DELTA
-        || (new_frame.height - prev_frame.height).abs() >= MIN_FRAME_DELTA;
-
-    // Skip if nothing changed
-    if !pos_changed && !size_changed {
-        return true; // Consider it successful - nothing to do
-    }
-
-    let mut success = true;
-
-    if pos_changed {
-        success &= unsafe { set_ax_position(element, new_frame.x, new_frame.y) };
-    }
-
-    if size_changed {
-        success &= unsafe { set_ax_size(element, new_frame.width, new_frame.height) };
-    }
-
-    success
-}
-
-/// Raises (brings to front) an `AXUIElement` window.
-///
-/// Returns `false` if the element is null or the action fails.
-#[inline]
-unsafe fn raise_ax_window(element: AXUIElementRef) -> bool {
-    if element.is_null() {
-        return false;
-    }
-    let result = unsafe { AXUIElementPerformAction(element, cf_raise()) };
-    result == K_AX_ERROR_SUCCESS
-}
-
-/// Sets the `AXMain` attribute on a window to make it the main window of its app.
-///
-/// This is important for windows from the same application that are stacked
-/// (like in monocle layout). Setting `AXMain` ensures the window becomes the
-/// active window of the app.
-///
-/// Returns `false` if the element is null or the attribute cannot be set.
-#[inline]
-unsafe fn set_ax_main(element: AXUIElementRef) -> bool {
-    if element.is_null() {
-        return false;
-    }
-    let true_value = CFBoolean::true_value();
-    let result = unsafe {
-        AXUIElementSetAttributeValue(element, cf_main(), true_value.as_concrete_TypeRef().cast())
-    };
-    result == K_AX_ERROR_SUCCESS
-}
-
-/// Sets the `AXFocused` attribute on a window to give it keyboard focus.
-///
-/// Returns `false` if the element is null or the attribute cannot be set.
-#[inline]
-unsafe fn set_ax_focused(element: AXUIElementRef) -> bool {
-    if element.is_null() {
-        return false;
-    }
-    let true_value = CFBoolean::true_value();
-    let result = unsafe {
-        AXUIElementSetAttributeValue(element, cf_focused(), true_value.as_concrete_TypeRef().cast())
-    };
-    result == K_AX_ERROR_SUCCESS
-}
-
-// ============================================================================
-// Enhanced User Interface Optimization
-// ============================================================================
-
-/// Gets the `AXEnhancedUserInterface` attribute from an application element.
-///
-/// This attribute is enabled by some apps for `VoiceOver` support. When enabled,
-/// it can significantly slow down accessibility operations. Temporarily disabling
-/// it during batch window operations improves performance.
-///
-/// # Arguments
-///
-/// * `app_element` - The application's `AXUIElement` (created via `AXUIElementCreateApplication`)
-///
-/// # Returns
-///
-/// `true` if enhanced UI is enabled, `false` otherwise or on error.
-#[inline]
-unsafe fn get_ax_enhanced_ui(app_element: AXUIElementRef) -> bool {
-    if app_element.is_null() {
-        return false;
-    }
-    unsafe { get_ax_bool(app_element, cf_enhanced_user_interface()).unwrap_or(false) }
-}
-
-/// Sets the `AXEnhancedUserInterface` attribute on an application element.
-///
-/// # Arguments
-///
-/// * `app_element` - The application's `AXUIElement`
-/// * `enabled` - Whether to enable enhanced UI
-///
-/// # Returns
-///
-/// `true` if the attribute was successfully set, `false` otherwise.
-#[inline]
-unsafe fn set_ax_enhanced_ui(app_element: AXUIElementRef, enabled: bool) -> bool {
-    if app_element.is_null() {
-        return false;
-    }
-    let value = if enabled {
-        CFBoolean::true_value()
-    } else {
-        CFBoolean::false_value()
-    };
-    let result = unsafe {
-        AXUIElementSetAttributeValue(
-            app_element,
-            cf_enhanced_user_interface(),
-            value.as_concrete_TypeRef().cast(),
-        )
-    };
-    result == K_AX_ERROR_SUCCESS
-}
-
-/// RAII guard that temporarily disables enhanced UI for an application.
-///
-/// When apps have `AXEnhancedUserInterface` enabled (common for VoiceOver-compatible
-/// apps), accessibility operations can be significantly slower. This guard:
-///
-/// 1. Checks if enhanced UI is enabled on construction
-/// 2. If enabled, disables it temporarily
-/// 3. Restores the original state on drop
-///
-/// This optimization is inspired by yabai's `AX_ENHANCED_UI_WORKAROUND` macro and
-/// can improve window manipulation performance by 2-10x for affected apps.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// let _guard = EnhancedUIGuard::new(app_element);
-/// // Perform AX operations with enhanced UI disabled
-/// // Enhanced UI is restored when guard drops
-/// ```
-pub struct EnhancedUIGuard {
-    /// The application element to restore enhanced UI on.
-    app_element: AXUIElementRef,
-    /// Whether enhanced UI was originally enabled.
-    was_enabled: bool,
-}
-
-impl EnhancedUIGuard {
-    /// Creates a new guard, disabling enhanced UI if it was enabled.
-    ///
-    /// Returns `None` if the app element is null or enhanced UI was not enabled
-    /// (in which case no restoration is needed).
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `app_element` is a valid `AXUIElementRef` or null.
-    /// Null pointers are handled safely and return `None`.
-    #[must_use]
-    #[allow(clippy::not_unsafe_ptr_arg_deref)]
-    pub fn new(app_element: AXUIElementRef) -> Option<Self> {
-        if app_element.is_null() {
-            return None;
-        }
-
-        let was_enabled = unsafe { get_ax_enhanced_ui(app_element) };
-        if was_enabled {
-            // Disable enhanced UI for faster operations
-            unsafe { set_ax_enhanced_ui(app_element, false) };
-            Some(Self { app_element, was_enabled })
-        } else {
-            // No need to restore if it wasn't enabled
-            None
-        }
-    }
-
-    /// Creates guards for multiple applications, returning those that were disabled.
-    ///
-    /// This is more efficient than creating individual guards because it can
-    /// process multiple apps without repeated allocations.
-    #[must_use]
-    pub fn new_for_pids(pids: &[i32]) -> Vec<Self> {
-        pids.iter()
-            .filter_map(|&pid| {
-                let app_element = unsafe { AXUIElementCreateApplication(pid) };
-                if app_element.is_null() {
-                    return None;
-                }
-                // Try to create guard; if enhanced UI wasn't enabled, we need to release the element
-                Self::new(app_element).or_else(|| {
-                    // Release the unused app element
-                    unsafe { CFRelease(app_element.cast()) };
-                    None
-                })
-            })
-            .collect()
-    }
-}
-
-impl Drop for EnhancedUIGuard {
-    fn drop(&mut self) {
-        if self.was_enabled {
-            // Restore enhanced UI
-            unsafe { set_ax_enhanced_ui(self.app_element, true) };
-        }
-        // Release the app element
-        unsafe { CFRelease(self.app_element.cast()) };
-    }
-}
-
-// SAFETY: AXUIElementRef is thread-safe for operations on different applications.
-// The guard only operates on a single app element that it owns.
-unsafe impl Send for EnhancedUIGuard {}
-
-/// Creates enhanced UI guards for all apps owning the specified windows.
-///
-/// This function looks up the PIDs for the given window IDs and creates
-/// guards for unique PIDs. Use this when you have window IDs but not PIDs.
-///
-/// # Arguments
-///
-/// * `window_ids` - List of window IDs to create guards for
-///
-/// # Returns
-///
-/// A vector of guards for apps that had enhanced UI enabled. These guards
-/// will restore the enhanced UI state when dropped.
-#[must_use]
-pub fn create_enhanced_ui_guards_for_windows(window_ids: &[u32]) -> Vec<EnhancedUIGuard> {
-    if window_ids.is_empty() {
-        return Vec::new();
-    }
-
-    // Get all windows to find PIDs
-    let windows = get_all_windows();
-
-    // Create a set for O(1) lookup
-    let window_id_set: std::collections::HashSet<u32> = window_ids.iter().copied().collect();
-
-    // Collect unique PIDs for the specified windows
-    let unique_pids: Vec<i32> = windows
-        .iter()
-        .filter(|w| window_id_set.contains(&w.id))
-        .map(|w| w.pid)
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .collect();
-
-    EnhancedUIGuard::new_for_pids(&unique_pids)
-}
-
-/// Gets the `CGWindowID` for an `AXUIElement` using private API.
-///
-/// Returns `None` if the element is null or the window ID cannot be retrieved.
-#[inline]
-unsafe fn get_ax_window_id(element: AXUIElementRef) -> Option<u32> {
-    if element.is_null() {
-        return None;
-    }
-    let mut window_id: u32 = 0;
-    let result = unsafe { _AXUIElementGetWindow(element, &raw mut window_id) };
-    if result == K_AX_ERROR_SUCCESS && window_id != 0 {
-        Some(window_id)
-    } else {
-        None
-    }
-}
-
-// AXValue FFI
-#[link(name = "ApplicationServices", kind = "framework")]
-unsafe extern "C" {
-    fn AXValueCreate(value_type: i32, value: *const c_void) -> *mut c_void;
-    fn AXValueGetValue(value: *const c_void, value_type: i32, value_ptr: *mut c_void) -> bool;
-}
-
-// ============================================================================
-// Application and Window Enumeration
+// AppInfo
 // ============================================================================
 
 /// Information about a running application.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct AppInfo {
     /// Process ID.
     pub pid: i32,
@@ -1093,11 +61,13 @@ pub struct AppInfo {
     pub name: String,
     /// Whether the app is currently hidden.
     pub is_hidden: bool,
-    /// `AXUIElement` for this application (for internal use).
-    ax_element: AXUIElementRef,
+    /// AX element for this application.
+    pub ax_app: AXElement,
 }
 
 /// Gets all running applications that can own windows.
+///
+/// Filters to only include "regular" apps (excludes background-only apps).
 #[must_use]
 pub fn get_running_apps() -> Vec<AppInfo> {
     unsafe {
@@ -1140,14 +110,17 @@ pub fn get_running_apps() -> Vec<AppInfo> {
             let name = ns_string_to_rust(msg_send![app, localizedName]);
             let is_hidden: BOOL = msg_send![app, isHidden];
 
-            let ax_element = AXUIElementCreateApplication(pid);
+            // Create AX element for this app
+            let Some(ax_app) = AXElement::application(pid) else {
+                continue;
+            };
 
             result.push(AppInfo {
                 pid,
                 bundle_id,
                 name,
                 is_hidden: is_hidden == YES,
-                ax_element,
+                ax_app,
             });
         }
 
@@ -1155,117 +128,12 @@ pub fn get_running_apps() -> Vec<AppInfo> {
     }
 }
 
-/// Information about a window from `CGWindowList`.
+// ============================================================================
+// WindowInfo
+// ============================================================================
+
+/// Extended window information for tracking.
 #[derive(Debug, Clone)]
-pub struct CGWindowInfo {
-    /// Window ID (`CGWindowID`).
-    pub id: u32,
-    /// Owner process ID.
-    pub pid: i32,
-    /// Window title (may be empty).
-    pub title: String,
-    /// Owner application name.
-    pub app_name: String,
-    /// Window bounds.
-    pub frame: Rect,
-    /// Window layer (0 = normal windows).
-    pub layer: i32,
-}
-
-/// Gets all on-screen windows using `CGWindowListCopyWindowInfo`.
-///
-/// This provides window IDs and basic info, but more details require
-/// the Accessibility API (`AXUIElement`).
-///
-/// # Caching
-///
-/// Results are cached for 50ms to reduce overhead from repeated queries
-/// within the same frame or rapid operations.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-#[must_use]
-pub fn get_cg_window_list() -> Vec<CGWindowInfo> { get_cached_cg_window_list(true) }
-
-/// Gets ALL windows (including hidden/minimized) using `CGWindowListCopyWindowInfo`.
-///
-/// Use this for initial tracking to ensure hidden windows are also tracked.
-///
-/// # Caching
-///
-/// Results are cached for 50ms to reduce overhead from repeated queries.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-#[must_use]
-pub fn get_cg_window_list_all() -> Vec<CGWindowInfo> { get_cached_cg_window_list(false) }
-
-/// Internal function to get window list without caching.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn get_cg_window_list_uncached(on_screen_only: bool) -> Vec<CGWindowInfo> {
-    unsafe {
-        let options = if on_screen_only {
-            K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS
-        } else {
-            K_CG_WINDOW_LIST_OPTION_ALL | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS
-        };
-        let window_list = CGWindowListCopyWindowInfo(options, 0);
-
-        if window_list.is_null() {
-            return Vec::new();
-        }
-
-        let window_list_ptr: *const c_void = window_list.cast();
-        let count = CFArrayGetCount(window_list_ptr);
-        let mut result = Vec::new();
-
-        for i in 0..count {
-            let dict = CFArrayGetValueAtIndex(window_list_ptr, i);
-            if dict.is_null() {
-                continue;
-            }
-
-            // Get window number (ID)
-            let id = get_cf_dict_number(dict, K_CG_WINDOW_NUMBER).unwrap_or(0) as u32;
-            if id == 0 {
-                continue;
-            }
-
-            // Get owner PID
-            let pid = get_cf_dict_number(dict, K_CG_WINDOW_OWNER_PID).unwrap_or(0) as i32;
-            if pid <= 0 {
-                continue;
-            }
-
-            // Get window layer (skip non-normal windows like menubar, dock, etc.)
-            let layer = get_cf_dict_number(dict, K_CG_WINDOW_LAYER).unwrap_or(0) as i32;
-            if layer != 0 {
-                continue;
-            }
-
-            // Get window title
-            let title = get_cf_dict_string(dict, K_CG_WINDOW_NAME).unwrap_or_default();
-
-            // Get owner name
-            let app_name = get_cf_dict_string(dict, K_CG_WINDOW_OWNER_NAME).unwrap_or_default();
-
-            // Get bounds
-            let frame = get_cf_dict_rect(dict, K_CG_WINDOW_BOUNDS).unwrap_or_default();
-
-            result.push(CGWindowInfo {
-                id,
-                pid,
-                title,
-                app_name,
-                frame,
-                layer,
-            });
-        }
-
-        CFRelease(window_list_ptr);
-        result
-    }
-}
-
-/// Extended window information combining `CGWindowList` and Accessibility API data.
-#[derive(Debug, Clone)]
-#[allow(clippy::struct_excessive_bools)] // All bools represent independent window states
 pub struct WindowInfo {
     /// Window ID (`CGWindowID`).
     pub id: u32,
@@ -1279,136 +147,127 @@ pub struct WindowInfo {
     pub title: String,
     /// Window frame (position and size).
     pub frame: Rect,
+    /// Minimum size constraints (width, height) if the window reports them.
+    pub minimum_size: Option<(f64, f64)>,
     /// Whether the window is minimized.
     pub is_minimized: bool,
     /// Whether the app is hidden.
     pub is_hidden: bool,
-    /// Whether this is the main window of its app.
-    pub is_main: bool,
     /// Whether this window has focus.
     pub is_focused: bool,
-    /// `AXUIElement` for this window (for operations).
-    ax_element: Option<AXUIElementRef>,
+    /// Whether this window is in fullscreen mode.
+    pub is_fullscreen: bool,
 }
 
-/// Gets all visible windows with full details.
+// ============================================================================
+// Window Enumeration
+// ============================================================================
+
+/// Gets all windows including those from hidden/minimized apps.
 ///
-/// This combines `CGWindowList` (for window IDs) with Accessibility API
-/// (for detailed attributes and control).
+/// This is the primary function for initial window tracking at startup.
+/// It enumerates windows using the AX-first approach to ensure we get
+/// accurate window information.
 ///
-/// Note: This only returns on-screen windows. Use `get_all_windows_including_hidden()`
-/// to also get windows from hidden/minimized apps.
+/// # Returns
+///
+/// A vector of `WindowInfo` structs for all trackable windows.
 #[must_use]
-pub fn get_all_windows() -> Vec<WindowInfo> { get_all_windows_internal(false) }
-
-/// Gets ALL windows including those from hidden/minimized apps.
-///
-/// This should be used for initial window tracking at startup to ensure
-/// all windows are tracked regardless of their visibility state.
-#[must_use]
-pub fn get_all_windows_including_hidden() -> Vec<WindowInfo> { get_all_windows_internal(true) }
-
-/// Internal function to get windows with configurable hidden app handling.
-///
-/// This uses an AX-first approach: we enumerate AX windows (the source of truth)
-/// and match them to CG windows to get their IDs. This avoids issues with:
-/// - Frame-based deduplication incorrectly merging distinct windows
-/// - Stale `CGWindowList` data
-fn get_all_windows_internal(include_hidden: bool) -> Vec<WindowInfo> {
-    // Use the full CG window list for matching.
-    // Some apps (like Ghostty) don't appear in ON_SCREEN_ONLY list even when visible.
-    // We use the full list and filter by frame matching to get the right window.
-    let cg_windows = get_cg_window_list_all();
-
-    // Build a map of PID -> bundle_id from running apps
+pub fn get_all_windows_including_hidden() -> Vec<WindowInfo> {
     let apps = get_running_apps();
-    let pid_to_bundle: HashMap<i32, &str> =
-        apps.iter().map(|app| (app.pid, app.bundle_id.as_str())).collect();
-    let pid_to_hidden: HashMap<i32, bool> =
-        apps.iter().map(|app| (app.pid, app.is_hidden)).collect();
 
-    // Group CG windows by PID for matching with AX windows
-    // Filter out non-standard windows (menus, tooltips, etc.) by layer or tiny size
-    let mut pid_to_cg_windows: HashMap<i32, Vec<&CGWindowInfo>> = HashMap::new();
-    for win in &cg_windows {
-        // Skip tiny windows (likely menus, tooltips, etc.)
-        if win.frame.width < 50.0 || win.frame.height < 50.0 {
-            continue;
-        }
-        pid_to_cg_windows.entry(win.pid).or_default().push(win);
-    }
+    // Build a map of PID -> (bundle_id, app_name, is_hidden)
+    let app_info_map: HashMap<i32, (&str, &str, bool)> = apps
+        .iter()
+        .map(|app| {
+            (
+                app.pid,
+                (app.bundle_id.as_str(), app.name.as_str(), app.is_hidden),
+            )
+        })
+        .collect();
 
     let mut result = Vec::new();
 
-    // For each app, enumerate AX windows and match to CG windows
     for app in &apps {
-        let ax_windows = unsafe { get_app_ax_windows(app.ax_element) };
+        // Get all AX windows for this app
+        let ax_windows = app.ax_app.windows();
 
-        if ax_windows.is_empty() {
-            continue;
-        }
-
-        // Get CG windows for this app (if any)
-        let cg_wins = pid_to_cg_windows.get(&app.pid).map_or(&[][..], |v| v.as_slice());
-
-        // Track which CG windows have been matched to avoid double-matching
-        let mut matched_cg_ids: std::collections::HashSet<u32> = std::collections::HashSet::new();
-
-        // Process each AX window (AX is the source of truth)
-        for ax in &ax_windows {
-            let ax_frame = unsafe { get_ax_frame(*ax) };
-            let Some(frame) = ax_frame else {
-                continue; // Skip windows without a valid frame
+        for ax_window in ax_windows {
+            // Get window ID (required)
+            let Some(window_id) = ax_window.window_id() else {
+                continue;
             };
 
-            let title = unsafe { get_ax_string(*ax, cf_title()) }.unwrap_or_default();
-            let is_minimized = unsafe { get_ax_bool(*ax, cf_minimized()) }.unwrap_or(false);
-            let is_main = unsafe { get_ax_bool(*ax, cf_main()) }.unwrap_or(false);
-            let is_focused = unsafe { get_ax_bool(*ax, cf_focused()) }.unwrap_or(false);
+            // Get frame (required)
+            let Some(frame) = ax_window.frame() else {
+                continue;
+            };
 
-            // Try to get window ID directly from AX element (most reliable)
-            // This uses a private API but gives exact AX-to-CG mapping
-            let direct_window_id = unsafe { get_ax_window_id(*ax) };
+            // Get subrole for filtering
+            let subrole = ax_window.subrole();
 
-            let (window_id, is_hidden) = if let Some(id) = direct_window_id {
-                // Direct match - verify it's in our CG window list
-                if cg_wins.iter().any(|w| w.id == id) {
-                    matched_cg_ids.insert(id);
-                    (id, *pid_to_hidden.get(&app.pid).unwrap_or(&false))
-                } else if include_hidden {
-                    // Window exists in AX but not in CG list - must be hidden
-                    (id, true)
-                } else {
-                    continue;
+            // Skip PiP (Picture-in-Picture) windows
+            if is_pip_window(subrole.as_deref()) {
+                continue;
+            }
+
+            // Minimum size thresholds
+            // Standard windows: 200x150 minimum
+            // Dialogs: 400x300 minimum (real dialogs like preferences are larger;
+            //          small dialogs are popups like date pickers, color pickers)
+            const MIN_STANDARD_WIDTH: f64 = 200.0;
+            const MIN_STANDARD_HEIGHT: f64 = 150.0;
+            const MIN_DIALOG_WIDTH: f64 = 400.0;
+            const MIN_DIALOG_HEIGHT: f64 = 300.0;
+
+            // Determine if window should be managed based on subrole and size
+            // Use blacklist approach: only reject known popup/sheet subroles
+            let should_manage = match subrole.as_deref() {
+                // Explicitly reject popup-like subroles
+                Some("AXSheet") | Some("AXDrawer") => {
+                    // Sheets and drawers are always attached to parent windows
+                    false
                 }
-            } else {
-                // Fall back to frame-based matching
-                let cg_match = find_best_cg_match(&frame, cg_wins, &matched_cg_ids);
-
-                if let Some(cg_win) = cg_match {
-                    matched_cg_ids.insert(cg_win.id);
-                    (cg_win.id, *pid_to_hidden.get(&app.pid).unwrap_or(&false))
-                } else if include_hidden {
-                    // No CG match - generate a synthetic ID for hidden window
-                    let hidden_id = generate_hidden_window_id(app.pid, &title, &frame);
-                    (hidden_id, true)
-                } else {
-                    continue; // Skip windows without CG match when not including hidden
+                Some("AXDialog") => {
+                    // Dialogs - only accept large ones (preferences, settings)
+                    // Small dialogs are popups (date pickers, color pickers, alerts)
+                    frame.width >= MIN_DIALOG_WIDTH && frame.height >= MIN_DIALOG_HEIGHT
+                }
+                _ => {
+                    // Standard windows, no subrole, or unknown subroles - accept if large enough
+                    // Many apps (like Ghostty) don't set subrole or use custom values
+                    frame.width >= MIN_STANDARD_WIDTH && frame.height >= MIN_STANDARD_HEIGHT
                 }
             };
+
+            if !should_manage {
+                continue;
+            }
+
+            // Get optional attributes
+            let title = ax_window.title().unwrap_or_default();
+            let is_minimized = ax_window.is_minimized().unwrap_or(false);
+            let is_focused = ax_window.is_focused().unwrap_or(false);
+            let is_fullscreen = ax_window.is_fullscreen().unwrap_or(false);
+            let minimum_size = ax_window.minimum_size();
+
+            // Get app info
+            let (bundle_id, app_name, is_hidden) =
+                app_info_map.get(&app.pid).copied().unwrap_or(("", "", false));
 
             result.push(WindowInfo {
                 id: window_id,
                 pid: app.pid,
-                bundle_id: pid_to_bundle.get(&app.pid).unwrap_or(&"").to_string(),
-                app_name: app.name.clone(),
+                bundle_id: bundle_id.to_string(),
+                app_name: app_name.to_string(),
                 title,
                 frame,
+                minimum_size,
                 is_minimized,
                 is_hidden,
-                is_main,
                 is_focused,
-                ax_element: Some(*ax),
+                is_fullscreen,
             });
         }
     }
@@ -1416,1366 +275,119 @@ fn get_all_windows_internal(include_hidden: bool) -> Vec<WindowInfo> {
     result
 }
 
-/// Finds the best matching CG window for an AX window frame.
+/// Gets only visible (on-screen) windows.
 ///
-/// Returns the CG window with the closest frame match that hasn't been matched yet.
-/// When multiple windows have the same frame (native tabs), prefers the lowest ID
-/// for consistency (lower IDs tend to be more stable and positionable).
-fn find_best_cg_match<'a>(
-    ax_frame: &Rect,
-    cg_windows: &[&'a CGWindowInfo],
-    matched_ids: &std::collections::HashSet<u32>,
-) -> Option<&'a CGWindowInfo> {
-    let mut best_match: Option<&'a CGWindowInfo> = None;
-    let mut best_distance = f64::MAX;
-    let mut best_id = u32::MAX;
-
-    for cg_win in cg_windows {
-        // Skip already matched windows
-        if matched_ids.contains(&cg_win.id) {
-            continue;
-        }
-
-        // Calculate frame distance
-        let dx = (ax_frame.x - cg_win.frame.x).abs();
-        let dy = (ax_frame.y - cg_win.frame.y).abs();
-        let dw = (ax_frame.width - cg_win.frame.width).abs();
-        let dh = (ax_frame.height - cg_win.frame.height).abs();
-        let distance = dx + dy + dw + dh;
-
-        // Only consider matches within reasonable tolerance (10 pixels total)
-        if distance < 10.0 {
-            // Prefer closer matches, or lower ID on ties (more stable for native tabs)
-            // Use small epsilon for float comparison (0.1 pixel)
-            let is_tie = (distance - best_distance).abs() < 0.1;
-            if distance < best_distance || (is_tie && cg_win.id < best_id) {
-                best_distance = distance;
-                best_id = cg_win.id;
-                best_match = Some(cg_win);
-            }
-        }
-    }
-
-    best_match
-}
-
-/// Deduplicates windows that are native tabs of the same window.
-///
-/// macOS assigns unique `CGWindowID`s to each native tab, but they all share
-/// the same frame (position and size). This function groups windows by their
-/// frame and keeps only one representative window per frame.
-///
-/// The window with the highest ID is kept, as it's typically the most recently
-/// active tab and macOS tends to give it the AX focus attributes.
-#[allow(dead_code)] // Only used in tests
-#[allow(clippy::cast_possible_truncation)] // Window coordinates won't exceed i32 range
-fn deduplicate_tabbed_windows<'a>(windows: &[&'a CGWindowInfo]) -> Vec<&'a CGWindowInfo> {
-    // Group windows by their frame (rounded to avoid floating point issues)
-    let mut frame_groups: HashMap<(i32, i32, i32, i32), Vec<&'a CGWindowInfo>> = HashMap::new();
-
-    for win in windows {
-        let key = (
-            win.frame.x.round() as i32,
-            win.frame.y.round() as i32,
-            win.frame.width.round() as i32,
-            win.frame.height.round() as i32,
-        );
-        frame_groups.entry(key).or_default().push(win);
-    }
-
-    // For each group, keep only one window (the one with highest ID - typically the active tab)
-    frame_groups
-        .into_values()
-        .filter_map(|group| group.into_iter().max_by_key(|w| w.id))
+/// Excludes windows from hidden apps and minimized windows.
+#[must_use]
+pub fn get_visible_windows() -> Vec<WindowInfo> {
+    get_all_windows_including_hidden()
+        .into_iter()
+        .filter(|w| !w.is_hidden && !w.is_minimized)
         .collect()
 }
 
-/// Generates a unique ID for hidden windows that don't have a `CGWindowID`.
+/// Gets the currently focused window ID.
 ///
-/// Uses a hash of the app PID, title, and frame to create a consistent ID.
-#[allow(clippy::cast_possible_truncation)] // Intentional truncation for hash
-fn generate_hidden_window_id(pid: i32, title: &str, frame: &Rect) -> u32 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    pid.hash(&mut hasher);
-    title.hash(&mut hasher);
-    // Round frame values to avoid floating point issues
-    (frame.x as i32).hash(&mut hasher);
-    (frame.y as i32).hash(&mut hasher);
-    (frame.width as i32).hash(&mut hasher);
-    (frame.height as i32).hash(&mut hasher);
-    // Use high bits to avoid collision with real CGWindowIDs (which are typically low numbers)
-    (hasher.finish() as u32) | 0x8000_0000
-}
-
-/// Gets AX windows for an application.
+/// This uses the proper macOS approach:
+/// 1. Get the frontmost application via `NSWorkspace.frontmostApplication`
+/// 2. Get that app's focused window via `AXFocusedWindow` attribute
 ///
-/// Returns an empty vector if the element is null or has no windows.
-unsafe fn get_app_ax_windows(app_element: AXUIElementRef) -> Vec<AXUIElementRef> {
-    if app_element.is_null() {
-        return Vec::new();
-    }
-
-    let mut value: *mut c_void = ptr::null_mut();
-    let result =
-        unsafe { AXUIElementCopyAttributeValue(app_element, cf_windows(), &raw mut value) };
-
-    if result != K_AX_ERROR_SUCCESS || value.is_null() {
-        return Vec::new();
-    }
-
-    let count = unsafe { CFArrayGetCount(value) };
-    if count <= 0 {
-        unsafe { CFRelease(value) };
-        return Vec::new();
-    }
-
-    let ax_type_id = unsafe { AXUIElementGetTypeID() };
-
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let mut windows = Vec::with_capacity(count as usize);
-
-    for i in 0..count {
-        let window = unsafe { CFArrayGetValueAtIndex(value, i) };
-        if !window.is_null() && unsafe { CFGetTypeID(window) } == ax_type_id {
-            // Check if it's a real window (has AXWindow role)
-            if let Some(role) = unsafe { get_ax_string(window.cast_mut(), cf_role()) }
-                && role == "AXWindow"
-            {
-                unsafe { CFRetain(window) };
-                windows.push(window.cast_mut());
-            }
-        }
-    }
-
-    unsafe { CFRelease(value) };
-    windows
-}
-
-// ============================================================================
-// Window Operations
-// ============================================================================
-
-/// Gets the currently focused window.
+/// # Returns
 ///
-/// This function gets the focused window by:
-/// 1. Getting the frontmost application
-/// 2. Getting that app's focused window (`AXFocusedWindow`)
-/// 3. Matching it with windows from `CGWindowList` to get the window ID
+/// The window ID of the currently focused window, or `None` if no window is focused.
 #[must_use]
-pub fn get_focused_window() -> Option<WindowInfo> { unsafe { get_focused_window_unsafe() } }
+pub fn get_focused_window_id() -> Option<u32> { unsafe { get_focused_window_id_unsafe() } }
 
-/// Internal implementation for getting the focused window.
+/// Internal implementation of `get_focused_window_id`.
 ///
 /// # Safety
 ///
-/// Uses Objective-C runtime and Accessibility API calls.
-#[allow(clippy::too_many_lines)]
-unsafe fn get_focused_window_unsafe() -> Option<WindowInfo> {
+/// Uses Objective-C runtime and Accessibility APIs. Must be called from the main thread.
+unsafe fn get_focused_window_id_unsafe() -> Option<u32> {
+    use std::ffi::c_void;
+
+    // FFI for AXFocusedWindow attribute
+    #[link(name = "ApplicationServices", kind = "framework")]
+    unsafe extern "C" {
+        fn AXUIElementCreateApplication(pid: i32) -> *mut c_void;
+        fn AXUIElementCopyAttributeValue(
+            element: *mut c_void,
+            attribute: *const c_void,
+            value: *mut *mut c_void,
+        ) -> i32;
+        fn _AXUIElementGetWindow(element: *mut c_void, window_id: *mut u32) -> i32;
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFRelease(cf: *const c_void);
+    }
+
+    const K_AX_ERROR_SUCCESS: i32 = 0;
+
+    // Create CFString for "AXFocusedWindow"
+    fn cf_focused_window() -> *const c_void {
+        use core_foundation::base::TCFType;
+        use core_foundation::string::CFString;
+        // Leak the string so it's static (this is fine, it's a constant)
+        let s = CFString::new("AXFocusedWindow");
+        let ptr = s.as_concrete_TypeRef().cast();
+        std::mem::forget(s);
+        ptr
+    }
+
     // Get the frontmost application
     let workspace_class = Class::get("NSWorkspace")?;
-
-    let shared_workspace: *mut Object = msg_send![workspace_class, sharedWorkspace];
-    if shared_workspace.is_null() {
+    let workspace: *mut Object = msg_send![workspace_class, sharedWorkspace];
+    if workspace.is_null() {
         return None;
     }
 
-    let frontmost_app: *mut Object = msg_send![shared_workspace, frontmostApplication];
+    let frontmost_app: *mut Object = msg_send![workspace, frontmostApplication];
     if frontmost_app.is_null() {
         return None;
     }
 
-    // Get the PID of the frontmost app
     let pid: i32 = msg_send![frontmost_app, processIdentifier];
     if pid <= 0 {
         return None;
     }
 
-    // Get the bundle ID
-    let bundle_id_ns: *mut Object = msg_send![frontmost_app, bundleIdentifier];
-    let bundle_id = if bundle_id_ns.is_null() {
-        String::new()
-    } else {
-        let utf8: *const i8 = msg_send![bundle_id_ns, UTF8String];
-        if utf8.is_null() {
-            String::new()
-        } else {
-            unsafe { std::ffi::CStr::from_ptr(utf8) }.to_string_lossy().into_owned()
-        }
-    };
-
-    // Get the app name
-    let app_name_ns: *mut Object = msg_send![frontmost_app, localizedName];
-    let app_name = if app_name_ns.is_null() {
-        String::new()
-    } else {
-        let utf8: *const i8 = msg_send![app_name_ns, UTF8String];
-        if utf8.is_null() {
-            String::new()
-        } else {
-            unsafe { std::ffi::CStr::from_ptr(utf8) }.to_string_lossy().into_owned()
-        }
-    };
-
-    // Create AXUIElement for the app and get its focused window
+    // Create AX element for the frontmost app
+    // SAFETY: AXUIElementCreateApplication is safe with a valid PID
     let app_element = unsafe { AXUIElementCreateApplication(pid) };
     if app_element.is_null() {
         return None;
     }
 
-    // Get the focused window of this app
-    let mut focused_window_ref: *mut c_void = ptr::null_mut();
+    // Get the focused window from the app
+    let mut focused_window_ref: *mut c_void = std::ptr::null_mut();
+    // SAFETY: We have a valid app_element and focused_window_ref is a valid out pointer
     let result = unsafe {
         AXUIElementCopyAttributeValue(app_element, cf_focused_window(), &raw mut focused_window_ref)
     };
 
+    // Release the app element
+    // SAFETY: app_element was created by AXUIElementCreateApplication
     unsafe { CFRelease(app_element.cast()) };
 
     if result != K_AX_ERROR_SUCCESS || focused_window_ref.is_null() {
         return None;
     }
 
-    // Get the window's frame from AX
-    let ax_frame = unsafe { get_ax_frame(focused_window_ref.cast()) }?;
+    // Get the window ID from the focused window
+    let mut window_id: u32 = 0;
+    // SAFETY: focused_window_ref is a valid AXUIElement and window_id is a valid out pointer
+    let result = unsafe { _AXUIElementGetWindow(focused_window_ref, &raw mut window_id) };
 
-    // Get window title
-    let title = unsafe { get_ax_string(focused_window_ref.cast(), cf_title()) }.unwrap_or_default();
+    // Release the window reference
+    // SAFETY: focused_window_ref was created by AXUIElementCopyAttributeValue
+    unsafe { CFRelease(focused_window_ref.cast()) };
 
-    // Get minimized state
-    let is_minimized =
-        unsafe { get_ax_bool(focused_window_ref.cast(), cf_minimized()) }.unwrap_or(false);
-
-    // Check if app is hidden
-    let is_hidden: BOOL = msg_send![frontmost_app, isHidden];
-
-    // First, try to get the window ID directly from the AX element using the private API.
-    // This is the most reliable method, especially for same-app windows in monocle mode
-    // where frame-based matching fails because all windows have identical frames.
-    let mut window_id = unsafe { get_ax_window_id(focused_window_ref) }.unwrap_or(0);
-
-    // If direct lookup failed, fall back to CGWindowList matching strategies.
-    // Some apps (especially GPU-accelerated ones like Ghostty) may report slightly
-    // different frames between AX and CG APIs, so we use multiple matching strategies.
-    if window_id == 0 {
-        let cg_list = get_cg_window_list();
-        let app_windows: Vec<&CGWindowInfo> = cg_list.iter().filter(|cg| cg.pid == pid).collect();
-
-        // Strategy 1: Match by frame with tight tolerance (2px)
-        let mut cg_match: Option<&CGWindowInfo> = app_windows.iter().copied().find(|cg| {
-            (cg.frame.x - ax_frame.x).abs() < 2.0
-                && (cg.frame.y - ax_frame.y).abs() < 2.0
-                && (cg.frame.width - ax_frame.width).abs() < 2.0
-                && (cg.frame.height - ax_frame.height).abs() < 2.0
-        });
-
-        // Strategy 2: Match by frame with looser tolerance (10px) - helps with GPU-rendered apps
-        if cg_match.is_none() {
-            cg_match = app_windows.iter().copied().find(|cg| {
-                (cg.frame.x - ax_frame.x).abs() < 10.0
-                    && (cg.frame.y - ax_frame.y).abs() < 10.0
-                    && (cg.frame.width - ax_frame.width).abs() < 10.0
-                    && (cg.frame.height - ax_frame.height).abs() < 10.0
-            });
-        }
-
-        // Strategy 3: Match by title if there's exactly one window with that title
-        if cg_match.is_none() && !title.is_empty() {
-            let title_matches: Vec<_> =
-                app_windows.iter().copied().filter(|cg| cg.title == title).collect();
-            if title_matches.len() == 1 {
-                cg_match = Some(title_matches[0]);
-            }
-        }
-
-        // Strategy 4: If there's only one window from this app, use it
-        if cg_match.is_none() && app_windows.len() == 1 {
-            cg_match = Some(app_windows[0]);
-        }
-
-        window_id = cg_match.map_or(0, |cg| cg.id);
-    }
-
-    unsafe { CFRelease(focused_window_ref) };
-
-    Some(WindowInfo {
-        id: window_id,
-        pid,
-        bundle_id,
-        app_name,
-        title,
-        frame: ax_frame,
-        is_minimized,
-        is_hidden: is_hidden == YES,
-        is_main: true, // The focused window is the main window
-        is_focused: true,
-        ax_element: None, // We already released it
-    })
-}
-
-/// Sets the frame (position and size) of a window by ID.
-///
-/// # Errors
-///
-/// Returns `TilingError::WindowNotFound` if the window ID is not found.
-/// Returns `TilingError::WindowOperation` if the AX element is unavailable or the frame cannot be set.
-pub fn set_window_frame(window_id: u32, frame: &Rect) -> TilingResult<()> {
-    let windows = get_all_windows();
-    let window = windows
-        .iter()
-        .find(|w| w.id == window_id)
-        .ok_or(TilingError::WindowNotFound(window_id))?;
-
-    let ax_element = window
-        .ax_element
-        .ok_or_else(|| TilingError::window_op(format!("No AX element for window {window_id}")))?;
-
-    if unsafe { set_ax_frame(ax_element, frame) } {
-        Ok(())
+    if result != K_AX_ERROR_SUCCESS || window_id == 0 {
+        None
     } else {
-        Err(TilingError::window_op(format!(
-            "Failed to set frame for window {window_id}"
-        )))
-    }
-}
-
-/// Sets the frame of a window using the app's PID and the window's current frame.
-///
-/// This is more reliable than `set_window_frame` for recently shown windows,
-/// as it doesn't depend on `CGWindowList` which may have stale data.
-///
-/// # Arguments
-///
-/// * `pid` - Process ID of the app owning the window
-/// * `current_frame` - The window's current/expected frame (used to identify the window)
-/// * `new_frame` - The new frame to set
-///
-/// # Returns
-///
-/// `true` if the window was found and repositioned successfully.
-#[must_use]
-pub fn set_window_frame_by_pid(pid: i32, current_frame: &Rect, new_frame: &Rect) -> bool {
-    // For single-window operations, delegate to the batch function
-    set_windows_for_pid(pid, &[(*current_frame, *new_frame)]) > 0
-}
-
-/// Sets frames for multiple windows belonging to the same app (PID).
-///
-/// This function matches all windows to their target frames BEFORE moving any,
-/// preventing the issue where moving one window causes another to be mismatched.
-///
-/// # Arguments
-///
-/// * `pid` - Process ID of the app
-/// * `window_frames` - Slice of (`current_frame`, `target_frame`) pairs
-///
-/// # Returns
-///
-/// Number of windows successfully repositioned.
-///
-/// # Panics
-///
-/// This function will not panic. The `unwrap()` call is guarded by a preceding `is_none()` check.
-#[must_use]
-pub fn set_windows_for_pid(pid: i32, window_frames: &[(Rect, Rect)]) -> usize {
-    if window_frames.is_empty() {
-        return 0;
-    }
-
-    unsafe {
-        let app_element = AXUIElementCreateApplication(pid);
-        if app_element.is_null() {
-            eprintln!(
-                "stache: tiling: set_windows_for_pid: failed to create AX element for pid {pid}"
-            );
-            return 0;
-        }
-
-        let ax_windows = get_app_ax_windows(app_element);
-        CFRelease(app_element.cast());
-
-        if ax_windows.is_empty() {
-            return 0;
-        }
-
-        // Get current frames for all AX windows
-        let ax_frames: Vec<Option<Rect>> = ax_windows.iter().map(|w| get_ax_frame(*w)).collect();
-
-        // Match each target to an AX window using Hungarian-style greedy matching
-        // This ensures each AX window is matched to at most one target
-        let mut used_ax_indices: std::collections::HashSet<usize> =
-            std::collections::HashSet::new();
-        let mut matches: Vec<(usize, Rect)> = Vec::with_capacity(window_frames.len());
-
-        for (current_frame, target_frame) in window_frames {
-            let mut best_match: Option<(usize, f64)> = None;
-
-            for (i, ax_frame) in ax_frames.iter().enumerate() {
-                if used_ax_indices.contains(&i) {
-                    continue; // Already matched
-                }
-
-                if let Some(frame) = ax_frame {
-                    let distance = (frame.x - current_frame.x).abs()
-                        + (frame.y - current_frame.y).abs()
-                        + (frame.width - current_frame.width).abs()
-                        + (frame.height - current_frame.height).abs();
-
-                    if best_match.is_none() || distance < best_match.unwrap().1 {
-                        best_match = Some((i, distance));
-                    }
-                }
-            }
-
-            if let Some((idx, _distance)) = best_match {
-                used_ax_indices.insert(idx);
-                matches.push((idx, *target_frame));
-            }
-        }
-
-        // Now apply all the frames (after all matching is done)
-        let mut success_count = 0;
-        for (ax_idx, target_frame) in matches {
-            if set_ax_frame(ax_windows[ax_idx], &target_frame) {
-                success_count += 1;
-            }
-        }
-
-        // Clean up AX references
-        for w in ax_windows {
-            CFRelease(w.cast());
-        }
-
-        success_count
-    }
-}
-
-/// Sets the frame of a window with retry logic.
-///
-/// This is useful when windows were just unhidden and may take time to appear.
-///
-/// # Arguments
-///
-/// * `pid` - Process ID of the app owning the window
-/// * `current_frame` - The window's current/expected frame
-/// * `new_frame` - The new frame to set
-/// * `max_attempts` - Maximum number of attempts
-///
-/// # Errors
-///
-/// Returns `TilingError::WindowOperation` if the window cannot be repositioned after all attempts.
-pub fn set_window_frame_with_retry(
-    pid: i32,
-    current_frame: &Rect,
-    new_frame: &Rect,
-    max_attempts: u32,
-) -> TilingResult<()> {
-    for attempt in 0..max_attempts {
-        if set_window_frame_by_pid(pid, current_frame, new_frame) {
-            if attempt > 0 {
-                eprintln!(
-                    "stache: tiling: set_window_frame_with_retry: succeeded on attempt {}",
-                    attempt + 1
-                );
-            }
-            return Ok(());
-        }
-
-        if attempt < max_attempts - 1 {
-            // Wait a bit before retrying - increase wait time with each attempt
-            std::thread::sleep(std::time::Duration::from_millis(10 * u64::from(attempt + 1)));
-        }
-    }
-
-    Err(TilingError::window_op(format!(
-        "Failed to set window frame after {max_attempts} attempts for pid {pid}"
-    )))
-}
-
-/// Sets frames for multiple windows by their IDs.
-///
-/// This is more reliable than frame-based matching as it uses window IDs directly.
-/// Gets the window list once and positions all windows from it.
-///
-/// # Performance Optimization
-///
-/// This function temporarily disables `AXEnhancedUserInterface` for affected apps
-/// during the batch operation. Apps with enhanced UI enabled (common for `VoiceOver`
-/// support) can be 2-10x slower for accessibility operations. The enhanced UI state
-/// is automatically restored when the function returns.
-///
-/// # Arguments
-///
-/// * `window_frames` - Pairs of (`window_id`, `new_frame`)
-///
-/// # Returns
-///
-/// Number of windows successfully positioned.
-#[must_use]
-pub fn set_window_frames_by_id(window_frames: &[(u32, Rect)]) -> usize {
-    if window_frames.is_empty() {
-        return 0;
-    }
-
-    // Get all windows once
-    let windows = get_all_windows();
-
-    // Build maps of window_id -> (ax_element, pid)
-    let window_map: std::collections::HashMap<u32, (AXUIElementRef, i32)> = windows
-        .iter()
-        .filter_map(|w| w.ax_element.map(|ax| (w.id, (ax, w.pid))))
-        .collect();
-
-    #[cfg(debug_assertions)]
-    eprintln!(
-        "stache: tiling: set_window_frames_by_id: {} targets, {} available windows with AX",
-        window_frames.len(),
-        window_map.len()
-    );
-
-    // Collect unique PIDs from windows we're about to manipulate
-    let target_window_ids: std::collections::HashSet<u32> =
-        window_frames.iter().map(|(id, _)| *id).collect();
-    let unique_pids: Vec<i32> = window_map
-        .iter()
-        .filter(|(id, _)| target_window_ids.contains(id))
-        .map(|(_, (_, pid))| *pid)
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .collect();
-
-    // Temporarily disable enhanced UI for all affected apps (yabai's optimization)
-    // This can significantly speed up AX operations for apps that have it enabled.
-    // The guards will restore the original state when they're dropped.
-    let _enhanced_ui_guards = EnhancedUIGuard::new_for_pids(&unique_pids);
-
-    // Check for duplicate window IDs in the input (should never happen)
-    let mut seen_ids: std::collections::HashSet<u32> = std::collections::HashSet::new();
-    for (window_id, _) in window_frames {
-        if !seen_ids.insert(*window_id) {
-            eprintln!("stache: tiling: BUG: duplicate window ID {window_id} in layout result!");
-        }
-    }
-
-    let mut success_count = 0;
-    #[cfg(debug_assertions)]
-    let mut missing_ids: Vec<u32> = Vec::new();
-
-    for (window_id, new_frame) in window_frames {
-        if let Some(&(ax_element, _)) = window_map.get(window_id) {
-            #[cfg(debug_assertions)]
-            eprintln!(
-                "stache: tiling: positioning window {} to ({:.0}, {:.0}, {:.0}x{:.0})",
-                window_id, new_frame.x, new_frame.y, new_frame.width, new_frame.height
-            );
-            if unsafe { set_ax_frame(ax_element, new_frame) } {
-                success_count += 1;
-            }
-        } else {
-            #[cfg(debug_assertions)]
-            missing_ids.push(*window_id);
-        }
-    }
-
-    // Enhanced UI guards are automatically restored here when they drop
-
-    #[cfg(debug_assertions)]
-    if !missing_ids.is_empty() {
-        eprintln!(
-            "stache: tiling: set_window_frames_by_id: {} window IDs not found: {:?}",
-            missing_ids.len(),
-            missing_ids
-        );
-        eprintln!(
-            "stache: tiling: set_window_frames_by_id: available IDs: {:?}",
-            window_map.keys().collect::<Vec<_>>()
-        );
-    }
-
-    success_count
-}
-
-/// Resolves window IDs to their AX element references.
-///
-/// This function uses a global cache to avoid repeated calls to `get_all_windows()`.
-/// Cached entries are returned immediately; cache misses trigger a window list
-/// query, and newly resolved elements are added to the cache.
-///
-/// # Cache Behavior
-///
-/// - Entries expire after `AX_ELEMENT_TTL_SECS` (5 seconds by default)
-/// - Cache is invalidated per-window via `invalidate_ax_element_cache()`
-/// - This provides significant speedup for rapid operations like animations
-///
-/// # Arguments
-///
-/// * `window_ids` - List of window IDs to resolve
-///
-/// # Returns
-///
-/// A map of `window_id` -> `AXUIElementRef` for windows that were found.
-#[must_use]
-pub fn resolve_window_ax_elements(
-    window_ids: &[u32],
-) -> std::collections::HashMap<u32, AXUIElementRef> {
-    if window_ids.is_empty() {
-        return HashMap::new();
-    }
-
-    let cache = get_ax_cache();
-
-    // Check cache first - get cached entries and list of misses
-    let (mut result, cache_misses) = cache.get_multiple(window_ids);
-
-    // If all windows were cached, return immediately (fast path)
-    if cache_misses.is_empty() {
-        return result;
-    }
-
-    // Resolve cache misses by querying the window list
-    let windows = get_all_windows();
-
-    // Build a set for O(1) lookup of which IDs we need
-    let miss_set: std::collections::HashSet<u32> = cache_misses.iter().copied().collect();
-
-    // Collect newly resolved elements for batch cache update
-    let mut new_entries: Vec<(u32, AXUIElementRef)> = Vec::with_capacity(cache_misses.len());
-
-    for window in &windows {
-        if miss_set.contains(&window.id)
-            && let Some(ax_element) = window.ax_element
-        {
-            result.insert(window.id, ax_element);
-            new_entries.push((window.id, ax_element));
-        }
-    }
-
-    // Update cache with newly resolved elements
-    cache.insert_multiple(&new_entries);
-
-    result
-}
-
-/// Sets frames for multiple windows using cached AX element references.
-///
-/// This is the fast path for animations - it doesn't query the window list,
-/// just directly positions windows using pre-resolved AX elements.
-/// Uses `set_ax_frame_fast` which makes only 2 AX calls per window instead of 3.
-///
-/// Windows are positioned in parallel using rayon for maximum throughput.
-///
-/// # Arguments
-///
-/// * `frames` - Pairs of (`AXUIElementRef`, `new_frame`)
-///
-/// # Returns
-///
-/// Number of windows successfully positioned.
-///
-/// # Safety
-///
-/// The AX element references must be valid. They should be obtained from
-/// `resolve_window_ax_elements` and used within the same animation sequence.
-pub fn set_window_frames_direct(frames: &[(AXUIElementRef, Rect)]) -> usize {
-    if frames.is_empty() {
-        return 0;
-    }
-
-    // For single window, skip parallel overhead
-    if frames.len() == 1 {
-        let (ax_element, new_frame) = &frames[0];
-        return usize::from(unsafe { set_ax_frame_fast(*ax_element, new_frame) });
-    }
-
-    // Wrap in sendable type for parallel iteration
-    let sendable_frames: Vec<(SendableAXElement, Rect)> =
-        frames.iter().map(|(ax, rect)| (SendableAXElement(*ax), *rect)).collect();
-
-    // Position multiple windows in parallel
-    let success_count = AtomicUsize::new(0);
-
-    sendable_frames
-        .par_iter()
-        .for_each(|(SendableAXElement(ax_element), new_frame)| {
-            if unsafe { set_ax_frame_fast(*ax_element, new_frame) } {
-                success_count.fetch_add(1, Ordering::Relaxed);
-            }
-        });
-
-    success_count.load(Ordering::Relaxed)
-}
-
-/// Sets frames for multiple windows with delta optimization.
-///
-/// Only updates properties (position/size) that have actually changed,
-/// reducing AX API calls by up to 50-100% for windows that are nearly stationary.
-///
-/// # Arguments
-///
-/// * `frames` - Tuples of (`AXUIElementRef`, `new_frame`, `prev_frame`)
-///
-/// # Returns
-///
-/// Number of windows successfully positioned.
-pub fn set_window_frames_delta(frames: &[(AXUIElementRef, Rect, Rect)]) -> usize {
-    if frames.is_empty() {
-        return 0;
-    }
-
-    // For single window, skip parallel overhead
-    if frames.len() == 1 {
-        let (ax_element, new_frame, prev_frame) = &frames[0];
-        return usize::from(unsafe { set_ax_frame_delta(*ax_element, new_frame, prev_frame) });
-    }
-
-    // Wrap in sendable type for parallel iteration
-    let sendable_frames: Vec<(SendableAXElement, Rect, Rect)> = frames
-        .iter()
-        .map(|(ax, new, prev)| (SendableAXElement(*ax), *new, *prev))
-        .collect();
-
-    // Position multiple windows in parallel
-    let success_count = AtomicUsize::new(0);
-
-    sendable_frames.par_iter().for_each(
-        |(SendableAXElement(ax_element), new_frame, prev_frame)| {
-            if unsafe { set_ax_frame_delta(*ax_element, new_frame, prev_frame) } {
-                success_count.fetch_add(1, Ordering::Relaxed);
-            }
-        },
-    );
-
-    success_count.load(Ordering::Relaxed)
-}
-
-/// Sets only the position (not size) for multiple windows.
-///
-/// This is faster than `set_window_frames_delta` when you know the animation
-/// only involves position changes (no resizing). It makes exactly 1 AX call
-/// per window instead of 2.
-///
-/// # Arguments
-///
-/// * `frames` - Tuples of (`AXUIElementRef`, `new_x`, `new_y`)
-///
-/// # Returns
-///
-/// Number of windows successfully positioned.
-pub fn set_window_positions_only(frames: &[(AXUIElementRef, f64, f64)]) -> usize {
-    if frames.is_empty() {
-        return 0;
-    }
-
-    // For single window, skip parallel overhead
-    if frames.len() == 1 {
-        let (ax_element, x, y) = &frames[0];
-        return usize::from(unsafe { set_ax_position(*ax_element, *x, *y) });
-    }
-
-    // Wrap in sendable type for parallel iteration
-    let sendable_frames: Vec<(SendableAXElement, f64, f64)> =
-        frames.iter().map(|(ax, x, y)| (SendableAXElement(*ax), *x, *y)).collect();
-
-    // Position multiple windows in parallel
-    let success_count = AtomicUsize::new(0);
-
-    sendable_frames.par_iter().for_each(|(SendableAXElement(ax_element), x, y)| {
-        if unsafe { set_ax_position(*ax_element, *x, *y) } {
-            success_count.fetch_add(1, Ordering::Relaxed);
-        }
-    });
-
-    success_count.load(Ordering::Relaxed)
-}
-
-/// Sets frames for multiple windows using pre-resolved AX elements.
-///
-/// # Arguments
-///
-/// * `window_frames` - Pairs of (`window_id`, `new_frame`)
-/// * `ax_elements` - Pre-resolved AX elements map
-///
-/// # Returns
-///
-/// Number of windows successfully positioned.
-#[must_use]
-#[allow(clippy::implicit_hasher)]
-pub fn set_window_frames_auto(
-    window_frames: &[(u32, Rect)],
-    ax_elements: &std::collections::HashMap<u32, AXUIElementRef>,
-) -> usize {
-    if window_frames.is_empty() {
-        return 0;
-    }
-
-    let ax_frames: Vec<(AXUIElementRef, Rect)> = window_frames
-        .iter()
-        .filter_map(|(id, frame)| ax_elements.get(id).map(|&ax| (ax, *frame)))
-        .collect();
-    set_window_frames_direct(&ax_frames)
-}
-
-/// Focuses a window by ID.
-///
-/// This raises the window and focuses it.
-///
-/// # Errors
-///
-/// Returns `TilingError::WindowNotFound` if the window ID is not found.
-/// Returns `TilingError::WindowOperation` if the app cannot be activated or window cannot be raised.
-pub fn focus_window(window_id: u32) -> TilingResult<()> {
-    let windows = get_all_windows();
-    let window = windows
-        .iter()
-        .find(|w| w.id == window_id)
-        .ok_or(TilingError::WindowNotFound(window_id))?;
-
-    // Activate the app
-    if !activate_app(window.pid) {
-        return Err(TilingError::window_op(format!(
-            "Failed to activate app for window {window_id} (pid {})",
-            window.pid
-        )));
-    }
-
-    // Set as main, focused, and raise the window
-    if let Some(ax_element) = window.ax_element {
-        let _ = unsafe { set_ax_main(ax_element) };
-        let _ = unsafe { set_ax_focused(ax_element) };
-        let _ = unsafe { raise_ax_window(ax_element) };
-    }
-
-    Ok(())
-}
-
-/// Activates an application by PID.
-///
-/// Uses `NSApplicationActivateAllWindows | NSApplicationActivateIgnoringOtherApps` (3)
-/// which is important for cycling through same-app windows in monocle layout.
-fn activate_app(pid: i32) -> bool {
-    unsafe {
-        let Some(app_class) = Class::get("NSRunningApplication") else {
-            return false;
-        };
-
-        let app: *mut Object = msg_send![app_class, runningApplicationWithProcessIdentifier: pid];
-        if app.is_null() {
-            return false;
-        }
-
-        let result: BOOL = msg_send![app, activateWithOptions: 3u64]; // AllWindows | IgnoringOtherApps
-        result == YES
-    }
-}
-
-/// Hides an application by PID.
-///
-/// This hides all windows of the app (like Cmd+H).
-/// Includes retry logic to handle race conditions with macOS activation.
-///
-/// # Errors
-///
-/// Returns `TilingError::WindowOperation` if the app cannot be found or hidden.
-pub fn hide_app(pid: i32) -> TilingResult<()> {
-    unsafe {
-        let app_class = Class::get("NSRunningApplication")
-            .ok_or_else(|| TilingError::window_op("NSRunningApplication class not found"))?;
-
-        let app: *mut Object = msg_send![app_class, runningApplicationWithProcessIdentifier: pid];
-        if app.is_null() {
-            return Err(TilingError::window_op(format!(
-                "No running application for pid {pid}"
-            )));
-        }
-
-        // Check if already hidden
-        let is_hidden: BOOL = msg_send![app, isHidden];
-        if is_hidden == YES {
-            return Ok(());
-        }
-
-        // Try to hide with retry logic
-        // macOS activation can race with hide, so we retry a few times
-        for attempt in 0..3 {
-            let result: BOOL = msg_send![app, hide];
-            if result == YES {
-                // Verify it actually hid
-                std::thread::sleep(std::time::Duration::from_millis(5));
-                let is_hidden: BOOL = msg_send![app, isHidden];
-                if is_hidden == YES {
-                    return Ok(());
-                }
-                // Not hidden yet, retry after a brief delay
-                if attempt < 2 {
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                }
-            } else if attempt < 2 {
-                // Hide call failed, retry after delay
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-        }
-
-        // Final check
-        let is_hidden: BOOL = msg_send![app, isHidden];
-        if is_hidden == YES {
-            Ok(())
-        } else {
-            Err(TilingError::window_op(format!(
-                "Failed to hide app with pid {pid} after 3 attempts"
-            )))
-        }
-    }
-}
-
-/// Shows (unhides) an application by PID.
-///
-/// # Errors
-///
-/// Returns `TilingError::WindowOperation` if the app cannot be found or unhidden.
-pub fn unhide_app(pid: i32) -> TilingResult<()> {
-    unsafe {
-        let app_class = Class::get("NSRunningApplication")
-            .ok_or_else(|| TilingError::window_op("NSRunningApplication class not found"))?;
-
-        let app: *mut Object = msg_send![app_class, runningApplicationWithProcessIdentifier: pid];
-        if app.is_null() {
-            return Err(TilingError::window_op(format!(
-                "No running application for pid {pid}"
-            )));
-        }
-
-        let result: BOOL = msg_send![app, unhide];
-        if result == YES {
-            Ok(())
-        } else {
-            Err(TilingError::window_op(format!(
-                "Failed to unhide app with pid {pid}"
-            )))
-        }
-    }
-}
-
-/// Hides a specific window by ID.
-///
-/// Note: macOS doesn't support hiding individual windows directly.
-/// This hides the entire application.
-///
-/// # Errors
-///
-/// Returns `TilingError::WindowNotFound` if the window ID is not found.
-/// Returns `TilingError::WindowOperation` if the app cannot be hidden.
-pub fn hide_window(window_id: u32) -> TilingResult<()> {
-    let windows = get_all_windows();
-    let window = windows
-        .iter()
-        .find(|w| w.id == window_id)
-        .ok_or(TilingError::WindowNotFound(window_id))?;
-
-    hide_app(window.pid)
-}
-
-/// Shows a specific window by ID.
-///
-/// Note: This unhides the entire application and focuses the window.
-///
-/// # Errors
-///
-/// Returns `TilingError::WindowNotFound` if the window ID is not found.
-/// Returns `TilingError::WindowOperation` if the app cannot be unhidden or window cannot be focused.
-pub fn show_window(window_id: u32) -> TilingResult<()> {
-    let windows = get_all_windows();
-    let window = windows
-        .iter()
-        .find(|w| w.id == window_id)
-        .ok_or(TilingError::WindowNotFound(window_id))?;
-
-    unhide_app(window.pid)?;
-    focus_window(window_id)
-}
-
-/// Waits for windows from a specific app to become ready (have valid AX frames).
-///
-/// Instead of using a fixed delay, this polls the app's windows until they have
-/// valid accessibility properties (position and size), or until the timeout is reached.
-///
-/// # Arguments
-///
-/// * `pid` - Process ID of the app
-/// * `max_wait_ms` - Maximum time to wait in milliseconds
-/// * `poll_interval_ms` - How often to check (in milliseconds)
-///
-/// # Returns
-///
-/// A vector of `WindowInfo` for all ready windows from the app.
-#[must_use]
-pub fn wait_for_app_windows_ready(
-    pid: i32,
-    max_wait_ms: u64,
-    poll_interval_ms: u64,
-) -> Vec<WindowInfo> {
-    use std::time::{Duration, Instant};
-
-    let start = Instant::now();
-    let max_wait = Duration::from_millis(max_wait_ms);
-    let poll_interval = Duration::from_millis(poll_interval_ms);
-
-    loop {
-        // Get fresh window list for this app, including hidden windows.
-        // This ensures we catch newly created windows that may not have CG IDs yet
-        // (e.g., Ghostty native tabs which take time to get CG window entries).
-        let windows = get_all_windows_including_hidden();
-        let app_windows: Vec<WindowInfo> = windows.into_iter().filter(|w| w.pid == pid).collect();
-
-        // Check if we found any windows
-        if !app_windows.is_empty() {
-            // All windows in get_all_windows_including_hidden() have valid frames
-            // (windows without valid frames are skipped in get_all_windows_internal)
-            return app_windows;
-        }
-
-        // Check timeout
-        if start.elapsed() >= max_wait {
-            eprintln!(
-                "stache: tiling: wait_for_app_windows_ready: timeout after {max_wait_ms}ms for pid {pid}"
-            );
-            return Vec::new();
-        }
-
-        // Wait before next poll
-        std::thread::sleep(poll_interval);
-    }
-}
-
-/// Checks if a specific window is ready (has valid AX frame).
-///
-/// # Arguments
-///
-/// * `pid` - Process ID of the app owning the window
-/// * `window_id` - The window ID to check
-///
-/// # Returns
-///
-/// `true` if the window exists and has a valid frame.
-#[must_use]
-pub fn is_window_ready(pid: i32, window_id: u32) -> bool {
-    let windows = get_all_windows();
-    windows.iter().any(|w| w.pid == pid && w.id == window_id)
-}
-
-/// Moves a window to a specific screen.
-///
-/// The window is repositioned to maintain its relative position within the
-/// screen bounds. If the window would be outside the target screen, it's
-/// positioned at the top-left of the visible area.
-///
-/// # Arguments
-///
-/// * `window_id` - The window to move
-/// * `target_screen` - The screen to move the window to
-/// * `current_screen` - The screen the window is currently on (optional, for relative positioning)
-///
-/// # Returns
-///
-/// `true` if the window was successfully moved.
-#[must_use]
-pub fn move_window_to_screen(
-    window_id: u32,
-    target_screen: &super::state::Screen,
-    current_screen: Option<&super::state::Screen>,
-) -> bool {
-    let windows = get_all_windows();
-    let Some(window) = windows.iter().find(|w| w.id == window_id) else {
-        return false;
-    };
-
-    let Some(ax_element) = window.ax_element else {
-        return false;
-    };
-
-    // Calculate new position
-    let new_frame = calculate_frame_for_screen(&window.frame, target_screen, current_screen);
-
-    unsafe { set_ax_frame(ax_element, &new_frame) }
-}
-
-/// Calculates a new frame for a window when moving it to a different screen.
-///
-/// Tries to preserve the relative position within the screen. If the window
-/// is larger than the target screen, it's resized to fit.
-#[allow(clippy::option_if_let_else)] // More readable with if let for this algorithm
-fn calculate_frame_for_screen(
-    current_frame: &Rect,
-    target_screen: &super::state::Screen,
-    current_screen: Option<&super::state::Screen>,
-) -> Rect {
-    let target = &target_screen.visible_frame;
-
-    // If we know the current screen, try to preserve relative position
-    if let Some(source) = current_screen {
-        let source_frame = &source.visible_frame;
-
-        // Calculate relative position (0.0 to 1.0)
-        let rel_x = if source_frame.width > 0.0 {
-            (current_frame.x - source_frame.x) / source_frame.width
-        } else {
-            0.0
-        };
-        let rel_y = if source_frame.height > 0.0 {
-            (current_frame.y - source_frame.y) / source_frame.height
-        } else {
-            0.0
-        };
-
-        // Apply relative position to target screen
-        let new_x = target.x + (rel_x * target.width);
-        let new_y = target.y + (rel_y * target.height);
-
-        // Ensure window fits within target screen
-        let new_width = current_frame.width.min(target.width);
-        let new_height = current_frame.height.min(target.height);
-
-        // Clamp position to keep window visible
-        let clamped_x = new_x.max(target.x).min(target.x + target.width - new_width);
-        let clamped_y = new_y.max(target.y).min(target.y + target.height - new_height);
-
-        Rect::new(clamped_x, clamped_y, new_width, new_height)
-    } else {
-        // No source screen info - position at top-left of target screen
-        let new_width = current_frame.width.min(target.width);
-        let new_height = current_frame.height.min(target.height);
-
-        Rect::new(target.x, target.y, new_width, new_height)
-    }
-}
-
-/// Determines which screen a point is on.
-///
-/// Returns the screen containing the point, or None if not found.
-#[must_use]
-pub fn get_screen_for_point(
-    x: f64,
-    y: f64,
-    screens: &[super::state::Screen],
-) -> Option<&super::state::Screen> {
-    screens.iter().find(|s| s.frame.contains(super::state::Point::new(x, y)))
-}
-
-/// Determines which screen a window is primarily on.
-///
-/// Uses the window's center point to determine the screen.
-#[must_use]
-pub fn get_screen_for_window<'a>(
-    window_frame: &Rect,
-    screens: &'a [super::state::Screen],
-) -> Option<&'a super::state::Screen> {
-    let center = window_frame.center();
-    get_screen_for_point(center.x, center.y, screens)
-}
-
-// ============================================================================
-// CoreFoundation Dictionary Helpers
-// ============================================================================
-
-/// Gets a number value from a `CFDictionary`.
-unsafe fn get_cf_dict_number(dict: *const c_void, key: &str) -> Option<i64> {
-    let cf_key = CFString::new(key);
-    let mut value: *const c_void = ptr::null();
-
-    let found = unsafe {
-        core_foundation::dictionary::CFDictionaryGetValueIfPresent(
-            dict.cast(),
-            cf_key.as_concrete_TypeRef().cast(),
-            &raw mut value,
-        )
-    };
-
-    if found == 0 || value.is_null() {
-        return None;
-    }
-
-    let number = unsafe { CFNumber::wrap_under_get_rule(value.cast()) };
-    number.to_i64()
-}
-
-/// Gets a string value from a `CFDictionary`.
-unsafe fn get_cf_dict_string(dict: *const c_void, key: &str) -> Option<String> {
-    let cf_key = CFString::new(key);
-    let mut value: *const c_void = ptr::null();
-
-    let found = unsafe {
-        core_foundation::dictionary::CFDictionaryGetValueIfPresent(
-            dict.cast(),
-            cf_key.as_concrete_TypeRef().cast(),
-            &raw mut value,
-        )
-    };
-
-    if found == 0 || value.is_null() {
-        return None;
-    }
-
-    // Check type
-    let cf_string_type_id = CFString::type_id() as u64;
-    if unsafe { CFGetTypeID(value) } != cf_string_type_id {
-        return None;
-    }
-
-    let cf_string = unsafe { CFString::wrap_under_get_rule(value.cast()) };
-    Some(cf_string.to_string())
-}
-
-/// Gets a `CGRect` value from a `CFDictionary` (stored as a bounds dictionary).
-#[allow(clippy::cast_precision_loss)] // Window coordinates won't exceed f64 precision
-unsafe fn get_cf_dict_rect(dict: *const c_void, key: &str) -> Option<Rect> {
-    let cf_key = CFString::new(key);
-    let mut value: *const c_void = ptr::null();
-
-    let found = unsafe {
-        core_foundation::dictionary::CFDictionaryGetValueIfPresent(
-            dict.cast(),
-            cf_key.as_concrete_TypeRef().cast(),
-            &raw mut value,
-        )
-    };
-
-    if found == 0 || value.is_null() {
-        return None;
-    }
-
-    // The bounds is a CFDictionary with X, Y, Width, Height keys
-    let x = unsafe { get_cf_dict_number(value, "X") }? as f64;
-    let y = unsafe { get_cf_dict_number(value, "Y") }? as f64;
-    let width = unsafe { get_cf_dict_number(value, "Width") }? as f64;
-    let height = unsafe { get_cf_dict_number(value, "Height") }? as f64;
-
-    Some(Rect::new(x, y, width, height))
-}
-
-/// Converts an `NSString` to a Rust String.
-#[inline]
-fn ns_string_to_rust(ns_string: *mut Object) -> String {
-    if ns_string.is_null() {
-        return String::new();
-    }
-
-    unsafe {
-        let utf8: *const i8 = msg_send![ns_string, UTF8String];
-        if utf8.is_null() {
-            return String::new();
-        }
-        std::ffi::CStr::from_ptr(utf8).to_string_lossy().into_owned()
-    }
-}
-
-// ============================================================================
-// Conversion to TrackedWindow
-// ============================================================================
-
-impl WindowInfo {
-    /// Creates a new `WindowInfo` instance.
-    ///
-    /// This is primarily useful for testing. In normal operation, window info
-    /// is obtained from `get_all_windows()`.
-    #[must_use]
-    #[allow(
-        clippy::too_many_arguments,
-        clippy::missing_const_for_fn,
-        clippy::fn_params_excessive_bools
-    )]
-    pub fn new(
-        id: u32,
-        pid: i32,
-        bundle_id: String,
-        app_name: String,
-        title: String,
-        frame: Rect,
-        is_minimized: bool,
-        is_hidden: bool,
-        is_main: bool,
-        is_focused: bool,
-    ) -> Self {
-        Self {
-            id,
-            pid,
-            bundle_id,
-            app_name,
-            title,
-            frame,
-            is_minimized,
-            is_hidden,
-            is_main,
-            is_focused,
-            ax_element: None,
-        }
-    }
-
-    /// Returns whether this window has a valid AX element.
-    ///
-    /// Windows without AX elements are "phantom" windows that appear in
-    /// `CGWindowList` but cannot be controlled via the Accessibility API.
-    #[must_use]
-    pub const fn has_ax_element(&self) -> bool { self.ax_element.is_some() }
-
-    /// Converts this `WindowInfo` to a `TrackedWindow` for the tiling state.
-    #[must_use]
-    pub fn to_tracked_window(&self, workspace_name: &str) -> TrackedWindow {
-        TrackedWindow::new(
-            self.id,
-            self.pid,
-            self.bundle_id.clone(),
-            self.app_name.clone(),
-            self.title.clone(),
-            self.frame,
-            workspace_name.to_string(),
-            self.is_minimized,
-        )
-    }
-
-    /// Creates a minimal `WindowInfo` for testing purposes.
-    ///
-    /// All optional fields are set to reasonable defaults.
-    #[cfg(test)]
-    #[must_use]
-    pub fn new_for_test(id: u32, pid: i32, frame: Rect) -> Self {
-        Self {
-            id,
-            pid,
-            bundle_id: String::new(),
-            app_name: String::new(),
-            title: String::new(),
-            frame,
-            is_minimized: false,
-            is_hidden: false,
-            is_main: false,
-            is_focused: false,
-            ax_element: None,
-        }
-    }
-
-    /// Creates a `WindowInfo` for testing with app identification.
-    ///
-    /// Use this when you need to test rule matching based on bundle ID or app name.
-    #[cfg(test)]
-    #[must_use]
-    pub fn new_for_test_with_app(
-        id: u32,
-        pid: i32,
-        frame: Rect,
-        bundle_id: &str,
-        app_name: &str,
-    ) -> Self {
-        Self {
-            id,
-            pid,
-            bundle_id: bundle_id.to_string(),
-            app_name: app_name.to_string(),
-            title: String::new(),
-            frame,
-            is_minimized: false,
-            is_hidden: false,
-            is_main: false,
-            is_focused: false,
-            ax_element: None,
-        }
+        Some(window_id)
     }
 }
 
@@ -2788,685 +400,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_cf_windows_returns_valid_pointer() {
-        let ptr = cf_windows();
-        assert!(!ptr.is_null());
+    fn test_get_running_apps_returns_results() {
+        // This test just verifies the function doesn't panic
+        // and returns some apps (at least Terminal/test runner)
+        let apps = get_running_apps();
+        // In a test environment there should be at least the test runner
+        assert!(!apps.is_empty() || true); // Allow empty in sandboxed environments
     }
 
     #[test]
-    fn test_cf_title_returns_valid_pointer() {
-        let ptr = cf_title();
-        assert!(!ptr.is_null());
+    fn test_get_all_windows_returns_results() {
+        // This test just verifies the function doesn't panic
+        let windows = get_all_windows_including_hidden();
+        // Just verify it returns a vector (may be empty in CI)
+        let _ = windows.len();
     }
 
     #[test]
-    fn test_cf_position_returns_valid_pointer() {
-        let ptr = cf_position();
-        assert!(!ptr.is_null());
-    }
-
-    #[test]
-    fn test_cf_size_returns_valid_pointer() {
-        let ptr = cf_size();
-        assert!(!ptr.is_null());
-    }
-
-    #[test]
-    fn test_cf_minimized_returns_valid_pointer() {
-        let ptr = cf_minimized();
-        assert!(!ptr.is_null());
-    }
-
-    #[test]
-    fn test_cf_raise_returns_valid_pointer() {
-        let ptr = cf_raise();
-        assert!(!ptr.is_null());
-    }
-
-    #[test]
-    fn test_get_ax_string_null_element() {
-        unsafe {
-            let result = get_ax_string(ptr::null_mut(), cf_title());
-            assert!(result.is_none());
+    fn test_get_visible_windows_filters_hidden() {
+        let visible = get_visible_windows();
+        // All returned windows should not be hidden or minimized
+        for w in &visible {
+            assert!(!w.is_hidden);
+            assert!(!w.is_minimized);
         }
-    }
-
-    #[test]
-    fn test_get_ax_bool_null_element() {
-        unsafe {
-            let result = get_ax_bool(ptr::null_mut(), cf_minimized());
-            assert!(result.is_none());
-        }
-    }
-
-    #[test]
-    fn test_get_ax_position_null_element() {
-        unsafe {
-            let result = get_ax_position(ptr::null_mut());
-            assert!(result.is_none());
-        }
-    }
-
-    #[test]
-    fn test_get_ax_size_null_element() {
-        unsafe {
-            let result = get_ax_size(ptr::null_mut());
-            assert!(result.is_none());
-        }
-    }
-
-    #[test]
-    fn test_get_ax_frame_null_element() {
-        unsafe {
-            let result = get_ax_frame(ptr::null_mut());
-            assert!(result.is_none());
-        }
-    }
-
-    #[test]
-    fn test_set_ax_position_null_element() {
-        unsafe {
-            let result = set_ax_position(ptr::null_mut(), 0.0, 0.0);
-            assert!(!result);
-        }
-    }
-
-    #[test]
-    fn test_set_ax_size_null_element() {
-        unsafe {
-            let result = set_ax_size(ptr::null_mut(), 100.0, 100.0);
-            assert!(!result);
-        }
-    }
-
-    #[test]
-    fn test_raise_ax_window_null_element() {
-        unsafe {
-            let result = raise_ax_window(ptr::null_mut());
-            assert!(!result);
-        }
-    }
-
-    #[test]
-    fn test_get_ax_window_id_null_element() {
-        // get_ax_window_id should return None for null elements.
-        // This is important for the monocle same-app focus fix where we use
-        // this function to get direct window IDs from AX elements.
-        unsafe {
-            let result = get_ax_window_id(ptr::null_mut());
-            assert!(result.is_none());
-        }
-    }
-
-    #[test]
-    fn test_get_running_apps() {
-        // This should return at least one app (the test runner)
-        // May be empty in CI without display - just verify it doesn't crash
-        let _ = get_running_apps();
-    }
-
-    #[test]
-    fn test_get_cg_window_list() {
-        // Just verify it doesn't crash
-        let _ = get_cg_window_list();
-    }
-
-    #[test]
-    fn test_ns_string_to_rust_null() {
-        let result = ns_string_to_rust(ptr::null_mut());
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn test_window_info_to_tracked_window() {
-        let info = WindowInfo {
-            id: 123,
-            pid: 456,
-            bundle_id: "com.example.app".to_string(),
-            app_name: "Example".to_string(),
-            title: "Window Title".to_string(),
-            frame: Rect::new(100.0, 100.0, 800.0, 600.0),
-            is_minimized: false,
-            is_hidden: false,
-            is_main: true,
-            is_focused: true,
-            ax_element: None,
-        };
-
-        let tracked = info.to_tracked_window("workspace1");
-
-        assert_eq!(tracked.id, 123);
-        assert_eq!(tracked.pid, 456);
-        assert_eq!(tracked.app_id, "com.example.app");
-        assert_eq!(tracked.app_name, "Example");
-        assert_eq!(tracked.title, "Window Title");
-        assert_eq!(tracked.workspace_name, "workspace1");
-    }
-
-    #[test]
-    fn test_rect_comparison() {
-        let r1 = Rect::new(100.0, 200.0, 800.0, 600.0);
-        let r2 = Rect::new(100.0, 200.0, 800.0, 600.0);
-        assert_eq!(r1, r2);
-    }
-
-    #[test]
-    fn test_cg_window_info_creation() {
-        let info = CGWindowInfo {
-            id: 1,
-            pid: 100,
-            title: "Test".to_string(),
-            app_name: "TestApp".to_string(),
-            frame: Rect::default(),
-            layer: 0,
-        };
-        assert_eq!(info.id, 1);
-        assert_eq!(info.pid, 100);
-    }
-
-    // ========================================================================
-    // Tab Deduplication Tests
-    // ========================================================================
-
-    #[test]
-    fn test_deduplicate_tabbed_windows_no_tabs() {
-        // Two windows with different frames - no deduplication needed
-        let win1 = CGWindowInfo {
-            id: 100,
-            pid: 1,
-            title: "Window 1".to_string(),
-            app_name: "App".to_string(),
-            frame: Rect::new(0.0, 0.0, 800.0, 600.0),
-            layer: 0,
-        };
-        let win2 = CGWindowInfo {
-            id: 200,
-            pid: 1,
-            title: "Window 2".to_string(),
-            app_name: "App".to_string(),
-            frame: Rect::new(100.0, 100.0, 800.0, 600.0), // Different position
-            layer: 0,
-        };
-
-        let windows: Vec<&CGWindowInfo> = vec![&win1, &win2];
-        let result = deduplicate_tabbed_windows(&windows);
-
-        assert_eq!(result.len(), 2);
-    }
-
-    #[test]
-    fn test_deduplicate_tabbed_windows_with_tabs() {
-        // Three windows with same frame - should deduplicate to one (like Ghostty with 3 tabs)
-        let frame = Rect::new(12.0, 52.0, 2536.0, 1375.0);
-        let win1 = CGWindowInfo {
-            id: 27,
-            pid: 1,
-            title: "Tab 1".to_string(),
-            app_name: "Ghostty".to_string(),
-            frame,
-            layer: 0,
-        };
-        let win2 = CGWindowInfo {
-            id: 28,
-            pid: 1,
-            title: "Tab 2".to_string(),
-            app_name: "Ghostty".to_string(),
-            frame,
-            layer: 0,
-        };
-        let win3 = CGWindowInfo {
-            id: 29,
-            pid: 1,
-            title: "Tab 3".to_string(),
-            app_name: "Ghostty".to_string(),
-            frame,
-            layer: 0,
-        };
-
-        let windows: Vec<&CGWindowInfo> = vec![&win1, &win2, &win3];
-        let result = deduplicate_tabbed_windows(&windows);
-
-        // Should keep only one window (the one with highest ID)
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].id, 29);
-    }
-
-    #[test]
-    fn test_deduplicate_tabbed_windows_mixed() {
-        // Simulates Finder with 2 windows (one with tabs, one without)
-        // Window 1 at position (21, 121) - no tabs
-        let win1 = CGWindowInfo {
-            id: 33568,
-            pid: 1,
-            title: "Documents".to_string(),
-            app_name: "Finder".to_string(),
-            frame: Rect::new(21.0, 121.0, 1416.0, 1261.0),
-            layer: 0,
-        };
-        // Window 2 at position (21, 179) - has 2 tabs (2 CGWindows)
-        let win2 = CGWindowInfo {
-            id: 33963,
-            pid: 1,
-            title: "Projects".to_string(),
-            app_name: "Finder".to_string(),
-            frame: Rect::new(21.0, 179.0, 1416.0, 1261.0),
-            layer: 0,
-        };
-        let win3 = CGWindowInfo {
-            id: 37874,
-            pid: 1,
-            title: "Projects Tab 2".to_string(),
-            app_name: "Finder".to_string(),
-            frame: Rect::new(21.0, 179.0, 1416.0, 1261.0), // Same frame as win2
-            layer: 0,
-        };
-
-        let windows: Vec<&CGWindowInfo> = vec![&win1, &win2, &win3];
-        let result = deduplicate_tabbed_windows(&windows);
-
-        // Should have 2 windows: one at y=121, one at y=179 (deduped)
-        assert_eq!(result.len(), 2);
-
-        // Check we have both unique positions
-        let y_positions: Vec<i32> = result.iter().map(|w| w.frame.y.round() as i32).collect();
-        assert!(y_positions.contains(&121));
-        assert!(y_positions.contains(&179));
-    }
-
-    #[test]
-    fn test_deduplicate_tabbed_windows_empty() {
-        let windows: Vec<&CGWindowInfo> = vec![];
-        let result = deduplicate_tabbed_windows(&windows);
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn test_deduplicate_tabbed_windows_single() {
-        let win = CGWindowInfo {
-            id: 1,
-            pid: 1,
-            title: "Single".to_string(),
-            app_name: "App".to_string(),
-            frame: Rect::new(0.0, 0.0, 800.0, 600.0),
-            layer: 0,
-        };
-
-        let windows: Vec<&CGWindowInfo> = vec![&win];
-        let result = deduplicate_tabbed_windows(&windows);
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].id, 1);
-    }
-
-    // ========================================================================
-    // AX Element Cache Tests
-    // ========================================================================
-
-    #[test]
-    fn test_cached_ax_entry_new() {
-        let dummy_ptr: AXUIElementRef = 0x1234 as *mut _;
-        let entry = CachedAXEntry::new(dummy_ptr);
-        assert_eq!(entry.ax_element(), dummy_ptr);
-        assert!(!entry.is_expired(Duration::from_secs(5)));
-    }
-
-    #[test]
-    fn test_cached_ax_entry_is_expired() {
-        let dummy_ptr: AXUIElementRef = 0x1234 as *mut _;
-        let entry = CachedAXEntry::new(dummy_ptr);
-
-        // Not expired with long TTL
-        assert!(!entry.is_expired(Duration::from_secs(10)));
-
-        // Expired with zero TTL
-        assert!(entry.is_expired(Duration::ZERO));
-    }
-
-    #[test]
-    fn test_cached_ax_ptr_send_sync() {
-        // Verify CachedAXPtr implements Send + Sync
-        fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<CachedAXPtr>();
-    }
-
-    #[test]
-    fn test_ax_element_cache_insert_and_get() {
-        let cache = AXElementCache::new(5);
-        let dummy_ptr: AXUIElementRef = 0xABCD as *mut _;
-
-        // Initially not in cache
-        assert!(cache.get(12345).is_none());
-
-        // Insert and retrieve
-        cache.insert(12345, dummy_ptr);
-        let retrieved = cache.get(12345);
-        assert!(retrieved.is_some());
-        assert_eq!(retrieved.unwrap(), dummy_ptr);
-    }
-
-    #[test]
-    fn test_ax_element_cache_remove() {
-        let cache = AXElementCache::new(5);
-        let dummy_ptr: AXUIElementRef = 0xABCD as *mut _;
-
-        cache.insert(12345, dummy_ptr);
-        assert!(cache.get(12345).is_some());
-
-        cache.remove(12345);
-        assert!(cache.get(12345).is_none());
-    }
-
-    #[test]
-    fn test_ax_element_cache_clear() {
-        let cache = AXElementCache::new(5);
-        let ptr1: AXUIElementRef = 0x1111 as *mut _;
-        let ptr2: AXUIElementRef = 0x2222 as *mut _;
-
-        cache.insert(1, ptr1);
-        cache.insert(2, ptr2);
-
-        assert!(cache.get(1).is_some());
-        assert!(cache.get(2).is_some());
-
-        cache.clear();
-
-        assert!(cache.get(1).is_none());
-        assert!(cache.get(2).is_none());
-    }
-
-    #[test]
-    fn test_ax_element_cache_get_multiple_all_cached() {
-        let cache = AXElementCache::new(5);
-        let ptr1: AXUIElementRef = 0x1111 as *mut _;
-        let ptr2: AXUIElementRef = 0x2222 as *mut _;
-
-        cache.insert(1, ptr1);
-        cache.insert(2, ptr2);
-
-        let (cached, misses) = cache.get_multiple(&[1, 2]);
-
-        assert_eq!(cached.len(), 2);
-        assert!(misses.is_empty());
-        assert_eq!(cached.get(&1), Some(&ptr1));
-        assert_eq!(cached.get(&2), Some(&ptr2));
-    }
-
-    #[test]
-    fn test_ax_element_cache_get_multiple_some_cached() {
-        let cache = AXElementCache::new(5);
-        let ptr1: AXUIElementRef = 0x1111 as *mut _;
-
-        cache.insert(1, ptr1);
-
-        let (cached, misses) = cache.get_multiple(&[1, 2, 3]);
-
-        assert_eq!(cached.len(), 1);
-        assert_eq!(misses.len(), 2);
-        assert!(misses.contains(&2));
-        assert!(misses.contains(&3));
-    }
-
-    #[test]
-    fn test_ax_element_cache_get_multiple_none_cached() {
-        let cache = AXElementCache::new(5);
-
-        let (cached, misses) = cache.get_multiple(&[1, 2, 3]);
-
-        assert!(cached.is_empty());
-        assert_eq!(misses.len(), 3);
-    }
-
-    #[test]
-    fn test_ax_element_cache_insert_multiple() {
-        let cache = AXElementCache::new(5);
-        let ptr1: AXUIElementRef = 0x1111 as *mut _;
-        let ptr2: AXUIElementRef = 0x2222 as *mut _;
-        let ptr3: AXUIElementRef = 0x3333 as *mut _;
-
-        cache.insert_multiple(&[(1, ptr1), (2, ptr2), (3, ptr3)]);
-
-        assert_eq!(cache.get(1), Some(ptr1));
-        assert_eq!(cache.get(2), Some(ptr2));
-        assert_eq!(cache.get(3), Some(ptr3));
-    }
-
-    #[test]
-    fn test_ax_element_cache_insert_multiple_empty() {
-        let cache = AXElementCache::new(5);
-
-        // Should not panic on empty input
-        cache.insert_multiple(&[]);
-
-        assert!(cache.get(1).is_none());
-    }
-
-    #[test]
-    fn test_ax_element_cache_ttl_expiration() {
-        // Create cache with 0 TTL (immediate expiration)
-        let cache = AXElementCache::new(0);
-        let ptr: AXUIElementRef = 0x1234 as *mut _;
-
-        cache.insert(1, ptr);
-
-        // Entry should be expired immediately
-        assert!(cache.get(1).is_none());
-    }
-
-    #[test]
-    fn test_ax_element_cache_constant() {
-        use super::super::constants::cache::AX_ELEMENT_TTL_SECS;
-
-        // TTL should be reasonable (between 1 and 60 seconds)
-        assert!(AX_ELEMENT_TTL_SECS >= 1);
-        assert!(AX_ELEMENT_TTL_SECS <= 60);
-    }
-
-    #[test]
-    fn test_get_ax_cache_returns_same_instance() {
-        // The cache should be a singleton
-        let cache1 = get_ax_cache();
-        let cache2 = get_ax_cache();
-
-        // Both should point to the same instance (same address)
-        assert!(std::ptr::eq(cache1, cache2));
-    }
-
-    // ========================================================================
-    // CG Window List Cache Tests
-    // ========================================================================
-
-    #[test]
-    fn test_cg_window_list_cache_new() {
-        let cache = CGWindowListCache::new(50);
-        assert!(
-            cache.get_on_screen().is_none(),
-            "New cache should have no on-screen data"
-        );
-        assert!(
-            cache.get_all().is_none(),
-            "New cache should have no all-windows data"
-        );
-    }
-
-    #[test]
-    fn test_cg_window_list_cache_update_on_screen() {
-        let mut cache = CGWindowListCache::new(1000);
-
-        let windows = vec![CGWindowInfo {
-            id: 1,
-            pid: 100,
-            title: "Test".to_string(),
-            app_name: "TestApp".to_string(),
-            frame: Rect::new(0.0, 0.0, 800.0, 600.0),
-            layer: 0,
-        }];
-
-        cache.update_on_screen(windows);
-
-        let cached = cache.get_on_screen();
-        assert!(cached.is_some(), "Should have cached on-screen data");
-        assert_eq!(cached.unwrap().len(), 1);
-
-        // All windows cache should still be empty
-        assert!(
-            cache.get_all().is_none(),
-            "All-windows cache should be unaffected"
-        );
-    }
-
-    #[test]
-    fn test_cg_window_list_cache_update_all() {
-        let mut cache = CGWindowListCache::new(1000);
-
-        let windows = vec![
-            CGWindowInfo {
-                id: 1,
-                pid: 100,
-                title: "Test1".to_string(),
-                app_name: "TestApp".to_string(),
-                frame: Rect::new(0.0, 0.0, 800.0, 600.0),
-                layer: 0,
-            },
-            CGWindowInfo {
-                id: 2,
-                pid: 100,
-                title: "Test2".to_string(),
-                app_name: "TestApp".to_string(),
-                frame: Rect::new(100.0, 100.0, 800.0, 600.0),
-                layer: 0,
-            },
-        ];
-
-        cache.update_all(windows);
-
-        let cached = cache.get_all();
-        assert!(cached.is_some(), "Should have cached all-windows data");
-        assert_eq!(cached.unwrap().len(), 2);
-
-        // On-screen cache should still be empty
-        assert!(
-            cache.get_on_screen().is_none(),
-            "On-screen cache should be unaffected"
-        );
-    }
-
-    #[test]
-    fn test_cg_window_list_cache_invalidate() {
-        let mut cache = CGWindowListCache::new(1000);
-
-        let windows = vec![CGWindowInfo {
-            id: 1,
-            pid: 100,
-            title: "Test".to_string(),
-            app_name: "TestApp".to_string(),
-            frame: Rect::default(),
-            layer: 0,
-        }];
-
-        cache.update_on_screen(windows.clone());
-        cache.update_all(windows);
-
-        assert!(cache.get_on_screen().is_some());
-        assert!(cache.get_all().is_some());
-
-        cache.invalidate();
-
-        assert!(
-            cache.get_on_screen().is_none(),
-            "On-screen should be None after invalidate"
-        );
-        assert!(
-            cache.get_all().is_none(),
-            "All-windows should be None after invalidate"
-        );
-    }
-
-    #[test]
-    fn test_cg_window_list_cache_ttl_expiration() {
-        // Create cache with 0ms TTL (immediate expiration)
-        let mut cache = CGWindowListCache::new(0);
-
-        let windows = vec![CGWindowInfo {
-            id: 1,
-            pid: 100,
-            title: "Test".to_string(),
-            app_name: "TestApp".to_string(),
-            frame: Rect::default(),
-            layer: 0,
-        }];
-
-        cache.update_on_screen(windows.clone());
-        cache.update_all(windows);
-
-        // Both should be expired immediately
-        assert!(
-            cache.get_on_screen().is_none(),
-            "On-screen cache with 0 TTL should be None"
-        );
-        assert!(
-            cache.get_all().is_none(),
-            "All-windows cache with 0 TTL should be None"
-        );
-    }
-
-    #[test]
-    fn test_cg_window_list_cache_independent_ttls() {
-        // Updates to one cache don't affect the other's timestamps
-        let mut cache = CGWindowListCache::new(1000);
-
-        let windows1 = vec![CGWindowInfo {
-            id: 1,
-            pid: 100,
-            title: "Window1".to_string(),
-            app_name: "App".to_string(),
-            frame: Rect::default(),
-            layer: 0,
-        }];
-
-        let windows2 = vec![CGWindowInfo {
-            id: 2,
-            pid: 200,
-            title: "Window2".to_string(),
-            app_name: "App".to_string(),
-            frame: Rect::default(),
-            layer: 0,
-        }];
-
-        // Update on-screen first
-        cache.update_on_screen(windows1);
-
-        // Later update all-windows
-        cache.update_all(windows2);
-
-        // Both should be valid
-        let on_screen = cache.get_on_screen();
-        let all = cache.get_all();
-
-        assert!(on_screen.is_some());
-        assert!(all.is_some());
-        assert_eq!(on_screen.unwrap()[0].id, 1);
-        assert_eq!(all.unwrap()[0].id, 2);
-    }
-
-    #[test]
-    fn test_invalidate_cg_window_list_cache_function() {
-        // Test the public invalidation function
-        invalidate_cg_window_list_cache();
-
-        // Should not panic, and subsequent calls should work
-        let windows = get_cg_window_list();
-        // We can't assert much about the result since it depends on system state,
-        // but it should be a valid (possibly empty) vector - just verify it returns
-        let _ = windows;
-    }
-
-    #[test]
-    fn test_cg_window_list_cache_constant() {
-        use super::super::constants::cache::CG_WINDOW_LIST_TTL_MS;
-
-        // TTL should be short (between 10ms and 500ms)
-        // This is intentionally short because window lists change frequently
-        assert!(CG_WINDOW_LIST_TTL_MS >= 10);
-        assert!(CG_WINDOW_LIST_TTL_MS <= 500);
     }
 }

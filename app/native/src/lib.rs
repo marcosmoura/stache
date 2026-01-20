@@ -99,7 +99,10 @@ pub fn run() {
             config::watch_config_file(app.handle().clone());
 
             // Start IPC socket server for CLI queries
-            utils::ipc_socket::init(tiling::handle_ipc_query);
+            utils::ipc_socket::init(|query| {
+                tiling::init::handle_ipc_query(&query)
+                    .unwrap_or_else(|| utils::ipc_socket::IpcResponse::error("Unknown query"))
+            });
 
             // Initialize Bar components
             bar::init(app);
@@ -122,9 +125,15 @@ pub fn run() {
             // Initialize MenuAnywhere
             menu_anywhere::init(app.handle().clone());
 
-            // Initialize tiling window manager
-            tiling::init(app.handle().clone());
+            // Initialize tiling window manager if enabled
+            let tiling_config = config::get_config().tiling.clone();
+            if tiling_config.is_enabled() {
+                eprintln!("stache: tiling enabled, starting init...");
+                tiling::init(app.handle().clone());
+                eprintln!("stache: tiling init returned");
+            }
 
+            eprintln!("stache: setup complete!");
             Ok(())
         })
         .build(tauri::generate_context!())

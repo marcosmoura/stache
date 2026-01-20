@@ -1,12 +1,14 @@
 //! Monocle layout - all windows maximized to fill the screen.
+//!
+//! Every window gets the full screen frame. This is useful for
+//! focusing on a single window at a time while keeping others accessible.
 
 use super::LayoutResult;
-use crate::tiling::state::Rect;
+use crate::modules::tiling::state::Rect;
 
 /// Monocle layout - all windows maximized to fill the screen.
 ///
-/// Every window gets the full screen frame. This is useful for
-/// focusing on a single window at a time while keeping others accessible.
+/// Every window gets the full screen frame.
 ///
 /// # Arguments
 ///
@@ -14,9 +16,12 @@ use crate::tiling::state::Rect;
 /// * `screen_frame` - The visible frame of the screen (already has outer gaps applied)
 #[must_use]
 pub fn layout(window_ids: &[u32], screen_frame: &Rect) -> LayoutResult {
-    // SmallVec implements FromIterator, so collect() works directly
     window_ids.iter().map(|&id| (id, *screen_frame)).collect()
 }
+
+// ============================================================================
+// Tests
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -60,5 +65,28 @@ mod tests {
         assert_eq!(result[1].0, 3);
         assert_eq!(result[2].0, 8);
         assert_eq!(result[3].0, 1);
+    }
+
+    #[test]
+    fn test_monocle_many_windows() {
+        let frame = screen_frame();
+        let ids: Vec<u32> = (1..=20).collect();
+        let result = layout(&ids, &frame);
+
+        assert_eq!(result.len(), 20);
+        for (id, window_frame) in &result {
+            assert_eq!(*window_frame, frame, "Window {id} should be fullscreen");
+        }
+    }
+
+    #[test]
+    fn test_monocle_with_offset_frame() {
+        // Simulates a frame with outer gaps already applied
+        let frame = Rect::new(20.0, 50.0, 1880.0, 1010.0);
+        let result = layout(&[1, 2], &frame);
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].1, frame);
+        assert_eq!(result[1].1, frame);
     }
 }

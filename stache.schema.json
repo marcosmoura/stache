@@ -865,7 +865,7 @@
           "default": 0
         },
         "screen": {
-          "description": "Screen identifier: \"main\", \"secondary\", or screen name.",
+          "description": "Screen identifier: \"main\"/\"primary\", \"secondary\", or screen name.",
           "type": "string"
         }
       },
@@ -1116,7 +1116,7 @@
           }
         },
         "screen": {
-          "description": "Screen assignment: \"main\", \"secondary\", or screen name.\nDefault: \"main\"",
+          "description": "Screen assignment: \"main\"/\"primary\", \"secondary\", or screen name.\nDefault: \"main\"",
           "type": "string",
           "default": "main"
         }

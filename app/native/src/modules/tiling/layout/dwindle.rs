@@ -1,4 +1,4 @@
-//! Dwindle layout - proper binary space partitioning with spiral pattern.
+//! Dwindle layout - binary space partitioning with spiral pattern.
 //!
 //! This implements the Dwindle algorithm similar to Hyprland's dwindle layout.
 //! Each new window splits the **last window's space**, creating a spiral pattern.
@@ -38,12 +38,6 @@
 //! ## Portrait Mode (e.g., 1080x1920)
 //!
 //! ```text
-//! 1 window:   ┌─────┐
-//!             │     │
-//!             │  1  │
-//!             │     │
-//!             └─────┘
-//!
 //! 2 windows:  ┌─────┐
 //!             │  1  │
 //!             ├─────┤
@@ -55,20 +49,12 @@
 //!             ├──┬──┤
 //!             │ 2│ 3│
 //!             └──┴──┘
-//!
-//! 4 windows:  ┌─────┐
-//!             │  1  │
-//!             ├──┬──┤
-//!             │ 2│ 3│
-//!             │  ├──┤
-//!             │  │ 4│
-//!             └──┴──┘
 //! ```
 
 use smallvec::{SmallVec, smallvec};
 
 use super::{Gaps, LAYOUT_INLINE_CAP, LayoutResult, helpers};
-use crate::tiling::state::Rect;
+use crate::modules::tiling::state::Rect;
 
 /// Dwindle layout - windows arranged in a dwindling spiral pattern.
 ///
@@ -83,8 +69,16 @@ use crate::tiling::state::Rect;
 /// * `window_ids` - IDs of windows to arrange (in order of creation)
 /// * `screen_frame` - The visible frame of the screen
 /// * `gaps` - Gap values for spacing between windows
+/// * `ratios` - Split ratios for each split (0.0-1.0, default 0.5 for each).
+///   For N windows, up to N-1 ratios can be provided. Each ratio controls
+///   the proportion of space the first half gets at that split level.
 #[must_use]
-pub fn layout(window_ids: &[u32], screen_frame: &Rect, gaps: &Gaps) -> LayoutResult {
+pub fn layout(
+    window_ids: &[u32],
+    screen_frame: &Rect,
+    gaps: &Gaps,
+    ratios: &[f64],
+) -> LayoutResult {
     if window_ids.is_empty() {
         return SmallVec::new();
     }
@@ -117,11 +111,15 @@ pub fn layout(window_ids: &[u32], screen_frame: &Rect, gaps: &Gaps) -> LayoutRes
             i % 2 == 0 // 1st split vertical, 2nd horizontal, 3rd vertical...
         };
 
+        // Get the ratio for this split (default 0.5 if not provided)
+        // ratios[0] controls split 1 (i=1), ratios[1] controls split 2 (i=2), etc.
+        let ratio = ratios.get(i - 1).copied().unwrap_or(0.5).clamp(0.05, 0.95);
+
         // Split the parent frame
         let (first_half, second_half) = if split_horizontal {
-            helpers::split_horizontal(&parent_frame, 0.5, gaps.inner_h)
+            helpers::split_horizontal(&parent_frame, ratio, gaps.inner_h)
         } else {
-            helpers::split_vertical(&parent_frame, 0.5, gaps.inner_v)
+            helpers::split_vertical(&parent_frame, ratio, gaps.inner_v)
         };
 
         // Update the parent window's frame to first half
@@ -139,6 +137,10 @@ pub fn layout(window_ids: &[u32], screen_frame: &Rect, gaps: &Gaps) -> LayoutRes
     result
 }
 
+// ============================================================================
+// Tests
+// ============================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,14 +157,14 @@ mod tests {
 
     #[test]
     fn test_dwindle_empty() {
-        let result = layout(&[], &landscape_frame(), &no_gaps());
+        let result = layout(&[], &landscape_frame(), &no_gaps(), &[]);
         assert!(result.is_empty());
     }
 
     #[test]
     fn test_dwindle_single_window() {
         let frame = landscape_frame();
-        let result = layout(&[1], &frame, &no_gaps());
+        let result = layout(&[1], &frame, &no_gaps(), &[]);
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0], (1, frame));
@@ -175,7 +177,7 @@ mod tests {
     #[test]
     fn test_landscape_two_windows() {
         let frame = landscape_frame();
-        let result = layout(&[1, 2], &frame, &no_gaps());
+        let result = layout(&[1, 2], &frame, &no_gaps(), &[]);
 
         assert_eq!(result.len(), 2);
 
@@ -199,7 +201,7 @@ mod tests {
     #[test]
     fn test_landscape_three_windows() {
         let frame = landscape_frame();
-        let result = layout(&[1, 2, 3], &frame, &no_gaps());
+        let result = layout(&[1, 2, 3], &frame, &no_gaps(), &[]);
 
         assert_eq!(result.len(), 3);
 
@@ -228,7 +230,7 @@ mod tests {
     #[test]
     fn test_landscape_four_windows() {
         let frame = landscape_frame();
-        let result = layout(&[1, 2, 3, 4], &frame, &no_gaps());
+        let result = layout(&[1, 2, 3, 4], &frame, &no_gaps(), &[]);
 
         assert_eq!(result.len(), 4);
 
@@ -267,7 +269,7 @@ mod tests {
     #[test]
     fn test_portrait_two_windows() {
         let frame = portrait_frame();
-        let result = layout(&[1, 2], &frame, &no_gaps());
+        let result = layout(&[1, 2], &frame, &no_gaps(), &[]);
 
         assert_eq!(result.len(), 2);
 
@@ -288,7 +290,7 @@ mod tests {
     #[test]
     fn test_portrait_three_windows() {
         let frame = portrait_frame();
-        let result = layout(&[1, 2, 3], &frame, &no_gaps());
+        let result = layout(&[1, 2, 3], &frame, &no_gaps(), &[]);
 
         assert_eq!(result.len(), 3);
 
@@ -317,7 +319,7 @@ mod tests {
     #[test]
     fn test_portrait_four_windows() {
         let frame = portrait_frame();
-        let result = layout(&[1, 2, 3, 4], &frame, &no_gaps());
+        let result = layout(&[1, 2, 3, 4], &frame, &no_gaps(), &[]);
 
         assert_eq!(result.len(), 4);
 
@@ -350,14 +352,14 @@ mod tests {
     }
 
     // ========================================================================
-    // General Tests (apply to both orientations)
+    // General Tests
     // ========================================================================
 
     #[test]
     fn test_dwindle_with_gaps() {
         let frame = landscape_frame();
         let gaps = Gaps::uniform(20.0, 0.0);
-        let result = layout(&[1, 2], &frame, &gaps);
+        let result = layout(&[1, 2], &frame, &gaps, &[]);
 
         let (_, frame1) = result[0];
         let (_, frame2) = result[1];
@@ -370,7 +372,7 @@ mod tests {
     #[test]
     fn test_dwindle_preserves_order() {
         let frame = landscape_frame();
-        let result = layout(&[10, 20, 30, 40], &frame, &no_gaps());
+        let result = layout(&[10, 20, 30, 40], &frame, &no_gaps(), &[]);
 
         assert_eq!(result[0].0, 10);
         assert_eq!(result[1].0, 20);
@@ -381,7 +383,7 @@ mod tests {
     #[test]
     fn test_dwindle_total_area_preserved_landscape() {
         let frame = landscape_frame();
-        let result = layout(&[1, 2, 3, 4, 5, 6], &frame, &no_gaps());
+        let result = layout(&[1, 2, 3, 4, 5, 6], &frame, &no_gaps(), &[]);
 
         let total_area: f64 = result.iter().map(|(_, f)| f.area()).sum();
         let screen_area = frame.area();
@@ -395,7 +397,7 @@ mod tests {
     #[test]
     fn test_dwindle_total_area_preserved_portrait() {
         let frame = portrait_frame();
-        let result = layout(&[1, 2, 3, 4, 5, 6], &frame, &no_gaps());
+        let result = layout(&[1, 2, 3, 4, 5, 6], &frame, &no_gaps(), &[]);
 
         let total_area: f64 = result.iter().map(|(_, f)| f.area()).sum();
         let screen_area = frame.area();
@@ -409,7 +411,7 @@ mod tests {
     #[test]
     fn test_dwindle_no_overlap() {
         let frame = landscape_frame();
-        let result = layout(&[1, 2, 3, 4], &frame, &no_gaps());
+        let result = layout(&[1, 2, 3, 4], &frame, &no_gaps(), &[]);
 
         for (i, (_, frame_a)) in result.iter().enumerate() {
             for (j, (_, frame_b)) in result.iter().enumerate() {
@@ -421,8 +423,7 @@ mod tests {
 
                     assert!(
                         !overlaps,
-                        "Windows {i} and {j} overlap: {:?} and {:?}",
-                        frame_a, frame_b
+                        "Windows {i} and {j} overlap: {frame_a:?} and {frame_b:?}",
                     );
                 }
             }
@@ -433,7 +434,7 @@ mod tests {
     fn test_dwindle_many_windows() {
         let frame = landscape_frame();
         let ids: Vec<u32> = (1..=8).collect();
-        let result = layout(&ids, &frame, &no_gaps());
+        let result = layout(&ids, &frame, &no_gaps(), &[]);
 
         assert_eq!(result.len(), 8);
 
@@ -449,7 +450,7 @@ mod tests {
     fn test_square_screen_uses_landscape_behavior() {
         // Square screens (width == height) should use landscape behavior
         let frame = Rect::new(0.0, 0.0, 1000.0, 1000.0);
-        let result = layout(&[1, 2], &frame, &no_gaps());
+        let result = layout(&[1, 2], &frame, &no_gaps(), &[]);
 
         let (_, frame1) = result[0];
         let (_, frame2) = result[1];
@@ -459,5 +460,60 @@ mod tests {
         assert_eq!(frame2.width, frame.width / 2.0);
         assert_eq!(frame1.height, frame.height);
         assert_eq!(frame2.height, frame.height);
+    }
+
+    // ========================================================================
+    // Custom Ratio Tests
+    // ========================================================================
+
+    #[test]
+    fn test_dwindle_with_custom_ratio_two_windows() {
+        let frame = landscape_frame();
+        // 70% for first window, 30% for second
+        let result = layout(&[1, 2], &frame, &no_gaps(), &[0.7]);
+
+        let (_, frame1) = result[0];
+        let (_, frame2) = result[1];
+
+        // First window gets 70%
+        assert!((frame1.width - frame.width * 0.7).abs() < 1.0);
+        assert!((frame2.width - frame.width * 0.3).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_dwindle_with_custom_ratios_three_windows() {
+        let frame = landscape_frame();
+        // 60% for first split, 40% for second split
+        let result = layout(&[1, 2, 3], &frame, &no_gaps(), &[0.6, 0.4]);
+
+        let (_, frame1) = result[0];
+        let (_, frame2) = result[1];
+        let (_, frame3) = result[2];
+
+        // First window gets 60% of screen width
+        assert!((frame1.width - frame.width * 0.6).abs() < 1.0);
+
+        // Windows 2 and 3 share the remaining 40% of width
+        // Second split (vertical) gives 40% to window 2, 60% to window 3
+        assert!((frame2.height - frame.height * 0.4).abs() < 1.0);
+        assert!((frame3.height - frame.height * 0.6).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_dwindle_partial_ratios() {
+        // Provide only some ratios - rest should default to 0.5
+        let frame = landscape_frame();
+        let result = layout(&[1, 2, 3, 4], &frame, &no_gaps(), &[0.6]); // Only first ratio
+
+        let (_, frame1) = result[0];
+
+        // First split uses custom ratio
+        assert!((frame1.width - frame.width * 0.6).abs() < 1.0);
+
+        // Remaining splits use default 0.5
+        let (_, frame2) = result[1];
+        let (_, frame3) = result[2];
+        assert!((frame2.height - frame.height * 0.5).abs() < 1.0);
+        assert!((frame3.width - (frame.width * 0.4) * 0.5).abs() < 1.0);
     }
 }

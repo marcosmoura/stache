@@ -94,4 +94,6 @@ export const TilingEvents = {
   INITIALIZED: 'stache://tiling/initialized',
   /** Emitted when window focus changes. Payload: { windowId: number, workspace: string } */
   WINDOW_FOCUS_CHANGED: 'stache://tiling/window-focus-changed',
+  /** Emitted when a window's title changes. Payload: { windowId: number, title: string } */
+  WINDOW_TITLE_CHANGED: 'stache://tiling/window-title-changed',
 } as const;

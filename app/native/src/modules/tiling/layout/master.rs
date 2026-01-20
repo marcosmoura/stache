@@ -37,8 +37,23 @@
 use smallvec::{SmallVec, smallvec};
 
 use super::{Gaps, LAYOUT_INLINE_CAP, LayoutResult};
-use crate::config::MasterPosition;
-use crate::tiling::state::Rect;
+use crate::modules::tiling::state::Rect;
+
+/// Position of the master window.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MasterPosition {
+    /// Master on left, stack on right (stacked vertically).
+    Left,
+    /// Master on right, stack on left (stacked vertically).
+    Right,
+    /// Master on top, stack below (arranged horizontally).
+    Top,
+    /// Master on bottom, stack above (arranged horizontally).
+    Bottom,
+    /// Adapts to screen orientation (left for landscape, top for portrait).
+    #[default]
+    Auto,
+}
 
 /// Master layout - one master window with remaining windows in a stack.
 ///
@@ -209,6 +224,10 @@ fn layout_bottom(window_ids: &[u32], screen_frame: &Rect, ratio: f64, gaps: &Gap
 
     result
 }
+
+// ============================================================================
+// Tests
+// ============================================================================
 
 #[cfg(test)]
 mod tests {

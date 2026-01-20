@@ -43,12 +43,22 @@ coreaudio-rs = { version = "0.14.0", default-features = false, features = [
 ] }
 dirs = "6.0"
 dotenvy = "0.15.7"
+
+# Reactive state management (tiling v2)
+eyeball = { version = "0.8.8", default-features = false }
+eyeball-im = { version = "0.8", default-features = false }
+futures = { version = "0.3.31", default-features = false, features = [
+    "std",
+    "async-await",
+    "executor",
+] }
 image = { version = "0.25.9", default-features = false, features = [
     "jpeg",
     "png",
 ] }
 json_comments = "0.2.2"
 keepawake = "0.6"
+log = "0.4.29"
 natord = "1.0.9"
 notify = { version = "8.2.0", features = ["macos_fsevent"] }
 objc = { version = "0.2.7", features = ["exception"] }
@@ -96,17 +106,24 @@ tauri-plugin-process = "2.3.1"
 tauri-plugin-shell = "2.3.4"
 tauri-plugin-single-instance = "2.3.7"
 tauri-plugin-zustand = "1.1.0"
+tempfile = "3.24.0"
 thiserror = "2.0.18"
+tokio = { version = "1.49.0", default-features = false, features = [
+    "sync",
+    "rt",
+    "time",
+    "macros",
+] }
+uuid = { version = "1.19.0", default-features = false, features = [
+    "v7",
+    "serde",
+    "std",
+] }
 wallpaper = "3.2"
 
 [build-dependencies]
 serde_json = "1.0.149"
 tauri-build = { version = "2.5.3", features = [] }
-
-[dev-dependencies]
-criterion = { version = "0.8.1", features = ["html_reports"] }
-ctor = "0.6.3"
-tempfile = "3.24.0"
 
 [lints]
 workspace = true

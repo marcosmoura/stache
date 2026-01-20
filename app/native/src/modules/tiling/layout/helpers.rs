@@ -1,6 +1,8 @@
 //! Helper functions for layout calculations.
+//!
+//! Provides split operations used by multiple layout algorithms.
 
-use crate::tiling::state::Rect;
+use crate::modules::tiling::state::Rect;
 
 /// Splits a frame horizontally (left/right) at the given ratio with a gap.
 ///
@@ -48,6 +50,10 @@ pub fn split_vertical(frame: &Rect, ratio: f64, gap: f64) -> (Rect, Rect) {
     (top, bottom)
 }
 
+// ============================================================================
+// Tests
+// ============================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -79,6 +85,26 @@ mod tests {
     }
 
     #[test]
+    fn test_split_horizontal_asymmetric_ratio() {
+        let frame = Rect::new(0.0, 0.0, 100.0, 50.0);
+        let (left, right) = split_horizontal(&frame, 0.7, 0.0);
+
+        assert_eq!(left.width, 70.0);
+        assert_eq!(right.width, 30.0);
+    }
+
+    #[test]
+    fn test_split_horizontal_preserves_y_position() {
+        let frame = Rect::new(10.0, 20.0, 100.0, 50.0);
+        let (left, right) = split_horizontal(&frame, 0.5, 0.0);
+
+        assert_eq!(left.x, 10.0);
+        assert_eq!(left.y, 20.0);
+        assert_eq!(right.x, 60.0);
+        assert_eq!(right.y, 20.0);
+    }
+
+    #[test]
     fn test_split_vertical_no_gap() {
         let frame = Rect::new(0.0, 0.0, 100.0, 50.0);
         let (top, bottom) = split_vertical(&frame, 0.4, 0.0);
@@ -102,5 +128,42 @@ mod tests {
         assert_eq!(bottom.height, 50.0);
         assert_eq!(top.y, 0.0);
         assert_eq!(bottom.y, 60.0); // 50 + 10 gap
+    }
+
+    #[test]
+    fn test_split_vertical_asymmetric_ratio() {
+        let frame = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let (top, bottom) = split_vertical(&frame, 0.3, 0.0);
+
+        assert_eq!(top.height, 30.0);
+        assert_eq!(bottom.height, 70.0);
+    }
+
+    #[test]
+    fn test_split_vertical_preserves_x_position() {
+        let frame = Rect::new(10.0, 20.0, 100.0, 50.0);
+        let (top, bottom) = split_vertical(&frame, 0.5, 0.0);
+
+        assert_eq!(top.x, 10.0);
+        assert_eq!(top.y, 20.0);
+        assert_eq!(bottom.x, 10.0);
+        assert_eq!(bottom.y, 45.0);
+    }
+
+    #[test]
+    fn test_split_both_directions() {
+        let frame = Rect::new(0.0, 0.0, 200.0, 100.0);
+
+        // Split horizontally first
+        let (left, right) = split_horizontal(&frame, 0.5, 10.0);
+        assert_eq!(left.width, 95.0);
+        assert_eq!(right.width, 95.0);
+
+        // Then split the left vertically
+        let (top_left, bottom_left) = split_vertical(&left, 0.5, 10.0);
+        assert_eq!(top_left.width, 95.0);
+        assert_eq!(bottom_left.width, 95.0);
+        assert_eq!(top_left.height, 45.0);
+        assert_eq!(bottom_left.height, 45.0);
     }
 }

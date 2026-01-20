@@ -101,7 +101,7 @@ pub struct GapsConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ScreenGapsConfig {
-    /// Screen identifier: "main", "secondary", or screen name.
+    /// Screen identifier: "main"/"primary", "secondary", or screen name.
     pub screen: String,
     /// Inner gaps between windows.
     #[serde(default)]

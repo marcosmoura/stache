@@ -15,28 +15,6 @@
 //!
 //! Note: Position and size changes are NOT supported by transactions and must
 //! continue using the Accessibility API.
-//!
-//! # Example
-//!
-//! ```rust,ignore
-//! use stache::tiling::ffi::transaction::Transaction;
-//!
-//! // Create a transaction
-//! let mut tx = Transaction::new()?;
-//!
-//! // Queue multiple operations
-//! tx.set_window_alpha(window_id_1, 1.0);
-//! tx.set_window_alpha(window_id_2, 0.8);
-//! tx.order_window_above(window_id_1, window_id_2);
-//!
-//! // Commit atomically (happens automatically on drop, but can be explicit)
-//! tx.commit()?;
-//! ```
-//!
-//! # Thread Safety
-//!
-//! Transactions should be created, used, and dropped on the same thread.
-//! The struct is `Send` but not `Sync`.
 
 use std::ffi::c_void;
 
@@ -46,10 +24,8 @@ use super::skylight::get_connection_id;
 // FFI Declarations
 // ============================================================================
 
-// Type alias for CFTypeRef used in SkyLight
 type CFTypeRef = *mut c_void;
 
-// Window ordering constants
 /// Place window above the reference window.
 pub const K_WINDOW_ORDER_ABOVE: i32 = 1;
 /// Place window below the reference window.
@@ -59,55 +35,9 @@ pub const K_WINDOW_ORDER_OUT: i32 = 0;
 
 #[link(name = "SkyLight", kind = "framework")]
 unsafe extern "C" {
-    // Creates a new transaction for batching window operations.
-    //
-    // # Arguments
-    //
-    // * `cid` - Connection ID from SLSMainConnectionID()
-    // * `options` - Transaction options (usually 0)
-    //
-    // # Returns
-    //
-    // A transaction reference, or null on failure.
     fn SLSTransactionCreate(cid: u32, options: u32) -> CFTypeRef;
-
-    // Commits a transaction, applying all queued operations atomically.
-    //
-    // # Arguments
-    //
-    // * `transaction` - Transaction reference from SLSTransactionCreate()
-    // * `synchronous` - If 1, waits for completion; if 0, returns immediately
-    //
-    // # Returns
-    //
-    // 0 on success, non-zero error code on failure.
     fn SLSTransactionCommit(transaction: CFTypeRef, synchronous: i32) -> i32;
-
-    // Sets the alpha (opacity) of a window within a transaction.
-    //
-    // # Arguments
-    //
-    // * `transaction` - Transaction reference
-    // * `wid` - Window ID
-    // * `alpha` - Opacity value (0.0 = transparent, 1.0 = opaque)
-    //
-    // # Returns
-    //
-    // 0 on success, non-zero error code on failure.
     fn SLSTransactionSetWindowAlpha(transaction: CFTypeRef, wid: u32, alpha: f32) -> i32;
-
-    // Changes the z-order of a window within a transaction.
-    //
-    // # Arguments
-    //
-    // * `transaction` - Transaction reference
-    // * `wid` - Window ID to reorder
-    // * `order` - Ordering mode (K_WINDOW_ORDER_ABOVE, K_WINDOW_ORDER_BELOW, etc.)
-    // * `relative_to_wid` - Reference window ID (0 for absolute ordering)
-    //
-    // # Returns
-    //
-    // 0 on success, non-zero error code on failure.
     fn SLSTransactionOrderWindow(
         transaction: CFTypeRef,
         wid: u32,
@@ -118,7 +48,6 @@ unsafe extern "C" {
 
 #[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {
-    // Note: Uses *const c_void to match other declarations in the codebase
     fn CFRelease(cf: *const c_void);
 }
 
@@ -165,29 +94,10 @@ pub type TransactionResult<T> = Result<T, TransactionError>;
 /// RAII wrapper for SkyLight transactions.
 ///
 /// Batches multiple window server operations into a single atomic commit.
-/// Operations are queued and only applied when `commit()` is called or
-/// the transaction is dropped.
-///
-/// # Automatic Commit
-///
-/// If the transaction is dropped without explicit `commit()`, it will
-/// attempt to commit automatically. However, errors during auto-commit
-/// are silently ignored. For error handling, call `commit()` explicitly.
-///
-/// # Operations Supported
-///
-/// - `set_window_alpha()` - Change window opacity
-/// - `order_window_above()` - Move window above another
-/// - `order_window_below()` - Move window below another
-/// - `bring_to_front()` - Move window to front of its level
-///
-/// # Operations NOT Supported
-///
-/// - Window position changes (use Accessibility API)
-/// - Window size changes (use Accessibility API)
 #[derive(Debug)]
 pub struct Transaction {
     /// Connection ID to the window server.
+    #[allow(dead_code)]
     cid: u32,
     /// Transaction reference.
     handle: CFTypeRef,
@@ -197,10 +107,6 @@ pub struct Transaction {
 
 impl Transaction {
     /// Creates a new transaction.
-    ///
-    /// # Returns
-    ///
-    /// A new transaction, or an error if creation failed.
     ///
     /// # Errors
     ///
@@ -221,18 +127,6 @@ impl Transaction {
     }
 
     /// Commits the transaction, applying all queued operations atomically.
-    ///
-    /// This consumes the transaction. After calling `commit()`, no more
-    /// operations can be queued.
-    ///
-    /// # Arguments
-    ///
-    /// * `synchronous` - If `true`, waits for the window server to apply
-    ///   all changes before returning. If `false`, returns immediately.
-    ///
-    /// # Returns
-    ///
-    /// `Ok(())` on success, or an error if the commit failed.
     ///
     /// # Errors
     ///
@@ -256,8 +150,6 @@ impl Transaction {
 
     /// Commits the transaction synchronously.
     ///
-    /// Convenience method for `commit(true)`.
-    ///
     /// # Errors
     ///
     /// Returns an error if the window server fails to commit the transaction.
@@ -265,19 +157,12 @@ impl Transaction {
 
     /// Commits the transaction asynchronously.
     ///
-    /// Convenience method for `commit(false)`.
-    ///
     /// # Errors
     ///
     /// Returns an error if the window server fails to commit the transaction.
     pub fn commit_async(&mut self) -> TransactionResult<()> { self.commit(false) }
 
     /// Sets the alpha (opacity) of a window.
-    ///
-    /// # Arguments
-    ///
-    /// * `window_id` - The CGWindowID of the window
-    /// * `alpha` - Opacity value (0.0 = fully transparent, 1.0 = fully opaque)
     ///
     /// # Errors
     ///
@@ -295,11 +180,6 @@ impl Transaction {
     }
 
     /// Orders a window above another window.
-    ///
-    /// # Arguments
-    ///
-    /// * `window_id` - The window to move
-    /// * `relative_to` - The window to place above
     ///
     /// # Errors
     ///
@@ -322,11 +202,6 @@ impl Transaction {
 
     /// Orders a window below another window.
     ///
-    /// # Arguments
-    ///
-    /// * `window_id` - The window to move
-    /// * `relative_to` - The window to place below
-    ///
     /// # Errors
     ///
     /// Returns an error if the window server fails to reorder the window.
@@ -348,15 +223,10 @@ impl Transaction {
 
     /// Brings a window to the front of all windows at its level.
     ///
-    /// # Arguments
-    ///
-    /// * `window_id` - The window to bring to front
-    ///
     /// # Errors
     ///
     /// Returns an error if the window server fails to reorder the window.
     pub fn bring_to_front(&mut self, window_id: u32) -> TransactionResult<()> {
-        // Order above window 0 (no reference) brings to front
         let result =
             unsafe { SLSTransactionOrderWindow(self.handle, window_id, K_WINDOW_ORDER_ABOVE, 0) };
 
@@ -376,7 +246,6 @@ impl Drop for Transaction {
     fn drop(&mut self) {
         // Auto-commit if not already committed
         if !self.committed {
-            // Ignore errors during auto-commit
             let _ = unsafe { SLSTransactionCommit(self.handle, 1) };
         }
 
@@ -387,8 +256,7 @@ impl Drop for Transaction {
     }
 }
 
-// Transaction is Send because SkyLight APIs are thread-safe,
-// but not Sync because operations should happen on one thread.
+// Transaction is Send because SkyLight APIs are thread-safe
 unsafe impl Send for Transaction {}
 
 // ============================================================================
@@ -427,7 +295,4 @@ mod tests {
         fn assert_send<T: Send>() {}
         assert_send::<Transaction>();
     }
-
-    // Note: Integration tests for Transaction require a running window server
-    // and actual windows, so they are not included here.
 }

@@ -1,4 +1,4 @@
-//! Layout algorithms for the tiling window manager.
+//! Layout algorithms for the tiling window manager v2.
 //!
 //! This module provides different layout algorithms for arranging windows
 //! within a workspace. Each layout takes a list of windows and a screen's
@@ -18,6 +18,31 @@
 //! Layout results use `SmallVec` to avoid heap allocations for workspaces with
 //! up to 16 windows (the common case). This reduces memory allocation overhead
 //! during animations and rapid layout recalculations.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use crate::modules::tiling::layout::{calculate_layout, Gaps, LayoutType};
+//! use crate::modules::tiling::state::Rect;
+//!
+//! let screen = Rect::new(0.0, 0.0, 1920.0, 1080.0);
+//! let gaps = Gaps::uniform(16.0, 20.0);
+//! let windows = vec![1, 2, 3];
+//!
+//! let result = calculate_layout(
+//!     LayoutType::Dwindle,
+//!     &windows,
+//!     &screen,
+//!     0.5,
+//!     &gaps,
+//!     &[],
+//!     MasterPosition::Auto,
+//! );
+//!
+//! for (window_id, frame) in result {
+//!     println!("Window {}: {:?}", window_id, frame);
+//! }
+//! ```
 
 mod dwindle;
 mod floating;
@@ -30,10 +55,11 @@ mod split;
 
 pub use floating::{calculate_preset_frame, find_preset, list_preset_names};
 pub use gaps::Gaps;
+pub use grid::MAX_GRID_WINDOWS;
+pub use master::MasterPosition;
 use smallvec::SmallVec;
 
-use crate::config::{LayoutType, MasterPosition};
-use crate::tiling::state::Rect;
+use crate::modules::tiling::state::{LayoutType, Rect};
 
 // ============================================================================
 // Layout Result
@@ -98,7 +124,7 @@ pub fn calculate_layout_with_gaps(
     master_ratio: f64,
     gaps: &Gaps,
 ) -> LayoutResult {
-    calculate_layout_with_gaps_and_ratios(
+    calculate_layout_full(
         layout,
         window_ids,
         screen_frame,
@@ -109,7 +135,7 @@ pub fn calculate_layout_with_gaps(
     )
 }
 
-/// Calculates window frames for a given layout type with gaps and custom ratios.
+/// Calculates window frames for a given layout type with all options.
 ///
 /// # Arguments
 ///
@@ -125,7 +151,7 @@ pub fn calculate_layout_with_gaps(
 ///
 /// A vector of (`window_id`, frame) pairs for each window.
 #[must_use]
-pub fn calculate_layout_with_gaps_and_ratios(
+pub fn calculate_layout_full(
     layout: LayoutType,
     window_ids: &[u32],
     screen_frame: &Rect,
@@ -142,9 +168,9 @@ pub fn calculate_layout_with_gaps_and_ratios(
     let usable_frame = gaps.apply_outer(screen_frame);
 
     match layout {
-        LayoutType::Floating => floating::layout(window_ids),
+        LayoutType::Floating => SmallVec::new(), // No repositioning for floating
         LayoutType::Monocle => monocle::layout(window_ids, &usable_frame),
-        LayoutType::Dwindle => dwindle::layout(window_ids, &usable_frame, gaps),
+        LayoutType::Dwindle => dwindle::layout(window_ids, &usable_frame, gaps, split_ratios),
         LayoutType::Split => split::layout_auto(window_ids, &usable_frame, gaps, split_ratios),
         LayoutType::SplitVertical => {
             split::layout_vertical(window_ids, &usable_frame, gaps, split_ratios)
@@ -155,7 +181,7 @@ pub fn calculate_layout_with_gaps_and_ratios(
         LayoutType::Master => {
             master::layout(window_ids, &usable_frame, master_ratio, gaps, master_position)
         }
-        LayoutType::Grid => grid::layout(window_ids, &usable_frame, gaps),
+        LayoutType::Grid => grid::layout(window_ids, &usable_frame, gaps, split_ratios),
     }
 }
 
@@ -205,14 +231,7 @@ mod tests {
     #[test]
     fn test_calculate_layout_with_outer_gaps() {
         let frame = Rect::new(0.0, 0.0, 1000.0, 800.0);
-        let gaps = Gaps {
-            inner_h: 10.0,
-            inner_v: 10.0,
-            outer_top: 50.0,
-            outer_right: 20.0,
-            outer_bottom: 20.0,
-            outer_left: 20.0,
-        };
+        let gaps = Gaps::new(10.0, 10.0, 50.0, 20.0, 20.0, 20.0);
 
         let result = calculate_layout_with_gaps(LayoutType::Monocle, &[1], &frame, 0.5, &gaps);
 
@@ -228,8 +247,6 @@ mod tests {
 
     #[test]
     fn test_dwindle_uses_dwindle_algorithm() {
-        // The DWINDLE layout should now use the dwindle algorithm
-        // which creates a spiral pattern, not a grid
         let frame = screen_frame();
         let result = calculate_layout(LayoutType::Dwindle, &[1, 2, 3, 4], &frame, 0.5);
 
@@ -253,5 +270,54 @@ mod tests {
 
         // Window 4 should be bottom-right right quarter
         assert!((frame4.width - frame.width / 4.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_calculate_layout_full_with_master_position() {
+        let frame = screen_frame();
+        let gaps = Gaps::default();
+
+        // Test with master on right
+        let result = calculate_layout_full(
+            LayoutType::Master,
+            &[1, 2],
+            &frame,
+            0.6,
+            &gaps,
+            &[],
+            MasterPosition::Right,
+        );
+
+        assert_eq!(result.len(), 2);
+        let (_, master) = result[0];
+        let (_, stack) = result[1];
+
+        // Master should be on the right (larger x)
+        assert!(master.x > stack.x);
+    }
+
+    #[test]
+    fn test_calculate_layout_full_with_split_ratios() {
+        let frame = screen_frame();
+        let gaps = Gaps::default();
+
+        // 70% for first window, 30% for second
+        let ratios = vec![0.7];
+        let result = calculate_layout_full(
+            LayoutType::SplitHorizontal,
+            &[1, 2],
+            &frame,
+            0.5,
+            &gaps,
+            &ratios,
+            MasterPosition::Auto,
+        );
+
+        assert_eq!(result.len(), 2);
+        let (_, w1) = result[0];
+        let (_, w2) = result[1];
+
+        assert!((w1.width - frame.width * 0.7).abs() < 1.0);
+        assert!((w2.width - frame.width * 0.3).abs() < 1.0);
     }
 }

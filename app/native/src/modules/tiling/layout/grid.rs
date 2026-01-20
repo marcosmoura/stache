@@ -28,8 +28,10 @@
 use smallvec::{SmallVec, smallvec};
 
 use super::{Gaps, LAYOUT_INLINE_CAP, LayoutResult};
-use crate::tiling::constants::layout::MAX_GRID_WINDOWS;
-use crate::tiling::state::Rect;
+use crate::modules::tiling::state::Rect;
+
+/// Maximum number of windows supported in grid layout.
+pub const MAX_GRID_WINDOWS: usize = 12;
 
 /// Grid layout - windows arranged in rows and columns.
 ///
@@ -41,9 +43,19 @@ use crate::tiling::state::Rect;
 /// * `window_ids` - IDs of windows to arrange (max 12, extras ignored)
 /// * `screen_frame` - The visible frame of the screen (after outer gaps applied)
 /// * `gaps` - Gap values for inner spacing
+/// * `ratios` - Split ratios for resizing. Interpretation depends on layout:
+///   - 2 windows: first ratio controls primary split (default 0.5)
+///   - Master-stack (3,5,7): first ratio controls master width (default varies by layout)
+///   - Regular grids: first `cols-1` ratios for column widths, next `rows-1` for row heights
+///   - Master-3x4 (10,11): first ratio controls master column width
 #[allow(clippy::cast_precision_loss)]
 #[must_use]
-pub fn layout(window_ids: &[u32], screen_frame: &Rect, gaps: &Gaps) -> LayoutResult {
+pub fn layout(
+    window_ids: &[u32],
+    screen_frame: &Rect,
+    gaps: &Gaps,
+    ratios: &[f64],
+) -> LayoutResult {
     if window_ids.is_empty() {
         return SmallVec::new();
     }
@@ -60,16 +72,16 @@ pub fn layout(window_ids: &[u32], screen_frame: &Rect, gaps: &Gaps) -> LayoutRes
 
     match count {
         1 => layout_single(window_ids, screen_frame),
-        2 => layout_two(window_ids, screen_frame, gaps, is_landscape),
-        3 | 5 => layout_master_stack(window_ids, screen_frame, gaps, 2, is_landscape),
-        4 => layout_grid(window_ids, screen_frame, gaps, 2, 2),
-        6 => layout_grid(window_ids, screen_frame, gaps, 2, 3),
-        7 => layout_master_stack(window_ids, screen_frame, gaps, 3, is_landscape),
-        8 => layout_grid(window_ids, screen_frame, gaps, 2, 4),
-        9 => layout_grid(window_ids, screen_frame, gaps, 3, 3),
-        10 => layout_master_3x4(window_ids, screen_frame, gaps, 3, is_landscape),
-        11 => layout_master_3x4(window_ids, screen_frame, gaps, 2, is_landscape),
-        _ => layout_grid(window_ids, screen_frame, gaps, 3, 4), // 12 or more (fallback)
+        2 => layout_two(window_ids, screen_frame, gaps, is_landscape, ratios),
+        3 | 5 => layout_master_stack(window_ids, screen_frame, gaps, 2, is_landscape, ratios),
+        4 => layout_grid_with_ratios(window_ids, screen_frame, gaps, 2, 2, ratios),
+        6 => layout_grid_with_ratios(window_ids, screen_frame, gaps, 2, 3, ratios),
+        7 => layout_master_stack(window_ids, screen_frame, gaps, 3, is_landscape, ratios),
+        8 => layout_grid_with_ratios(window_ids, screen_frame, gaps, 2, 4, ratios),
+        9 => layout_grid_with_ratios(window_ids, screen_frame, gaps, 3, 3, ratios),
+        10 => layout_master_3x4(window_ids, screen_frame, gaps, 3, is_landscape, ratios),
+        11 => layout_master_3x4(window_ids, screen_frame, gaps, 2, is_landscape, ratios),
+        _ => layout_grid_with_ratios(window_ids, screen_frame, gaps, 3, 4, ratios),
     }
 }
 
@@ -84,22 +96,28 @@ fn layout_two(
     screen_frame: &Rect,
     gaps: &Gaps,
     is_landscape: bool,
+    ratios: &[f64],
 ) -> LayoutResult {
+    // First ratio controls the split (default 0.5)
+    let ratio = ratios.first().copied().unwrap_or(0.5).clamp(0.05, 0.95);
+
     if is_landscape {
         // Side by side
         let gap = gaps.inner_h;
-        let width = (screen_frame.width - gap) / 2.0;
+        let available_width = screen_frame.width - gap;
+        let width1 = available_width * ratio;
+        let width2 = available_width * (1.0 - ratio);
         smallvec![
             (
                 window_ids[0],
-                Rect::new(screen_frame.x, screen_frame.y, width, screen_frame.height),
+                Rect::new(screen_frame.x, screen_frame.y, width1, screen_frame.height),
             ),
             (
                 window_ids[1],
                 Rect::new(
-                    screen_frame.x + width + gap,
+                    screen_frame.x + width1 + gap,
                     screen_frame.y,
-                    width,
+                    width2,
                     screen_frame.height,
                 ),
             ),
@@ -107,30 +125,57 @@ fn layout_two(
     } else {
         // Stacked vertically
         let gap = gaps.inner_v;
-        let height = (screen_frame.height - gap) / 2.0;
+        let available_height = screen_frame.height - gap;
+        let height1 = available_height * ratio;
+        let height2 = available_height * (1.0 - ratio);
         smallvec![
             (
                 window_ids[0],
-                Rect::new(screen_frame.x, screen_frame.y, screen_frame.width, height),
+                Rect::new(screen_frame.x, screen_frame.y, screen_frame.width, height1),
             ),
             (
                 window_ids[1],
                 Rect::new(
                     screen_frame.x,
-                    screen_frame.y + height + gap,
+                    screen_frame.y + height1 + gap,
                     screen_frame.width,
-                    height,
+                    height2,
                 ),
             ),
         ]
     }
 }
 
-/// Layout for a regular grid where all windows have equal size.
+/// Layout for a regular grid with ratio support.
 ///
 /// Used for: 4 (2×2), 6 (2×3), 8 (2×4), 9 (3×3), 12 (3×4)
+///
+/// Ratios interpretation:
+/// - First `cols-1` ratios: cumulative column positions (0.0-1.0)
+/// - Next `rows-1` ratios: cumulative row positions (0.0-1.0)
 #[allow(clippy::cast_precision_loss)]
-fn layout_grid(
+fn layout_grid_with_ratios(
+    window_ids: &[u32],
+    screen_frame: &Rect,
+    gaps: &Gaps,
+    rows: usize,
+    cols: usize,
+    ratios: &[f64],
+) -> LayoutResult {
+    // Fast-path: when no custom ratios, use simple equal-size grid (no allocations)
+    if ratios.is_empty() {
+        return layout_grid_equal(window_ids, screen_frame, gaps, rows, cols);
+    }
+
+    // Slow path: custom ratios require position calculations
+    layout_grid_with_custom_ratios(window_ids, screen_frame, gaps, rows, cols, ratios)
+}
+
+/// Fast-path grid layout with equal-sized cells (no allocations).
+///
+/// This matches the V1 grid implementation for performance.
+#[allow(clippy::cast_precision_loss)]
+fn layout_grid_equal(
     window_ids: &[u32],
     screen_frame: &Rect,
     gaps: &Gaps,
@@ -139,7 +184,7 @@ fn layout_grid(
 ) -> LayoutResult {
     let count = window_ids.len();
 
-    // Calculate cell dimensions
+    // Calculate cell dimensions using simple division
     let h_gaps_total = gaps.inner_h * (cols - 1) as f64;
     let v_gaps_total = gaps.inner_v * (rows - 1) as f64;
     let cell_width = (screen_frame.width - h_gaps_total) / cols as f64;
@@ -165,39 +210,104 @@ fn layout_grid(
     result
 }
 
+/// Grid layout with custom ratios (requires position vector allocations).
+#[allow(clippy::cast_precision_loss)]
+fn layout_grid_with_custom_ratios(
+    window_ids: &[u32],
+    screen_frame: &Rect,
+    gaps: &Gaps,
+    rows: usize,
+    cols: usize,
+    ratios: &[f64],
+) -> LayoutResult {
+    let count = window_ids.len();
+
+    // Calculate total gaps
+    let h_gaps_total = gaps.inner_h * (cols - 1) as f64;
+    let v_gaps_total = gaps.inner_v * (rows - 1) as f64;
+    let available_width = screen_frame.width - h_gaps_total;
+    let available_height = screen_frame.height - v_gaps_total;
+
+    // Parse ratios: first cols-1 for columns, next rows-1 for rows
+    let col_ratio_count = cols.saturating_sub(1);
+    let row_ratio_count = rows.saturating_sub(1);
+
+    // Build column positions (cumulative)
+    let col_positions: Vec<f64> = (0..cols)
+        .map(|c| {
+            if c == 0 {
+                0.0
+            } else if c <= ratios.len() && c <= col_ratio_count {
+                ratios[c - 1].clamp(0.05, 0.95)
+            } else {
+                // Default: equal distribution
+                c as f64 / cols as f64
+            }
+        })
+        .collect();
+
+    // Build row positions (cumulative)
+    let row_positions: Vec<f64> = (0..rows)
+        .map(|r| {
+            if r == 0 {
+                0.0
+            } else {
+                let ratio_idx = col_ratio_count + r - 1;
+                if ratio_idx < ratios.len() && r <= row_ratio_count {
+                    ratios[ratio_idx].clamp(0.05, 0.95)
+                } else {
+                    // Default: equal distribution
+                    r as f64 / rows as f64
+                }
+            }
+        })
+        .collect();
+
+    let mut result: LayoutResult = SmallVec::with_capacity(count.min(LAYOUT_INLINE_CAP));
+    let mut idx = 0;
+
+    for row in 0..rows {
+        let row_start = row_positions[row];
+        let row_end = if row + 1 < rows {
+            row_positions[row + 1]
+        } else {
+            1.0
+        };
+        let cell_height = (row_end - row_start) * available_height;
+        let y = screen_frame.y + row_start * available_height + (row as f64) * gaps.inner_v;
+
+        for col in 0..cols {
+            if idx >= count {
+                break;
+            }
+
+            let col_start = col_positions[col];
+            let col_end = if col + 1 < cols {
+                col_positions[col + 1]
+            } else {
+                1.0
+            };
+            let cell_width = (col_end - col_start) * available_width;
+            let x = screen_frame.x + col_start * available_width + (col as f64) * gaps.inner_h;
+
+            result.push((window_ids[idx], Rect::new(x, y, cell_width, cell_height)));
+            idx += 1;
+        }
+    }
+
+    result
+}
+
 /// Master-stack layout: W1 takes left column, remaining windows fill the rest.
 ///
 /// Used for: 3, 5, 7 windows
 ///
-/// All columns have equal width. W1 spans all rows in the first column.
+/// First ratio controls master width ratio (default: 1/total_cols for equal columns).
 ///
 /// For landscape:
 /// - 3 windows: 2×2 grid, W1 spans left column
-///   ```text
-///   +----+----+
-///   |    | W2 |
-///   | W1 +----+
-///   |    | W3 |
-///   +----+----+
-///   ```
 /// - 5 windows: 2×3 grid, W1 spans left column
-///   ```text
-///   +----+----+----+
-///   |    | W2 | W3 |
-///   | W1 +----+----+
-///   |    | W4 | W5 |
-///   +----+----+----+
-///   ```
 /// - 7 windows: 3×3 grid, W1 spans left column
-///   ```text
-///   +----+----+----+
-///   |    | W2 | W3 |
-///   | W1 +----+----+
-///   |    | W4 | W5 |
-///   +----+----+----+
-///   |    | W6 | W7 |
-///   +----+----+----+
-///   ```
 #[allow(clippy::cast_precision_loss, clippy::cast_lossless)]
 fn layout_master_stack(
     window_ids: &[u32],
@@ -205,6 +315,7 @@ fn layout_master_stack(
     gaps: &Gaps,
     rows: usize,
     is_landscape: bool,
+    ratios: &[f64],
 ) -> LayoutResult {
     let count = window_ids.len();
     let stack_count = count - 1;
@@ -214,17 +325,28 @@ fn layout_master_stack(
     let mut result: LayoutResult = SmallVec::with_capacity(count.min(LAYOUT_INLINE_CAP));
 
     if is_landscape {
-        // Calculate cell dimensions with equal column widths
+        // First ratio controls master width (default: equal column width)
+        let default_master_ratio = 1.0 / total_cols as f64;
+        let master_ratio = ratios.first().copied().unwrap_or(default_master_ratio).clamp(0.1, 0.9);
+
         let h_gaps_total = gaps.inner_h * (total_cols - 1) as f64;
         let v_gaps_total = gaps.inner_v * (rows - 1) as f64;
-        let cell_width = (screen_frame.width - h_gaps_total) / total_cols as f64;
-        let cell_height = (screen_frame.height - v_gaps_total) / rows as f64;
+        let available_width = screen_frame.width - h_gaps_total;
+        let available_height = screen_frame.height - v_gaps_total;
+
+        let master_width = available_width * master_ratio;
+        let stack_width_per_col = if stack_cols > 0 {
+            (available_width * (1.0 - master_ratio)) / stack_cols as f64
+        } else {
+            0.0
+        };
+        let cell_height = available_height / rows as f64;
 
         // W1: first column, spans all rows
         let master_height = cell_height * rows as f64 + gaps.inner_v * (rows - 1) as f64;
         result.push((
             window_ids[0],
-            Rect::new(screen_frame.x, screen_frame.y, cell_width, master_height),
+            Rect::new(screen_frame.x, screen_frame.y, master_width, master_height),
         ));
 
         // Remaining windows fill the grid (columns 1+)
@@ -232,12 +354,18 @@ fn layout_master_stack(
         for row in 0..rows {
             let y = (row as f64).mul_add(cell_height + gaps.inner_v, screen_frame.y);
 
-            for col in 1..total_cols {
+            for col in 0..stack_cols {
                 if idx >= count {
                     break;
                 }
-                let x = (col as f64).mul_add(cell_width + gaps.inner_h, screen_frame.x);
-                result.push((window_ids[idx], Rect::new(x, y, cell_width, cell_height)));
+                let x = screen_frame.x
+                    + master_width
+                    + gaps.inner_h
+                    + (col as f64) * (stack_width_per_col + gaps.inner_h);
+                result.push((
+                    window_ids[idx],
+                    Rect::new(x, y, stack_width_per_col, cell_height),
+                ));
                 idx += 1;
             }
         }
@@ -246,29 +374,47 @@ fn layout_master_stack(
         let total_rows = 1 + rows; // W1 row + stack rows
         let stack_rows_count = rows;
 
+        // First ratio controls master height (default: equal row height)
+        let default_master_ratio = 1.0 / total_rows as f64;
+        let master_ratio = ratios.first().copied().unwrap_or(default_master_ratio).clamp(0.1, 0.9);
+
         let h_gaps_total = gaps.inner_h * (stack_cols - 1) as f64;
         let v_gaps_total = gaps.inner_v * (total_rows - 1) as f64;
-        let cell_width = (screen_frame.width - h_gaps_total) / stack_cols as f64;
-        let cell_height = (screen_frame.height - v_gaps_total) / total_rows as f64;
+        let available_width = screen_frame.width - h_gaps_total;
+        let available_height = screen_frame.height - v_gaps_total;
+
+        let master_height = available_height * master_ratio;
+        let stack_height_per_row = if stack_rows_count > 0 {
+            (available_height * (1.0 - master_ratio)) / stack_rows_count as f64
+        } else {
+            0.0
+        };
+        let cell_width = available_width / stack_cols as f64;
 
         // W1: first row, spans all columns
         let master_width = cell_width * stack_cols as f64 + gaps.inner_h * (stack_cols - 1) as f64;
         result.push((
             window_ids[0],
-            Rect::new(screen_frame.x, screen_frame.y, master_width, cell_height),
+            Rect::new(screen_frame.x, screen_frame.y, master_width, master_height),
         ));
 
         // Remaining windows fill the grid (rows 1+)
         let mut idx = 1;
-        for row in 1..=stack_rows_count {
-            let y = (row as f64).mul_add(cell_height + gaps.inner_v, screen_frame.y);
+        for row in 0..stack_rows_count {
+            let y = screen_frame.y
+                + master_height
+                + gaps.inner_v
+                + (row as f64) * (stack_height_per_row + gaps.inner_v);
 
             for col in 0..stack_cols {
                 if idx >= count {
                     break;
                 }
                 let x = (col as f64).mul_add(cell_width + gaps.inner_h, screen_frame.x);
-                result.push((window_ids[idx], Rect::new(x, y, cell_width, cell_height)));
+                result.push((
+                    window_ids[idx],
+                    Rect::new(x, y, cell_width, stack_height_per_row),
+                ));
                 idx += 1;
             }
         }
@@ -281,27 +427,10 @@ fn layout_master_stack(
 ///
 /// Used for: 10, 11 windows
 ///
-/// For 10 windows: W1 spans 3 cells (entire left column)
-/// ```text
-/// +----+----+----+----+
-/// |    | W2 | W3 | W4 |
-/// | W1 +----+----+----+
-/// |    | W5 | W6 | W7 |
-/// +----+----+----+----+
-/// |    | W8 | W9 |W10 |
-/// +----+----+----+----+
-/// ```
+/// First ratio controls master column width (default: 1/cols for equal columns).
 ///
+/// For 10 windows: W1 spans 3 cells (entire left column)
 /// For 11 windows: W1 spans 2 cells (top 2 rows of left column)
-/// ```text
-/// +----+----+----+----+
-/// |    | W2 | W3 | W4 |
-/// | W1 +----+----+----+
-/// |    | W5 | W6 | W7 |
-/// +----+----+----+----+
-/// | W8 | W9 |W10 |W11 |
-/// +----+----+----+----+
-/// ```
 #[allow(clippy::cast_precision_loss, clippy::cast_lossless)]
 fn layout_master_3x4(
     window_ids: &[u32],
@@ -309,15 +438,29 @@ fn layout_master_3x4(
     gaps: &Gaps,
     master_span: usize, // How many rows W1 spans (2 or 3)
     is_landscape: bool,
+    ratios: &[f64],
 ) -> LayoutResult {
     let count = window_ids.len();
     let (rows, cols) = if is_landscape { (3, 4) } else { (4, 3) };
 
-    // Calculate cell dimensions
+    // First ratio controls master column width
+    let default_master_ratio = 1.0 / cols as f64;
+    let master_ratio = ratios.first().copied().unwrap_or(default_master_ratio).clamp(0.1, 0.9);
+
+    // Calculate dimensions
     let h_gaps_total = gaps.inner_h * (cols - 1) as f64;
     let v_gaps_total = gaps.inner_v * (rows - 1) as f64;
-    let cell_width = (screen_frame.width - h_gaps_total) / cols as f64;
-    let cell_height = (screen_frame.height - v_gaps_total) / rows as f64;
+    let available_width = screen_frame.width - h_gaps_total;
+    let available_height = screen_frame.height - v_gaps_total;
+
+    let master_width = available_width * master_ratio;
+    let stack_cols = cols - 1;
+    let stack_width_per_col = if stack_cols > 0 {
+        (available_width * (1.0 - master_ratio)) / stack_cols as f64
+    } else {
+        0.0
+    };
+    let cell_height = available_height / rows as f64;
 
     let mut result: LayoutResult = SmallVec::with_capacity(count.min(LAYOUT_INLINE_CAP));
 
@@ -325,7 +468,7 @@ fn layout_master_3x4(
     let master_height = cell_height * master_span as f64 + gaps.inner_v * (master_span - 1) as f64;
     result.push((
         window_ids[0],
-        Rect::new(screen_frame.x, screen_frame.y, cell_width, master_height),
+        Rect::new(screen_frame.x, screen_frame.y, master_width, master_height),
     ));
 
     // Remaining windows fill the grid
@@ -341,14 +484,31 @@ fn layout_master_3x4(
             if idx >= count {
                 break;
             }
-            let x = (col as f64).mul_add(cell_width + gaps.inner_h, screen_frame.x);
-            result.push((window_ids[idx], Rect::new(x, y, cell_width, cell_height)));
+
+            let (x, width) = if col == 0 {
+                // First column (only for rows after master)
+                (screen_frame.x, master_width)
+            } else {
+                // Stack columns
+                let stack_col = col - 1;
+                let x = screen_frame.x
+                    + master_width
+                    + gaps.inner_h
+                    + (stack_col as f64) * (stack_width_per_col + gaps.inner_h);
+                (x, stack_width_per_col)
+            };
+
+            result.push((window_ids[idx], Rect::new(x, y, width, cell_height)));
             idx += 1;
         }
     }
 
     result
 }
+
+// ============================================================================
+// Tests
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -366,14 +526,14 @@ mod tests {
 
     #[test]
     fn test_layout_empty() {
-        let result = layout(&[], &screen_frame(), &no_gaps());
+        let result = layout(&[], &screen_frame(), &no_gaps(), &[]);
         assert!(result.is_empty());
     }
 
     #[test]
     fn test_layout_single_window() {
         let frame = screen_frame();
-        let result = layout(&[1], &frame, &no_gaps());
+        let result = layout(&[1], &frame, &no_gaps(), &[]);
 
         assert_eq!(result.len(), 1);
         let (id, window_frame) = result[0];
@@ -384,7 +544,7 @@ mod tests {
     #[test]
     fn test_layout_two_windows_landscape() {
         let frame = screen_frame();
-        let result = layout(&[1, 2], &frame, &no_gaps());
+        let result = layout(&[1, 2], &frame, &no_gaps(), &[]);
 
         assert_eq!(result.len(), 2);
 
@@ -403,7 +563,7 @@ mod tests {
     #[test]
     fn test_layout_two_windows_portrait() {
         let frame = portrait_frame();
-        let result = layout(&[1, 2], &frame, &no_gaps());
+        let result = layout(&[1, 2], &frame, &no_gaps(), &[]);
 
         assert_eq!(result.len(), 2);
 
@@ -425,7 +585,7 @@ mod tests {
     fn test_layout_three_windows_landscape() {
         // W1 left half, W2-W3 stacked on right
         let frame = screen_frame();
-        let result = layout(&[1, 2, 3], &frame, &no_gaps());
+        let result = layout(&[1, 2, 3], &frame, &no_gaps(), &[]);
 
         assert_eq!(result.len(), 3);
 
@@ -454,14 +614,8 @@ mod tests {
 
     #[test]
     fn test_layout_five_windows_landscape() {
-        // 5 windows: 2 rows × 3 columns grid, W1 spans left column
-        // +----+----+----+
-        // |    | W2 | W3 |
-        // | W1 +----+----+
-        // |    | W4 | W5 |
-        // +----+----+----+
         let frame = screen_frame();
-        let result = layout(&[1, 2, 3, 4, 5], &frame, &no_gaps());
+        let result = layout(&[1, 2, 3, 4, 5], &frame, &no_gaps(), &[]);
 
         assert_eq!(result.len(), 5);
 
@@ -487,16 +641,8 @@ mod tests {
 
     #[test]
     fn test_layout_seven_windows_landscape() {
-        // 7 windows: 3 rows × 3 columns grid, W1 spans left column
-        // +----+----+----+
-        // |    | W2 | W3 |
-        // | W1 +----+----+
-        // |    | W4 | W5 |
-        // +----+----+----+
-        // |    | W6 | W7 |
-        // +----+----+----+
         let frame = screen_frame();
-        let result = layout(&[1, 2, 3, 4, 5, 6, 7], &frame, &no_gaps());
+        let result = layout(&[1, 2, 3, 4, 5, 6, 7], &frame, &no_gaps(), &[]);
 
         assert_eq!(result.len(), 7);
 
@@ -527,7 +673,7 @@ mod tests {
     fn test_layout_four_windows_landscape() {
         // 2×2 grid
         let frame = screen_frame();
-        let result = layout(&[1, 2, 3, 4], &frame, &no_gaps());
+        let result = layout(&[1, 2, 3, 4], &frame, &no_gaps(), &[]);
 
         assert_eq!(result.len(), 4);
 
@@ -551,7 +697,7 @@ mod tests {
     fn test_layout_six_windows_landscape() {
         // 2×3 grid
         let frame = screen_frame();
-        let result = layout(&[1, 2, 3, 4, 5, 6], &frame, &no_gaps());
+        let result = layout(&[1, 2, 3, 4, 5, 6], &frame, &no_gaps(), &[]);
 
         assert_eq!(result.len(), 6);
 
@@ -572,7 +718,7 @@ mod tests {
     fn test_layout_eight_windows_landscape() {
         // 2×4 grid
         let frame = screen_frame();
-        let result = layout(&[1, 2, 3, 4, 5, 6, 7, 8], &frame, &no_gaps());
+        let result = layout(&[1, 2, 3, 4, 5, 6, 7, 8], &frame, &no_gaps(), &[]);
 
         assert_eq!(result.len(), 8);
 
@@ -589,7 +735,7 @@ mod tests {
         // 3×3 grid
         let frame = screen_frame();
         let ids: Vec<u32> = (1..=9).collect();
-        let result = layout(&ids, &frame, &no_gaps());
+        let result = layout(&ids, &frame, &no_gaps(), &[]);
 
         assert_eq!(result.len(), 9);
 
@@ -606,7 +752,7 @@ mod tests {
         // 3×4 grid
         let frame = screen_frame();
         let ids: Vec<u32> = (1..=12).collect();
-        let result = layout(&ids, &frame, &no_gaps());
+        let result = layout(&ids, &frame, &no_gaps(), &[]);
 
         assert_eq!(result.len(), 12);
 
@@ -627,7 +773,7 @@ mod tests {
         // 3×4 grid with W1 spanning left column (3 cells)
         let frame = screen_frame();
         let ids: Vec<u32> = (1..=10).collect();
-        let result = layout(&ids, &frame, &no_gaps());
+        let result = layout(&ids, &frame, &no_gaps(), &[]);
 
         assert_eq!(result.len(), 10);
 
@@ -653,7 +799,7 @@ mod tests {
         // 3×4 grid with W1 spanning 2 cells in left column
         let frame = screen_frame();
         let ids: Vec<u32> = (1..=11).collect();
-        let result = layout(&ids, &frame, &no_gaps());
+        let result = layout(&ids, &frame, &no_gaps(), &[]);
 
         assert_eq!(result.len(), 11);
 
@@ -683,7 +829,7 @@ mod tests {
         // More than 12 windows should be truncated
         let frame = screen_frame();
         let ids: Vec<u32> = (1..=20).collect();
-        let result = layout(&ids, &frame, &no_gaps());
+        let result = layout(&ids, &frame, &no_gaps(), &[]);
 
         assert_eq!(result.len(), MAX_GRID_WINDOWS);
     }
@@ -692,7 +838,7 @@ mod tests {
     fn test_layout_with_gaps() {
         let frame = screen_frame();
         let gaps = Gaps::uniform(16.0, 0.0);
-        let result = layout(&[1, 2], &frame, &gaps);
+        let result = layout(&[1, 2], &frame, &gaps, &[]);
 
         let (_, w1) = result[0];
         let (_, w2) = result[1];
@@ -706,7 +852,7 @@ mod tests {
     fn test_layout_four_windows_with_gaps() {
         let frame = screen_frame();
         let gaps = Gaps::uniform(16.0, 0.0);
-        let result = layout(&[1, 2, 3, 4], &frame, &gaps);
+        let result = layout(&[1, 2, 3, 4], &frame, &gaps, &[]);
 
         let (_, w1) = result[0];
         let (_, w2) = result[1];
@@ -743,7 +889,7 @@ mod tests {
         // Test all window counts from 1 to 12
         for count in 1..=12 {
             let ids: Vec<u32> = (1..=count).collect();
-            let result = layout(&ids, &frame, &gaps);
+            let result = layout(&ids, &frame, &gaps, &[]);
 
             assert_eq!(result.len(), count as usize, "Wrong count for {count} windows");
 
@@ -767,17 +913,8 @@ mod tests {
 
     #[test]
     fn test_layout_three_windows_portrait() {
-        // Portrait 3 windows: W1 at top, W2-W3 below
-        // All rows have equal height (3 total rows)
-        // +--------+
-        // |   W1   |
-        // +--------+
-        // |   W2   |
-        // +--------+
-        // |   W3   |
-        // +--------+
         let frame = portrait_frame();
-        let result = layout(&[1, 2, 3], &frame, &no_gaps());
+        let result = layout(&[1, 2, 3], &frame, &no_gaps(), &[]);
 
         assert_eq!(result.len(), 3);
 
@@ -789,5 +926,34 @@ mod tests {
         assert_eq!(w1.y, frame.y);
         assert_eq!(w1.width, frame.width);
         assert!((w1.height - row_height).abs() < 1.0);
+    }
+
+    // ========================================================================
+    // Custom Ratio Tests
+    // ========================================================================
+
+    #[test]
+    fn test_layout_two_windows_with_custom_ratio() {
+        let frame = screen_frame();
+        // 70% for first window, 30% for second
+        let result = layout(&[1, 2], &frame, &no_gaps(), &[0.7]);
+
+        let (_, w1) = result[0];
+        let (_, w2) = result[1];
+
+        assert!((w1.width - frame.width * 0.7).abs() < 1.0);
+        assert!((w2.width - frame.width * 0.3).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_layout_three_windows_with_custom_master_ratio() {
+        let frame = screen_frame();
+        // 60% for master window
+        let result = layout(&[1, 2, 3], &frame, &no_gaps(), &[0.6]);
+
+        let (_, w1) = result[0];
+
+        // W1 should be 60% width
+        assert!((w1.width - frame.width * 0.6).abs() < 1.0);
     }
 }

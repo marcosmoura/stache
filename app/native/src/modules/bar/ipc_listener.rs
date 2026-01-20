@@ -6,7 +6,7 @@
 use tauri::{AppHandle, Emitter, Runtime};
 
 use crate::events;
-use crate::tiling::{begin_animation, cancel_animation};
+use crate::modules::tiling;
 use crate::utils::ipc::{self, StacheNotification};
 
 /// Initializes the IPC listener for CLI notifications.
@@ -67,79 +67,69 @@ fn handle_notification<R: Runtime>(app_handle: &AppHandle<R>, notification: Stac
         StacheNotification::TilingFocusWorkspace(workspace) => {
             let app_handle = app_handle.clone();
             std::thread::spawn(move || {
-                if let Some(manager) = crate::tiling::get_manager() {
-                    cancel_animation();
-                    let mut mgr = manager.write();
-                    begin_animation();
-                    if let Some(info) = mgr.switch_workspace(&workspace) {
-                        eprintln!("stache: tiling: switched to workspace: {}", info.workspace);
-                        let workspace_name = info.workspace.clone();
-                        drop(mgr); // Release lock before emitting
+                if !tiling::init::is_initialized() {
+                    log::warn!("tiling: manager not initialized");
+                    return;
+                }
+
+                if let Some(handle) = tiling::init::get_handle() {
+                    if let Err(e) = handle.switch_workspace(&workspace) {
+                        log::warn!("tiling: failed to switch workspace: {e}");
+                    } else {
+                        log::debug!("tiling: switched to workspace: {workspace}");
 
                         // Emit WORKSPACE_CHANGED event
                         if let Err(e) = app_handle.emit(
                             events::tiling::WORKSPACE_CHANGED,
                             serde_json::json!({
-                                "workspace": info.workspace,
-                                "screen": info.screen,
-                                "previousWorkspace": info.previous_workspace,
+                                "workspace": workspace,
                             }),
                         ) {
-                            eprintln!("stache: tiling: failed to emit workspace-changed: {e}");
+                            log::warn!("tiling: failed to emit workspace-changed: {e}");
                         }
-
-                        // Emit WINDOW_FOCUS_CHANGED event (UI will refetch focused window)
-                        let _ = app_handle.emit(
-                            events::tiling::WINDOW_FOCUS_CHANGED,
-                            serde_json::json!({ "workspace": workspace_name }),
-                        );
-                    } else {
-                        eprintln!("stache: tiling: workspace not found: {workspace}");
                     }
                 } else {
-                    eprintln!("stache: tiling: manager not initialized");
+                    log::warn!("tiling: handle not available");
                 }
             });
         }
 
         StacheNotification::TilingSetLayout(layout) => {
             std::thread::spawn(move || {
-                if let Some(manager) = crate::tiling::get_manager() {
-                    // Parse the layout string into LayoutType
-                    let layout_type: Result<crate::config::LayoutType, _> =
-                        serde_json::from_value(serde_json::json!(layout));
+                if !tiling::init::is_initialized() {
+                    log::warn!("tiling: manager not initialized");
+                    return;
+                }
 
-                    match layout_type {
-                        Ok(layout_type) => {
-                            cancel_animation();
-                            let mut mgr = manager.write();
-                            begin_animation();
+                // Parse the layout string into LayoutType
+                let layout_type: Result<tiling::state::LayoutType, _> =
+                    serde_json::from_value(serde_json::json!(layout));
 
-                            // Get the focused workspace name
-                            let workspace_name =
-                                mgr.get_focused_workspace().map(|ws| ws.name.clone());
-
-                            if let Some(ws_name) = workspace_name {
-                                if mgr.set_workspace_layout(&ws_name, layout_type) {
-                                    drop(mgr);
-                                    eprintln!(
-                                        "stache: tiling: set layout to {layout_type:?} for workspace '{ws_name}'"
-                                    );
-                                } else {
-                                    eprintln!(
-                                        "stache: tiling: failed to set layout for workspace '{ws_name}'"
-                                    );
+                match layout_type {
+                    Ok(layout_type) => {
+                        if let Some(handle) = tiling::init::get_handle() {
+                            // Get focused workspace ID
+                            let rt = tokio::runtime::Builder::new_current_thread()
+                                .enable_all()
+                                .build()
+                                .unwrap();
+                            if let Ok(result) = rt.block_on(handle.get_focused_workspace()) {
+                                if let Some(Some(ws)) = result.into_workspace() {
+                                    if let Err(e) = handle.set_layout(ws.id, layout_type) {
+                                        log::warn!("tiling: failed to set layout: {e}");
+                                    } else {
+                                        log::debug!(
+                                            "tiling: set layout to {layout_type:?} for workspace '{}'",
+                                            ws.name
+                                        );
+                                    }
                                 }
-                            } else {
-                                eprintln!("stache: tiling: no focused workspace to set layout");
                             }
                         }
-                        Err(e) => {
-                            eprintln!("stache: tiling: invalid layout '{layout}': {e}");
-                        }
                     }
-                } else {
-                    eprintln!("stache: tiling: manager not initialized");
+                    Err(e) => {
+                        log::warn!("tiling: invalid layout '{layout}': {e}");
+                    }
                 }
             });
         }
@@ -147,164 +137,188 @@ fn handle_notification<R: Runtime>(app_handle: &AppHandle<R>, notification: Stac
         StacheNotification::TilingWindowFocus(target) => {
             let app_handle = app_handle.clone();
             std::thread::spawn(move || {
-                if let Some(manager) = crate::tiling::get_manager() {
-                    cancel_animation();
-                    let mut mgr = manager.write();
-                    begin_animation();
-                    if let Some(window_id) = mgr.focus_window_in_direction(&target) {
-                        eprintln!("stache: tiling: focused window {window_id}");
+                if !tiling::init::is_initialized() {
+                    log::warn!("tiling: manager not initialized");
+                    return;
+                }
 
-                        // Get workspace name for the event
-                        let workspace_name =
-                            mgr.state().focused_workspace.clone().unwrap_or_default();
+                if let Some(handle) = tiling::init::get_handle() {
+                    // Parse direction
+                    if let Some(direction) = tiling::actor::FocusDirection::from_str(&target) {
+                        if let Err(e) = handle.focus_window(direction) {
+                            log::warn!("tiling: failed to focus window: {e}");
+                        } else {
+                            log::debug!("tiling: focused window {target}");
 
-                        drop(mgr); // Release lock before emitting
-
-                        // Emit WINDOW_FOCUS_CHANGED event
-                        if let Err(e) = app_handle.emit(
-                            events::tiling::WINDOW_FOCUS_CHANGED,
-                            serde_json::json!({
-                                "windowId": window_id,
-                                "workspace": workspace_name,
-                            }),
-                        ) {
-                            eprintln!("stache: tiling: failed to emit window-focus-changed: {e}");
+                            // Emit WINDOW_FOCUS_CHANGED event
+                            let _ = app_handle.emit(
+                                events::tiling::WINDOW_FOCUS_CHANGED,
+                                serde_json::json!({ "direction": target }),
+                            );
                         }
+                    } else {
+                        log::warn!("tiling: invalid focus direction: {target}");
                     }
-                    // None means no focus change needed (e.g., already focused or no valid target)
-                } else {
-                    eprintln!("stache: tiling: manager not initialized");
                 }
             });
         }
 
         StacheNotification::TilingWindowSwap(direction) => {
-            // Spawn thread so cancel_animation() can be called while previous animation runs
             std::thread::spawn(move || {
-                if let Some(manager) = crate::tiling::get_manager() {
-                    cancel_animation();
-                    let mut mgr = manager.write();
-                    begin_animation();
-                    if mgr.swap_window_in_direction(&direction) {
-                        eprintln!("stache: tiling: swapped window {direction}");
+                if !tiling::init::is_initialized() {
+                    log::warn!("tiling: manager not initialized");
+                    return;
+                }
+
+                if let Some(handle) = tiling::init::get_handle() {
+                    // Parse direction
+                    if let Some(dir) = tiling::actor::FocusDirection::from_str(&direction) {
+                        if let Err(e) = handle.swap_window_in_direction(dir) {
+                            log::warn!("tiling: failed to swap window: {e}");
+                        } else {
+                            log::debug!("tiling: swapped window {direction}");
+                        }
                     } else {
-                        eprintln!("stache: tiling: failed to swap window: {direction}");
+                        log::warn!("tiling: invalid swap direction: {direction}");
                     }
-                } else {
-                    eprintln!("stache: tiling: manager not initialized");
                 }
             });
         }
 
         StacheNotification::TilingWindowResize { dimension, amount } => {
             std::thread::spawn(move || {
-                if let Some(manager) = crate::tiling::get_manager() {
-                    cancel_animation();
-                    let mut mgr = manager.write();
-                    begin_animation();
-                    if mgr.resize_focused_window(&dimension, amount) {
-                        eprintln!("stache: tiling: resized window {dimension} by {amount}px");
+                if !tiling::init::is_initialized() {
+                    log::warn!("tiling: manager not initialized");
+                    return;
+                }
+
+                if let Some(handle) = tiling::init::get_handle() {
+                    if let Err(e) = handle.resize_focused_window(&dimension, amount) {
+                        log::warn!("tiling: failed to resize window: {e}");
                     } else {
-                        eprintln!("stache: tiling: failed to resize window");
+                        log::debug!("tiling: resized window {dimension} by {amount}px");
                     }
-                } else {
-                    eprintln!("stache: tiling: manager not initialized");
                 }
             });
         }
 
         StacheNotification::TilingWindowPreset(preset) => {
             std::thread::spawn(move || {
-                if let Some(manager) = crate::tiling::get_manager() {
-                    cancel_animation();
-                    let mut mgr = manager.write();
-                    begin_animation();
-                    if mgr.apply_preset(&preset) {
-                        eprintln!("stache: tiling: applied preset '{preset}'");
+                if !tiling::init::is_initialized() {
+                    log::warn!("tiling: manager not initialized");
+                    return;
+                }
+
+                if let Some(handle) = tiling::init::get_handle() {
+                    if let Err(e) = handle.apply_preset(&preset) {
+                        log::warn!("tiling: failed to apply preset: {e}");
                     } else {
-                        eprintln!("stache: tiling: failed to apply preset: {preset}");
+                        log::debug!("tiling: applied preset '{preset}'");
                     }
-                } else {
-                    eprintln!("stache: tiling: manager not initialized");
                 }
             });
         }
 
         StacheNotification::TilingWindowSendToWorkspace(workspace) => {
             std::thread::spawn(move || {
-                if let Some(manager) = crate::tiling::get_manager() {
-                    cancel_animation();
-                    let mut mgr = manager.write();
-                    begin_animation();
-                    if mgr.send_window_to_workspace(&workspace) {
-                        eprintln!("stache: tiling: sent window to workspace {workspace}");
-                    } else {
-                        eprintln!(
-                            "stache: tiling: failed to send window to workspace: {workspace}"
-                        );
+                if !tiling::init::is_initialized() {
+                    log::warn!("tiling: manager not initialized");
+                    return;
+                }
+
+                if let Some(handle) = tiling::init::get_handle() {
+                    // Get the workspace ID by name, then get focused window ID
+                    let rt =
+                        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+
+                    // Get workspace by name
+                    let ws_result = rt.block_on(handle.get_workspace_by_name(&workspace));
+                    let workspace_id =
+                        ws_result.ok().and_then(|r| r.into_workspace()).flatten().map(|ws| ws.id);
+
+                    // Get focused window
+                    let win_result = rt.block_on(handle.get_focused_window());
+                    let window_id =
+                        win_result.ok().and_then(|r| r.into_window()).flatten().map(|w| w.id);
+
+                    match (window_id, workspace_id) {
+                        (Some(wid), Some(wsid)) => {
+                            if let Err(e) =
+                                handle.send(tiling::actor::StateMessage::MoveWindowToWorkspace {
+                                    window_id: wid,
+                                    workspace_id: wsid,
+                                })
+                            {
+                                log::warn!("tiling: failed to send window to workspace: {e}");
+                            } else {
+                                log::debug!("tiling: sent window {wid} to workspace '{workspace}'");
+                            }
+                        }
+                        (None, _) => {
+                            log::warn!("tiling: no focused window");
+                        }
+                        (_, None) => {
+                            log::warn!("tiling: workspace '{workspace}' not found");
+                        }
                     }
-                } else {
-                    eprintln!("stache: tiling: manager not initialized");
                 }
             });
         }
 
         StacheNotification::TilingWindowSendToScreen(screen) => {
             std::thread::spawn(move || {
-                if let Some(manager) = crate::tiling::get_manager() {
-                    cancel_animation();
-                    let mut mgr = manager.write();
-                    begin_animation();
-                    if mgr.send_window_to_screen(&screen) {
-                        eprintln!("stache: tiling: sent window to screen {screen}");
+                if !tiling::init::is_initialized() {
+                    log::warn!("tiling: manager not initialized");
+                    return;
+                }
+
+                if let Some(handle) = tiling::init::get_handle() {
+                    if let Err(e) = handle.send_window_to_screen(&screen) {
+                        log::warn!("tiling: failed to send window to screen: {e}");
                     } else {
-                        eprintln!("stache: tiling: failed to send window to screen: {screen}");
+                        log::debug!("tiling: sent window to screen {screen}");
                     }
-                } else {
-                    eprintln!("stache: tiling: manager not initialized");
                 }
             });
         }
 
         StacheNotification::TilingWorkspaceBalance => {
             std::thread::spawn(move || {
-                if let Some(manager) = crate::tiling::get_manager() {
-                    cancel_animation();
-                    let mut mgr = manager.write();
-                    begin_animation();
+                if !tiling::init::is_initialized() {
+                    log::warn!("tiling: manager not initialized");
+                    return;
+                }
 
-                    // Get the focused workspace name
-                    let workspace_name = mgr.get_focused_workspace().map(|ws| ws.name.clone());
-
-                    if let Some(ws_name) = workspace_name {
-                        // Balance the workspace (clears ratios and re-applies layout)
-                        let repositioned = mgr.balance_workspace(&ws_name);
-                        drop(mgr);
-                        eprintln!(
-                            "stache: tiling: balanced {repositioned} windows in workspace '{ws_name}'"
-                        );
-                    } else {
-                        eprintln!("stache: tiling: no focused workspace to balance");
+                if let Some(handle) = tiling::init::get_handle() {
+                    // Get focused workspace ID
+                    let rt =
+                        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+                    if let Ok(result) = rt.block_on(handle.get_focused_workspace()) {
+                        if let Some(Some(ws)) = result.into_workspace() {
+                            if let Err(e) = handle.balance_workspace(ws.id) {
+                                log::warn!("tiling: failed to balance workspace: {e}");
+                            } else {
+                                log::debug!("tiling: balanced workspace '{}'", ws.name);
+                            }
+                        }
                     }
-                } else {
-                    eprintln!("stache: tiling: manager not initialized");
                 }
             });
         }
 
         StacheNotification::TilingWorkspaceSendToScreen(screen) => {
             std::thread::spawn(move || {
-                if let Some(manager) = crate::tiling::get_manager() {
-                    cancel_animation();
-                    let mut mgr = manager.write();
-                    begin_animation();
-                    if mgr.send_workspace_to_screen(&screen) {
-                        eprintln!("stache: tiling: sent workspace to screen: {screen}");
+                if !tiling::init::is_initialized() {
+                    log::warn!("tiling: manager not initialized");
+                    return;
+                }
+
+                if let Some(handle) = tiling::init::get_handle() {
+                    if let Err(e) = handle.send_workspace_to_screen(&screen) {
+                        log::warn!("tiling: failed to send workspace to screen: {e}");
                     } else {
-                        eprintln!("stache: tiling: failed to send workspace to screen: {screen}");
+                        log::debug!("tiling: sent workspace to screen {screen}");
                     }
-                } else {
-                    eprintln!("stache: tiling: manager not initialized");
                 }
             });
         }

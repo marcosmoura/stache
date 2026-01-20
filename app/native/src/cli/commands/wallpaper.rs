@@ -79,8 +79,8 @@ fn init_wallpaper_manager() -> Result<(), StacheError> {
     // Initialize configuration (required for wallpaper settings)
     config::init();
 
-    // Initialize wallpaper manager
-    wallpaper::init();
+    // Setup wallpaper manager (creates the manager instance)
+    wallpaper::setup();
 
     // Check if wallpaper manager was initialized successfully
     if wallpaper::get_manager().is_none() {

@@ -122,15 +122,22 @@ fn flush_token(token: &mut String, is_value: bool) {
     token.clear();
 }
 
-/// Truncates a string to a maximum length, adding ellipsis if needed.
+/// Truncates a string to a maximum number of characters, adding ellipsis if needed.
+///
+/// This function correctly handles multi-byte UTF-8 characters by counting
+/// characters rather than bytes.
 #[must_use]
-pub fn truncate(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
+pub fn truncate(s: &str, max_chars: usize) -> String {
+    let char_count = s.chars().count();
+
+    if char_count <= max_chars {
         s.to_string()
-    } else if max_len <= 1 {
+    } else if max_chars <= 1 {
         "…".to_string()
     } else {
-        format!("{}…", &s[..max_len - 1])
+        // Find the byte index of the (max_chars - 1)th character
+        let truncate_at = s.char_indices().nth(max_chars - 1).map_or(s.len(), |(idx, _)| idx);
+        format!("{}…", &s[..truncate_at])
     }
 }
 
@@ -166,6 +173,23 @@ mod tests {
     #[test]
     fn test_truncate_min_length() {
         assert_eq!(truncate("hello", 1), "…");
+    }
+
+    #[test]
+    fn test_truncate_multibyte_utf8() {
+        // Test with em-dash (3 bytes in UTF-8)
+        let s = "file.md — stache";
+        // Should truncate at character boundary, not byte boundary
+        assert_eq!(truncate(s, 10), "file.md —…");
+        // Full string should not be truncated
+        assert_eq!(truncate(s, 20), s);
+    }
+
+    #[test]
+    fn test_truncate_emoji() {
+        // Test with emoji (4 bytes in UTF-8)
+        let s = "hello 🌍 world";
+        assert_eq!(truncate(s, 8), "hello 🌍…");
     }
 
     #[test]

@@ -150,7 +150,7 @@ export const useSpaces = () => {
 
     if (
       lastFocusChangedRefreshRef.current &&
-      now.getTime() - lastFocusChangedRefreshRef.current.getTime() < 200
+      now.getTime() - lastFocusChangedRefreshRef.current.getTime() < 100
     ) {
       return;
     }
@@ -185,6 +185,7 @@ export const useSpaces = () => {
   useTauriEvent(TilingEvents.WORKSPACE_WINDOWS_CHANGED, onWindowFocusChanged);
   useTauriEvent(TilingEvents.WINDOW_TRACKED, onWindowFocusChanged);
   useTauriEvent(TilingEvents.WINDOW_UNTRACKED, onWindowFocusChanged);
+  useTauriEvent(TilingEvents.WINDOW_TITLE_CHANGED, onWindowFocusChanged);
   useTauriEvent(TilingEvents.WINDOW_FOCUS_CHANGED, onWindowFocusChanged);
   useTauriEvent(TilingEvents.WORKSPACE_CHANGED, onWorkspaceChanged);
 

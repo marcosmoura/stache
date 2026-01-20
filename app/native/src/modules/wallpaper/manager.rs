@@ -368,6 +368,11 @@ pub fn setup() {
     // Store in global
     if MANAGER.set(manager).is_err() {
         eprintln!("stache: warning: wallpaper manager already initialized");
+    } else {
+        println!(
+            "stache: wallpaper manager initialized with {} wallpapers",
+            get_manager().map_or(0, |m| m.wallpapers.len())
+        );
     }
 }
 
