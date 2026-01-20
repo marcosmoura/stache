@@ -269,15 +269,15 @@ impl AXObserverAdapter {
         // - If role check fails (element invalid) → might be a destroyed window → fall back to PID detection
         let role = get_element_role(ax_element);
 
-        if let Some(ref r) = role {
-            if r != "AXWindow" {
-                // Definitely NOT a window (e.g., tab, button) - ignore
-                log::trace!(
-                    "tiling: AXUIElementDestroyed for non-window element (role={}, pid={pid}), ignoring",
-                    r
-                );
-                return;
-            }
+        if let Some(ref r) = role
+            && r != "AXWindow"
+        {
+            // Definitely NOT a window (e.g., tab, button) - ignore
+            log::trace!(
+                "tiling: AXUIElementDestroyed for non-window element (role={}, pid={pid}), ignoring",
+                r
+            );
+            return;
         }
 
         // Either it IS a window, or we couldn't determine (element invalid) - fall back to PID detection

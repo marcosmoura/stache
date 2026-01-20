@@ -321,7 +321,7 @@ impl FocusDirection {
     ///
     /// Valid values: "up", "down", "left", "right", "next", "previous", "prev"
     #[must_use]
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "up" => Some(Self::Up),
             "down" => Some(Self::Down),

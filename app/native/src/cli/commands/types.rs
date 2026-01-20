@@ -316,7 +316,7 @@ mod tests {
     #[test]
     fn test_screen_index_clone() {
         let idx = ScreenIndex::new(3);
-        let cloned = idx.clone();
+        let cloned = idx;
         assert_eq!(idx.get(), cloned.get());
     }
 

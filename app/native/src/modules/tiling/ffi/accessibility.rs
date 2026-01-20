@@ -532,19 +532,13 @@ impl AXElement {
         let tab_group_role = "AXTabGroup";
 
         for child in self.children() {
-            if let Some(role) = child.role() {
-                if role == tab_group_role {
-                    return Some(child);
-                }
+            if child.role().is_some_and(|role| role == tab_group_role) {
+                return Some(child);
             }
             // Also check in AXGroup children (Safari 14+ puts tabs in an AXGroup)
-            if let Some(role) = child.role() {
-                if role == "AXGroup" {
-                    // Check if this group has an AXTabs attribute
-                    if child.has_tabs_attribute() {
-                        return Some(child);
-                    }
-                }
+            if child.role().is_some_and(|role| role == "AXGroup") && child.has_tabs_attribute() {
+                // Check if this group has an AXTabs attribute
+                return Some(child);
             }
         }
         None
@@ -833,11 +827,11 @@ mod tests {
 
     #[test]
     fn test_ax_error_constants_are_negative() {
-        assert!(K_AX_ERROR_INVALID_UI_ELEMENT < 0);
-        assert!(K_AX_ERROR_ATTRIBUTE_UNSUPPORTED < 0);
-        assert!(K_AX_ERROR_ACTION_UNSUPPORTED < 0);
-        assert!(K_AX_ERROR_NOT_IMPLEMENTED < 0);
-        assert!(K_AX_ERROR_CANNOT_COMPLETE < 0);
+        const { assert!(K_AX_ERROR_INVALID_UI_ELEMENT < 0) };
+        const { assert!(K_AX_ERROR_ATTRIBUTE_UNSUPPORTED < 0) };
+        const { assert!(K_AX_ERROR_ACTION_UNSUPPORTED < 0) };
+        const { assert!(K_AX_ERROR_NOT_IMPLEMENTED < 0) };
+        const { assert!(K_AX_ERROR_CANNOT_COMPLETE < 0) };
     }
 
     #[test]

@@ -307,6 +307,7 @@ fn apply_split_resize_with_minimums(
 /// In Dwindle, ratio[i] controls the split between window i and window i+1.
 /// This function checks if the resize would violate minimum sizes and
 /// limits the resize accordingly.
+#[allow(clippy::too_many_arguments)]
 fn apply_dwindle_resize_with_minimums(
     ratios: &mut [f64],
     index: usize,
@@ -356,13 +357,13 @@ fn apply_dwindle_resize_with_minimums(
     let mut has_violation = false;
 
     for (window_id, frame) in &proposed_layout {
-        if let Some(window) = state.get_window(*window_id) {
-            if let Some((min_w, min_h)) = window.effective_minimum_size() {
-                // Check both width and height
-                if frame.width < min_w - 1.0 || frame.height < min_h - 1.0 {
-                    has_violation = true;
-                    break;
-                }
+        if let Some((min_w, min_h)) =
+            state.get_window(*window_id).and_then(|w| w.effective_minimum_size())
+        {
+            // Check both width and height
+            if frame.width < min_w - 1.0 || frame.height < min_h - 1.0 {
+                has_violation = true;
+                break;
             }
         }
     }
@@ -377,6 +378,7 @@ fn apply_dwindle_resize_with_minimums(
 ///
 /// In Grid, the first ratio typically controls the primary split.
 /// This function checks if the resize would violate minimum sizes.
+#[allow(clippy::too_many_arguments)]
 fn apply_grid_resize_with_minimums(
     ratios: &mut [f64],
     index: usize,
@@ -425,22 +427,21 @@ fn apply_grid_resize_with_minimums(
     // Check if any window would violate its minimum size
     let mut has_violation = false;
     for (window_id, frame) in &proposed_layout {
-        if let Some(window) = state.get_window(*window_id) {
-            if let Some((min_w, min_h)) = window.effective_minimum_size() {
-                if frame.width < min_w - 1.0 || frame.height < min_h - 1.0 {
-                    has_violation = true;
-                    log::debug!(
-                        "Grid resize blocked: window {} would violate minimum size \
-                         (frame: {:.0}x{:.0}, min: {:.0}x{:.0})",
-                        window_id,
-                        frame.width,
-                        frame.height,
-                        min_w,
-                        min_h
-                    );
-                    break;
-                }
-            }
+        if let Some((min_w, min_h)) =
+            state.get_window(*window_id).and_then(|w| w.effective_minimum_size())
+            && (frame.width < min_w - 1.0 || frame.height < min_h - 1.0)
+        {
+            has_violation = true;
+            log::debug!(
+                "Grid resize blocked: window {} would violate minimum size \
+                 (frame: {:.0}x{:.0}, min: {:.0}x{:.0})",
+                window_id,
+                frame.width,
+                frame.height,
+                min_w,
+                min_h
+            );
+            break;
         }
     }
 

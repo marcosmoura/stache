@@ -107,24 +107,27 @@ fn handle_notification<R: Runtime>(app_handle: &AppHandle<R>, notification: Stac
 
                 match layout_type {
                     Ok(layout_type) => {
-                        if let Some(handle) = tiling::init::get_handle() {
-                            // Get focused workspace ID
-                            let rt = tokio::runtime::Builder::new_current_thread()
-                                .enable_all()
-                                .build()
-                                .unwrap();
-                            if let Ok(result) = rt.block_on(handle.get_focused_workspace()) {
-                                if let Some(Some(ws)) = result.into_workspace() {
-                                    if let Err(e) = handle.set_layout(ws.id, layout_type) {
-                                        log::warn!("tiling: failed to set layout: {e}");
-                                    } else {
-                                        log::debug!(
-                                            "tiling: set layout to {layout_type:?} for workspace '{}'",
-                                            ws.name
-                                        );
-                                    }
-                                }
-                            }
+                        let Some(handle) = tiling::init::get_handle() else {
+                            return;
+                        };
+                        // Get focused workspace ID
+                        let rt = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .unwrap();
+                        let Ok(result) = rt.block_on(handle.get_focused_workspace()) else {
+                            return;
+                        };
+                        let Some(Some(ws)) = result.into_workspace() else {
+                            return;
+                        };
+                        if let Err(e) = handle.set_layout(ws.id, layout_type) {
+                            log::warn!("tiling: failed to set layout: {e}");
+                        } else {
+                            log::debug!(
+                                "tiling: set layout to {layout_type:?} for workspace '{}'",
+                                ws.name
+                            );
                         }
                     }
                     Err(e) => {
@@ -144,7 +147,7 @@ fn handle_notification<R: Runtime>(app_handle: &AppHandle<R>, notification: Stac
 
                 if let Some(handle) = tiling::init::get_handle() {
                     // Parse direction
-                    if let Some(direction) = tiling::actor::FocusDirection::from_str(&target) {
+                    if let Some(direction) = tiling::actor::FocusDirection::parse(&target) {
                         if let Err(e) = handle.focus_window(direction) {
                             log::warn!("tiling: failed to focus window: {e}");
                         } else {
@@ -172,7 +175,7 @@ fn handle_notification<R: Runtime>(app_handle: &AppHandle<R>, notification: Stac
 
                 if let Some(handle) = tiling::init::get_handle() {
                     // Parse direction
-                    if let Some(dir) = tiling::actor::FocusDirection::from_str(&direction) {
+                    if let Some(dir) = tiling::actor::FocusDirection::parse(&direction) {
                         if let Err(e) = handle.swap_window_in_direction(dir) {
                             log::warn!("tiling: failed to swap window: {e}");
                         } else {
@@ -289,19 +292,22 @@ fn handle_notification<R: Runtime>(app_handle: &AppHandle<R>, notification: Stac
                     return;
                 }
 
-                if let Some(handle) = tiling::init::get_handle() {
-                    // Get focused workspace ID
-                    let rt =
-                        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-                    if let Ok(result) = rt.block_on(handle.get_focused_workspace()) {
-                        if let Some(Some(ws)) = result.into_workspace() {
-                            if let Err(e) = handle.balance_workspace(ws.id) {
-                                log::warn!("tiling: failed to balance workspace: {e}");
-                            } else {
-                                log::debug!("tiling: balanced workspace '{}'", ws.name);
-                            }
-                        }
-                    }
+                let Some(handle) = tiling::init::get_handle() else {
+                    return;
+                };
+                // Get focused workspace ID
+                let rt =
+                    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+                let Ok(result) = rt.block_on(handle.get_focused_workspace()) else {
+                    return;
+                };
+                let Some(Some(ws)) = result.into_workspace() else {
+                    return;
+                };
+                if let Err(e) = handle.balance_workspace(ws.id) {
+                    log::warn!("tiling: failed to balance workspace: {e}");
+                } else {
+                    log::debug!("tiling: balanced workspace '{}'", ws.name);
                 }
             });
         }

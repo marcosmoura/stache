@@ -409,8 +409,10 @@ mod tests {
 
     #[test]
     fn test_hold_state_can_track_time() {
-        let mut state = HoldState::default();
-        state.press_start = Some(Instant::now());
+        let state = HoldState {
+            press_start: Some(Instant::now()),
+            ..HoldState::default()
+        };
         assert!(state.press_start.is_some());
     }
 

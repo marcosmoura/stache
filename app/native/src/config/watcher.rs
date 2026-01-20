@@ -113,8 +113,8 @@ mod tests {
     #[test]
     fn config_debounce_duration_is_reasonable() {
         // Debounce should be at least 100ms but not more than 1 second
-        assert!(CONFIG_DEBOUNCE_MS >= 100);
-        assert!(CONFIG_DEBOUNCE_MS <= 1000);
+        const { assert!(CONFIG_DEBOUNCE_MS >= 100) };
+        const { assert!(CONFIG_DEBOUNCE_MS <= 1000) };
     }
 
     #[test]

@@ -721,18 +721,20 @@ fn enforce_minimum_sizes_for_split(
     // Check for violations in initial layout
     let mut has_violations = false;
     for (window_id, frame) in initial_result.iter() {
-        if let Some(window) = layoutable_windows.iter().find(|w| w.id == *window_id) {
-            if let Some((min_w, min_h)) = window.effective_minimum_size() {
-                let current_dim = if is_horizontal {
-                    frame.width
-                } else {
-                    frame.height
-                };
-                let min_dim = if is_horizontal { min_w } else { min_h };
-                if current_dim < min_dim - 1.0 {
-                    has_violations = true;
-                    break;
-                }
+        if let Some((min_w, min_h)) = layoutable_windows
+            .iter()
+            .find(|w| w.id == *window_id)
+            .and_then(super::state::Window::effective_minimum_size)
+        {
+            let current_dim = if is_horizontal {
+                frame.width
+            } else {
+                frame.height
+            };
+            let min_dim = if is_horizontal { min_w } else { min_h };
+            if current_dim < min_dim - 1.0 {
+                has_violations = true;
+                break;
             }
         }
     }
@@ -938,7 +940,7 @@ fn enforce_minimum_sizes_for_dwindle(
             if window_idx == 0 {
                 // Window 0 gets space from the first split
                 // Increase ratio[0] to give more space to first half
-                if ratios.first().is_some() {
+                if !ratios.is_empty() {
                     ratios[0] = (ratios[0] + ADJUSTMENT_STEP).min(0.9);
                 }
             } else {
@@ -964,7 +966,7 @@ fn enforce_minimum_sizes_for_dwindle(
                     }
 
                     // Also try adjusting parent ratios
-                    for parent_idx in 0..ratio_idx {
+                    for (parent_idx, ratio) in ratios.iter_mut().take(ratio_idx).enumerate() {
                         let parent_horizontal = is_dwindle_split_horizontal(
                             parent_idx + 1,
                             screen_frame.width >= screen_frame.height,
@@ -972,7 +974,7 @@ fn enforce_minimum_sizes_for_dwindle(
                         if (parent_horizontal && width_violated)
                             || (!parent_horizontal && height_violated)
                         {
-                            ratios[parent_idx] = (ratios[parent_idx] - ADJUSTMENT_STEP).max(0.1);
+                            *ratio = (*ratio - ADJUSTMENT_STEP).max(0.1);
                         }
                     }
                 }
@@ -1013,9 +1015,9 @@ fn enforce_minimum_sizes_for_dwindle(
 /// Determines if a Dwindle split at the given index is horizontal.
 fn is_dwindle_split_horizontal(split_index: usize, is_landscape: bool) -> bool {
     if is_landscape {
-        split_index % 2 == 1
+        !split_index.is_multiple_of(2)
     } else {
-        split_index % 2 == 0
+        split_index.is_multiple_of(2)
     }
 }
 

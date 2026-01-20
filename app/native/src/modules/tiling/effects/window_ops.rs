@@ -622,12 +622,7 @@ fn get_ax_element_for_window(
     let app = AXElement::application(pid)?;
 
     // Find the window with matching ID
-    for window in app.windows() {
-        if window.window_id() == Some(window_id) {
-            return Some(window);
-        }
-    }
-    None
+    app.windows().into_iter().find(|w| w.window_id() == Some(window_id))
 }
 
 /// Focuses a window (gives it keyboard focus).

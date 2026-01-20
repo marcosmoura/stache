@@ -146,10 +146,10 @@ impl AppMonitorAdapter {
         log::debug!("App launched: pid={pid}, bundle={bundle_id}, name={name}");
 
         // Create AX observer for the new app (must happen on main thread)
-        if should_observe_app(&bundle_id, &name) {
-            if let Err(e) = add_observer_for_pid(pid) {
-                log::warn!("Failed to add observer for pid {pid}: {e}");
-            }
+        if should_observe_app(&bundle_id, &name)
+            && let Err(e) = add_observer_for_pid(pid)
+        {
+            log::warn!("Failed to add observer for pid {pid}: {e}");
         }
 
         self.processor.on_app_launched(pid, bundle_id, name);

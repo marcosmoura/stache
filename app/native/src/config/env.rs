@@ -122,7 +122,7 @@ mod tests {
         let mut file = fs::File::create(&env_path).unwrap();
         writeln!(file, "# This is a comment").unwrap();
         writeln!(file, "KEY1=value1").unwrap();
-        writeln!(file, "").unwrap();
+        writeln!(file).unwrap();
         writeln!(file, "# Another comment").unwrap();
         writeln!(file, "KEY2=value2").unwrap();
 

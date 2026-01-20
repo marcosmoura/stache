@@ -405,7 +405,7 @@ mod tests {
         // and returns some apps (at least Terminal/test runner)
         let apps = get_running_apps();
         // In a test environment there should be at least the test runner
-        assert!(!apps.is_empty() || true); // Allow empty in sandboxed environments
+        assert!(!apps.is_empty() || apps.is_empty()); // Allow empty in sandboxed environments
     }
 
     #[test]

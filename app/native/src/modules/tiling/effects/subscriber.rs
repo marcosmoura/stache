@@ -390,10 +390,10 @@ impl EffectSubscriber {
 
         // Store expected frames for minimum size detection before applying layout
         // This allows us to detect when windows fail to resize to their calculated positions
-        if !new_positions.is_empty() {
-            if let Err(e) = self.actor_handle.set_expected_frames(new_positions.clone()) {
-                log::warn!("tiling: failed to set expected frames: {e}");
-            }
+        if !new_positions.is_empty()
+            && let Err(e) = self.actor_handle.set_expected_frames(new_positions.clone())
+        {
+            log::warn!("tiling: failed to set expected frames: {e}");
         }
 
         // Update state and get the change
@@ -439,12 +439,11 @@ impl EffectSubscriber {
         }
 
         // Check if the focused window itself is floating
-        if let Some(window_id) = new_focus.focused_window_id {
-            if let Ok(QueryResult::Window(Some(window))) =
+        if let Some(window_id) = new_focus.focused_window_id
+            && let Ok(QueryResult::Window(Some(window))) =
                 self.actor_handle.query(StateQuery::GetWindow { id: window_id }).await
-            {
-                is_window_floating = window.is_floating;
-            }
+        {
+            is_window_floating = window.is_floating;
         }
 
         // Update borders via the simple API
@@ -591,12 +590,11 @@ impl EffectSubscriber {
         }
 
         // Check if the focused window itself is floating
-        if let Some(window_id) = self.state.focus.focused_window_id {
-            if let Ok(QueryResult::Window(Some(window))) =
+        if let Some(window_id) = self.state.focus.focused_window_id
+            && let Ok(QueryResult::Window(Some(window))) =
                 self.actor_handle.query(StateQuery::GetWindow { id: window_id }).await
-            {
-                is_window_floating = window.is_floating;
-            }
+        {
+            is_window_floating = window.is_floating;
         }
 
         // Update borders via the simple API

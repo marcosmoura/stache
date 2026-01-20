@@ -544,14 +544,22 @@ mod tests {
 
         #[test]
         fn test_screen_batch_interval() {
-            let mut screen = Screen::default();
-            screen.refresh_rate = 60.0;
+            let screen = Screen {
+                refresh_rate: 60.0,
+                ..Screen::default()
+            };
             assert!((screen.batch_interval_ms() - 16.666).abs() < 0.01);
 
-            screen.refresh_rate = 120.0;
+            let screen = Screen {
+                refresh_rate: 120.0,
+                ..Screen::default()
+            };
             assert!((screen.batch_interval_ms() - 8.333).abs() < 0.01);
 
-            screen.refresh_rate = 240.0;
+            let screen = Screen {
+                refresh_rate: 240.0,
+                ..Screen::default()
+            };
             assert!((screen.batch_interval_ms() - 4.166).abs() < 0.01);
         }
     }
@@ -615,33 +623,53 @@ mod tests {
 
         #[test]
         fn test_window_is_layoutable() {
-            let mut window = Window::default();
-            window.id = 1;
+            let window = Window { id: 1, ..Window::default() };
             assert!(window.is_layoutable());
 
-            window.is_minimized = true;
+            let window = Window {
+                id: 1,
+                is_minimized: true,
+                ..Window::default()
+            };
             assert!(!window.is_layoutable());
-            window.is_minimized = false;
 
-            window.is_hidden = true;
+            let window = Window {
+                id: 1,
+                is_hidden: true,
+                ..Window::default()
+            };
             assert!(!window.is_layoutable());
-            window.is_hidden = false;
 
-            window.is_fullscreen = true;
+            let window = Window {
+                id: 1,
+                is_fullscreen: true,
+                ..Window::default()
+            };
             assert!(!window.is_layoutable());
-            window.is_fullscreen = false;
 
-            window.is_floating = true;
+            let window = Window {
+                id: 1,
+                is_floating: true,
+                ..Window::default()
+            };
             assert!(!window.is_layoutable());
-            window.is_floating = false;
 
             // Tab that's not active
-            window.tab_group_id = Some(Uuid::now_v7());
-            window.is_active_tab = false;
+            let window = Window {
+                id: 1,
+                tab_group_id: Some(Uuid::now_v7()),
+                is_active_tab: false,
+                ..Window::default()
+            };
             assert!(!window.is_layoutable());
 
             // Tab that is active
-            window.is_active_tab = true;
+            let window = Window {
+                id: 1,
+                tab_group_id: Some(Uuid::now_v7()),
+                is_active_tab: true,
+                ..Window::default()
+            };
             assert!(window.is_layoutable());
         }
 

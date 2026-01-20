@@ -91,12 +91,13 @@ pub fn is_animation_active() -> bool { ANIMATION_ACTIVE.load(Ordering::Relaxed) 
 /// during that period so handlers can ignore stale events.
 #[must_use]
 pub fn is_animation_settling() -> bool {
-    if let Ok(guard) = get_animation_end_time().read() {
-        if let Some(end_time) = *guard {
-            return end_time.elapsed() < Duration::from_millis(ANIMATION_SETTLE_DURATION_MS);
-        }
-    }
-    false
+    get_animation_end_time()
+        .read()
+        .ok()
+        .and_then(|guard| *guard)
+        .is_some_and(|end_time| {
+            end_time.elapsed() < Duration::from_millis(ANIMATION_SETTLE_DURATION_MS)
+        })
 }
 
 /// Returns whether geometry events should be ignored.

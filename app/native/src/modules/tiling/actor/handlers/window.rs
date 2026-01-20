@@ -28,10 +28,8 @@ pub fn on_window_created(state: &mut TilingState, info: WindowCreatedInfo) {
     let workspace_id = on_window_created_internal(state, info);
 
     // Notify subscriber that layout needs to be recomputed for this workspace
-    if let Some(ws_id) = workspace_id {
-        if let Some(handle) = get_subscriber_handle() {
-            handle.notify_layout_changed(ws_id, false);
-        }
+    if let (Some(ws_id), Some(handle)) = (workspace_id, get_subscriber_handle()) {
+        handle.notify_layout_changed(ws_id, false);
     }
 }
 
@@ -457,10 +455,11 @@ pub fn on_window_moved(state: &mut TilingState, window_id: u32, frame: Rect) {
 
     // Check for minimum size mismatch and update inferred minimum if needed
     // If detected, trigger a layout recalculation to restore valid positions
-    if let Some(workspace_id) = detect_and_update_inferred_minimum(state, window_id, &frame) {
-        if let Some(handle) = get_subscriber_handle() {
-            handle.notify_layout_changed(workspace_id, false);
-        }
+    if let (Some(workspace_id), Some(handle)) = (
+        detect_and_update_inferred_minimum(state, window_id, &frame),
+        get_subscriber_handle(),
+    ) {
+        handle.notify_layout_changed(workspace_id, false);
     }
 
     state.update_window(window_id, |w| {
@@ -489,10 +488,11 @@ pub fn on_window_resized(state: &mut TilingState, window_id: u32, frame: Rect) {
 
     // Check for minimum size mismatch and update inferred minimum if needed
     // If detected, trigger a layout recalculation to restore valid positions
-    if let Some(workspace_id) = detect_and_update_inferred_minimum(state, window_id, &frame) {
-        if let Some(handle) = get_subscriber_handle() {
-            handle.notify_layout_changed(workspace_id, false);
-        }
+    if let (Some(workspace_id), Some(handle)) = (
+        detect_and_update_inferred_minimum(state, window_id, &frame),
+        get_subscriber_handle(),
+    ) {
+        handle.notify_layout_changed(workspace_id, false);
     }
 
     state.update_window(window_id, |w| {
@@ -615,10 +615,8 @@ pub fn on_window_fullscreen_changed(state: &mut TilingState, window_id: u32, ful
     });
 
     // Fullscreen state affects layout
-    if let Some(ws_id) = workspace_id {
-        if let Some(handle) = get_subscriber_handle() {
-            handle.notify_layout_changed(ws_id, false);
-        }
+    if let (Some(ws_id), Some(handle)) = (workspace_id, get_subscriber_handle()) {
+        handle.notify_layout_changed(ws_id, false);
     }
 }
 
@@ -712,10 +710,9 @@ pub fn on_batched_geometry_updates(state: &mut TilingState, updates: Vec<Geometr
         // Check for minimum size mismatch
         if let Some(workspace_id) =
             detect_and_update_inferred_minimum(state, update.window_id, &update.frame)
+                .filter(|ws_id| !workspaces_to_relayout.contains(ws_id))
         {
-            if !workspaces_to_relayout.contains(&workspace_id) {
-                workspaces_to_relayout.push(workspace_id);
-            }
+            workspaces_to_relayout.push(workspace_id);
         }
 
         // Update the frame
@@ -725,8 +722,8 @@ pub fn on_batched_geometry_updates(state: &mut TilingState, updates: Vec<Geometr
     }
 
     // Trigger layout recalculation for workspaces with minimum size violations
-    for workspace_id in workspaces_to_relayout {
-        if let Some(handle) = get_subscriber_handle() {
+    if let Some(handle) = get_subscriber_handle() {
+        for workspace_id in workspaces_to_relayout {
             handle.notify_layout_changed(workspace_id, false);
         }
     }
@@ -827,24 +824,28 @@ fn rule_matches_window(rule: &crate::config::WindowRule, info: &WindowCreatedInf
     }
 
     // Check app_id (bundle identifier) - case-insensitive exact match
-    if let Some(ref rule_app_id) = rule.app_id {
-        if !info.app_id.eq_ignore_ascii_case(rule_app_id) {
-            return false;
-        }
+    if rule
+        .app_id
+        .as_ref()
+        .is_some_and(|rule_app_id| !info.app_id.eq_ignore_ascii_case(rule_app_id))
+    {
+        return false;
     }
 
     // Check app_name - case-insensitive substring match
-    if let Some(ref rule_app_name) = rule.app_name {
-        if !info.app_name.to_lowercase().contains(&rule_app_name.to_lowercase()) {
-            return false;
-        }
+    if rule.app_name.as_ref().is_some_and(|rule_app_name| {
+        !info.app_name.to_lowercase().contains(&rule_app_name.to_lowercase())
+    }) {
+        return false;
     }
 
     // Check title - case-insensitive substring match
-    if let Some(ref rule_title) = rule.title {
-        if !info.title.to_lowercase().contains(&rule_title.to_lowercase()) {
-            return false;
-        }
+    if rule
+        .title
+        .as_ref()
+        .is_some_and(|rule_title| !info.title.to_lowercase().contains(&rule_title.to_lowercase()))
+    {
+        return false;
     }
 
     // All specified criteria matched

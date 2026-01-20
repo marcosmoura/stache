@@ -656,7 +656,7 @@ mod tests {
     fn test_screen_size_copy_and_clone() {
         let original = ScreenSize { width: 1920, height: 1080 };
         let copied = original; // Copy
-        let cloned = original.clone();
+        let cloned = original;
 
         assert_eq!(original.width, copied.width);
         assert_eq!(original.height, copied.height);
@@ -1055,7 +1055,7 @@ mod tests {
 
     #[test]
     fn test_aa_samples_is_reasonable() {
-        assert!(AA_SAMPLES >= 2);
-        assert!(AA_SAMPLES <= 16);
+        const { assert!(AA_SAMPLES >= 2) };
+        const { assert!(AA_SAMPLES <= 16) };
     }
 }

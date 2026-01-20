@@ -414,10 +414,10 @@ fn track_existing_windows(handle: &StateActorHandle) {
     }
 
     // Send batch message (no individual layout notifications)
-    if !window_infos.is_empty() {
-        if let Err(e) = handle.send(StateMessage::BatchWindowsCreated(window_infos)) {
-            log::error!("tiling: failed to send BatchWindowsCreated: {e}");
-        }
+    if !window_infos.is_empty()
+        && let Err(e) = handle.send(StateMessage::BatchWindowsCreated(window_infos))
+    {
+        log::error!("tiling: failed to send BatchWindowsCreated: {e}");
     }
 
     log::debug!("tiling: tracked {tracked_count} windows");

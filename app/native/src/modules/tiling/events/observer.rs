@@ -284,12 +284,12 @@ pub fn add_observer_for_pid(pid: i32) -> Result<(), String> {
 /// Removes the observer for an application.
 pub fn remove_observer_for_pid(pid: i32) {
     let mut state_guard = OBSERVER_STATE.lock();
-    if let Some(state) = state_guard.as_mut() {
-        if let Some(observer) = state.observers.remove(&pid) {
-            // Release the observer
-            unsafe { CFRelease(observer.0.cast()) };
-            log::trace!("Removed observer for pid {pid}");
-        }
+    if let Some(state) = state_guard.as_mut()
+        && let Some(observer) = state.observers.remove(&pid)
+    {
+        // Release the observer
+        unsafe { CFRelease(observer.0.cast()) };
+        log::trace!("Removed observer for pid {pid}");
     }
 }
 

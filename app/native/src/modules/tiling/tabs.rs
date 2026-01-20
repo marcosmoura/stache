@@ -384,12 +384,13 @@ pub fn is_new_window_a_tab(pid: i32, new_window_id: u32, workspace_window_ids: &
 
         // Check if this window belongs to the same PID
         // We need to verify this is from the same app
-        if let Some(&tracked_pid) = registry.window_to_pid.get(&wid) {
-            if tracked_pid == pid && !tabs_for_this_pid.contains(&wid) {
-                // Found a non-tab window from the same app in the workspace
-                // This new window is likely a new tab
-                return true;
-            }
+        if let Some(&tracked_pid) = registry.window_to_pid.get(&wid)
+            && tracked_pid == pid
+            && !tabs_for_this_pid.contains(&wid)
+        {
+            // Found a non-tab window from the same app in the workspace
+            // This new window is likely a new tab
+            return true;
         }
     }
 
