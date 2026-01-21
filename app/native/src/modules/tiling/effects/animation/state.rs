@@ -59,7 +59,7 @@ pub fn clear_animation_end_time() {
 }
 
 /// Stores the last rendered position for each window when animation is cancelled.
-/// Uses DashMap for lock-free concurrent access.
+/// Uses `DashMap` for lock-free concurrent access.
 static INTERRUPTED_POSITIONS: OnceLock<DashMap<u32, Rect>> = OnceLock::new();
 
 /// Gets the interrupted positions map, initializing if needed.
@@ -127,7 +127,7 @@ pub fn set_animation_active(active: bool) {
 
 /// Gets the interrupted position for a window, if any.
 ///
-/// Lock-free read via DashMap.
+/// Lock-free read via `DashMap`.
 #[must_use]
 pub fn get_interrupted_position(window_id: u32) -> Option<Rect> {
     get_interrupted_positions().get(&window_id).map(|r| *r)
@@ -136,7 +136,7 @@ pub fn get_interrupted_position(window_id: u32) -> Option<Rect> {
 /// Stores interrupted positions for the given windows.
 ///
 /// Called when animation is cancelled to record where windows are.
-/// Lock-free writes via DashMap.
+/// Lock-free writes via `DashMap`.
 #[allow(dead_code)] // Will be used when animation cancellation stores positions
 pub fn store_interrupted_positions(positions: &[(u32, Rect)]) {
     let map = get_interrupted_positions();
@@ -147,7 +147,7 @@ pub fn store_interrupted_positions(positions: &[(u32, Rect)]) {
 
 /// Clears interrupted positions for the given windows.
 ///
-/// Lock-free removals via DashMap.
+/// Lock-free removals via `DashMap`.
 pub fn clear_interrupted_positions(window_ids: &[u32]) {
     let map = get_interrupted_positions();
     for window_id in window_ids {

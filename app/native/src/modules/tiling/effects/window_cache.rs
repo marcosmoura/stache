@@ -527,7 +527,7 @@ fn get_app_window_ids_with_elements(app_element: AXUIElementRef) -> Vec<(u32, AX
     }
 
     let ax_type_id = unsafe { AXUIElementGetTypeID() };
-    #[allow(clippy::cast_sign_loss)]
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     let mut results = Vec::with_capacity(count as usize);
 
     for i in 0..count {

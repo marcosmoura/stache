@@ -919,6 +919,7 @@ fn compute_layout_with_ratios(
 /// Dwindle uses a binary tree structure where each ratio controls a split level.
 /// This implementation uses proportional adjustments based on violation severity
 /// for faster convergence (typically 1-3 iterations instead of 10).
+#[allow(clippy::too_many_lines)]
 fn enforce_minimum_sizes_for_dwindle(
     initial_result: &LayoutResult,
     layoutable_windows: &[Window],
