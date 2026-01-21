@@ -36,6 +36,7 @@ use std::time::{Duration, Instant};
 use core_foundation::base::TCFType;
 // Re-export public types and functions
 pub use easing::{apply_easing, lerp};
+use smallvec::SmallVec;
 pub use spring::{SpringParams, SpringState};
 pub use state::{
     ANIMATION_SETTLE_DURATION_MS, begin_animation, cancel_animation, clear_animation_end_time,
@@ -51,6 +52,8 @@ pub use transition::WindowTransition;
 
 use crate::config::{EasingType, get_config};
 use crate::modules::tiling::effects::window_cache::get_cache;
+use crate::modules::tiling::ffi::skylight::UpdateGuard;
+use crate::modules::tiling::layout::LAYOUT_INLINE_CAP;
 use crate::modules::tiling::state::Rect;
 
 // ============================================================================
@@ -269,7 +272,8 @@ impl AnimationSystem {
         let easing = self.config.easing;
 
         // Collect window IDs for batch resolution
-        let window_ids: Vec<u32> = transitions.iter().map(|t| t.window_id).collect();
+        let window_ids: SmallVec<[u32; LAYOUT_INLINE_CAP]> =
+            transitions.iter().map(|t| t.window_id).collect();
 
         // Use cache for efficient batch resolution (avoids O(n*m) per window)
         let cache = get_cache();
@@ -293,6 +297,7 @@ impl AnimationSystem {
             // Check for cancellation
             if should_cancel() {
                 // Snap to final positions
+                let _update_guard = UpdateGuard::new();
                 ca_transaction_begin_disabled();
                 for &(idx, ax) in &animatable {
                     let frame = &transitions[idx].to;
@@ -310,6 +315,7 @@ impl AnimationSystem {
             let progress = (elapsed.as_secs_f64() / duration.as_secs_f64()).min(1.0);
             let eased_progress = apply_easing(progress, easing);
 
+            let _update_guard = UpdateGuard::new();
             ca_transaction_begin_disabled();
             for &(idx, ax) in &animatable {
                 let frame = transitions[idx].interpolate(eased_progress);
@@ -344,7 +350,8 @@ impl AnimationSystem {
         let mut last_frame_time = start;
 
         // Collect window IDs for batch resolution
-        let window_ids: Vec<u32> = transitions.iter().map(|t| t.window_id).collect();
+        let window_ids: SmallVec<[u32; LAYOUT_INLINE_CAP]> =
+            transitions.iter().map(|t| t.window_id).collect();
 
         // Use cache for efficient batch resolution (avoids O(n*m) per window)
         let cache = get_cache();
@@ -370,6 +377,7 @@ impl AnimationSystem {
         loop {
             // Check for cancellation
             if should_cancel() {
+                let _update_guard = UpdateGuard::new();
                 ca_transaction_begin_disabled();
                 for &(idx, ax) in &animatable {
                     let frame = &transitions[idx].to;
@@ -395,6 +403,7 @@ impl AnimationSystem {
                 }
             }
 
+            let _update_guard = UpdateGuard::new();
             ca_transaction_begin_disabled();
             for &(idx, ax) in &animatable {
                 let progress = spring_states[idx].calculate_position(spring_states[idx].elapsed);
@@ -405,6 +414,7 @@ impl AnimationSystem {
 
             if all_settled || start.elapsed() > max_duration {
                 // Ensure exact final positions
+                let _update_guard = UpdateGuard::new();
                 ca_transaction_begin_disabled();
                 for &(idx, ax) in &animatable {
                     let frame = &transitions[idx].to;

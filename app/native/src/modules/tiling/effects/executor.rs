@@ -198,7 +198,7 @@ impl EffectExecutor {
                 .filter_map(|(window_id, target_frame, _)| {
                     // Check for interrupted position first, then fall back to cached frame
                     let from_frame = get_interrupted_position(*window_id)
-                        .or_else(|| cache.get_window_frame(*window_id))?;
+                        .or_else(|| cache.get_window_frame_fast(*window_id))?;
                     Some(WindowTransition::new(*window_id, from_frame, *target_frame))
                 })
                 .collect();

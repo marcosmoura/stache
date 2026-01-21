@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
 
+use crate::modules::tiling::ffi::skylight;
 use crate::modules::tiling::state::Rect;
 
 // ============================================================================
@@ -408,6 +409,25 @@ impl WindowElementCache {
         let frame = get_frame_from_element(element);
         unsafe { CFRelease(element.cast()) };
         frame
+    }
+
+    /// Gets the frame of a window using the fast SkyLight path when available.
+    ///
+    /// Falls back to the AX-based cache if SkyLight fails.
+    #[must_use]
+    pub fn get_window_frame_fast(&self, window_id: u32) -> Option<Rect> {
+        skylight::get_window_bounds_fast(window_id).or_else(|| self.get_window_frame(window_id))
+    }
+
+    /// Gets the PID for a cached window if available.
+    #[must_use]
+    pub fn get_window_pid(&self, window_id: u32) -> Option<i32> {
+        self.windows.get(&window_id).map(|entry| entry.pid).or_else(|| {
+            let element = self.resolve(window_id)?;
+            let pid = self.windows.get(&window_id).map(|entry| entry.pid);
+            unsafe { CFRelease(element.cast()) };
+            pid
+        })
     }
 
     /// Sets the frame of a window using a cached or resolved element.

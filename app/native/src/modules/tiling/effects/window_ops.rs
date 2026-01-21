@@ -689,6 +689,11 @@ fn focus_window_impl(window_id: u32) {
 
 /// Gets the PID of the app that owns a window.
 fn get_window_pid(window_id: u32) -> Option<i32> {
+    if let Some(pid) = crate::modules::tiling::effects::get_window_cache().get_window_pid(window_id)
+    {
+        return Some(pid);
+    }
+
     // Get all running app PIDs and check which one owns this window
     let pids = get_running_app_pids();
 

@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
 
+use dashmap::DashMap;
 use parking_lot::Mutex;
 
 use crate::modules::tiling::actor::{
@@ -81,7 +82,7 @@ pub struct EventProcessor {
     screen_batches: Arc<Mutex<HashMap<u32, ScreenBatch>>>,
 
     /// Window ID → Screen ID mapping for routing geometry events.
-    window_screen_map: Arc<Mutex<HashMap<u32, u32>>>,
+    window_screen_map: Arc<DashMap<u32, u32>>,
 
     /// PID → Set of Window IDs mapping for destroy detection.
     /// When we get a destroy event but can't get the window ID, we compare
@@ -106,7 +107,7 @@ impl EventProcessor {
         Self {
             actor_handle,
             screen_batches: Arc::new(Mutex::new(HashMap::new())),
-            window_screen_map: Arc::new(Mutex::new(HashMap::new())),
+            window_screen_map: Arc::new(DashMap::new()),
             pid_windows: Arc::new(Mutex::new(HashMap::new())),
             default_screen_id: AtomicU32::new(0),
             running: Arc::new(AtomicBool::new(false)),
@@ -189,20 +190,17 @@ impl EventProcessor {
     ///
     /// Call this when a window is created or moves to a different screen.
     pub fn set_window_screen(&self, window_id: u32, screen_id: u32) {
-        self.window_screen_map.lock().insert(window_id, screen_id);
+        self.window_screen_map.insert(window_id, screen_id);
     }
 
     /// Remove the screen assignment for a window.
-    pub fn remove_window(&self, window_id: u32) {
-        self.window_screen_map.lock().remove(&window_id);
-    }
+    pub fn remove_window(&self, window_id: u32) { self.window_screen_map.remove(&window_id); }
 
     /// Get the screen ID for a window.
     fn get_window_screen(&self, window_id: u32) -> u32 {
         self.window_screen_map
-            .lock()
             .get(&window_id)
-            .copied()
+            .map(|entry| *entry)
             .unwrap_or_else(|| self.default_screen_id.load(Ordering::SeqCst))
     }
 
@@ -336,7 +334,7 @@ impl EventProcessor {
         log::debug!("tiling: processor.on_window_destroyed called for window_id={window_id}");
 
         // Remove from window-screen mapping
-        let screen_id = self.window_screen_map.lock().remove(&window_id);
+        let screen_id = self.window_screen_map.remove(&window_id).map(|(_, id)| id);
 
         // Remove from geometry batch
         if let Some(screen_id) = screen_id
