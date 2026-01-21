@@ -359,8 +359,8 @@ impl EventProcessor {
 
     /// Handle window destruction when we only know the PID.
     ///
-    /// This compares our tracked windows against current macOS windows
-    /// to find which one was destroyed.
+    /// Uses the window element cache to efficiently check which tracked
+    /// windows are no longer valid, avoiding expensive AX enumeration.
     pub fn on_window_destroyed_for_pid(&self, pid: i32) {
         log::debug!("tiling: on_window_destroyed_for_pid called for pid={pid}");
 
@@ -377,20 +377,20 @@ impl EventProcessor {
             return;
         }
 
-        // Query current windows from macOS for this PID
-        let current_window_ids = get_current_window_ids_for_pid(pid);
-        log::debug!("tiling: current windows from macOS for pid={pid}: {current_window_ids:?}");
+        // Use window cache to efficiently find invalid windows
+        // This uses O(1) validity checks on cached elements where possible
+        let cache = crate::modules::tiling::effects::get_window_cache();
+        let invalid_windows = cache.find_invalid_windows(&tracked_window_ids);
 
-        // Find windows that are tracked but no longer exist
-        for window_id in tracked_window_ids {
-            if current_window_ids.contains(&window_id) {
-                log::trace!("tiling: window {window_id} still exists for pid={pid}");
-            } else {
-                log::debug!(
-                    "tiling: window {window_id} no longer exists for pid={pid}, destroying"
-                );
-                self.on_window_destroyed(window_id);
-            }
+        log::debug!(
+            "tiling: found {} invalid windows for pid={pid}",
+            invalid_windows.len()
+        );
+
+        // Destroy invalid windows
+        for window_id in invalid_windows {
+            log::debug!("tiling: window {window_id} no longer valid for pid={pid}, destroying");
+            self.on_window_destroyed(window_id);
         }
     }
 
@@ -668,89 +668,6 @@ pub fn get_display_refresh_rate(display_id: u32) -> f64 {
 pub fn get_main_display_refresh_rate() -> f64 {
     use core_graphics::display::CGDisplay;
     get_display_refresh_rate(CGDisplay::main().id)
-}
-
-/// Get the current window IDs for a process from macOS.
-///
-/// This queries the window server for all windows belonging to the given PID.
-#[must_use]
-pub fn get_current_window_ids_for_pid(pid: i32) -> Vec<u32> {
-    use std::ffi::c_void;
-
-    type AXUIElementRef = *mut c_void;
-    type AXError = i32;
-    const K_AX_ERROR_SUCCESS: AXError = 0;
-
-    #[link(name = "ApplicationServices", kind = "framework")]
-    unsafe extern "C" {
-        fn AXUIElementCreateApplication(pid: i32) -> AXUIElementRef;
-        fn AXUIElementCopyAttributeValue(
-            element: AXUIElementRef,
-            attribute: *const c_void,
-            value: *mut *mut c_void,
-        ) -> AXError;
-        fn AXUIElementGetTypeID() -> u64;
-        fn _AXUIElementGetWindow(element: AXUIElementRef, window_id: *mut u32) -> AXError;
-    }
-
-    #[link(name = "CoreFoundation", kind = "framework")]
-    unsafe extern "C" {
-        fn CFGetTypeID(cf: *const c_void) -> u64;
-        fn CFArrayGetCount(array: *const c_void) -> i64;
-        fn CFArrayGetValueAtIndex(array: *const c_void, idx: i64) -> *const c_void;
-        fn CFRelease(cf: *const c_void);
-    }
-
-    unsafe {
-        use core_foundation::base::TCFType;
-        use core_foundation::string::CFString;
-
-        let app_element = AXUIElementCreateApplication(pid);
-        if app_element.is_null() {
-            return Vec::new();
-        }
-
-        let attr = CFString::new("AXWindows");
-        let mut value: *mut c_void = std::ptr::null_mut();
-
-        let result = AXUIElementCopyAttributeValue(
-            app_element,
-            attr.as_concrete_TypeRef().cast(),
-            &raw mut value,
-        );
-
-        CFRelease(app_element.cast());
-
-        if result != K_AX_ERROR_SUCCESS || value.is_null() {
-            return Vec::new();
-        }
-
-        let count = CFArrayGetCount(value);
-        if count <= 0 {
-            CFRelease(value);
-            return Vec::new();
-        }
-
-        let ax_type_id = AXUIElementGetTypeID();
-        let mut window_ids = Vec::new();
-
-        for i in 0..count {
-            let window = CFArrayGetValueAtIndex(value, i);
-            if window.is_null() || CFGetTypeID(window) != ax_type_id {
-                continue;
-            }
-
-            let mut window_id: u32 = 0;
-            if _AXUIElementGetWindow(window.cast_mut(), &raw mut window_id) == K_AX_ERROR_SUCCESS
-                && window_id != 0
-            {
-                window_ids.push(window_id);
-            }
-        }
-
-        CFRelease(value);
-        window_ids
-    }
 }
 
 // ============================================================================

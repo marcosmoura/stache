@@ -2,11 +2,18 @@
 //!
 //! Tracks animation lifecycle, cancellation, interrupted positions,
 //! and the settling period after animations complete.
+//!
+//! # Performance
+//!
+//! Uses `DashMap` for lock-free concurrent access to interrupted positions,
+//! avoiding mutex contention during animation cancellation.
 
-use std::collections::HashMap;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
+
+use dashmap::DashMap;
+use parking_lot::RwLock;
 
 use crate::modules::tiling::state::Rect;
 
@@ -41,24 +48,23 @@ fn get_animation_end_time() -> &'static RwLock<Option<Instant>> {
 
 /// Records when an animation ends.
 fn record_animation_end() {
-    if let Ok(mut guard) = get_animation_end_time().write() {
-        *guard = Some(Instant::now());
-    }
+    let mut guard = get_animation_end_time().write();
+    *guard = Some(Instant::now());
 }
 
 /// Clears the animation end time (called when new animation starts).
 pub fn clear_animation_end_time() {
-    if let Ok(mut guard) = get_animation_end_time().write() {
-        *guard = None;
-    }
+    let mut guard = get_animation_end_time().write();
+    *guard = None;
 }
 
 /// Stores the last rendered position for each window when animation is cancelled.
-static INTERRUPTED_POSITIONS: OnceLock<Mutex<HashMap<u32, Rect>>> = OnceLock::new();
+/// Uses DashMap for lock-free concurrent access.
+static INTERRUPTED_POSITIONS: OnceLock<DashMap<u32, Rect>> = OnceLock::new();
 
 /// Gets the interrupted positions map, initializing if needed.
-fn get_interrupted_positions() -> &'static Mutex<HashMap<u32, Rect>> {
-    INTERRUPTED_POSITIONS.get_or_init(|| Mutex::new(HashMap::new()))
+fn get_interrupted_positions() -> &'static DashMap<u32, Rect> {
+    INTERRUPTED_POSITIONS.get_or_init(DashMap::new)
 }
 
 /// Signals that a command is waiting to run an animation.
@@ -91,13 +97,10 @@ pub fn is_animation_active() -> bool { ANIMATION_ACTIVE.load(Ordering::Relaxed) 
 /// during that period so handlers can ignore stale events.
 #[must_use]
 pub fn is_animation_settling() -> bool {
-    get_animation_end_time()
-        .read()
-        .ok()
-        .and_then(|guard| *guard)
-        .is_some_and(|end_time| {
-            end_time.elapsed() < Duration::from_millis(ANIMATION_SETTLE_DURATION_MS)
-        })
+    let guard = get_animation_end_time().read();
+    guard.is_some_and(|end_time| {
+        end_time.elapsed() < Duration::from_millis(ANIMATION_SETTLE_DURATION_MS)
+    })
 }
 
 /// Returns whether geometry events should be ignored.
@@ -123,32 +126,32 @@ pub fn set_animation_active(active: bool) {
 }
 
 /// Gets the interrupted position for a window, if any.
+///
+/// Lock-free read via DashMap.
 #[must_use]
 pub fn get_interrupted_position(window_id: u32) -> Option<Rect> {
-    get_interrupted_positions()
-        .lock()
-        .ok()
-        .and_then(|map| map.get(&window_id).copied())
+    get_interrupted_positions().get(&window_id).map(|r| *r)
 }
 
 /// Stores interrupted positions for the given windows.
 ///
 /// Called when animation is cancelled to record where windows are.
+/// Lock-free writes via DashMap.
 #[allow(dead_code)] // Will be used when animation cancellation stores positions
 pub fn store_interrupted_positions(positions: &[(u32, Rect)]) {
-    if let Ok(mut map) = get_interrupted_positions().lock() {
-        for (window_id, rect) in positions {
-            map.insert(*window_id, *rect);
-        }
+    let map = get_interrupted_positions();
+    for (window_id, rect) in positions {
+        map.insert(*window_id, *rect);
     }
 }
 
 /// Clears interrupted positions for the given windows.
+///
+/// Lock-free removals via DashMap.
 pub fn clear_interrupted_positions(window_ids: &[u32]) {
-    if let Ok(mut map) = get_interrupted_positions().lock() {
-        for window_id in window_ids {
-            map.remove(window_id);
-        }
+    let map = get_interrupted_positions();
+    for window_id in window_ids {
+        map.remove(window_id);
     }
 }
 

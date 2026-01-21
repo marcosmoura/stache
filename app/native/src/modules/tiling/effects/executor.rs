@@ -20,7 +20,7 @@ use tauri::Emitter;
 
 use super::{
     AnimationSystem, BorderState, TilingEffect, WindowTransition, get_interrupted_position,
-    window_ops,
+    window_cache, window_ops,
 };
 use crate::modules::tiling::state::Rect;
 
@@ -159,6 +159,9 @@ impl EffectExecutor {
     }
 
     /// Executes frame update effects.
+    ///
+    /// Uses the window element cache for efficient batch resolution,
+    /// avoiding repeated O(n*m) lookups during animation setup.
     fn execute_frame_updates(&self, updates: &[(u32, Rect, bool)]) -> usize {
         if updates.is_empty() {
             return 0;
@@ -170,26 +173,32 @@ impl EffectExecutor {
         let (animated, immediate): (Vec<_>, Vec<_>) =
             updates.iter().partition(|(_, _, animate)| *animate);
 
-        // Execute immediate updates first
-        for (window_id, frame, _) in &immediate {
-            if window_ops::set_window_frame(*window_id, frame) {
-                success_count += 1;
-            } else {
-                log::warn!("Failed to set frame for window {window_id}");
+        // Execute immediate updates first using the cache
+        if !immediate.is_empty() {
+            let cache = window_cache::get_cache();
+            for (window_id, frame, _) in &immediate {
+                if cache.set_window_frame_fast(*window_id, frame) {
+                    success_count += 1;
+                } else {
+                    log::warn!("Failed to set frame for window {window_id}");
+                }
             }
         }
 
         // Execute animated updates using the animation system
         if !animated.is_empty() {
+            // Use the cache for efficient batch frame retrieval
+            let cache = window_cache::get_cache();
+
             // Build transitions by getting current frames
             // If a previous animation was interrupted, use the interrupted position
             // as the starting point for smoother continuation
             let transitions: Vec<WindowTransition> = animated
                 .iter()
                 .filter_map(|(window_id, target_frame, _)| {
-                    // Check for interrupted position first, then fall back to current frame
+                    // Check for interrupted position first, then fall back to cached frame
                     let from_frame = get_interrupted_position(*window_id)
-                        .or_else(|| window_ops::get_window_frame(*window_id))?;
+                        .or_else(|| cache.get_window_frame(*window_id))?;
                     Some(WindowTransition::new(*window_id, from_frame, *target_frame))
                 })
                 .collect();

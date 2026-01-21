@@ -780,8 +780,9 @@ fn raise_window_impl(window_id: u32) {
 
 /// Sets multiple window frames in batch.
 ///
-/// This resolves all window elements first, then applies the frames.
-/// More efficient than calling `set_window_frame` repeatedly.
+/// Uses a single main thread dispatch for all frames, reducing IPC overhead
+/// compared to calling `set_window_frame` repeatedly. More efficient for
+/// layout changes that affect multiple windows.
 ///
 /// # Arguments
 ///
@@ -789,18 +790,24 @@ fn raise_window_impl(window_id: u32) {
 ///
 /// # Returns
 ///
-/// Number of windows successfully updated.
+/// Number of frames queued (actual application is async).
 #[must_use]
 pub fn set_window_frames_batch(frames: &[(u32, Rect)]) -> usize {
-    let mut success_count = 0;
-
-    for (window_id, frame) in frames {
-        if set_window_frame(*window_id, frame) {
-            success_count += 1;
-        }
+    if frames.is_empty() {
+        return 0;
     }
 
-    success_count
+    let count = frames.len();
+    let frames_copy: Vec<(u32, Rect)> = frames.to_vec();
+
+    // Single main thread dispatch for all frames
+    crate::utils::thread::dispatch_on_main(move || {
+        for (window_id, frame) in frames_copy {
+            set_window_frame_impl(window_id, &frame);
+        }
+    });
+
+    count
 }
 
 // ============================================================================

@@ -50,7 +50,7 @@ pub use sync::{
 pub use transition::WindowTransition;
 
 use crate::config::{EasingType, get_config};
-use crate::modules::tiling::effects::window_ops::{resolve_window_element, set_window_frame_fast};
+use crate::modules::tiling::effects::window_cache::get_cache;
 use crate::modules::tiling::state::Rect;
 
 // ============================================================================
@@ -228,11 +228,14 @@ impl AnimationSystem {
     }
 
     /// Applies transitions instantly (no animation).
+    ///
+    /// Uses the window element cache for efficient frame setting.
     #[allow(clippy::unused_self)] // Self kept for consistency and future config access
     fn apply_instant(&self, transitions: &[WindowTransition]) -> usize {
+        let cache = get_cache();
         let mut count = 0;
         for t in transitions {
-            if set_window_frame_fast(t.window_id, &t.to) {
+            if cache.set_window_frame_fast(t.window_id, &t.to) {
                 count += 1;
             }
         }
@@ -253,6 +256,8 @@ impl AnimationSystem {
     }
 
     /// Runs a time-based eased animation.
+    ///
+    /// Uses the window element cache for efficient batch resolution.
     fn run_eased_animation(&self, transitions: &[WindowTransition], duration: Duration) -> usize {
         set_animation_active(true);
         init_display_link();
@@ -263,19 +268,26 @@ impl AnimationSystem {
         let start = Instant::now();
         let easing = self.config.easing;
 
-        // Resolve AX elements once at the start
-        let animatable: Vec<_> = transitions
-            .iter()
-            .enumerate()
-            .filter_map(|(i, t)| resolve_window_element(t.window_id).map(|ax| (i, ax)))
+        // Collect window IDs for batch resolution
+        let window_ids: Vec<u32> = transitions.iter().map(|t| t.window_id).collect();
+
+        // Use cache for efficient batch resolution (avoids O(n*m) per window)
+        let cache = get_cache();
+        let resolved = cache.batch_resolve(&window_ids);
+
+        // Build animatable list with transition indices
+        let animatable: Vec<_> = resolved
+            .into_iter()
+            .filter_map(|(wid, ax)| {
+                let idx = transitions.iter().position(|t| t.window_id == wid)?;
+                Some((idx, ax))
+            })
             .collect();
 
         if animatable.is_empty() {
             set_animation_active(false);
             return 0;
         }
-
-        let window_ids: Vec<u32> = transitions.iter().map(|t| t.window_id).collect();
 
         loop {
             // Check for cancellation
@@ -317,6 +329,8 @@ impl AnimationSystem {
     }
 
     /// Runs a physics-based spring animation.
+    ///
+    /// Uses the window element cache for efficient batch resolution.
     #[allow(clippy::unused_self)] // Self kept for consistency and future config access
     fn run_spring_animation(&self, transitions: &[WindowTransition], duration: Duration) -> usize {
         set_animation_active(true);
@@ -329,11 +343,20 @@ impl AnimationSystem {
         let start = Instant::now();
         let mut last_frame_time = start;
 
-        // Resolve AX elements once at the start
-        let animatable: Vec<_> = transitions
-            .iter()
-            .enumerate()
-            .filter_map(|(i, t)| resolve_window_element(t.window_id).map(|ax| (i, ax)))
+        // Collect window IDs for batch resolution
+        let window_ids: Vec<u32> = transitions.iter().map(|t| t.window_id).collect();
+
+        // Use cache for efficient batch resolution (avoids O(n*m) per window)
+        let cache = get_cache();
+        let resolved = cache.batch_resolve(&window_ids);
+
+        // Build animatable list with transition indices
+        let animatable: Vec<_> = resolved
+            .into_iter()
+            .filter_map(|(wid, ax)| {
+                let idx = transitions.iter().position(|t| t.window_id == wid)?;
+                Some((idx, ax))
+            })
             .collect();
 
         if animatable.is_empty() {
@@ -341,7 +364,6 @@ impl AnimationSystem {
             return 0;
         }
 
-        let window_ids: Vec<u32> = transitions.iter().map(|t| t.window_id).collect();
         let mut spring_states: Vec<SpringState> =
             transitions.iter().map(|_| SpringState::new(duration)).collect();
 

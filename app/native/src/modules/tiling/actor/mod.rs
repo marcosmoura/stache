@@ -33,7 +33,10 @@ use crate::modules::tiling::layout::{Gaps, LayoutResult, MasterPosition, calcula
 use crate::modules::tiling::state::{LayoutType, Rect, TilingState, Window};
 
 /// Channel buffer size for the state actor.
-const CHANNEL_BUFFER_SIZE: usize = 256;
+///
+/// Increased from 256 to 1024 to handle burst events (e.g., multiple windows
+/// moving during layout changes) without backpressure.
+const CHANNEL_BUFFER_SIZE: usize = 1024;
 
 /// The state actor that owns all tiling state.
 ///

@@ -11,6 +11,7 @@ use std::collections::HashSet;
 
 use uuid::Uuid;
 
+use crate::modules::tiling::effects::get_window_cache;
 use crate::modules::tiling::init::get_subscriber_handle;
 use crate::modules::tiling::state::TilingState;
 
@@ -43,6 +44,9 @@ pub fn on_app_terminated(state: &mut TilingState, pid: i32) -> HashSet<Uuid> {
 
     let count = window_ids.len();
     log::debug!("Removing {count} windows for pid {pid}");
+
+    // Invalidate cache entries for this app (efficient bulk removal)
+    get_window_cache().invalidate_app(pid);
 
     // Track affected workspaces
     let mut affected_workspaces: HashSet<Uuid> = HashSet::new();

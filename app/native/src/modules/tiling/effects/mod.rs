@@ -39,6 +39,7 @@
 pub mod animation;
 pub mod executor;
 pub mod subscriber;
+pub mod window_cache;
 pub mod window_ops;
 
 pub use animation::{
@@ -49,6 +50,7 @@ pub use animation::{
 pub use executor::EffectExecutor;
 pub use subscriber::{EffectSubscriber, EffectSubscriberHandle};
 use uuid::Uuid;
+pub use window_cache::{WindowElementCache, get_cache as get_window_cache};
 pub use window_ops::{
     focus_window, get_window_frame, raise_window, set_window_frame, set_window_frame_fast,
 };

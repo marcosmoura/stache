@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::modules::tiling::actor::messages::{
     GeometryUpdate, GeometryUpdateType, WindowCreatedInfo,
 };
-use crate::modules::tiling::effects::should_ignore_geometry_events;
+use crate::modules::tiling::effects::{get_window_cache, should_ignore_geometry_events};
 use crate::modules::tiling::init::get_subscriber_handle;
 use crate::modules::tiling::state::{Rect, TilingState, Window, WindowIdList, Workspace};
 use crate::modules::tiling::tabs;
@@ -173,6 +173,9 @@ pub fn on_window_destroyed(state: &mut TilingState, window_id: u32) -> Option<uu
     // Remove the window from state
     state.remove_window(window_id);
     log::debug!("tiling: window {window_id} removed from state");
+
+    // Invalidate window cache entry for this window
+    get_window_cache().invalidate_window(window_id);
 
     // Remove from workspace's window list
     state.update_workspace(workspace_id, |ws| {
