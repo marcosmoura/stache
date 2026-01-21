@@ -56,15 +56,8 @@
       "$ref": "#/$defs/ProxyAudioConfig",
       "default": {
         "enabled": false,
-        "input": {
-          "name": "Stache Virtual Input",
-          "priority": []
-        },
-        "output": {
-          "bufferSize": 256,
-          "name": "Stache Virtual Output",
-          "priority": []
-        }
+        "input": [],
+        "output": []
       }
     },
     "tiling": {
@@ -819,60 +812,14 @@
           "default": false
         },
         "input": {
-          "description": "Input device configuration.",
-          "$ref": "#/$defs/ProxyAudioInputConfig",
-          "default": {
-            "name": "Stache Virtual Input",
-            "priority": []
-          }
-        },
-        "output": {
-          "description": "Output device configuration.",
-          "$ref": "#/$defs/ProxyAudioOutputConfig",
-          "default": {
-            "bufferSize": 256,
-            "name": "Stache Virtual Output",
-            "priority": []
-          }
-        }
-      }
-    },
-    "ProxyAudioInputConfig": {
-      "description": "Input device configuration for proxy audio.\n\nDefines the virtual input device name and priority list for device selection.",
-      "type": "object",
-      "properties": {
-        "name": {
-          "description": "Name of the virtual input device (used if a virtual device is installed).\nDefault: \"Stache Virtual Input\"",
-          "type": "string",
-          "default": "Stache Virtual Input"
-        },
-        "priority": {
           "description": "Priority list for input device selection.\nDevices are checked in order; the first available device is selected.\n`AirPlay` devices are always given highest priority automatically.",
           "type": "array",
           "default": [],
           "items": {
             "$ref": "#/$defs/AudioDevicePriority"
           }
-        }
-      }
-    },
-    "ProxyAudioOutputConfig": {
-      "description": "Output device configuration for proxy audio.\n\nDefines the virtual output device name, buffer size, and priority list.",
-      "type": "object",
-      "properties": {
-        "bufferSize": {
-          "description": "Audio buffer size in frames. Smaller values reduce latency but may cause artifacts.\nRecommended values: 128 (low latency), 256 (balanced), 512 (stable).\nDefault: 256",
-          "type": "integer",
-          "format": "uint32",
-          "default": 256,
-          "minimum": 0
         },
-        "name": {
-          "description": "Name of the virtual output device (used if a virtual device is installed).\nDefault: \"Stache Virtual Output\"",
-          "type": "string",
-          "default": "Stache Virtual Output"
-        },
-        "priority": {
+        "output": {
           "description": "Priority list for output device selection.\nDevices are checked in order; the first available device is selected.\n`AirPlay` devices are always given highest priority automatically.",
           "type": "array",
           "default": [],
