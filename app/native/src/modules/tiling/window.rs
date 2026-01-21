@@ -258,6 +258,12 @@ pub fn get_all_windows_including_hidden() -> Vec<WindowInfo> {
             let (bundle_id, app_name, is_hidden) =
                 app_info_map.get(&app.pid).copied().unwrap_or(("", "", false));
 
+            // Skip Finder "Get Info" windows (e.g., "filename.txt Info")
+            // These are popup-like windows that shouldn't be tiled
+            if bundle_id == "com.apple.finder" && title.ends_with(" Info") {
+                continue;
+            }
+
             result.push(WindowInfo {
                 id: window_id,
                 pid: app.pid,
