@@ -1,6 +1,13 @@
 //! The main `TilingState` struct with reactive collections.
 //!
 //! Uses `eyeball` and `eyeball-im` for observable state that can be subscribed to.
+//!
+//! # Performance
+//!
+//! This module maintains auxiliary `HashMap` indices for O(1) lookups by ID.
+//! The indices are kept in sync with the `ObservableVector` collections through
+//! the `upsert_*` and `remove_*` methods. Always use these methods instead of
+//! directly manipulating the vectors.
 
 use std::collections::HashMap;
 
@@ -21,6 +28,13 @@ use super::types::{FocusState, Screen, Window, Workspace};
 /// Relations:
 /// - `Workspace.screen_id` → `Screen.id`
 /// - `Window.workspace_id` → `Workspace.id`
+///
+/// # Indices
+///
+/// Auxiliary `HashMap` indices provide O(1) lookups:
+/// - `screen_idx`: `screen_id` → index in `screens`
+/// - `workspace_idx`: `workspace_id` → index in `workspaces`
+/// - `window_idx`: `window_id` → index in `windows`
 pub struct TilingState {
     /// All physical displays.
     pub screens: ObservableVector<Screen>,
@@ -40,6 +54,18 @@ pub struct TilingState {
     /// Focus history: remembers the last focused window in each workspace.
     /// Maps `workspace_id` -> `window_id`.
     focus_history: HashMap<Uuid, u32>,
+
+    // ════════════════════════════════════════════════════════════════════════
+    // Auxiliary Indices for O(1) Lookups
+    // ════════════════════════════════════════════════════════════════════════
+    /// Index: `screen_id` → position in `screens` vector.
+    screen_idx: HashMap<u32, usize>,
+
+    /// Index: `workspace_id` → position in `workspaces` vector.
+    workspace_idx: HashMap<Uuid, usize>,
+
+    /// Index: `window_id` → position in `windows` vector.
+    window_idx: HashMap<u32, usize>,
 }
 
 impl Default for TilingState {
@@ -57,143 +83,172 @@ impl TilingState {
             focus: Observable::new(FocusState::new()),
             enabled: Observable::new(true),
             focus_history: HashMap::new(),
+            screen_idx: HashMap::new(),
+            workspace_idx: HashMap::new(),
+            window_idx: HashMap::new(),
         }
     }
 
     // ========================================================================
-    // Screen Operations
+    // Screen Operations (O(1) lookups via index)
     // ========================================================================
 
-    /// Get a screen by ID.
+    /// Get a screen by ID. O(1) via index.
     #[must_use]
     pub fn get_screen(&self, id: u32) -> Option<Screen> {
-        self.screens.iter().find(|s| s.id == id).cloned()
+        self.screen_idx.get(&id).and_then(|&idx| self.screens.get(idx)).cloned()
     }
 
-    /// Get a screen by name.
+    /// Get a screen by name. O(n) - no index for names.
     #[must_use]
     pub fn get_screen_by_name(&self, name: &str) -> Option<Screen> {
         self.screens.iter().find(|s| s.name == name).cloned()
     }
 
-    /// Get the main screen.
+    /// Get the main screen. O(n) - no index for `is_main`.
     #[must_use]
     pub fn get_main_screen(&self) -> Option<Screen> {
         self.screens.iter().find(|s| s.is_main).cloned()
     }
 
-    /// Get the index of a screen by ID.
+    /// Get the index of a screen by ID. O(1) via index.
     #[must_use]
-    pub fn screen_index(&self, id: u32) -> Option<usize> {
-        self.screens.iter().position(|s| s.id == id)
-    }
+    pub fn screen_index(&self, id: u32) -> Option<usize> { self.screen_idx.get(&id).copied() }
 
-    /// Insert or update a screen.
+    /// Insert or update a screen. Maintains index.
     pub fn upsert_screen(&mut self, screen: Screen) {
-        if let Some(idx) = self.screen_index(screen.id) {
+        let screen_id = screen.id;
+        if let Some(&idx) = self.screen_idx.get(&screen_id) {
             self.screens.set(idx, screen);
         } else {
+            let idx = self.screens.len();
             self.screens.push_back(screen);
+            self.screen_idx.insert(screen_id, idx);
         }
     }
 
-    /// Remove a screen by ID.
+    /// Remove a screen by ID. Maintains index.
     pub fn remove_screen(&mut self, id: u32) -> Option<Screen> {
-        if let Some(idx) = self.screen_index(id) {
-            Some(self.screens.remove(idx))
-        } else {
-            None
+        let idx = self.screen_idx.remove(&id)?;
+        let screen = self.screens.remove(idx);
+
+        // Update indices for all screens that shifted down
+        for (&screen_id, stored_idx) in &mut self.screen_idx {
+            if *stored_idx > idx {
+                *stored_idx -= 1;
+            }
+            // Sanity check in debug builds
+            debug_assert_eq!(
+                self.screens.get(*stored_idx).map(|s| s.id),
+                Some(screen_id),
+                "screen_idx out of sync after remove"
+            );
         }
+
+        Some(screen)
     }
 
     // ========================================================================
-    // Workspace Operations
+    // Workspace Operations (O(1) lookups via index)
     // ========================================================================
 
-    /// Get a workspace by ID.
+    /// Get a workspace by ID. O(1) via index.
     #[must_use]
     pub fn get_workspace(&self, id: Uuid) -> Option<Workspace> {
-        self.workspaces.iter().find(|w| w.id == id).cloned()
+        self.workspace_idx.get(&id).and_then(|&idx| self.workspaces.get(idx)).cloned()
     }
 
-    /// Get a workspace by name.
+    /// Get a workspace by name. O(n) - no index for names.
     #[must_use]
     pub fn get_workspace_by_name(&self, name: &str) -> Option<Workspace> {
         self.workspaces.iter().find(|w| w.name == name).cloned()
     }
 
-    /// Get the focused workspace.
+    /// Get the focused workspace. O(n) - no index for `is_focused`.
     #[must_use]
     pub fn get_focused_workspace(&self) -> Option<Workspace> {
         self.workspaces.iter().find(|w| w.is_focused).cloned()
     }
 
-    /// Get all workspaces for a screen.
+    /// Get all workspaces for a screen. O(n).
     #[must_use]
     pub fn get_workspaces_for_screen(&self, screen_id: u32) -> Vec<Workspace> {
         self.workspaces.iter().filter(|w| w.screen_id == screen_id).cloned().collect()
     }
 
-    /// Get all visible workspaces.
+    /// Get all visible workspaces. O(n).
     #[must_use]
     pub fn get_visible_workspaces(&self) -> Vec<Workspace> {
         self.workspaces.iter().filter(|w| w.is_visible).cloned().collect()
     }
 
-    /// Get the index of a workspace by ID.
+    /// Get the index of a workspace by ID. O(1) via index.
     #[must_use]
     pub fn workspace_index(&self, id: Uuid) -> Option<usize> {
-        self.workspaces.iter().position(|w| w.id == id)
+        self.workspace_idx.get(&id).copied()
     }
 
-    /// Get the index of a workspace by name.
+    /// Get the index of a workspace by name. O(n) - no index for names.
     #[must_use]
     pub fn workspace_index_by_name(&self, name: &str) -> Option<usize> {
         self.workspaces.iter().position(|w| w.name == name)
     }
 
-    /// Insert or update a workspace.
+    /// Insert or update a workspace. Maintains index.
     pub fn upsert_workspace(&mut self, workspace: Workspace) {
-        if let Some(idx) = self.workspace_index(workspace.id) {
+        let workspace_id = workspace.id;
+        if let Some(&idx) = self.workspace_idx.get(&workspace_id) {
             self.workspaces.set(idx, workspace);
         } else {
+            let idx = self.workspaces.len();
             self.workspaces.push_back(workspace);
+            self.workspace_idx.insert(workspace_id, idx);
         }
     }
 
-    /// Remove a workspace by ID.
+    /// Remove a workspace by ID. Maintains index.
     pub fn remove_workspace(&mut self, id: Uuid) -> Option<Workspace> {
-        if let Some(idx) = self.workspace_index(id) {
-            Some(self.workspaces.remove(idx))
-        } else {
-            None
+        let idx = self.workspace_idx.remove(&id)?;
+        let workspace = self.workspaces.remove(idx);
+
+        // Update indices for all workspaces that shifted down
+        for (&ws_id, stored_idx) in &mut self.workspace_idx {
+            if *stored_idx > idx {
+                *stored_idx -= 1;
+            }
+            debug_assert_eq!(
+                self.workspaces.get(*stored_idx).map(|w| w.id),
+                Some(ws_id),
+                "workspace_idx out of sync after remove"
+            );
         }
+
+        Some(workspace)
     }
 
-    /// Update a workspace in place.
+    /// Update a workspace in place. O(1) lookup via index.
     pub fn update_workspace<F>(&mut self, id: Uuid, f: F) -> bool
     where F: FnOnce(&mut Workspace) {
-        if let Some(idx) = self.workspace_index(id) {
-            let mut workspace = self.workspaces.remove(idx);
-            f(&mut workspace);
-            self.workspaces.insert(idx, workspace);
-            true
-        } else {
-            false
-        }
+        let Some(&idx) = self.workspace_idx.get(&id) else {
+            return false;
+        };
+        let mut workspace = self.workspaces.remove(idx);
+        f(&mut workspace);
+        self.workspaces.insert(idx, workspace);
+        true
     }
 
     // ========================================================================
-    // Window Operations
+    // Window Operations (O(1) lookups via index)
     // ========================================================================
 
-    /// Get a window by ID.
+    /// Get a window by ID. O(1) via index.
     #[must_use]
     pub fn get_window(&self, id: u32) -> Option<Window> {
-        self.windows.iter().find(|w| w.id == id).cloned()
+        self.window_idx.get(&id).and_then(|&idx| self.windows.get(idx)).cloned()
     }
 
-    /// Get all windows for a workspace.
+    /// Get all windows for a workspace. O(n).
     #[must_use]
     pub fn get_windows_for_workspace(&self, workspace_id: Uuid) -> Vec<Window> {
         self.windows
@@ -203,13 +258,13 @@ impl TilingState {
             .collect()
     }
 
-    /// Get all windows for an application (by PID).
+    /// Get all windows for an application (by PID). O(n).
     #[must_use]
     pub fn get_windows_for_pid(&self, pid: i32) -> Vec<Window> {
         self.windows.iter().filter(|w| w.pid == pid).cloned().collect()
     }
 
-    /// Get all windows in a tab group.
+    /// Get all windows in a tab group. O(n).
     #[must_use]
     pub fn get_windows_in_tab_group(&self, tab_group_id: Uuid) -> Vec<Window> {
         self.windows
@@ -219,14 +274,14 @@ impl TilingState {
             .collect()
     }
 
-    /// Get the focused window.
+    /// Get the focused window. O(1) via index.
     #[must_use]
     pub fn get_focused_window(&self) -> Option<Window> {
         let focus = Observable::get(&self.focus);
         focus.focused_window_id.and_then(|id| self.get_window(id))
     }
 
-    /// Get all layoutable windows for a workspace (excludes minimized, hidden, inactive tabs).
+    /// Get all layoutable windows for a workspace (excludes minimized, hidden, inactive tabs). O(n).
     #[must_use]
     pub fn get_layoutable_windows(&self, workspace_id: Uuid) -> Vec<Window> {
         self.windows
@@ -236,41 +291,52 @@ impl TilingState {
             .collect()
     }
 
-    /// Get the index of a window by ID.
+    /// Get the index of a window by ID. O(1) via index.
     #[must_use]
-    pub fn window_index(&self, id: u32) -> Option<usize> {
-        self.windows.iter().position(|w| w.id == id)
-    }
+    pub fn window_index(&self, id: u32) -> Option<usize> { self.window_idx.get(&id).copied() }
 
-    /// Insert or update a window.
+    /// Insert or update a window. Maintains index.
     pub fn upsert_window(&mut self, window: Window) {
-        if let Some(idx) = self.window_index(window.id) {
+        let window_id = window.id;
+        if let Some(&idx) = self.window_idx.get(&window_id) {
             self.windows.set(idx, window);
         } else {
+            let idx = self.windows.len();
             self.windows.push_back(window);
+            self.window_idx.insert(window_id, idx);
         }
     }
 
-    /// Remove a window by ID.
+    /// Remove a window by ID. Maintains index.
     pub fn remove_window(&mut self, id: u32) -> Option<Window> {
-        if let Some(idx) = self.window_index(id) {
-            Some(self.windows.remove(idx))
-        } else {
-            None
+        let idx = self.window_idx.remove(&id)?;
+        let window = self.windows.remove(idx);
+
+        // Update indices for all windows that shifted down
+        for (&win_id, stored_idx) in &mut self.window_idx {
+            if *stored_idx > idx {
+                *stored_idx -= 1;
+            }
+            debug_assert_eq!(
+                self.windows.get(*stored_idx).map(|w| w.id),
+                Some(win_id),
+                "window_idx out of sync after remove"
+            );
         }
+
+        Some(window)
     }
 
-    /// Update a window in place.
+    /// Update a window in place. O(1) lookup via index.
     pub fn update_window<F>(&mut self, id: u32, f: F) -> bool
     where F: FnOnce(&mut Window) {
-        if let Some(idx) = self.window_index(id) {
-            let mut window = self.windows.remove(idx);
-            f(&mut window);
-            self.windows.insert(idx, window);
-            true
-        } else {
-            false
-        }
+        let Some(&idx) = self.window_idx.get(&id) else {
+            return false;
+        };
+        let mut window = self.windows.remove(idx);
+        f(&mut window);
+        self.windows.insert(idx, window);
+        true
     }
 
     // ========================================================================
@@ -367,6 +433,64 @@ impl TilingState {
     }
 
     // ========================================================================
+    // ID-Only Queries (Zero-Clone)
+    // ========================================================================
+    // These methods return only IDs, avoiding expensive clones of full objects.
+    // Use these in hot paths where you only need to identify entities.
+
+    /// Get all screen IDs. O(n) but no cloning of Screen objects.
+    #[must_use]
+    pub fn get_all_screen_ids(&self) -> Vec<u32> { self.screens.iter().map(|s| s.id).collect() }
+
+    /// Get all workspace IDs. O(n) but no cloning of Workspace objects.
+    #[must_use]
+    pub fn get_all_workspace_ids(&self) -> Vec<Uuid> {
+        self.workspaces.iter().map(|w| w.id).collect()
+    }
+
+    /// Get all window IDs. O(n) but no cloning of Window objects.
+    #[must_use]
+    pub fn get_all_window_ids(&self) -> Vec<u32> { self.windows.iter().map(|w| w.id).collect() }
+
+    /// Get window IDs for a workspace. O(n) but no cloning of Window objects.
+    #[must_use]
+    pub fn get_window_ids_for_workspace(&self, workspace_id: Uuid) -> Vec<u32> {
+        self.windows
+            .iter()
+            .filter(|w| w.workspace_id == workspace_id)
+            .map(|w| w.id)
+            .collect()
+    }
+
+    /// Get layoutable window IDs for a workspace. O(n) but no cloning.
+    #[must_use]
+    pub fn get_layoutable_window_ids(&self, workspace_id: Uuid) -> Vec<u32> {
+        self.windows
+            .iter()
+            .filter(|w| w.workspace_id == workspace_id && w.is_layoutable())
+            .map(|w| w.id)
+            .collect()
+    }
+
+    /// Get visible workspace IDs. O(n) but no cloning.
+    #[must_use]
+    pub fn get_visible_workspace_ids(&self) -> Vec<Uuid> {
+        self.workspaces.iter().filter(|w| w.is_visible).map(|w| w.id).collect()
+    }
+
+    /// Check if a window exists. O(1) via index.
+    #[must_use]
+    pub fn has_window(&self, id: u32) -> bool { self.window_idx.contains_key(&id) }
+
+    /// Check if a workspace exists. O(1) via index.
+    #[must_use]
+    pub fn has_workspace(&self, id: Uuid) -> bool { self.workspace_idx.contains_key(&id) }
+
+    /// Check if a screen exists. O(1) via index.
+    #[must_use]
+    pub fn has_screen(&self, id: u32) -> bool { self.screen_idx.contains_key(&id) }
+
+    // ========================================================================
     // Utility Methods
     // ========================================================================
 
@@ -391,7 +515,7 @@ impl TilingState {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::modules::tiling::state::types::{LayoutType, Rect};
+    use crate::modules::tiling::state::types::{LayoutType, Rect, WindowIdList};
 
     fn make_screen(id: u32, name: &str, is_main: bool) -> Screen {
         Screen {
@@ -414,7 +538,7 @@ mod tests {
             layout: LayoutType::Dwindle,
             is_visible: false,
             is_focused: false,
-            window_ids: Vec::new(),
+            window_ids: WindowIdList::new(),
             focused_window_index: None,
             split_ratios: Vec::new(),
             configured_screen: None,

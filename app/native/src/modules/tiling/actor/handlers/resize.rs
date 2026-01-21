@@ -5,6 +5,7 @@
 
 use uuid::Uuid;
 
+use crate::modules::tiling::actor::messages::ResizeDimension;
 use crate::modules::tiling::init::get_subscriber_handle;
 use crate::modules::tiling::state::{LayoutType, Rect, TilingState};
 
@@ -458,10 +459,10 @@ fn apply_grid_resize_with_minimums(
 /// # Arguments
 ///
 /// * `state` - The tiling state
-/// * `dimension` - "width" or "height"
+/// * `dimension` - `ResizeDimension::Width` or `ResizeDimension::Height`
 /// * `amount` - Pixels to add (positive) or remove (negative)
 #[allow(clippy::too_many_lines)]
-pub fn on_resize_focused_window(state: &mut TilingState, dimension: &str, amount: i32) {
+pub fn on_resize_focused_window(state: &mut TilingState, dimension: ResizeDimension, amount: i32) {
     let focus = state.get_focus_state();
     let Some(workspace_id) = focus.focused_workspace_id else {
         log::debug!("resize_focused_window: no focused workspace");
@@ -500,13 +501,9 @@ pub fn on_resize_focused_window(state: &mut TilingState, dimension: &str, amount
     let is_landscape = screen.visible_frame.width >= screen.visible_frame.height;
 
     // Calculate delta as a ratio of screen dimension
-    let delta_ratio = match dimension.to_lowercase().as_str() {
-        "width" => f64::from(amount) / screen.visible_frame.width,
-        "height" => f64::from(amount) / screen.visible_frame.height,
-        _ => {
-            log::warn!("resize_focused_window: invalid dimension '{dimension}'");
-            return;
-        }
+    let delta_ratio = match dimension {
+        ResizeDimension::Width => f64::from(amount) / screen.visible_frame.width,
+        ResizeDimension::Height => f64::from(amount) / screen.visible_frame.height,
     };
 
     // Get layoutable windows
@@ -544,15 +541,15 @@ pub fn on_resize_focused_window(state: &mut TilingState, dimension: &str, amount
                 };
 
                 // Apply delta based on dimension matching split direction
-                let effective = if (dimension == "width" && is_horizontal_split)
-                    || (dimension == "height" && !is_horizontal_split)
+                let effective = if (dimension == ResizeDimension::Width && is_horizontal_split)
+                    || (dimension == ResizeDimension::Height && !is_horizontal_split)
                 {
                     delta_ratio
                 } else {
                     // Dimension doesn't match this split direction
                     // Try to find the appropriate split for this dimension
                     log::debug!(
-                        "resize_focused_window: dimension {dimension} doesn't match split direction for window at index {window_index}"
+                        "resize_focused_window: dimension {dimension:?} doesn't match split direction for window at index {window_index}"
                     );
                     return;
                 };
@@ -564,7 +561,7 @@ pub fn on_resize_focused_window(state: &mut TilingState, dimension: &str, amount
             // Grid: first ratio typically controls the primary split (master width)
             // For width resize: always use index 0
             // For height resize: depends on grid structure (not yet supported)
-            if dimension == "width" {
+            if dimension == ResizeDimension::Width {
                 (0, delta_ratio)
             } else {
                 log::debug!(
@@ -595,7 +592,7 @@ pub fn on_resize_focused_window(state: &mut TilingState, dimension: &str, amount
     on_resize_split(state, workspace_id, ratio_index, effective_delta);
 
     log::debug!(
-        "Resized window {focused_id} {dimension} by {amount}px (layout: {layout:?}, ratio_index: {ratio_index}, delta: {effective_delta:.4})"
+        "Resized window {focused_id} {dimension:?} by {amount}px (layout: {layout:?}, ratio_index: {ratio_index}, delta: {effective_delta:.4})"
     );
 }
 
@@ -682,9 +679,9 @@ pub fn on_user_resize_completed(
 
     // Determine which dimension had the primary change
     let (ratio_delta, resize_dimension) = if width_delta.abs() > height_delta.abs() {
-        (width_delta / screen_width, "width")
+        (width_delta / screen_width, ResizeDimension::Width)
     } else {
-        (height_delta / screen_height, "height")
+        (height_delta / screen_height, ResizeDimension::Height)
     };
 
     // Determine which split ratio to modify based on layout type
@@ -719,7 +716,7 @@ pub fn on_user_resize_completed(
         }
         LayoutType::Grid => {
             // Grid: first ratio controls primary split
-            if resize_dimension == "width" {
+            if resize_dimension == ResizeDimension::Width {
                 (0, ratio_delta)
             } else {
                 // Height changes in grid - not well supported yet

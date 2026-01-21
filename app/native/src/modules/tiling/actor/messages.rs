@@ -129,13 +129,16 @@ pub enum StateMessage {
     BalanceWorkspace { workspace_id: Uuid },
 
     /// Send focused window to another screen.
-    SendWindowToScreen { target_screen: String },
+    SendWindowToScreen { target_screen: TargetScreen },
 
     /// Send focused workspace to another screen.
-    SendWorkspaceToScreen { target_screen: String },
+    SendWorkspaceToScreen { target_screen: TargetScreen },
 
     /// Resize the focused window in a dimension.
-    ResizeFocusedWindow { dimension: String, amount: i32 },
+    ResizeFocusedWindow {
+        dimension: ResizeDimension,
+        amount: i32,
+    },
 
     /// Apply a floating preset to the focused window.
     ApplyPreset { preset: String },
@@ -316,6 +319,73 @@ pub enum FocusDirection {
     Previous,
 }
 
+/// Dimension for resize operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResizeDimension {
+    Width,
+    Height,
+}
+
+impl ResizeDimension {
+    /// Parses a dimension string (case-insensitive).
+    ///
+    /// Valid values: "width", "height"
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "width" => Some(Self::Width),
+            "height" => Some(Self::Height),
+            _ => None,
+        }
+    }
+
+    /// Returns the dimension as a lowercase string.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Width => "width",
+            Self::Height => "height",
+        }
+    }
+}
+
+/// Target screen for send operations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TargetScreen {
+    /// Main/primary display.
+    Main,
+    /// Secondary display (first non-main).
+    Secondary,
+    /// Display by name.
+    Named(String),
+}
+
+impl TargetScreen {
+    /// Parses a target screen string.
+    ///
+    /// "main" or "primary" -> `Main`
+    /// "secondary" -> `Secondary`
+    /// anything else -> `Named(s)`
+    #[must_use]
+    pub fn parse(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "main" | "primary" => Self::Main,
+            "secondary" => Self::Secondary,
+            _ => Self::Named(s.to_string()),
+        }
+    }
+
+    /// Returns the target as a string for display/logging.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Main => "main",
+            Self::Secondary => "secondary",
+            Self::Named(name) => name,
+        }
+    }
+}
+
 impl FocusDirection {
     /// Parses a direction string (case-insensitive).
     ///
@@ -347,6 +417,9 @@ impl FocusDirection {
 /// Queries that can be executed against the state.
 #[derive(Debug, Clone)]
 pub enum StateQuery {
+    // ════════════════════════════════════════════════════════════════════════
+    // Full Object Queries (clones entire objects)
+    // ════════════════════════════════════════════════════════════════════════
     // Snapshots
     GetAllScreens,
     GetAllWorkspaces,
@@ -355,40 +428,99 @@ pub enum StateQuery {
     GetEnabled,
 
     // By ID
-    GetScreen { id: u32 },
-    GetWorkspace { id: Uuid },
-    GetWorkspaceByName { name: String },
-    GetWindow { id: u32 },
+    GetScreen {
+        id: u32,
+    },
+    GetWorkspace {
+        id: Uuid,
+    },
+    GetWorkspaceByName {
+        name: String,
+    },
+    GetWindow {
+        id: u32,
+    },
 
     // Relations
-    GetWindowsForWorkspace { workspace_id: Uuid },
-    GetWindowsForPid { pid: i32 },
-    GetWorkspacesForScreen { screen_id: u32 },
+    GetWindowsForWorkspace {
+        workspace_id: Uuid,
+    },
+    GetWindowsForPid {
+        pid: i32,
+    },
+    GetWorkspacesForScreen {
+        screen_id: u32,
+    },
     GetVisibleWorkspaces,
     GetFocusedWorkspace,
     GetFocusedWindow,
-    GetLayoutableWindows { workspace_id: Uuid },
+    GetLayoutableWindows {
+        workspace_id: Uuid,
+    },
 
     // Tab groups
-    GetTabGroup { tab_group_id: Uuid },
+    GetTabGroup {
+        tab_group_id: Uuid,
+    },
 
     // Computed (may require layout calculation)
-    GetWindowLayout { workspace_id: Uuid },
+    GetWindowLayout {
+        workspace_id: Uuid,
+    },
+
+    // ════════════════════════════════════════════════════════════════════════
+    // ID-Only Queries (zero-clone, for hot paths)
+    // ════════════════════════════════════════════════════════════════════════
+    /// Get all screen IDs without cloning Screen objects.
+    GetAllScreenIds,
+    /// Get all workspace IDs without cloning Workspace objects.
+    GetAllWorkspaceIds,
+    /// Get all window IDs without cloning Window objects.
+    GetAllWindowIds,
+    /// Get window IDs for a workspace without cloning Window objects.
+    GetWindowIdsForWorkspace {
+        workspace_id: Uuid,
+    },
+    /// Get layoutable window IDs for a workspace.
+    GetLayoutableWindowIds {
+        workspace_id: Uuid,
+    },
+    /// Get visible workspace IDs.
+    GetVisibleWorkspaceIds,
+    /// Check if a window exists. O(1).
+    HasWindow {
+        id: u32,
+    },
+    /// Check if a workspace exists. O(1).
+    HasWorkspace {
+        id: Uuid,
+    },
+    /// Check if a screen exists. O(1).
+    HasScreen {
+        id: u32,
+    },
 }
 
 /// Results from queries.
 #[derive(Debug, Clone)]
 pub enum QueryResult {
+    // Full object results
     Screens(Vec<Screen>),
     Workspaces(Vec<Workspace>),
     Windows(Vec<Window>),
-    WindowIds(Vec<u32>),
     Screen(Option<Screen>),
     Workspace(Option<Workspace>),
     Window(Option<Window>),
     Focus(FocusState),
     Enabled(bool),
     Layout(Vec<(u32, Rect)>),
+
+    // ID-only results (zero-clone)
+    ScreenIds(Vec<u32>),
+    WorkspaceIds(Vec<Uuid>),
+    WindowIds(Vec<u32>),
+    /// Boolean result for existence checks.
+    Exists(bool),
 }
 
 impl QueryResult {
@@ -472,6 +604,46 @@ impl QueryResult {
             _ => None,
         }
     }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // ID-Only Result Conversions
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// Try to get screen IDs from the result.
+    #[must_use]
+    pub fn into_screen_ids(self) -> Option<Vec<u32>> {
+        match self {
+            Self::ScreenIds(ids) => Some(ids),
+            _ => None,
+        }
+    }
+
+    /// Try to get workspace IDs from the result.
+    #[must_use]
+    pub fn into_workspace_ids(self) -> Option<Vec<Uuid>> {
+        match self {
+            Self::WorkspaceIds(ids) => Some(ids),
+            _ => None,
+        }
+    }
+
+    /// Try to get window IDs from the result.
+    #[must_use]
+    pub fn into_window_ids(self) -> Option<Vec<u32>> {
+        match self {
+            Self::WindowIds(ids) => Some(ids),
+            _ => None,
+        }
+    }
+
+    /// Try to get existence check result.
+    #[must_use]
+    pub fn into_exists(self) -> Option<bool> {
+        match self {
+            Self::Exists(exists) => Some(exists),
+            _ => None,
+        }
+    }
 }
 
 // ============================================================================
@@ -524,5 +696,49 @@ mod tests {
         assert_eq!(info.window_id, 123);
         assert_eq!(info.pid, 456);
         assert_eq!(info.minimum_size, Some((200.0, 150.0)));
+    }
+
+    #[test]
+    fn test_resize_dimension_parse() {
+        assert_eq!(ResizeDimension::parse("width"), Some(ResizeDimension::Width));
+        assert_eq!(ResizeDimension::parse("WIDTH"), Some(ResizeDimension::Width));
+        assert_eq!(ResizeDimension::parse("height"), Some(ResizeDimension::Height));
+        assert_eq!(ResizeDimension::parse("Height"), Some(ResizeDimension::Height));
+        assert_eq!(ResizeDimension::parse("invalid"), None);
+        assert_eq!(ResizeDimension::parse(""), None);
+    }
+
+    #[test]
+    fn test_resize_dimension_as_str() {
+        assert_eq!(ResizeDimension::Width.as_str(), "width");
+        assert_eq!(ResizeDimension::Height.as_str(), "height");
+    }
+
+    #[test]
+    fn test_target_screen_parse() {
+        assert_eq!(TargetScreen::parse("main"), TargetScreen::Main);
+        assert_eq!(TargetScreen::parse("MAIN"), TargetScreen::Main);
+        assert_eq!(TargetScreen::parse("primary"), TargetScreen::Main);
+        assert_eq!(TargetScreen::parse("PRIMARY"), TargetScreen::Main);
+        assert_eq!(TargetScreen::parse("secondary"), TargetScreen::Secondary);
+        assert_eq!(TargetScreen::parse("SECONDARY"), TargetScreen::Secondary);
+        assert_eq!(
+            TargetScreen::parse("Dell U2720Q"),
+            TargetScreen::Named("Dell U2720Q".to_string())
+        );
+        assert_eq!(
+            TargetScreen::parse("custom"),
+            TargetScreen::Named("custom".to_string())
+        );
+    }
+
+    #[test]
+    fn test_target_screen_as_str() {
+        assert_eq!(TargetScreen::Main.as_str(), "main");
+        assert_eq!(TargetScreen::Secondary.as_str(), "secondary");
+        assert_eq!(
+            TargetScreen::Named("Dell U2720Q".to_string()).as_str(),
+            "Dell U2720Q"
+        );
     }
 }

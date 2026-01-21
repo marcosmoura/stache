@@ -7,7 +7,9 @@ use core_graphics::display::CGDisplay;
 
 use crate::config::get_config;
 use crate::modules::tiling::init::get_subscriber_handle;
-use crate::modules::tiling::state::{LayoutType, Rect, Screen, TilingState, Workspace};
+use crate::modules::tiling::state::{
+    LayoutType, Rect, Screen, TilingState, WindowIdList, Workspace,
+};
 
 /// Handles a screens changed event.
 ///
@@ -196,7 +198,7 @@ fn create_workspaces_from_config(state: &mut TilingState) {
                     layout,
                     is_visible: false,
                     is_focused: false,
-                    window_ids: Vec::new(),
+                    window_ids: WindowIdList::new(),
                     focused_window_index: None,
                     split_ratios: Vec::new(),
                     configured_screen: Some(ws_config.screen.clone()),
@@ -228,7 +230,7 @@ fn create_default_workspaces(state: &mut TilingState) {
             layout: LayoutType::Dwindle,
             is_visible: false,
             is_focused: false,
-            window_ids: Vec::new(),
+            window_ids: WindowIdList::new(),
             focused_window_index: None,
             split_ratios: Vec::new(),
             configured_screen: None,
@@ -254,7 +256,7 @@ fn ensure_screen_workspaces(state: &mut TilingState) {
                 layout: LayoutType::Dwindle,
                 is_visible: false,
                 is_focused: false,
-                window_ids: Vec::new(),
+                window_ids: WindowIdList::new(),
                 focused_window_index: None,
                 split_ratios: Vec::new(),
                 configured_screen: None,
@@ -693,7 +695,7 @@ mod tests {
             layout: LayoutType::Dwindle,
             is_visible: true,
             is_focused: false,
-            window_ids: Vec::new(),
+            window_ids: WindowIdList::new(),
             focused_window_index: None,
             split_ratios: Vec::new(),
             configured_screen: None,

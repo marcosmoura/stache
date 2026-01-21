@@ -106,7 +106,7 @@ pub async fn get_tiling_workspaces(
                 .find(|s| s.id == ws.screen_id)
                 .map_or_else(|| "unknown".to_string(), |s| s.name.clone());
 
-            let tiled_window_ids: Vec<u32> = ws.window_ids.clone();
+            let tiled_window_ids: Vec<u32> = ws.window_ids.to_vec();
 
             WorkspaceInfo {
                 name: ws.name,

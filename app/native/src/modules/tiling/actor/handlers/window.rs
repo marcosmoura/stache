@@ -14,7 +14,7 @@ use crate::modules::tiling::actor::messages::{
 };
 use crate::modules::tiling::effects::should_ignore_geometry_events;
 use crate::modules::tiling::init::get_subscriber_handle;
-use crate::modules::tiling::state::{Rect, TilingState, Window, Workspace};
+use crate::modules::tiling::state::{Rect, TilingState, Window, WindowIdList, Workspace};
 use crate::modules::tiling::tabs;
 
 /// Handles a window created event.
@@ -78,8 +78,10 @@ fn on_window_created_internal(state: &mut TilingState, info: WindowCreatedInfo) 
     let workspace_id = find_workspace_for_window(state, &info);
 
     // Get workspace window IDs for tab detection
-    let workspace_window_ids: Vec<u32> =
-        state.get_workspace(workspace_id).map(|ws| ws.window_ids).unwrap_or_default();
+    let workspace_window_ids: Vec<u32> = state
+        .get_workspace(workspace_id)
+        .map(|ws| ws.window_ids.to_vec())
+        .unwrap_or_default();
 
     // Check if this new window is a tab being added to an existing window
     if tabs::is_new_window_a_tab(info.pid, info.window_id, &workspace_window_ids) {
@@ -175,7 +177,7 @@ pub fn on_window_destroyed(state: &mut TilingState, window_id: u32) -> Option<uu
     // Remove from workspace's window list
     state.update_workspace(workspace_id, |ws| {
         let before_count = ws.window_ids.len();
-        ws.window_ids.retain(|&id| id != window_id);
+        ws.window_ids.retain(|id| *id != window_id);
         let after_count = ws.window_ids.len();
         log::debug!(
             "tiling: workspace {workspace_id} window count: {before_count} -> {after_count}"
@@ -846,7 +848,7 @@ fn create_default_workspace(state: &TilingState) -> Workspace {
         layout: crate::modules::tiling::state::LayoutType::Dwindle,
         is_visible: true,
         is_focused: true,
-        window_ids: Vec::new(),
+        window_ids: WindowIdList::new(),
         focused_window_index: None,
         split_ratios: Vec::new(),
         configured_screen: None,
@@ -873,7 +875,7 @@ mod tests {
             layout: LayoutType::Dwindle,
             is_visible: true,
             is_focused: true,
-            window_ids: Vec::new(),
+            window_ids: WindowIdList::new(),
             focused_window_index: None,
             split_ratios: Vec::new(),
             configured_screen: None,

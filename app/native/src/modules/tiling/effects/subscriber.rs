@@ -212,40 +212,62 @@ pub struct EffectSubscriberHandle {
 impl EffectSubscriberHandle {
     /// Notifies the subscriber that a layout changed.
     pub fn notify_layout_changed(&self, workspace_id: Uuid, user_triggered: bool) {
-        let _ = self
+        if let Err(e) = self
             .notification_tx
-            .try_send(SubscriberNotification::LayoutChanged { workspace_id, user_triggered });
+            .try_send(SubscriberNotification::LayoutChanged { workspace_id, user_triggered })
+        {
+            log::warn!(
+                "tiling: dropped LayoutChanged notification for workspace {workspace_id}: {e}"
+            );
+        }
     }
 
     /// Notifies the subscriber that focus changed.
     pub fn notify_focus_changed(&self) {
-        let _ = self.notification_tx.try_send(SubscriberNotification::FocusChanged);
+        if let Err(e) = self.notification_tx.try_send(SubscriberNotification::FocusChanged) {
+            log::warn!("tiling: dropped FocusChanged notification: {e}");
+        }
     }
 
     /// Notifies the subscriber that workspace visibility changed.
     pub fn notify_visibility_changed(&self, workspace_id: Uuid, visible: bool) {
-        let _ = self
+        if let Err(e) = self
             .notification_tx
-            .try_send(SubscriberNotification::VisibilityChanged { workspace_id, visible });
+            .try_send(SubscriberNotification::VisibilityChanged { workspace_id, visible })
+        {
+            log::warn!(
+                "tiling: dropped VisibilityChanged notification for workspace {workspace_id}: {e}"
+            );
+        }
     }
 
     /// Notifies the subscriber that a window's floating state changed.
     pub fn notify_floating_changed(&self, window_id: u32, floating: bool) {
-        let _ = self
+        if let Err(e) = self
             .notification_tx
-            .try_send(SubscriberNotification::FloatingChanged { window_id, floating });
+            .try_send(SubscriberNotification::FloatingChanged { window_id, floating })
+        {
+            log::warn!("tiling: dropped FloatingChanged notification for window {window_id}: {e}");
+        }
     }
 
     /// Notifies the subscriber that a workspace's layout changed.
     pub fn notify_workspace_layout_changed(&self, workspace_id: Uuid, layout: LayoutType) {
-        let _ = self
+        if let Err(e) = self
             .notification_tx
-            .try_send(SubscriberNotification::WorkspaceLayoutChanged { workspace_id, layout });
+            .try_send(SubscriberNotification::WorkspaceLayoutChanged { workspace_id, layout })
+        {
+            log::warn!(
+                "tiling: dropped WorkspaceLayoutChanged notification for workspace {workspace_id}: {e}"
+            );
+        }
     }
 
     /// Shuts down the subscriber.
     pub fn shutdown(&self) {
-        let _ = self.notification_tx.try_send(SubscriberNotification::Shutdown);
+        if let Err(e) = self.notification_tx.try_send(SubscriberNotification::Shutdown) {
+            log::warn!("tiling: dropped Shutdown notification: {e}");
+        }
     }
 }
 

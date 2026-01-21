@@ -11,6 +11,7 @@
 //! - `Workspace.window_ids` → list of `Window.id`
 
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 use uuid::Uuid;
 
 // ============================================================================
@@ -179,6 +180,10 @@ impl LayoutType {
 // Workspace Type
 // ============================================================================
 
+/// Window ID list type alias. Uses `SmallVec` for inline storage of up to 8 window IDs,
+/// avoiding heap allocation for the common case of workspaces with few windows.
+pub type WindowIdList = SmallVec<[u32; 8]>;
+
 /// A virtual desktop that contains windows.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Workspace {
@@ -201,7 +206,8 @@ pub struct Workspace {
     pub is_focused: bool,
 
     /// Window IDs in stack order (back to front).
-    pub window_ids: Vec<u32>,
+    /// Uses `SmallVec` for inline storage of up to 8 windows.
+    pub window_ids: WindowIdList,
 
     /// Index of focused window in `window_ids`.
     pub focused_window_index: Option<usize>,
@@ -223,7 +229,7 @@ impl Default for Workspace {
             layout: LayoutType::default(),
             is_visible: false,
             is_focused: false,
-            window_ids: Vec::new(),
+            window_ids: WindowIdList::new(),
             focused_window_index: None,
             split_ratios: Vec::new(),
             configured_screen: None,
@@ -249,11 +255,11 @@ impl Workspace {
 
     /// Get the number of windows in this workspace.
     #[must_use]
-    pub const fn window_count(&self) -> usize { self.window_ids.len() }
+    pub fn window_count(&self) -> usize { self.window_ids.len() }
 
     /// Check if this workspace has no windows.
     #[must_use]
-    pub const fn is_empty(&self) -> bool { self.window_ids.is_empty() }
+    pub fn is_empty(&self) -> bool { self.window_ids.is_empty() }
 
     /// Check if a window is in this workspace.
     #[must_use]
@@ -597,8 +603,10 @@ mod tests {
 
         #[test]
         fn test_workspace_window_management() {
+            use smallvec::smallvec;
+
             let mut ws = Workspace::new("test");
-            ws.window_ids = vec![100, 200, 300];
+            ws.window_ids = smallvec![100, 200, 300];
             ws.focused_window_index = Some(1);
 
             assert_eq!(ws.window_count(), 3);

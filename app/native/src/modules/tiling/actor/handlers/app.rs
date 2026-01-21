@@ -60,7 +60,7 @@ pub fn on_app_terminated(state: &mut TilingState, pid: i32) -> HashSet<Uuid> {
             affected_workspaces.insert(ws_id);
 
             state.update_workspace(ws_id, |ws| {
-                ws.window_ids.retain(|&id| id != *window_id);
+                ws.window_ids.retain(|id| *id != *window_id);
 
                 // Update focused window index if needed
                 if let Some(idx) = ws.focused_window_index {
@@ -142,8 +142,10 @@ pub fn on_app_activated(state: &mut TilingState, pid: i32) {
 
 #[cfg(test)]
 mod tests {
+    use smallvec::smallvec;
+
     use super::*;
-    use crate::modules::tiling::state::{LayoutType, Rect, Window, Workspace};
+    use crate::modules::tiling::state::{LayoutType, Rect, Window, WindowIdList, Workspace};
 
     fn make_state_with_workspace() -> (TilingState, Uuid) {
         let mut state = TilingState::new();
@@ -155,7 +157,7 @@ mod tests {
             layout: LayoutType::Dwindle,
             is_visible: true,
             is_focused: true,
-            window_ids: Vec::new(),
+            window_ids: WindowIdList::new(),
             focused_window_index: None,
             split_ratios: Vec::new(),
             configured_screen: None,
@@ -202,7 +204,7 @@ mod tests {
         state.upsert_window(win3);
 
         state.update_workspace(ws_id, |ws| {
-            ws.window_ids = vec![100, 200, 300];
+            ws.window_ids = smallvec![100, 200, 300];
         });
 
         assert_eq!(state.windows.len(), 3);
@@ -218,7 +220,7 @@ mod tests {
 
         // Workspace should only have window 300
         let ws = state.get_workspace(ws_id).unwrap();
-        assert_eq!(ws.window_ids, vec![300]);
+        assert_eq!(ws.window_ids.as_slice(), &[300]);
 
         // Should report the affected workspace
         assert!(affected.contains(&ws_id));

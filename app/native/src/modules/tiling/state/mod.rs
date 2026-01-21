@@ -8,4 +8,4 @@ mod tiling_state;
 mod types;
 
 pub use tiling_state::TilingState;
-pub use types::{FocusState, LayoutType, Rect, Screen, Window, Workspace};
+pub use types::{FocusState, LayoutType, Rect, Screen, Window, WindowIdList, Workspace};

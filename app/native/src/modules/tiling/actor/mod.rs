@@ -224,7 +224,7 @@ impl StateActor {
                 self.on_send_workspace_to_screen(&target_screen);
             }
             StateMessage::ResizeFocusedWindow { dimension, amount } => {
-                self.on_resize_focused_window(&dimension, amount);
+                self.on_resize_focused_window(dimension, amount);
             }
             StateMessage::ApplyPreset { preset } => {
                 self.on_apply_preset(&preset);
@@ -346,6 +346,27 @@ impl StateActor {
             StateQuery::GetWindowLayout { workspace_id } => {
                 QueryResult::Layout(self.compute_layout(workspace_id))
             }
+
+            // ════════════════════════════════════════════════════════════════════════
+            // ID-Only Queries (zero-clone, for hot paths)
+            // ════════════════════════════════════════════════════════════════════════
+            StateQuery::GetAllScreenIds => QueryResult::ScreenIds(self.state.get_all_screen_ids()),
+            StateQuery::GetAllWorkspaceIds => {
+                QueryResult::WorkspaceIds(self.state.get_all_workspace_ids())
+            }
+            StateQuery::GetAllWindowIds => QueryResult::WindowIds(self.state.get_all_window_ids()),
+            StateQuery::GetWindowIdsForWorkspace { workspace_id } => {
+                QueryResult::WindowIds(self.state.get_window_ids_for_workspace(workspace_id))
+            }
+            StateQuery::GetLayoutableWindowIds { workspace_id } => {
+                QueryResult::WindowIds(self.state.get_layoutable_window_ids(workspace_id))
+            }
+            StateQuery::GetVisibleWorkspaceIds => {
+                QueryResult::WorkspaceIds(self.state.get_visible_workspace_ids())
+            }
+            StateQuery::HasWindow { id } => QueryResult::Exists(self.state.has_window(id)),
+            StateQuery::HasWorkspace { id } => QueryResult::Exists(self.state.has_workspace(id)),
+            StateQuery::HasScreen { id } => QueryResult::Exists(self.state.has_screen(id)),
         }
     }
 
@@ -518,15 +539,15 @@ impl StateActor {
         handlers::on_balance_workspace(&mut self.state, workspace_id);
     }
 
-    fn on_send_window_to_screen(&mut self, target_screen: &str) {
+    fn on_send_window_to_screen(&mut self, target_screen: &messages::TargetScreen) {
         handlers::on_send_window_to_screen(&mut self.state, target_screen);
     }
 
-    fn on_send_workspace_to_screen(&mut self, target_screen: &str) {
+    fn on_send_workspace_to_screen(&mut self, target_screen: &messages::TargetScreen) {
         handlers::on_send_workspace_to_screen(&mut self.state, target_screen);
     }
 
-    fn on_resize_focused_window(&mut self, dimension: &str, amount: i32) {
+    fn on_resize_focused_window(&mut self, dimension: messages::ResizeDimension, amount: i32) {
         handlers::on_resize_focused_window(&mut self.state, dimension, amount);
     }
 
@@ -893,7 +914,8 @@ fn compute_layout_with_ratios(
 /// Enforces minimum window sizes for Dwindle layout by adjusting ratios.
 ///
 /// Dwindle uses a binary tree structure where each ratio controls a split level.
-/// This function iteratively adjusts ratios to accommodate minimum sizes.
+/// This implementation uses proportional adjustments based on violation severity
+/// for faster convergence (typically 1-3 iterations instead of 10).
 fn enforce_minimum_sizes_for_dwindle(
     initial_result: &LayoutResult,
     layoutable_windows: &[Window],
@@ -902,10 +924,21 @@ fn enforce_minimum_sizes_for_dwindle(
     gaps: &Gaps,
     current_ratios: &[f64],
 ) -> Option<LayoutResult> {
-    const MAX_ITERATIONS: usize = 10;
-    const ADJUSTMENT_STEP: f64 = 0.05;
+    // Reduced from 10 - proportional adjustments converge faster
+    const MAX_ITERATIONS: usize = 3;
 
     if window_ids.len() < 2 {
+        return None;
+    }
+
+    // Build minimum size lookup for O(1) access
+    let min_sizes: std::collections::HashMap<u32, (f64, f64)> = layoutable_windows
+        .iter()
+        .filter_map(|w| w.effective_minimum_size().map(|min| (w.id, min)))
+        .collect();
+
+    // Early exit: no windows have minimum sizes
+    if min_sizes.is_empty() {
         return None;
     }
 
@@ -920,7 +953,6 @@ fn enforce_minimum_sizes_for_dwindle(
         violations.len()
     );
 
-    // Try iterative adjustment
     let mut ratios = if current_ratios.is_empty() {
         vec![0.5; window_ids.len().saturating_sub(1)]
     } else {
@@ -932,59 +964,82 @@ fn enforce_minimum_sizes_for_dwindle(
         ratios.push(0.5);
     }
 
+    let is_landscape = screen_frame.width >= screen_frame.height;
+
     for _iteration in 0..MAX_ITERATIONS {
-        // For each violation, try to increase the space for that window
+        // Collect adjustment magnitudes based on violation severity
+        let mut adjustments: Vec<(usize, f64)> = Vec::new();
+
         for &(window_idx, violation_axis) in &violations {
+            // Get the window's frame and minimum size
+            let Some((_, frame)) = initial_result.get(window_idx) else {
+                continue;
+            };
+            let window_id = window_ids.get(window_idx).copied().unwrap_or(0);
+            let Some(&(min_w, min_h)) = min_sizes.get(&window_id) else {
+                continue;
+            };
+
+            // Calculate proportional adjustment based on violation magnitude
+            let width_deficit = (min_w - frame.width).max(0.0);
+            let height_deficit = (min_h - frame.height).max(0.0);
+
+            let width_violated = violation_axis == 0 || violation_axis == 2;
+            let height_violated = violation_axis == 1 || violation_axis == 2;
+
             if window_idx == 0 {
                 // Window 0 gets space from the first split
-                // Increase ratio[0] to give more space to first half
                 if !ratios.is_empty() {
-                    ratios[0] = (ratios[0] + ADJUSTMENT_STEP).min(0.9);
+                    let is_h = is_dwindle_split_horizontal(0, is_landscape);
+                    let deficit = if is_h { width_deficit } else { height_deficit };
+                    let total_dim = if is_h {
+                        screen_frame.width
+                    } else {
+                        screen_frame.height
+                    };
+                    // Proportional adjustment: how much ratio change needed
+                    let adjustment = (deficit / total_dim).min(0.3);
+                    if adjustment > 0.01 {
+                        adjustments.push((0, adjustment));
+                    }
                 }
             } else {
-                // Windows > 0 are in the second half of their parent split
-                // We need to decrease the ratio at their level to give them more space
                 let ratio_idx = window_idx - 1;
                 if ratio_idx < ratios.len() {
-                    // Check which axis is violated
-                    let is_horizontal_split = is_dwindle_split_horizontal(
-                        window_idx,
-                        screen_frame.width >= screen_frame.height,
-                    );
+                    let is_h_split = is_dwindle_split_horizontal(window_idx, is_landscape);
 
-                    let width_violated = violation_axis == 0 || violation_axis == 2;
-                    let height_violated = violation_axis == 1 || violation_axis == 2;
-
-                    // If this split direction matches the violated axis, adjust it
-                    if (is_horizontal_split && width_violated)
-                        || (!is_horizontal_split && height_violated)
-                    {
-                        // Decrease ratio to give second half (this window) more space
-                        ratios[ratio_idx] = (ratios[ratio_idx] - ADJUSTMENT_STEP).max(0.1);
-                    }
-
-                    // Also try adjusting parent ratios
-                    for (parent_idx, ratio) in ratios.iter_mut().take(ratio_idx).enumerate() {
-                        let parent_horizontal = is_dwindle_split_horizontal(
-                            parent_idx + 1,
-                            screen_frame.width >= screen_frame.height,
-                        );
-                        if (parent_horizontal && width_violated)
-                            || (!parent_horizontal && height_violated)
-                        {
-                            *ratio = (*ratio - ADJUSTMENT_STEP).max(0.1);
+                    if (is_h_split && width_violated) || (!is_h_split && height_violated) {
+                        let deficit = if is_h_split {
+                            width_deficit
+                        } else {
+                            height_deficit
+                        };
+                        let total_dim = if is_h_split {
+                            screen_frame.width
+                        } else {
+                            screen_frame.height
+                        };
+                        let adjustment = (deficit / total_dim).min(0.3);
+                        if adjustment > 0.01 {
+                            // Negative adjustment to give more space to second half
+                            adjustments.push((ratio_idx, -adjustment));
                         }
                     }
                 }
             }
         }
 
-        // Recompute layout with adjusted ratios using calculate_layout_full
+        // Apply all adjustments
+        for (idx, adj) in adjustments {
+            ratios[idx] = (ratios[idx] + adj).clamp(0.1, 0.9);
+        }
+
+        // Recompute layout with adjusted ratios
         let new_result = calculate_layout_full(
             LayoutType::Dwindle,
             window_ids,
             screen_frame,
-            0.5, // master_ratio not used for dwindle
+            0.5,
             gaps,
             &ratios,
             MasterPosition::Auto,
@@ -1028,10 +1083,21 @@ fn enforce_minimum_sizes_for_grid(
     gaps: &Gaps,
     current_ratios: &[f64],
 ) -> Option<LayoutResult> {
-    const MAX_ITERATIONS: usize = 10;
-    const ADJUSTMENT_STEP: f64 = 0.05;
+    // Reduced from 10 - proportional adjustments converge faster
+    const MAX_ITERATIONS: usize = 3;
 
     if window_ids.len() < 2 {
+        return None;
+    }
+
+    // Build minimum size lookup for O(1) access
+    let min_sizes: std::collections::HashMap<u32, (f64, f64)> = layoutable_windows
+        .iter()
+        .filter_map(|w| w.effective_minimum_size().map(|min| (w.id, min)))
+        .collect();
+
+    // Early exit: no windows have minimum sizes
+    if min_sizes.is_empty() {
         return None;
     }
 
@@ -1057,42 +1123,75 @@ fn enforce_minimum_sizes_for_grid(
     let is_landscape = screen_frame.width >= screen_frame.height;
 
     for _iteration in 0..MAX_ITERATIONS {
+        // Collect proportional adjustments based on violation severity
+        let mut total_adjustment: f64 = 0.0;
+
         for &(window_idx, violation_axis) in &violations {
-            // For 2-window layouts, first ratio controls the split
-            // For master-stack layouts (3,5,7), first ratio controls master width
-            // We'll adjust the first ratio based on which window is violating
+            // Get the window's frame and minimum size
+            let Some((_, frame)) = initial_result.get(window_idx) else {
+                continue;
+            };
+            let window_id = window_ids.get(window_idx).copied().unwrap_or(0);
+            let Some(&(min_w, min_h)) = min_sizes.get(&window_id) else {
+                continue;
+            };
+
+            // Calculate proportional adjustment based on violation magnitude
+            let width_deficit = (min_w - frame.width).max(0.0);
+            let height_deficit = (min_h - frame.height).max(0.0);
 
             let width_violated = violation_axis == 0 || violation_axis == 2;
             let height_violated = violation_axis == 1 || violation_axis == 2;
 
+            // Determine relevant deficit based on layout orientation
+            let relevant_deficit = if is_landscape && width_violated {
+                width_deficit
+            } else if !is_landscape && height_violated {
+                height_deficit
+            } else {
+                continue;
+            };
+
+            let total_dim = if is_landscape {
+                screen_frame.width
+            } else {
+                screen_frame.height
+            };
+
+            // Proportional adjustment: how much ratio change needed
+            let adjustment = (relevant_deficit / total_dim).min(0.3);
+            if adjustment < 0.01 {
+                continue;
+            }
+
             if window_ids.len() == 2 {
                 // Two windows: side by side (landscape) or stacked (portrait)
-                if (is_landscape && width_violated) || (!is_landscape && height_violated) {
-                    if window_idx == 0 {
-                        // First window needs more space
-                        ratios[0] = (ratios[0] + ADJUSTMENT_STEP).min(0.9);
-                    } else {
-                        // Second window needs more space
-                        ratios[0] = (ratios[0] - ADJUSTMENT_STEP).max(0.1);
-                    }
+                // First ratio controls the split
+                if window_idx == 0 {
+                    // First window needs more space
+                    total_adjustment += adjustment;
+                } else {
+                    // Second window needs more space
+                    total_adjustment -= adjustment;
                 }
             } else if matches!(window_ids.len(), 3 | 5 | 7) {
-                // Master-stack layouts
+                // Master-stack layouts: first ratio controls master width/height
                 if window_idx == 0 {
                     // Master window needs more space
-                    if (is_landscape && width_violated) || (!is_landscape && height_violated) {
-                        ratios[0] = (ratios[0] + ADJUSTMENT_STEP).min(0.8);
-                    }
+                    total_adjustment += adjustment;
                 } else {
                     // Stack window needs more space - reduce master
-                    if (is_landscape && width_violated) || (!is_landscape && height_violated) {
-                        ratios[0] = (ratios[0] - ADJUSTMENT_STEP).max(0.2);
-                    }
+                    total_adjustment -= adjustment;
                 }
             }
             // For other window counts (4, 6, 8, 9+), ratio adjustment is more complex
             // and would require knowing the specific grid structure. For now, we'll
             // make best-effort adjustments to the primary ratio.
+        }
+
+        // Apply accumulated adjustment
+        if total_adjustment.abs() > 0.01 && !ratios.is_empty() {
+            ratios[0] = (ratios[0] + total_adjustment).clamp(0.1, 0.9);
         }
 
         // Recompute layout using calculate_layout_full

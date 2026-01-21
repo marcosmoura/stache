@@ -6,6 +6,7 @@
 use uuid::Uuid;
 
 use super::window::sync_window_visibility_for_workspaces;
+use crate::modules::tiling::actor::messages::TargetScreen;
 use crate::modules::tiling::init::get_subscriber_handle;
 use crate::modules::tiling::state::TilingState;
 
@@ -299,8 +300,10 @@ pub fn on_cycle_workspace(state: &mut TilingState, direction: CycleDirection) {
 /// sizes so the layout is calculated fresh, as if the app had just started.
 pub fn on_balance_workspace(state: &mut TilingState, workspace_id: Uuid) {
     // Get window IDs in this workspace before clearing ratios
-    let window_ids: Vec<u32> =
-        state.get_workspace(workspace_id).map(|ws| ws.window_ids).unwrap_or_default();
+    let window_ids: Vec<u32> = state
+        .get_workspace(workspace_id)
+        .map(|ws| ws.window_ids.to_vec())
+        .unwrap_or_default();
 
     // Clear split ratios
     state.update_workspace(workspace_id, |ws| {
@@ -331,7 +334,7 @@ pub fn on_balance_workspace(state: &mut TilingState, workspace_id: Uuid) {
 ///
 /// The workspace becomes visible on the target screen.
 /// If it was visible on the source screen, another workspace becomes visible there.
-pub fn on_send_workspace_to_screen(state: &mut TilingState, target_screen: &str) {
+pub fn on_send_workspace_to_screen(state: &mut TilingState, target_screen: &TargetScreen) {
     // Get focused workspace
     let focus = state.get_focus_state();
     let Some(workspace_id) = focus.focused_workspace_id else {
@@ -351,7 +354,10 @@ pub fn on_send_workspace_to_screen(state: &mut TilingState, target_screen: &str)
     // Resolve target screen
     let target_screen_id = resolve_screen(state, target_screen);
     let Some(target_screen_id) = target_screen_id else {
-        log::warn!("send_workspace_to_screen: screen '{target_screen}' not found");
+        log::warn!(
+            "send_workspace_to_screen: screen '{}' not found",
+            target_screen.as_str()
+        );
         return;
     };
 
@@ -413,7 +419,8 @@ pub fn on_send_workspace_to_screen(state: &mut TilingState, target_screen: &str)
     });
 
     log::debug!(
-        "Sent workspace '{workspace_name}' from screen {source_screen_id} to '{target_screen}'"
+        "Sent workspace '{workspace_name}' from screen {source_screen_id} to '{}'",
+        target_screen.as_str()
     );
 
     // Sync window visibility
@@ -437,15 +444,17 @@ pub fn on_send_workspace_to_screen(state: &mut TilingState, target_screen: &str)
 // Screen Resolution Helper
 // ============================================================================
 
-/// Resolve a screen name to a screen ID.
+/// Resolve a target screen to a screen ID.
 ///
-/// Supports "main"/"primary", "secondary", or display name.
+/// Supports `Main`/`Secondary` or named display.
 #[must_use]
-pub fn resolve_screen(state: &TilingState, target: &str) -> Option<u32> {
-    match target.to_lowercase().as_str() {
-        "main" | "primary" => state.screens.iter().find(|s| s.is_main).map(|s| s.id),
-        "secondary" => state.screens.iter().find(|s| !s.is_main).map(|s| s.id),
-        name => state.screens.iter().find(|s| s.name.eq_ignore_ascii_case(name)).map(|s| s.id),
+pub fn resolve_screen(state: &TilingState, target: &TargetScreen) -> Option<u32> {
+    match target {
+        TargetScreen::Main => state.screens.iter().find(|s| s.is_main).map(|s| s.id),
+        TargetScreen::Secondary => state.screens.iter().find(|s| !s.is_main).map(|s| s.id),
+        TargetScreen::Named(name) => {
+            state.screens.iter().find(|s| s.name.eq_ignore_ascii_case(name)).map(|s| s.id)
+        }
     }
 }
 

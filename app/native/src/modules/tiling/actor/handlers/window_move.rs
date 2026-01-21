@@ -6,6 +6,7 @@
 use uuid::Uuid;
 
 use super::workspace::resolve_screen;
+use crate::modules::tiling::actor::messages::TargetScreen;
 use crate::modules::tiling::init::get_subscriber_handle;
 use crate::modules::tiling::state::TilingState;
 
@@ -28,7 +29,7 @@ pub fn on_move_window_to_workspace(state: &mut TilingState, window_id: u32, work
 
     // Remove from old workspace
     state.update_workspace(old_workspace_id, |ws| {
-        ws.window_ids.retain(|&id| id != window_id);
+        ws.window_ids.retain(|id| *id != window_id);
         // Update focused index if needed
         if let Some(idx) = ws.focused_window_index
             && let Some(pos) = ws.window_ids.iter().position(|&id| id == window_id)
@@ -143,11 +144,14 @@ pub fn on_toggle_floating(state: &mut TilingState, window_id: u32) {
 /// Send the focused window to another screen.
 ///
 /// The window is moved to the visible workspace on the target screen.
-pub fn on_send_window_to_screen(state: &mut TilingState, target_screen: &str) {
+pub fn on_send_window_to_screen(state: &mut TilingState, target_screen: &TargetScreen) {
     // Resolve target screen
     let target_screen_id = resolve_screen(state, target_screen);
     let Some(target_screen_id) = target_screen_id else {
-        log::warn!("send_window_to_screen: screen '{target_screen}' not found");
+        log::warn!(
+            "send_window_to_screen: screen '{}' not found",
+            target_screen.as_str()
+        );
         return;
     };
 
@@ -190,7 +194,7 @@ pub fn on_send_window_to_screen(state: &mut TilingState, target_screen: &str) {
 
     // Use move_window_to_workspace to do the actual work
     on_move_window_to_workspace(state, window_id, target_workspace_id);
-    log::debug!("Sent window {window_id} to screen '{target_screen}'");
+    log::debug!("Sent window {window_id} to screen '{}'", target_screen.as_str());
 }
 
 // ============================================================================
@@ -281,14 +285,14 @@ mod tests {
 
         // Initial order: [100, 200, 300]
         let ws = state.get_workspace(ws_id).unwrap();
-        assert_eq!(ws.window_ids, vec![100, 200, 300]);
+        assert_eq!(ws.window_ids.as_slice(), &[100, 200, 300]);
 
         // Swap 100 and 300
         on_swap_windows(&mut state, 100, 300);
 
         // New order: [300, 200, 100]
         let ws = state.get_workspace(ws_id).unwrap();
-        assert_eq!(ws.window_ids, vec![300, 200, 100]);
+        assert_eq!(ws.window_ids.as_slice(), &[300, 200, 100]);
     }
 
     #[test]

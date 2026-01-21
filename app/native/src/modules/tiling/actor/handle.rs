@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
 
-use super::messages::{QueryResult, StateMessage, StateQuery};
+use super::messages::{QueryResult, ResizeDimension, StateMessage, StateQuery, TargetScreen};
 
 /// Error types for actor communication.
 #[derive(Debug, thiserror::Error)]
@@ -299,7 +299,7 @@ impl StateActorHandle {
     /// Returns [`ActorError::SendFailed`] if the channel is closed.
     pub fn send_window_to_screen(&self, target_screen: &str) -> Result<(), ActorError> {
         self.send(StateMessage::SendWindowToScreen {
-            target_screen: target_screen.to_string(),
+            target_screen: TargetScreen::parse(target_screen),
         })
     }
 
@@ -312,7 +312,7 @@ impl StateActorHandle {
     /// Returns [`ActorError::SendFailed`] if the channel is closed.
     pub fn send_workspace_to_screen(&self, target_screen: &str) -> Result<(), ActorError> {
         self.send(StateMessage::SendWorkspaceToScreen {
-            target_screen: target_screen.to_string(),
+            target_screen: TargetScreen::parse(target_screen),
         })
     }
 
@@ -328,11 +328,13 @@ impl StateActorHandle {
     /// # Errors
     ///
     /// Returns [`ActorError::SendFailed`] if the channel is closed.
+    /// Returns `Ok(())` but logs a warning if the dimension is invalid.
     pub fn resize_focused_window(&self, dimension: &str, amount: i32) -> Result<(), ActorError> {
-        self.send(StateMessage::ResizeFocusedWindow {
-            dimension: dimension.to_string(),
-            amount,
-        })
+        let Some(dim) = ResizeDimension::parse(dimension) else {
+            log::warn!("resize_focused_window: invalid dimension '{dimension}'");
+            return Ok(());
+        };
+        self.send(StateMessage::ResizeFocusedWindow { dimension: dim, amount })
     }
 
     /// Apply a floating preset to the focused window.
