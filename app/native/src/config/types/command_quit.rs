@@ -52,7 +52,7 @@ mod tests {
     #[test]
     fn test_command_quit_config_default() {
         let config = CommandQuitConfig::default();
-        assert!(config.enabled);
+        assert!(!config.enabled); // Disabled by default (opt-in feature)
         assert_eq!(config.hold_duration, 1500);
     }
 
