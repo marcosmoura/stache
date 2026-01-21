@@ -583,12 +583,18 @@ pub fn on_window_minimized(state: &mut TilingState, window_id: u32, minimized: b
 pub fn on_window_title_changed(state: &mut TilingState, window_id: u32, title: &str) {
     tracing::debug!("Handling window title changed: {window_id} to '{title}'");
 
+    // Get window's workspace before updating
+    let window_workspace_id = state.get_window(window_id).map(|w| w.workspace_id);
+
     state.update_window(window_id, |w| {
         w.title = title.to_string();
     });
 
-    // Emit event to frontend so bar can update
-    crate::modules::tiling::init::emit_window_title_changed(window_id, title);
+    // Only emit event to frontend if window is in the focused workspace
+    let focused_workspace_id = state.get_focus_state().focused_workspace_id;
+    if window_workspace_id.is_some() && window_workspace_id == focused_workspace_id {
+        crate::modules::tiling::init::emit_window_title_changed(window_id, title);
+    }
 }
 
 /// Handles a window fullscreen state changed event.
