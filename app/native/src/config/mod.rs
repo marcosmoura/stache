@@ -7,7 +7,8 @@
 //! Both single-line (`//`) and multi-line (`/* */`) comments are allowed.
 
 pub mod env;
-mod types;
+pub mod template;
+pub mod types;
 mod watcher;
 
 use std::path::PathBuf;
@@ -51,6 +52,7 @@ pub fn set_custom_config_path(path: PathBuf) -> bool { CUSTOM_CONFIG_PATH.set(pa
 /// Loads the configuration from disk.
 ///
 /// Returns the loaded configuration, or a default configuration if loading fails.
+/// If no configuration file exists, creates a template configuration file.
 fn load_or_default() -> StacheConfig {
     // Check for custom config path first
     let result = CUSTOM_CONFIG_PATH.get().map_or_else(load_config_default, load_config_from_path);
@@ -60,10 +62,47 @@ fn load_or_default() -> StacheConfig {
             let _ = CONFIG_PATH.set(path);
             config
         }
-        Err(ConfigError::NotFound) => StacheConfig::default(),
+        Err(ConfigError::NotFound) => {
+            // Create a template config file at the default location
+            create_default_config_file();
+            StacheConfig::default()
+        }
         Err(err) => {
             tracing::warn!(error = %err, "failed to load configuration, using defaults");
             StacheConfig::default()
+        }
+    }
+}
+
+/// Creates a template configuration file at the default location.
+///
+/// This is called when no configuration file is found during startup.
+fn create_default_config_file() {
+    // Get the first (preferred) config path
+    let Some(config_path) = config_paths().into_iter().next() else {
+        tracing::debug!("no config path available for creating template");
+        return;
+    };
+
+    // Only create if it doesn't exist
+    if config_path.exists() {
+        return;
+    }
+
+    match template::create_config_file(&config_path) {
+        Ok(()) => {
+            let _ = CONFIG_PATH.set(config_path.clone());
+            tracing::info!(
+                path = %config_path.display(),
+                "created default configuration file"
+            );
+        }
+        Err(err) => {
+            tracing::debug!(
+                error = %err,
+                path = %config_path.display(),
+                "failed to create default configuration file"
+            );
         }
     }
 }
