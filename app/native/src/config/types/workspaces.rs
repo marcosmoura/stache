@@ -93,9 +93,9 @@ pub struct WorkspaceConfig {
     pub name: String,
 
     /// Layout mode for this workspace.
-    /// Default: "floating"
-    #[serde(default)]
-    pub layout: LayoutType,
+    /// If not specified, uses the `defaultLayout` from the tiling config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<LayoutType>,
 
     /// Screen assignment: "main"/"primary", "secondary", or screen name.
     /// Default: "main"

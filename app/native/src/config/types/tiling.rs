@@ -173,12 +173,16 @@ impl Default for MasterConfig {
 ///
 /// Provides virtual workspace management with multiple layout modes,
 /// configurable gaps, and window matching rules.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default, rename_all = "camelCase")]
 pub struct TilingConfig {
     /// Whether the tiling window manager is enabled.
     /// Default: false
     pub enabled: bool,
+
+    /// Default layout for workspaces that don't specify a layout.
+    /// Default: "dwindle"
+    pub default_layout: LayoutType,
 
     /// Workspace definitions.
     /// If empty and tiling is enabled, creates one default workspace per screen.
@@ -202,6 +206,22 @@ pub struct TilingConfig {
     /// Window border configuration.
     /// Borders provide visual feedback for focus state and layout mode.
     pub borders: BordersConfig,
+}
+
+impl Default for TilingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            default_layout: LayoutType::Dwindle,
+            workspaces: Vec::new(),
+            ignore: Vec::new(),
+            animations: AnimationConfig::default(),
+            gaps: GapsConfigValue::default(),
+            floating: FloatingConfig::default(),
+            master: MasterConfig::default(),
+            borders: BordersConfig::default(),
+        }
+    }
 }
 
 impl TilingConfig {
@@ -243,6 +263,15 @@ mod tests {
     fn test_tiling_config_default() {
         let config = TilingConfig::default();
         assert!(!config.is_enabled());
+        assert_eq!(config.default_layout, LayoutType::Dwindle);
         assert!(config.workspaces.is_empty());
+    }
+
+    #[test]
+    fn test_default_layout_serialization() {
+        let json = r#"{"enabled": true, "defaultLayout": "master"}"#;
+        let config: TilingConfig = serde_json::from_str(json).unwrap();
+        assert!(config.enabled);
+        assert_eq!(config.default_layout, LayoutType::Master);
     }
 }

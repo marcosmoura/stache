@@ -190,7 +190,8 @@ fn create_workspaces_from_config(state: &mut TilingState) {
             });
 
             if let Some(screen_id) = screen_id {
-                let layout = convert_layout_type(ws_config.layout);
+                let config_layout = ws_config.layout.unwrap_or(tiling_config.default_layout);
+                let layout = convert_layout_type(config_layout);
                 let workspace = Workspace {
                     id: uuid::Uuid::now_v7(),
                     name: ws_config.name.clone(),
@@ -217,6 +218,9 @@ fn create_workspaces_from_config(state: &mut TilingState) {
 
 /// Creates a default workspace for each screen.
 fn create_default_workspaces(state: &mut TilingState) {
+    let config = get_config();
+    let default_layout = convert_layout_type(config.tiling.default_layout);
+
     let screen_info: Vec<(usize, u32)> =
         state.screens.iter().enumerate().map(|(i, s)| (i, s.id)).collect();
 
@@ -227,7 +231,7 @@ fn create_default_workspaces(state: &mut TilingState) {
             id: uuid::Uuid::now_v7(),
             name: name.clone(),
             screen_id,
-            layout: LayoutType::Dwindle,
+            layout: default_layout,
             is_visible: false,
             is_focused: false,
             window_ids: WindowIdList::new(),
