@@ -20,6 +20,7 @@ use crate::{config, schema};
 
 pub mod audio;
 pub mod cache;
+pub mod config_cmd;
 pub mod tiling;
 pub mod types;
 pub mod wallpaper;
@@ -27,6 +28,7 @@ pub mod wallpaper;
 // Re-export commonly used types for convenience
 pub use audio::AudioCommands;
 pub use cache::CacheCommands;
+pub use config_cmd::ConfigCommands;
 pub use tiling::TilingCommands;
 pub use wallpaper::WallpaperCommands;
 
@@ -75,6 +77,12 @@ pub enum Commands {
     /// Manage windows, workspaces, and query tiling state.
     #[command(subcommand)]
     Tiling(TilingCommands),
+
+    /// Configuration file management commands.
+    ///
+    /// Initialize, view, and manage the configuration file.
+    #[command(subcommand)]
+    Config(ConfigCommands),
 
     /// Reload Stache configuration.
     ///
@@ -141,6 +149,7 @@ impl Cli {
             Commands::Cache(cmd) => cache::execute(cmd),
             Commands::Audio(cmd) => audio::execute(cmd),
             Commands::Tiling(cmd) => tiling::execute(cmd),
+            Commands::Config(cmd) => config_cmd::execute(cmd),
 
             Commands::Reload => {
                 if !ipc::send_notification(&StacheNotification::Reload) {
@@ -434,8 +443,9 @@ mod tests {
     fn test_cli_parses_tiling_query_screens() {
         let cli = Cli::try_parse_from(["stache", "tiling", "query", "screens"]).unwrap();
         match cli.command {
-            Commands::Tiling(TilingCommands::Query { json, command }) => {
+            Commands::Tiling(TilingCommands::Query { json, detailed, command }) => {
                 assert!(!json);
+                assert!(!detailed);
                 assert!(matches!(command, Some(TilingQueryCommands::Screens)));
             }
             _ => panic!("Expected Tiling Query command"),

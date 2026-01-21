@@ -20,7 +20,7 @@ use crate::utils::ipc_socket::{self, IpcError, IpcQuery, IpcResponse};
 #[derive(Subcommand, Debug)]
 #[command(next_display_order = None)]
 pub enum TilingCommands {
-    /// Query tiling state (screens, workspaces, windows).
+    /// Query tiling state (screens, workspaces, windows, apps).
     ///
     /// Without a subcommand, outputs all query results.
     /// Use --json for JSON output instead of human-readable tables.
@@ -30,7 +30,11 @@ pub enum TilingCommands {
         #[arg(long, short = 'j', global = true)]
         json: bool,
 
-        /// Query subcommand (screens, workspaces, windows).
+        /// Show detailed information (more columns/fields).
+        #[arg(long, short = 'd', global = true)]
+        detailed: bool,
+
+        /// Query subcommand (screens, workspaces, windows, apps).
         #[command(subcommand)]
         command: Option<TilingQueryCommands>,
     },
@@ -84,7 +88,8 @@ pub enum TilingQueryCommands {
     #[command(after_long_help = r#"Examples:
   stache tiling query windows                       # List all windows
   stache tiling query windows --focused-workspace   # Windows in focused workspace
-  stache tiling query windows --workspace coding    # Windows in 'coding' workspace"#)]
+  stache tiling query windows --workspace coding    # Windows in 'coding' workspace
+  stache tiling query -d windows                    # Show detailed window info"#)]
     Windows {
         /// Only show windows on the focused screen.
         #[arg(long, conflicts_with_all = ["screen", "workspace", "focused_workspace"])]
@@ -102,6 +107,16 @@ pub enum TilingQueryCommands {
         #[arg(long, conflicts_with_all = ["focused_screen", "focused_workspace"])]
         workspace: Option<String>,
     },
+
+    /// List all running applications.
+    ///
+    /// Returns information about all running applications that can own windows,
+    /// excluding apps that match ignore rules in the configuration.
+    #[command(after_long_help = r#"Examples:
+  stache tiling query apps            # List all running apps
+  stache tiling query --json apps     # Output as JSON
+  stache tiling query -d apps         # Show detailed app info"#)]
+    Apps,
 }
 
 /// Tiling window command arguments.
@@ -199,7 +214,9 @@ pub struct TilingWorkspaceArgs {
 /// Execute tiling subcommands.
 pub fn execute(cmd: &TilingCommands) -> Result<(), StacheError> {
     match cmd {
-        TilingCommands::Query { json, command } => execute_query(*json, command.as_ref()),
+        TilingCommands::Query { json, detailed, command } => {
+            execute_query(*json, *detailed, command.as_ref())
+        }
         TilingCommands::Window(args) => execute_window(args),
         TilingCommands::Workspace(args) => execute_workspace(args),
     }
@@ -207,7 +224,11 @@ pub fn execute(cmd: &TilingCommands) -> Result<(), StacheError> {
 
 /// Execute tiling query subcommands.
 #[allow(clippy::unnecessary_wraps)] // Will return errors when fully implemented
-fn execute_query(json: bool, cmd: Option<&TilingQueryCommands>) -> Result<(), StacheError> {
+fn execute_query(
+    json: bool,
+    detailed: bool,
+    cmd: Option<&TilingQueryCommands>,
+) -> Result<(), StacheError> {
     match cmd {
         None => {
             // No subcommand: show help
@@ -232,11 +253,16 @@ fn execute_query(json: bool, cmd: Option<&TilingQueryCommands>) -> Result<(), St
         }) => {
             execute_query_windows(
                 json,
+                detailed,
                 *focused_screen,
                 *focused_workspace,
                 screen.as_deref(),
                 workspace.as_deref(),
             );
+            Ok(())
+        }
+        Some(TilingQueryCommands::Apps) => {
+            execute_query_apps(json, detailed);
             Ok(())
         }
     }
@@ -432,9 +458,15 @@ fn execute_query_workspaces(json: bool, focused_screen: bool, screen: Option<&st
 }
 
 /// Execute tiling query windows command.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::too_many_lines,
+    clippy::fn_params_excessive_bools
+)]
 fn execute_query_windows(
     json: bool,
+    detailed: bool,
     focused_screen: bool,
     focused_workspace: bool,
     screen: Option<&str>,
@@ -456,12 +488,37 @@ fn execute_query_windows(
         focused: String,
     }
 
+    #[derive(Tabled)]
+    struct WindowRowDetailed {
+        #[tabled(rename = "ID")]
+        id: u32,
+        #[tabled(rename = "PID")]
+        pid: i32,
+        #[tabled(rename = "App")]
+        app: String,
+        #[tabled(rename = "Bundle ID")]
+        bundle_id: String,
+        #[tabled(rename = "Title")]
+        title: String,
+        #[tabled(rename = "Workspace")]
+        workspace: String,
+        #[tabled(rename = "Frame")]
+        frame: String,
+        #[tabled(rename = "Min")]
+        minimized: String,
+        #[tabled(rename = "Float")]
+        floating: String,
+        #[tabled(rename = "Focus")]
+        focused: String,
+    }
+
     // Send IPC query to app
     let query = IpcQuery::Windows {
         screen: screen.map(String::from),
         workspace: workspace.map(String::from),
         focused_screen,
         focused_workspace,
+        detailed,
     };
 
     let response = match ipc_socket::send_query(query) {
@@ -498,42 +555,174 @@ fn execute_query_windows(
                     return;
                 }
 
-                let rows: Vec<WindowRow> = windows
+                let count = windows.len();
+                println!("{}", format!("Windows ({count})").bold());
+
+                if detailed {
+                    let rows: Vec<WindowRowDetailed> = windows
+                        .iter()
+                        .map(|w| {
+                            let frame = &w["frame"];
+                            WindowRowDetailed {
+                                id: w["id"].as_u64().unwrap_or(0) as u32,
+                                pid: w["pid"].as_i64().unwrap_or(0) as i32,
+                                app: output::truncate(w["appName"].as_str().unwrap_or("?"), 15),
+                                bundle_id: output::truncate(w["appId"].as_str().unwrap_or("?"), 25),
+                                title: output::truncate(
+                                    w["title"]
+                                        .as_str()
+                                        .filter(|s| !s.is_empty())
+                                        .unwrap_or("(no title)"),
+                                    25,
+                                ),
+                                workspace: w["workspace"].as_str().unwrap_or("?").to_string(),
+                                frame: format!(
+                                    "{}x{} @ {}, {}",
+                                    frame["width"].as_f64().unwrap_or(0.0) as u32,
+                                    frame["height"].as_f64().unwrap_or(0.0) as u32,
+                                    frame["x"].as_f64().unwrap_or(0.0) as i32,
+                                    frame["y"].as_f64().unwrap_or(0.0) as i32
+                                ),
+                                minimized: output::format_bool(
+                                    w["isMinimized"].as_bool().unwrap_or(false),
+                                ),
+                                floating: output::format_bool(
+                                    w["isFloating"].as_bool().unwrap_or(false),
+                                ),
+                                focused: output::format_bool(
+                                    w["isFocused"].as_bool().unwrap_or(false),
+                                ),
+                            }
+                        })
+                        .collect();
+
+                    let table = Table::new(rows)
+                        .with(Style::rounded())
+                        .with(Modify::new(Columns::one(0)).with(Alignment::right()))
+                        .with(Modify::new(Columns::one(1)).with(Alignment::right()))
+                        .with(Modify::new(Columns::new(7..10)).with(Alignment::center()))
+                        .to_string();
+
+                    println!("{table}");
+                } else {
+                    let rows: Vec<WindowRow> = windows
+                        .iter()
+                        .map(|w| {
+                            let frame = &w["frame"];
+                            WindowRow {
+                                id: w["id"].as_u64().unwrap_or(0) as u32,
+                                app: output::truncate(w["appName"].as_str().unwrap_or("?"), 20),
+                                title: output::truncate(
+                                    w["title"]
+                                        .as_str()
+                                        .filter(|s| !s.is_empty())
+                                        .unwrap_or("(no title)"),
+                                    35,
+                                ),
+                                workspace: w["workspace"].as_str().unwrap_or("?").to_string(),
+                                frame: format!(
+                                    "{}x{} @ {}, {}",
+                                    frame["width"].as_f64().unwrap_or(0.0) as u32,
+                                    frame["height"].as_f64().unwrap_or(0.0) as u32,
+                                    frame["x"].as_f64().unwrap_or(0.0) as i32,
+                                    frame["y"].as_f64().unwrap_or(0.0) as i32
+                                ),
+                                focused: output::format_bool(
+                                    w["isFocused"].as_bool().unwrap_or(false),
+                                ),
+                            }
+                        })
+                        .collect();
+
+                    let table = Table::new(rows)
+                        .with(Style::rounded())
+                        .with(Modify::new(Columns::one(0)).with(Alignment::right()))
+                        .with(Modify::new(Columns::one(4)).with(Alignment::right()))
+                        .with(Modify::new(Columns::last()).with(Alignment::center()))
+                        .to_string();
+
+                    println!("{table}");
+                }
+            }
+        }
+        IpcResponse::Error { error } => {
+            if json {
+                println!(r#"{{"error":"{error}"}}"#);
+            } else {
+                println!("{} {error}", "Error:".red());
+            }
+        }
+    }
+}
+
+/// Execute tiling query apps command.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn execute_query_apps(json: bool, _detailed: bool) {
+    #[derive(Tabled)]
+    struct AppRow {
+        #[tabled(rename = "PID")]
+        pid: i32,
+        #[tabled(rename = "Name")]
+        name: String,
+        #[tabled(rename = "Bundle ID")]
+        bundle_id: String,
+        #[tabled(rename = "Visible")]
+        visible: String,
+    }
+
+    // Send IPC query to app
+    let response = match ipc_socket::send_query(IpcQuery::Apps) {
+        Ok(r) => r,
+        Err(IpcError::AppNotRunning) => {
+            if json {
+                println!(r#"{{"error":"Stache app is not running"}}"#);
+            } else {
+                println!("{}", "Stache app is not running.".red());
+            }
+            return;
+        }
+        Err(e) => {
+            if json {
+                println!(r#"{{"error":"{e}"}}"#);
+            } else {
+                println!("{} {e}", "Error:".red());
+            }
+            return;
+        }
+    };
+
+    match response {
+        IpcResponse::Success { data } => {
+            if json {
+                output::print_highlighted_json(&data);
+            } else {
+                // Parse apps from response
+                let apps: Vec<serde_json::Value> = serde_json::from_value(data).unwrap_or_default();
+
+                if apps.is_empty() {
+                    println!("{}", "No running apps found.".dimmed());
+                    return;
+                }
+
+                let count = apps.len();
+                println!("{}", format!("Running Apps ({count})").bold());
+
+                let rows: Vec<AppRow> = apps
                     .iter()
-                    .map(|w| {
-                        let frame = &w["frame"];
-                        WindowRow {
-                            id: w["id"].as_u64().unwrap_or(0) as u32,
-                            app: output::truncate(w["appName"].as_str().unwrap_or("?"), 20),
-                            title: output::truncate(
-                                w["title"]
-                                    .as_str()
-                                    .filter(|s| !s.is_empty())
-                                    .unwrap_or("(no title)"),
-                                35,
-                            ),
-                            workspace: w["workspace"].as_str().unwrap_or("?").to_string(),
-                            frame: format!(
-                                "{}x{} @ {}, {}",
-                                frame["width"].as_f64().unwrap_or(0.0) as u32,
-                                frame["height"].as_f64().unwrap_or(0.0) as u32,
-                                frame["x"].as_f64().unwrap_or(0.0) as i32,
-                                frame["y"].as_f64().unwrap_or(0.0) as i32
-                            ),
-                            focused: output::format_bool(w["isFocused"].as_bool().unwrap_or(false)),
-                        }
+                    .map(|a| AppRow {
+                        pid: a["pid"].as_i64().unwrap_or(0) as i32,
+                        name: output::truncate(a["name"].as_str().unwrap_or("?"), 25),
+                        bundle_id: output::truncate(a["bundleId"].as_str().unwrap_or("?"), 35),
+                        visible: output::format_bool(!a["isHidden"].as_bool().unwrap_or(false)),
                     })
                     .collect();
 
                 let table = Table::new(rows)
                     .with(Style::rounded())
                     .with(Modify::new(Columns::one(0)).with(Alignment::right()))
-                    .with(Modify::new(Columns::one(4)).with(Alignment::right()))
                     .with(Modify::new(Columns::last()).with(Alignment::center()))
                     .to_string();
 
-                let count = windows.len();
-                println!("{}", format!("Windows ({count})").bold());
                 println!("{table}");
             }
         }
@@ -687,8 +876,9 @@ mod tests {
     fn test_tiling_query_screens_parse() {
         let cli = TestCli::try_parse_from(["test", "query", "screens"]).unwrap();
         match cli.command {
-            TilingCommands::Query { json, command } => {
+            TilingCommands::Query { json, detailed, command } => {
                 assert!(!json);
+                assert!(!detailed);
                 assert!(matches!(command, Some(TilingQueryCommands::Screens)));
             }
             _ => panic!("Expected Query command"),
@@ -699,8 +889,9 @@ mod tests {
     fn test_tiling_query_screens_json_parse() {
         let cli = TestCli::try_parse_from(["test", "query", "--json", "screens"]).unwrap();
         match cli.command {
-            TilingCommands::Query { json, command } => {
+            TilingCommands::Query { json, detailed, command } => {
                 assert!(json);
+                assert!(!detailed);
                 assert!(matches!(command, Some(TilingQueryCommands::Screens)));
             }
             _ => panic!("Expected Query command"),
@@ -711,8 +902,9 @@ mod tests {
     fn test_tiling_query_workspaces_parse() {
         let cli = TestCli::try_parse_from(["test", "query", "workspaces"]).unwrap();
         match cli.command {
-            TilingCommands::Query { json, command } => {
+            TilingCommands::Query { json, detailed, command } => {
                 assert!(!json);
+                assert!(!detailed);
                 match command {
                     Some(TilingQueryCommands::Workspaces { focused_screen, screen }) => {
                         assert!(!focused_screen);
@@ -805,6 +997,45 @@ mod tests {
                 }
                 _ => panic!("Expected Windows command"),
             },
+            _ => panic!("Expected Query command"),
+        }
+    }
+
+    #[test]
+    fn test_tiling_query_apps_parse() {
+        let cli = TestCli::try_parse_from(["test", "query", "apps"]).unwrap();
+        match cli.command {
+            TilingCommands::Query { json, detailed, command } => {
+                assert!(!json);
+                assert!(!detailed);
+                assert!(matches!(command, Some(TilingQueryCommands::Apps)));
+            }
+            _ => panic!("Expected Query command"),
+        }
+    }
+
+    #[test]
+    fn test_tiling_query_detailed_flag_parse() {
+        let cli = TestCli::try_parse_from(["test", "query", "-d", "windows"]).unwrap();
+        match cli.command {
+            TilingCommands::Query { json, detailed, command } => {
+                assert!(!json);
+                assert!(detailed);
+                assert!(matches!(command, Some(TilingQueryCommands::Windows { .. })));
+            }
+            _ => panic!("Expected Query command"),
+        }
+    }
+
+    #[test]
+    fn test_tiling_query_detailed_long_flag_parse() {
+        let cli = TestCli::try_parse_from(["test", "query", "--detailed", "apps"]).unwrap();
+        match cli.command {
+            TilingCommands::Query { json, detailed, command } => {
+                assert!(!json);
+                assert!(detailed);
+                assert!(matches!(command, Some(TilingQueryCommands::Apps)));
+            }
             _ => panic!("Expected Query command"),
         }
     }

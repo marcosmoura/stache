@@ -83,7 +83,13 @@ pub enum IpcQuery {
         focused_screen: bool,
         #[serde(default, rename = "focusedWorkspace")]
         focused_workspace: bool,
+        /// Include detailed information about each window.
+        #[serde(default)]
+        detailed: bool,
     },
+
+    /// Query all running applications (excluding ignored apps).
+    Apps,
 
     /// Ping to check if app is running.
     Ping,
@@ -426,6 +432,7 @@ mod tests {
             workspace: None,
             focused_screen: false,
             focused_workspace: true,
+            detailed: false,
         };
         let json = serde_json::to_string(&query).unwrap();
         assert!(json.contains(r#""type":"windows""#));

@@ -588,12 +588,15 @@ pub fn handle_ipc_query(query: &IpcQuery) -> Option<IpcResponse> {
             workspace,
             focused_screen,
             focused_workspace,
+            ..
         } => handle_windows_query(
             screen.as_deref(),
             workspace.as_deref(),
             *focused_screen,
             *focused_workspace,
         ),
+
+        IpcQuery::Apps => handle_apps_query(),
 
         IpcQuery::V2State => {
             if !is_initialized() {
@@ -1096,6 +1099,32 @@ fn handle_windows_query(
 
         Some(IpcResponse::success(filtered_windows))
     })
+}
+
+/// Handles the `apps` query - returns all running applications (excluding ignored apps).
+#[allow(clippy::unnecessary_wraps)] // Matches other handler signatures
+fn handle_apps_query() -> Option<IpcResponse> {
+    use super::rules::should_tile_window;
+    use super::window::get_running_apps;
+
+    // Get all running apps
+    let apps = get_running_apps();
+
+    // Filter out apps that match ignore rules and format response
+    let app_infos: Vec<_> = apps
+        .iter()
+        .filter(|app| should_tile_window(&app.bundle_id, &app.name))
+        .map(|app| {
+            serde_json::json!({
+                "pid": app.pid,
+                "name": app.name,
+                "bundleId": app.bundle_id,
+                "isHidden": app.is_hidden,
+            })
+        })
+        .collect();
+
+    Some(IpcResponse::success(app_infos))
 }
 
 // ============================================================================
