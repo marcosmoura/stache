@@ -411,9 +411,9 @@ impl WindowElementCache {
         frame
     }
 
-    /// Gets the frame of a window using the fast SkyLight path when available.
+    /// Gets the frame of a window using the fast `SkyLight` path when available.
     ///
-    /// Falls back to the AX-based cache if SkyLight fails.
+    /// Falls back to the AX-based cache if `SkyLight` fails.
     #[must_use]
     pub fn get_window_frame_fast(&self, window_id: u32) -> Option<Rect> {
         skylight::get_window_bounds_fast(window_id).or_else(|| self.get_window_frame(window_id))
