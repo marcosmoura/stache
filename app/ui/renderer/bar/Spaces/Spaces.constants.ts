@@ -60,7 +60,10 @@ const appIcons = {
   'Microsoft Teams': UserMultiple02Icon,
   'Proton Drive': HardDriveIcon,
   'Proton Pass': SecurityPasswordIcon,
+  // WTF? There is a special character in the app name
+  '‎WhatsApp': WhatsappIcon,
   'Zed Preview': CodeSquareIcon,
+  Bloom: Folder01Icon,
   Code: VisualStudioCodeIcon,
   Dia: ArcBrowserIcon,
   Discord: DiscordIcon,
@@ -72,10 +75,8 @@ const appIcons = {
   Settings: Settings01Icon,
   Slack: SlackIcon,
   Spotify: SpotifyIcon,
-  WhatsApp: WhatsappIcon,
   TIDAL: SiTidal,
-  // WTF? There is a special character in the app name
-  '‎WhatsApp': WhatsappIcon,
+  WhatsApp: WhatsappIcon,
   Zoom: ZoomIcon,
 } as const;
 
