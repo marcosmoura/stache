@@ -40,7 +40,6 @@ export const MEDIA_APPS_BY_BUNDLE_ID = Object.values(MEDIA_APPS).reduce<Record<s
  * Default icon props for unknown media players.
  */
 const DEFAULT_PLAYER_ICON: IconProps = {
-  pack: 'hugeicons',
   icon: PlayCircle02Icon,
   color: colors.text,
   size: 22,
@@ -51,19 +50,16 @@ const DEFAULT_PLAYER_ICON: IconProps = {
  */
 const PLAYER_ICONS: Record<string, IconProps> = {
   [MEDIA_APPS.spotify.bundleIdentifier]: {
-    pack: 'hugeicons',
     icon: SpotifyIcon,
     color: colors.green,
     size: 22,
   },
   [MEDIA_APPS.edge.bundleIdentifier]: {
-    pack: 'hugeicons',
     icon: YoutubeIcon,
     color: colors.red,
     size: 22,
   },
   [MEDIA_APPS.tidal.bundleIdentifier]: {
-    pack: 'simple-icons',
     icon: SiTidal,
     color: colors.text,
     size: 18,

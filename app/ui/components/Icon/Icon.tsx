@@ -1,14 +1,18 @@
 import { HugeiconsIcon } from '@hugeicons/react';
 
-import type { IconProps, HugeIconsProps, SimpleIconsProps } from './Icon.types';
+import type { IconProps } from './Icon.types';
+import { isSimpleIcon } from './Icon.types';
 
-export const Icon = ({ pack = 'hugeicons', ...props }: IconProps) => {
-  if (pack === 'hugeicons') {
-    const { icon, size = 18, strokeWidth = 1.8, ...rest } = props as HugeIconsProps;
-    return <HugeiconsIcon icon={icon} size={size} strokeWidth={strokeWidth} {...rest} />;
+/**
+ * Unified Icon component that automatically detects the icon library
+ * - Simple Icons (IconType) are React function components
+ * - HugeIcons (IconSvgElement) are SVG data objects
+ */
+export const Icon = ({ icon, size = 18, strokeWidth = 1.8, ...rest }: IconProps) => {
+  if (isSimpleIcon(icon)) {
+    const SimpleIcon = icon;
+    return <SimpleIcon size={size} {...rest} />;
   }
 
-  // simple-icons
-  const { icon: SimpleIcon, size = 18, ...rest } = props as SimpleIconsProps;
-  return <SimpleIcon size={size} {...rest} />;
+  return <HugeiconsIcon icon={icon} size={size} strokeWidth={strokeWidth} {...rest} />;
 };

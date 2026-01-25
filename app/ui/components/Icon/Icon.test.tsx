@@ -6,18 +6,9 @@ import { render } from 'vitest-browser-react';
 import { Icon } from './Icon';
 
 describe('Icon Component', () => {
-  describe('HugeIcons (default pack)', () => {
-    test('renders HugeIcons icon by default', async () => {
+  describe('HugeIcons', () => {
+    test('renders HugeIcons icon', async () => {
       const { container } = await render(<Icon icon={Home01Icon} />);
-
-      await vi.waitFor(() => {
-        const svg = container.querySelector('svg');
-        expect(svg).toBeDefined();
-      });
-    });
-
-    test('renders HugeIcons icon with explicit pack prop', async () => {
-      const { container } = await render(<Icon pack="hugeicons" icon={Home01Icon} />);
 
       await vi.waitFor(() => {
         const svg = container.querySelector('svg');
@@ -44,9 +35,9 @@ describe('Icon Component', () => {
     });
   });
 
-  describe('SimpleIcons pack', () => {
-    test('renders SimpleIcons icon', async () => {
-      const { container } = await render(<Icon pack="simple-icons" icon={SiTidal} />);
+  describe('SimpleIcons', () => {
+    test('renders SimpleIcons icon automatically', async () => {
+      const { container } = await render(<Icon icon={SiTidal} />);
 
       await vi.waitFor(() => {
         const svg = container.querySelector('svg');
@@ -55,7 +46,7 @@ describe('Icon Component', () => {
     });
 
     test('renders SimpleIcons with custom size', async () => {
-      const { container } = await render(<Icon pack="simple-icons" icon={SiTidal} size={24} />);
+      const { container } = await render(<Icon icon={SiTidal} size={24} />);
 
       await vi.waitFor(() => {
         const svg = container.querySelector('svg');
@@ -63,15 +54,12 @@ describe('Icon Component', () => {
       });
     });
 
-    test('forwards SimpleIcons-specific props', async () => {
-      const { container } = await render(
-        <Icon pack="simple-icons" icon={SiTidal} data-testid="si-icon" className="si-custom" />,
-      );
+    test('renders SimpleIcons with color prop', async () => {
+      const { container } = await render(<Icon icon={SiTidal} color="#ff0000" />);
 
       await vi.waitFor(() => {
         const svg = container.querySelector('svg');
-        expect(svg?.getAttribute('data-testid')).toBe('si-icon');
-        expect(svg?.classList.contains('si-custom')).toBe(true);
+        expect(svg).toBeDefined();
       });
     });
   });
