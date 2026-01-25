@@ -125,6 +125,7 @@ export const useWeatherStore = () => {
     queryKey: ['weatherLocation', config?.defaultLocation],
     queryFn: () => fetchLocationData(config!.defaultLocation),
     refetchInterval: REFETCH_INTERVAL,
+    refetchOnReconnect: true,
     enabled: !!config,
   });
 
@@ -134,6 +135,7 @@ export const useWeatherStore = () => {
     queryFn: () =>
       fetchWeatherData(config!.visualCrossingApiKey, location!, config!.defaultLocation),
     refetchInterval: REFETCH_INTERVAL,
+    refetchOnReconnect: true,
     enabled: !!config?.visualCrossingApiKey && !!location,
   });
 
