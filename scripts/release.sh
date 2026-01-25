@@ -27,6 +27,7 @@ BUNDLE_PATH=""
 INSTALL_PATH="${APPLICATIONS_DIR}/${APP_NAME}.app"
 SUDO_REFRESHED=0
 SIGNING_IDENTITY="Stache App"
+SKIP_TESTS=0
 
 log() {
 	echo ''
@@ -268,8 +269,12 @@ main() {
 	progress "Installing JavaScript dependencies via pnpm"
 	pnpm install --frozen-lockfile
 
-	progress "Running tests"
-	pnpm run test || fail "Tests failed. Aborting release."
+	if ((SKIP_TESTS == 0)); then
+		progress "Running tests"
+		pnpm run test || fail "Tests failed. Aborting release."
+	else
+		log "Skipping tests (--skip-tests)"
+	fi
 
 	progress "Formatting code"
 	pnpm run format
@@ -298,4 +303,17 @@ main() {
 	succeed "Release complete!"
 }
 
-main "$@"
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+	--skip-tests)
+		SKIP_TESTS=1
+		shift
+		;;
+	*)
+		fail "Unknown option: $1"
+		;;
+	esac
+done
+
+main
