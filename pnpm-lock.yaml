@@ -102,8 +102,8 @@ importers:
         specifier: ^4.0.18
         version: 4.0.18(vitest@4.0.18)
       '@wyw-in-js/vite':
-        specifier: 1.0.5
-        version: 1.0.5(rolldown-vite@7.3.1(@types/node@25.0.10)(jiti@2.6.1)(yaml@2.8.2))(typescript@5.9.3)
+        specifier: 1.0.6
+        version: 1.0.6(rolldown-vite@7.3.1(@types/node@25.0.10)(jiti@2.6.1)(yaml@2.8.2))(typescript@5.9.3)
       babel-plugin-module-resolver:
         specifier: ^5.0.2
         version: 5.0.2
@@ -1480,17 +1480,17 @@ packages:
       }
     engines: { node: '>=20.0.0' }
 
-  '@wyw-in-js/transform@1.0.5':
+  '@wyw-in-js/transform@1.0.6':
     resolution:
       {
-        integrity: sha512-Ql09GSzRaeMMylL5uBMQ2kKYZ4m4tj9U9E5h0YutouLxCsRjoDBhb1rIy1TMiylEdmk2RHRr5I8Ay9Vrj+b2Sw==,
+        integrity: sha512-fObTiuRgcOgl4K+cK1LuT+knCjbAWCoM/nrpHuFfwQqYLcUfM2WPFVvlXoTFxhI4svJrPBysmW7VryjwDYxEzw==,
       }
     engines: { node: '>=20.0.0' }
 
-  '@wyw-in-js/vite@1.0.5':
+  '@wyw-in-js/vite@1.0.6':
     resolution:
       {
-        integrity: sha512-rf0xy9oWs7HfukWj4ZN5aVu+GXJMohSLNNHTLNaT68jS8DOVcNK3bWRkDC5dhPZXPPsHsD/OpwBHzFRtCLhi0g==,
+        integrity: sha512-Q0u3UeIy/kluLTayGED6hDqJG8E1rU5KfJITRaOP6T1jTM02i0SOg5lD+T/j5b+lZ5kni9xaScTbx0vWruDClQ==,
       }
     engines: { node: '>=20.0.0' }
     peerDependencies:
@@ -4874,7 +4874,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@wyw-in-js/transform@1.0.5(typescript@5.9.3)':
+  '@wyw-in-js/transform@1.0.6(typescript@5.9.3)':
     dependencies:
       '@babel/core': 7.28.6
       '@babel/generator': 7.28.6
@@ -4897,10 +4897,10 @@ snapshots:
       - typescript
       - utf-8-validate
 
-  '@wyw-in-js/vite@1.0.5(rolldown-vite@7.3.1(@types/node@25.0.10)(jiti@2.6.1)(yaml@2.8.2))(typescript@5.9.3)':
+  '@wyw-in-js/vite@1.0.6(rolldown-vite@7.3.1(@types/node@25.0.10)(jiti@2.6.1)(yaml@2.8.2))(typescript@5.9.3)':
     dependencies:
       '@wyw-in-js/shared': 1.0.4
-      '@wyw-in-js/transform': 1.0.5(typescript@5.9.3)
+      '@wyw-in-js/transform': 1.0.6(typescript@5.9.3)
       vite: rolldown-vite@7.3.1(@types/node@25.0.10)(jiti@2.6.1)(yaml@2.8.2)
     transitivePeerDependencies:
       - bufferutil
