@@ -10,6 +10,7 @@ export const useWeather = () => {
   const { weather, isLoading, isConfigured } = useWeatherStore();
 
   const currentConditions = weather?.currentConditions;
+  const address = weather?.address;
 
   const icon = useMemo(() => {
     if (!currentConditions) {
@@ -28,11 +29,12 @@ export const useWeather = () => {
     const condition = currentConditions.conditions || '';
 
     if (isLaptopScreen) {
-      return `${feelsLike}°C`;
+      const city = address?.split(',')[0]?.trim() || '';
+      return `${feelsLike}°C (${city})`;
     }
 
     return `${feelsLike}°C (${condition})`;
-  }, [currentConditions, isLaptopScreen, isLoading]);
+  }, [address, currentConditions, isLaptopScreen, isLoading]);
 
   return { label, icon, ref, onClick, isConfigured };
 };
