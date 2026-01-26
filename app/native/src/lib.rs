@@ -27,7 +27,7 @@ pub mod modules;
 use std::sync::OnceLock;
 
 pub use modules::{audio, tiling};
-use modules::{bar, cmd_q, hotkey, menu_anywhere, notunes, wallpaper, widgets};
+use modules::{bar, cmd_q, hotkey, menu_anywhere, notunes, tray, wallpaper, widgets};
 use tauri::App;
 
 /// Cached accessibility permission status.
@@ -51,6 +51,10 @@ fn load_base_modules(app: &App) {
         tiling::init::handle_ipc_query(&query)
             .unwrap_or_else(|| utils::ipc_socket::IpcResponse::error("Unknown query"))
     });
+
+    // Initialize system tray
+    tracing::debug!("initializing system tray");
+    tray::init(app);
 
     // Initialize Bar (UI-critical, blocks until window is ready)
     tracing::debug!("initializing bar");

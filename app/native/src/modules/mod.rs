@@ -10,6 +10,7 @@
 //! - [`menu_anywhere`] - Summon app menus at cursor position
 //! - [`notunes`] - Prevent Apple Music from auto-launching
 //! - [`tiling`] - Tiling window manager (reactive architecture)
+//! - [`tray`] - System tray icon and menu
 //! - [`wallpaper`] - Dynamic wallpaper management
 //! - [`widgets`] - Widget overlay windows
 
@@ -20,5 +21,6 @@ pub mod hotkey;
 pub mod menu_anywhere;
 pub mod notunes;
 pub mod tiling;
+pub mod tray;
 pub mod wallpaper;
 pub mod widgets;
