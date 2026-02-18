@@ -27,9 +27,9 @@ import {
   SpotifyIcon,
   WhatsappIcon,
   ZoomIcon,
+  Vynil02Icon,
 } from '@hugeicons/core-free-icons';
 import { SiProtonvpn, SiTidal, SiTransmission } from '@icons-pack/react-simple-icons';
-import { mdiGuitarElectric } from '@mdi/js';
 
 import type { AnyIcon } from '@/components/Icon';
 import { motionRaw } from '@/design-system';
@@ -41,7 +41,7 @@ export const workspaceIcons: Record<string, AnyIcon> = {
   music: MusicNote03Icon,
   design: FigmaIcon,
   communication: MessageMultiple01Icon,
-  guitar: mdiGuitarElectric,
+  guitar: Vynil02Icon,
   misc: DashboardCircleIcon,
   files: Folder01Icon,
   tasks: CheckListIcon,

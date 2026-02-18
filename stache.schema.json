@@ -14,7 +14,8 @@
         "padding": 0,
         "weather": {
           "apiKeys": "",
-          "defaultLocation": ""
+          "defaultLocation": "",
+          "provider": "auto"
         }
       }
     },
@@ -218,7 +219,8 @@
           "$ref": "#/$defs/WeatherConfig",
           "default": {
             "apiKeys": "",
-            "defaultLocation": ""
+            "defaultLocation": "",
+            "provider": "auto"
           }
         }
       }
@@ -1058,8 +1060,33 @@
           "description": "Default location for weather data when geolocation fails.\nCan be a city name, address, or coordinates.",
           "type": "string",
           "default": ""
+        },
+        "provider": {
+          "description": "Weather data provider.\nDefault: \"auto\" - Uses Visual Crossing if API key exists, otherwise Open Meteo.",
+          "$ref": "#/$defs/WeatherProvider",
+          "default": "auto"
         }
       }
+    },
+    "WeatherProvider": {
+      "description": "Weather provider options.",
+      "oneOf": [
+        {
+          "description": "Automatically select provider based on available API keys.\nUses Visual Crossing if API key is available, otherwise Open Meteo.",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "Force use of Visual Crossing Weather API (requires API key).",
+          "type": "string",
+          "const": "visual-crossing"
+        },
+        {
+          "description": "Use Open Meteo (free, no API key required).",
+          "type": "string",
+          "const": "open-meteo"
+        }
+      ]
     },
     "WindowRule": {
       "description": "Window matching rule for workspace assignment.\n\nAll specified properties must match (AND logic).\nAt least one property must be specified.\n\n# Performance\n\nCall [`WindowRule::prepare()`] after loading rules from config to pre-compute\nlowercase versions of string fields. This avoids repeated `to_lowercase()` calls\nduring window matching.",

@@ -110,11 +110,6 @@ vi.mock('@hugeicons/react', () => ({
   HugeiconsIcon: () => null,
 }));
 
-// Mock @mdi/react to avoid issues in test environment
-vi.mock('@mdi/react', () => ({
-  Icon: () => null,
-}));
-
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn().mockImplementation((cmd: string) => {
     if (cmd in defaultInvokeMocks) {

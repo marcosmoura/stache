@@ -25,12 +25,6 @@ importers:
       '@icons-pack/react-simple-icons':
         specifier: ^13.11.2
         version: 13.11.2(react@19.2.4)
-      '@mdi/js':
-        specifier: ^7.4.47
-        version: 7.4.47
-      '@mdi/react':
-        specifier: ^1.6.1
-        version: 1.6.1
       '@tanstack/react-query':
         specifier: ^5.90.21
         version: 5.90.21(react@19.2.4)
@@ -636,18 +630,6 @@ packages:
         integrity: sha512-KRa5XaTNPLFoJawtQnt58tzdt9QrQsUL/u6yEsfYg3d0tcsTecpoHFhT4bPzwuZg9Hie7khTSFhEy+aY84Fo7A==,
       }
     engines: { node: '>=20.0.0' }
-
-  '@mdi/js@7.4.47':
-    resolution:
-      {
-        integrity: sha512-KPnNOtm5i2pMabqZxpUz7iQf+mfrYZyKCZ8QNz85czgEt7cuHcGorWfdzUMWYA0SD+a6Hn4FmJ+YhzzzjkTZrQ==,
-      }
-
-  '@mdi/react@1.6.1':
-    resolution:
-      {
-        integrity: sha512-4qZeDcluDFGFTWkHs86VOlHkm6gnKaMql13/gpIcUQ8kzxHgpj31NuCkD8abECVfbULJ3shc7Yt4HJ6Wu6SN4w==,
-      }
 
   '@napi-rs/wasm-runtime@0.2.12':
     resolution:
@@ -2862,13 +2844,6 @@ packages:
       }
     engines: { node: '>=18' }
 
-  loose-envify@1.4.0:
-    resolution:
-      {
-        integrity: sha512-lyuxPGr/Wfhrlem2CL/UcnUc1zcqKAImBDzukY7Y5F/yQiNdko6+fRLevlw1HgMySw7f611UIY408EtxRSoK3Q==,
-      }
-    hasBin: true
-
   lru-cache@10.4.3:
     resolution:
       {
@@ -3056,13 +3031,6 @@ packages:
     resolution:
       {
         integrity: sha512-6eZs5Ls3WtCisHWp9S2GUy8dqkpGi4BVSz3GaqiE6ezub0512ESztXUwUB6C6IKbQkY2Pnb/mD4WYojCRwcwLA==,
-      }
-    engines: { node: '>=0.10.0' }
-
-  object-assign@4.1.1:
-    resolution:
-      {
-        integrity: sha512-rJgTQnkUnH1sFw8yT6VSU3zD3sWmu6sZhIseY8VX+GRu3P6F7Fu+JNDoXfklElbLJSnc3FUQHVe4cU5hj+BcUg==,
       }
     engines: { node: '>=0.10.0' }
 
@@ -3333,12 +3301,6 @@ packages:
     engines: { node: '>=14' }
     hasBin: true
 
-  prop-types@15.8.1:
-    resolution:
-      {
-        integrity: sha512-oj87CgZICdulUohogVAR7AjlC0327U4el4L6eAvOqCeudMDVU0NThNaV+b9Df4dXgSP1gXMTnPdhfe/2qDH5cg==,
-      }
-
   punycode@2.3.1:
     resolution:
       {
@@ -3374,12 +3336,6 @@ packages:
       }
     peerDependencies:
       react: ^18.0.0 || ^19.0.0
-
-  react-is@16.13.1:
-    resolution:
-      {
-        integrity: sha512-24e6ynE2H+OKt4kqsOvNd8kBpV65zoxbA4BVsEOB3ARVWQki/DHzaUoC5KuON/BiccDaCCTZBuOcfZs70kR8bQ==,
-      }
 
   react-refresh@0.18.0:
     resolution:
@@ -4391,12 +4347,6 @@ snapshots:
       '@wyw-in-js/processor-utils': 1.0.4
     transitivePeerDependencies:
       - supports-color
-
-  '@mdi/js@7.4.47': {}
-
-  '@mdi/react@1.6.1':
-    dependencies:
-      prop-types: 15.8.1
 
   '@napi-rs/wasm-runtime@0.2.12':
     dependencies:
@@ -5672,10 +5622,6 @@ snapshots:
       strip-ansi: 7.1.2
       wrap-ansi: 9.0.2
 
-  loose-envify@1.4.0:
-    dependencies:
-      js-tokens: 4.0.0
-
   lru-cache@10.4.3: {}
 
   lru-cache@5.1.1:
@@ -5756,8 +5702,6 @@ snapshots:
   node-releases@2.0.27: {}
 
   normalize-path@3.0.0: {}
-
-  object-assign@4.1.1: {}
 
   obug@2.1.1: {}
 
@@ -5891,12 +5835,6 @@ snapshots:
 
   prettier@3.8.1: {}
 
-  prop-types@15.8.1:
-    dependencies:
-      loose-envify: 1.4.0
-      object-assign: 4.1.1
-      react-is: 16.13.1
-
   punycode@2.3.1: {}
 
   qified@0.6.0:
@@ -5913,8 +5851,6 @@ snapshots:
   react-error-boundary@6.1.1(react@19.2.4):
     dependencies:
       react: 19.2.4
-
-  react-is@16.13.1: {}
 
   react-refresh@0.18.0: {}
 

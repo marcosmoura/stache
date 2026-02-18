@@ -19,14 +19,12 @@ type HugeIconsSpecificProps = Omit<HugeiconsIconProps, 'ref' | 'icon' | 'size'>;
  * Union type for any supported icon
  * - HugeIcons: IconSvgElement (SVG data object / array)
  * - Simple Icons: IconType (React forwardRef component)
- * - MDI Icons: string (SVG path data from @mdi/js)
  */
-export type AnyIcon = IconSvgElement | IconType | string;
+export type AnyIcon = IconSvgElement | IconType;
 
 /**
  * Unified Icon component props
  * The component automatically detects which icon library to use based on the icon type:
- * - If icon is a string → MDI Icons (@mdi/js path data)
  * - If icon is an object with `render` → Simple Icons
  * - Otherwise → HugeIcons
  */
@@ -34,11 +32,6 @@ export type IconProps = BaseIconProps &
   HugeIconsSpecificProps & {
     icon: AnyIcon;
   };
-
-/**
- * Type guard to check if an icon is an MDI icon (plain SVG path string from @mdi/js)
- */
-export const isMdiIcon = (icon: AnyIcon): icon is string => typeof icon === 'string';
 
 /**
  * Type guard to check if an icon is a Simple Icon (React forwardRef component)
