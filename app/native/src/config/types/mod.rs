@@ -27,7 +27,7 @@ pub use bar::{BarConfig, WeatherConfig, WeatherProvider};
 // Border types
 pub use borders::{BorderColor, BorderStateConfig, BordersConfig, GradientConfig};
 // Color types
-pub use color::{parse_color, parse_hex_color, parse_rgba_color, Rgba};
+pub use color::{Rgba, parse_color, parse_hex_color, parse_rgba_color};
 // Command Quit types
 pub use command_quit::CommandQuitConfig;
 // Gap types
@@ -38,7 +38,7 @@ pub use menu_anywhere::{MenuAnywhereConfig, MenuAnywhereModifier, MenuAnywhereMo
 pub use notunes::{NoTunesConfig, TargetMusicApp};
 // Root config types
 pub use root::{
-    config_paths, load_config, load_config_from_path, ConfigError, ShortcutCommands, StacheConfig,
+    ConfigError, ShortcutCommands, StacheConfig, config_paths, load_config, load_config_from_path,
 };
 // Tiling types
 pub use tiling::{

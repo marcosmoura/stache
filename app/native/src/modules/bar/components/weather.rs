@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use crate::config::env::load_api_keys;
 use crate::config::types::WeatherProvider;
-use crate::config::{get_config, get_config_path, WeatherConfig};
+use crate::config::{WeatherConfig, get_config, get_config_path};
 
 /// Weather configuration payload for the frontend.
 #[derive(Debug, Clone, Serialize)]
