@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use rand::Rng;
+use rand::RngExt;
 use rayon::prelude::*;
 
 use super::macos;
