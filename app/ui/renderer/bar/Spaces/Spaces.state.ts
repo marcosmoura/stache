@@ -16,9 +16,9 @@ const workspaceOrder = [
   'music',
   'design',
   'communication',
+  'guitar',
   'misc',
   'files',
-  'mail',
   'tasks',
 ];
 

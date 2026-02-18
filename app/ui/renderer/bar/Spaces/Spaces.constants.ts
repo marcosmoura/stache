@@ -7,14 +7,12 @@ import {
   MessageMultiple01Icon,
   DashboardCircleIcon,
   Folder01Icon,
-  MailAtSign01Icon,
   CheckListIcon,
   Analytics01Icon,
   AppStoreIcon,
+  MixerIcon,
   MusicNote02Icon,
   BrowserIcon,
-  Mail01Icon,
-  UserMultiple02Icon,
   HardDriveIcon,
   SecurityPasswordIcon,
   CodeSquareIcon,
@@ -30,36 +28,39 @@ import {
   WhatsappIcon,
   ZoomIcon,
 } from '@hugeicons/core-free-icons';
-import type { IconSvgElement } from '@hugeicons/react';
-import { SiTidal } from '@icons-pack/react-simple-icons';
+import { SiProtonvpn, SiTidal, SiTransmission } from '@icons-pack/react-simple-icons';
+import { mdiGuitarElectric } from '@mdi/js';
 
+import type { AnyIcon } from '@/components/Icon';
 import { motionRaw } from '@/design-system';
 
-export const workspaceIcons: Record<string, IconSvgElement> = {
+export const workspaceIcons: Record<string, AnyIcon> = {
   terminal: ComputerTerminal01Icon,
   coding: CodeSimpleIcon,
   browser: AiBrowserIcon,
   music: MusicNote03Icon,
   design: FigmaIcon,
   communication: MessageMultiple01Icon,
+  guitar: mdiGuitarElectric,
   misc: DashboardCircleIcon,
   files: Folder01Icon,
-  mail: MailAtSign01Icon,
   tasks: CheckListIcon,
 };
 
 const appIcons = {
+  'Ableton Live': MusicNote02Icon,
   'Activity Monitor': Analytics01Icon,
   'App Store': AppStoreIcon,
   'Archetype Gojira X': MusicNote02Icon,
   'Archetype John Mayer X': MusicNote02Icon,
   'Archetype Nolly X': MusicNote02Icon,
+  'Audio MIDI Setup': MixerIcon,
   'Fortin Nameless Suite X': MusicNote02Icon,
   'Microsoft Edge Dev': BrowserIcon,
-  'Microsoft Outlook': Mail01Icon,
-  'Microsoft Teams': UserMultiple02Icon,
   'Proton Drive': HardDriveIcon,
   'Proton Pass': SecurityPasswordIcon,
+  'Proton VPN': SiProtonvpn,
+  'Soldano SLO100 X': MusicNote02Icon,
   // WTF? There is a special character in the app name
   '‎WhatsApp': WhatsappIcon,
   'Zed Preview': CodeSquareIcon,
@@ -67,6 +68,7 @@ const appIcons = {
   Code: VisualStudioCodeIcon,
   Dia: ArcBrowserIcon,
   Discord: DiscordIcon,
+  Feishin: MusicNote02Icon,
   Figma: FigmaIcon,
   Finder: AppleFinderIcon,
   Ghostty: ComputerTerminal01Icon,
@@ -76,6 +78,7 @@ const appIcons = {
   Slack: SlackIcon,
   Spotify: SpotifyIcon,
   TIDAL: SiTidal,
+  Transmission: SiTransmission,
   WhatsApp: WhatsappIcon,
   Zoom: ZoomIcon,
 } as const;
