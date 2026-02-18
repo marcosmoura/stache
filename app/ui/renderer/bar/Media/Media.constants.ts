@@ -1,4 +1,9 @@
-import { SpotifyIcon, YoutubeIcon, PlayCircle02Icon } from '@hugeicons/core-free-icons';
+import {
+  SpotifyIcon,
+  YoutubeIcon,
+  PlayCircle02Icon,
+  Vynil02Icon,
+} from '@hugeicons/core-free-icons';
 import { SiTidal } from '@icons-pack/react-simple-icons';
 
 import type { IconProps } from '@/components/Icon';
@@ -69,7 +74,7 @@ const PLAYER_ICONS: Record<string, IconProps> = {
     size: 18,
   },
   [MEDIA_APPS.feishin.bundleIdentifier]: {
-    icon: PlayCircle02Icon,
+    icon: Vynil02Icon,
     color: colors.sky,
     size: 22,
   },
