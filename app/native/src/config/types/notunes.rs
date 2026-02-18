@@ -16,6 +16,8 @@ pub enum TargetMusicApp {
     Tidal,
     /// Spotify music streaming service.
     Spotify,
+    /// Feishin self-hosted music player.
+    Feishin,
     /// Do not launch any replacement app.
     None,
 }
@@ -27,6 +29,7 @@ impl TargetMusicApp {
         match self {
             Self::Tidal => Some("/Applications/TIDAL.app"),
             Self::Spotify => Some("/Applications/Spotify.app"),
+            Self::Feishin => Some("/Applications/Feishin.app"),
             Self::None => None,
         }
     }
@@ -37,6 +40,7 @@ impl TargetMusicApp {
         match self {
             Self::Tidal => Some("com.tidal.desktop"),
             Self::Spotify => Some("com.spotify.client"),
+            Self::Feishin => Some("org.jeffvli.feishin"),
             Self::None => None,
         }
     }
@@ -47,6 +51,7 @@ impl TargetMusicApp {
         match self {
             Self::Tidal => "Tidal",
             Self::Spotify => "Spotify",
+            Self::Feishin => "Feishin",
             Self::None => "None",
         }
     }
@@ -65,7 +70,7 @@ pub struct NoTunesConfig {
     pub enabled: bool,
 
     /// The music app to launch when Apple Music/iTunes is blocked.
-    /// Options: "tidal", "spotify", "none"
+    /// Options: "tidal", "spotify", "feishin", "none"
     /// Default: "spotify"
     pub target_app: TargetMusicApp,
 }
@@ -101,6 +106,10 @@ mod tests {
             TargetMusicApp::Spotify.app_path(),
             Some("/Applications/Spotify.app")
         );
+        assert_eq!(
+            TargetMusicApp::Feishin.app_path(),
+            Some("/Applications/Feishin.app")
+        );
         assert_eq!(TargetMusicApp::None.app_path(), None);
     }
 
@@ -108,6 +117,7 @@ mod tests {
     fn test_target_music_app_bundle_id() {
         assert_eq!(TargetMusicApp::Tidal.bundle_id(), Some("com.tidal.desktop"));
         assert_eq!(TargetMusicApp::Spotify.bundle_id(), Some("com.spotify.client"));
+        assert_eq!(TargetMusicApp::Feishin.bundle_id(), Some("org.jeffvli.feishin"));
         assert_eq!(TargetMusicApp::None.bundle_id(), None);
     }
 
@@ -115,6 +125,7 @@ mod tests {
     fn test_target_music_app_display_name() {
         assert_eq!(TargetMusicApp::Tidal.display_name(), "Tidal");
         assert_eq!(TargetMusicApp::Spotify.display_name(), "Spotify");
+        assert_eq!(TargetMusicApp::Feishin.display_name(), "Feishin");
         assert_eq!(TargetMusicApp::None.display_name(), "None");
     }
 

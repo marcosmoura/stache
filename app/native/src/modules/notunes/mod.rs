@@ -267,6 +267,7 @@ mod tests {
     fn test_is_music_app_other_apps() {
         assert!(!is_music_app("com.spotify.client"));
         assert!(!is_music_app("com.tidal.desktop"));
+        assert!(!is_music_app("org.jeffvli.feishin"));
         assert!(!is_music_app("com.apple.Safari"));
         assert!(!is_music_app(""));
     }
@@ -309,6 +310,14 @@ mod tests {
         assert_eq!(app.app_path(), Some("/Applications/Spotify.app"));
         assert_eq!(app.bundle_id(), Some("com.spotify.client"));
         assert_eq!(app.display_name(), "Spotify");
+    }
+
+    #[test]
+    fn test_target_app_feishin() {
+        let app = TargetMusicApp::Feishin;
+        assert_eq!(app.app_path(), Some("/Applications/Feishin.app"));
+        assert_eq!(app.bundle_id(), Some("org.jeffvli.feishin"));
+        assert_eq!(app.display_name(), "Feishin");
     }
 
     #[test]
