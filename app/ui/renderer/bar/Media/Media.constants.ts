@@ -23,6 +23,10 @@ export const MEDIA_APPS = {
     bundleIdentifier: 'com.tidal.desktop',
     name: 'Tidal',
   },
+  feishin: {
+    bundleIdentifier: 'org.jeffvli.feishin',
+    name: 'Feishin',
+  },
 } as const satisfies Record<string, MediaApp>;
 
 /**
@@ -63,6 +67,11 @@ const PLAYER_ICONS: Record<string, IconProps> = {
     icon: SiTidal,
     color: colors.text,
     size: 18,
+  },
+  [MEDIA_APPS.feishin.bundleIdentifier]: {
+    icon: PlayCircle02Icon,
+    color: colors.sky,
+    size: 22,
   },
 };
 

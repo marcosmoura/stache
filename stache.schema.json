@@ -880,6 +880,11 @@
           "const": "spotify"
         },
         {
+          "description": "Feishin self-hosted music player.",
+          "type": "string",
+          "const": "feishin"
+        },
+        {
           "description": "Do not launch any replacement app.",
           "type": "string",
           "const": "none"
