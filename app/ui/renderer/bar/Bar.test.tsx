@@ -52,6 +52,12 @@ describe('Bar Component', () => {
           return Promise.resolve([{ appName: 'Ghostty', id: 100, title: 'Ghostty' }]);
         case 'get_tiling_focused_window':
           return Promise.resolve({ appName: 'Ghostty', id: 100, title: 'Ghostty' });
+        case 'get_weather_config':
+          return Promise.resolve({
+            provider: 'auto',
+            visualCrossingApiKey: '',
+            defaultLocation: 'Berlin, Germany',
+          });
         default:
           return Promise.resolve(null);
       }

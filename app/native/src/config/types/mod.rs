@@ -23,11 +23,11 @@ pub mod workspaces;
 // Audio types
 pub use audio::{AudioDeviceDependency, AudioDevicePriority, MatchStrategy, ProxyAudioConfig};
 // Bar types
-pub use bar::{BarConfig, WeatherConfig};
+pub use bar::{BarConfig, WeatherConfig, WeatherProvider};
 // Border types
 pub use borders::{BorderColor, BorderStateConfig, BordersConfig, GradientConfig};
 // Color types
-pub use color::{Rgba, parse_color, parse_hex_color, parse_rgba_color};
+pub use color::{parse_color, parse_hex_color, parse_rgba_color, Rgba};
 // Command Quit types
 pub use command_quit::CommandQuitConfig;
 // Gap types
@@ -38,7 +38,7 @@ pub use menu_anywhere::{MenuAnywhereConfig, MenuAnywhereModifier, MenuAnywhereMo
 pub use notunes::{NoTunesConfig, TargetMusicApp};
 // Root config types
 pub use root::{
-    ConfigError, ShortcutCommands, StacheConfig, config_paths, load_config, load_config_from_path,
+    config_paths, load_config, load_config_from_path, ConfigError, ShortcutCommands, StacheConfig,
 };
 // Tiling types
 pub use tiling::{

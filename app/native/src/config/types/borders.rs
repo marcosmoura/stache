@@ -5,7 +5,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::color::{Rgba, parse_hex_color};
+use super::color::{parse_hex_color, Rgba};
 use super::workspaces::WindowRule;
 
 /// Gradient color configuration.

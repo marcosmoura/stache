@@ -15,27 +15,28 @@ import {
   SunCloudSnowIcon,
   SunIcon,
 } from '@hugeicons/core-free-icons';
-import type { IconSvgElement } from '@hugeicons/react';
 
-export const weatherIconMap: Record<string, IconSvgElement> = {
+import type { AnyIcon } from '@/components/Icon';
+
+export const weatherIconMap: Record<string, AnyIcon> = {
   snow: SnowIcon,
-  'snow-showers-day': SunCloudSnowIcon,
-  'snow-showers-night': MoonCloudSnowIcon,
-  'thunder-rain': CloudAngledRainZapIcon,
-  'thunder-showers-day': CloudAngledRainZapIcon,
-  'thunder-showers-night': MoonAngledRainZapIcon,
+  snowShowersDay: SunCloudSnowIcon,
+  snowShowersNight: MoonCloudSnowIcon,
+  thunder: CloudAngledRainZapIcon,
+  thunderShowersDay: CloudAngledRainZapIcon,
+  thunderShowersNight: MoonAngledRainZapIcon,
   rain: CloudAngledRainIcon,
-  'showers-day': SunCloudAngledRainIcon,
-  'showers-night': MoonCloudAngledRainIcon,
+  rainDay: SunCloudAngledRainIcon,
+  rainNight: MoonCloudAngledRainIcon,
   fog: CloudSlowWindIcon,
-  wind: FastWindIcon,
+  windy: FastWindIcon,
   cloudy: CloudIcon,
-  'partly-cloudy-day': SunCloud02Icon,
-  'partly-cloudy-night': MoonCloudIcon,
-  'clear-day': SunIcon,
-  'clear-night': MoonIcon,
+  partlyCloudyDay: SunCloud02Icon,
+  partlyCloudyNight: MoonCloudIcon,
+  clearDay: SunIcon,
+  clearNight: MoonIcon,
 };
 
-export const getWeatherIcon = (iconKey: string): IconSvgElement => {
-  return weatherIconMap[iconKey] ?? weatherIconMap['clear-day'];
+export const getWeatherIcon = (iconKey: string): AnyIcon => {
+  return weatherIconMap[iconKey] ?? weatherIconMap.clearDay;
 };

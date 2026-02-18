@@ -46,6 +46,9 @@ importers:
       motion:
         specifier: ^12.34.1
         version: 12.34.1(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      openmeteo:
+        specifier: ^1.2.3
+        version: 1.2.3
       react:
         specifier: ^19.2.4
         version: 19.2.4
@@ -678,6 +681,13 @@ packages:
         integrity: sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg==,
       }
     engines: { node: '>= 8' }
+
+  '@openmeteo/sdk@1.25.0':
+    resolution:
+      {
+        integrity: sha512-tpX2d/HOPn95NIU+/IU1VFFzOM3m/PqSpPSJnWuGQGEW5GogB50xUOUMrsD2N/6LCMy12e3cZEQd6c3Gb0lmtA==,
+      }
+    engines: { node: '>=12.0' }
 
   '@oxc-project/runtime@0.101.0':
     resolution:
@@ -2209,6 +2219,12 @@ packages:
         integrity: sha512-AhHYqwvN62NVLp4lObVXGVluiABTHapoB57EyegZVmazN+hhGhLTn3uZbOofoTw4DSDvVCadzzyChXhOAvy8uQ==,
       }
 
+  flatbuffers@25.9.23:
+    resolution:
+      {
+        integrity: sha512-MI1qs7Lo4Syw0EOzUl0xjs2lsoeqFku44KpngfIduHBYvzm8h2+7K8YMQh1JtVVVrUvhLpNwqVi4DERegUJhPQ==,
+      }
+
   flatted@3.3.3:
     resolution:
       {
@@ -3062,6 +3078,13 @@ packages:
         integrity: sha512-VXJjc87FScF88uafS3JllDgvAm+c/Slfz06lorj2uAY34rlUu0Nt+v8wreiImcrgAjjIHp1rXpTDlLOGw29WwQ==,
       }
     engines: { node: '>=18' }
+
+  openmeteo@1.2.3:
+    resolution:
+      {
+        integrity: sha512-3updmgCMnCAAjAgV3RfhMdIBPi/43RtbjQ4CizHGn52RP9SpgmVCDRpun+Ex75NG3jTF3pZp+d1BPlP9DWMHiQ==,
+      }
+    engines: { node: '>=12.0' }
 
   optionator@0.9.4:
     resolution:
@@ -4401,6 +4424,10 @@ snapshots:
       '@nodelib/fs.scandir': 2.1.5
       fastq: 1.20.1
 
+  '@openmeteo/sdk@1.25.0':
+    dependencies:
+      flatbuffers: 25.9.23
+
   '@oxc-project/runtime@0.101.0': {}
 
   '@oxc-project/types@0.101.0': {}
@@ -5328,6 +5355,8 @@ snapshots:
       flatted: 3.3.3
       hookified: 1.15.1
 
+  flatbuffers@25.9.23: {}
+
   flatted@3.3.3: {}
 
   framer-motion@12.34.1(react-dom@19.2.4(react@19.2.4))(react@19.2.4):
@@ -5735,6 +5764,11 @@ snapshots:
   onetime@7.0.0:
     dependencies:
       mimic-function: 5.0.1
+
+  openmeteo@1.2.3:
+    dependencies:
+      '@openmeteo/sdk': 1.25.0
+      flatbuffers: 25.9.23
 
   optionator@0.9.4:
     dependencies:

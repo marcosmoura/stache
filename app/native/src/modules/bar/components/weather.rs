@@ -9,12 +9,15 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::config::env::load_api_keys;
-use crate::config::{WeatherConfig, get_config, get_config_path};
+use crate::config::types::WeatherProvider;
+use crate::config::{get_config, get_config_path, WeatherConfig};
 
 /// Weather configuration payload for the frontend.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WeatherConfigInfo {
+    /// Weather data provider.
+    pub provider: WeatherProvider,
     /// API key for Visual Crossing Weather API.
     pub visual_crossing_api_key: String,
     /// Default location for weather data when geolocation fails.
@@ -34,6 +37,7 @@ impl WeatherConfigInfo {
         let api_keys = load_api_keys(&config.api_keys, config_dir);
 
         Self {
+            provider: config.provider,
             visual_crossing_api_key: api_keys.visual_crossing_api_key().to_string(),
             default_location: config.default_location.clone(),
         }
@@ -86,6 +90,7 @@ mod tests {
         writeln!(file, "VISUAL_CROSSING_API_KEY=test_key_12345").unwrap();
 
         let config = WeatherConfig {
+            provider: WeatherProvider::Auto,
             api_keys: ".env".to_string(),
             default_location: "New York".to_string(),
         };
@@ -99,6 +104,7 @@ mod tests {
     #[test]
     fn test_weather_config_info_missing_env_file() {
         let config = WeatherConfig {
+            provider: WeatherProvider::Auto,
             api_keys: "nonexistent.env".to_string(),
             default_location: "London".to_string(),
         };
@@ -119,12 +125,13 @@ mod tests {
         writeln!(file, "VISUAL_CROSSING_API_KEY=absolute_path_key").unwrap();
 
         let config = WeatherConfig {
+            provider: WeatherProvider::VisualCrossing,
             api_keys: env_path.to_string_lossy().to_string(),
             default_location: "Paris".to_string(),
         };
 
         // Config dir doesn't matter for absolute paths
-        let config_dir = Path::new("/some/other/dir");
+        let config_dir = Path::New("/some/other/dir");
         let info = WeatherConfigInfo::from_config(&config, config_dir);
 
         assert_eq!(info.visual_crossing_api_key, "absolute_path_key");

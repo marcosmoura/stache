@@ -4,6 +4,10 @@ import { useMediaQuery, useWidgetToggle } from '@/hooks';
 import { getWeatherIcon, useWeatherStore } from '@/stores/WeatherStore';
 import { LAPTOP_MEDIA_QUERY } from '@/utils/media-query';
 
+const formatLabel = (temp: number, label: string) => {
+  return `${Math.ceil(temp)}°C (${label})`;
+};
+
 export const useWeather = () => {
   const { ref, onClick } = useWidgetToggle('weather');
   const isLaptopScreen = useMediaQuery(LAPTOP_MEDIA_QUERY);
@@ -14,7 +18,7 @@ export const useWeather = () => {
 
   const icon = useMemo(() => {
     if (!currentConditions) {
-      return getWeatherIcon('clear-day');
+      return getWeatherIcon('clearDay');
     }
 
     return getWeatherIcon(currentConditions.icon);
@@ -30,10 +34,10 @@ export const useWeather = () => {
 
     if (isLaptopScreen) {
       const city = address?.split(',')[0]?.trim() || '';
-      return `${feelsLike}°C (${city})`;
+      return formatLabel(feelsLike, city);
     }
 
-    return `${feelsLike}°C (${condition})`;
+    return formatLabel(feelsLike, condition);
   }, [address, currentConditions, isLaptopScreen, isLoading]);
 
   return { label, icon, ref, onClick, isConfigured };

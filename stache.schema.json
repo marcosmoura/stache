@@ -796,7 +796,7 @@
           "default": false
         },
         "targetApp": {
-          "description": "The music app to launch when Apple Music/iTunes is blocked.\nOptions: \"tidal\", \"spotify\", \"none\"\nDefault: \"spotify\"",
+          "description": "The music app to launch when Apple Music/iTunes is blocked.\nOptions: \"tidal\", \"spotify\", \"feishin\", \"none\"\nDefault: \"spotify\"",
           "$ref": "#/$defs/TargetMusicApp",
           "default": "spotify"
         }

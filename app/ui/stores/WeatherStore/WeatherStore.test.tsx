@@ -11,6 +11,7 @@ import {
   type FetchRoute,
 } from '@/tests/utils';
 
+import type { LocationData } from './location';
 import { useWeatherStore } from './WeatherStore';
 
 import type { WeatherConfig, WeatherData } from './WeatherStore.types';
@@ -72,7 +73,10 @@ const createMockWeatherData = (overrides: Partial<WeatherData> = {}): WeatherDat
 
 /* Default routes for weather tests */
 const defaultRoutes: FetchRoute[] = [
-  { pattern: 'ipapi.co', response: { city: 'Berlin', country_name: 'Germany' } },
+  {
+    pattern: 'ipapi.co',
+    response: { city: 'Berlin', country_name: 'Germany', latitude: 52.52, longitude: 13.405 },
+  },
   { pattern: 'visualcrossing', response: createMockWeatherData() },
 ];
 
@@ -102,7 +106,10 @@ const renderWeatherTest = async (
   mockInvoke.mockResolvedValue(mockConfig);
 
   const routes = options.routes ?? [
-    { pattern: 'ipapi.co', response: { city: 'Berlin', country_name: 'Germany' } },
+    {
+      pattern: 'ipapi.co',
+      response: { city: 'Berlin', country_name: 'Germany', latitude: 52.52, longitude: 13.405 },
+    },
     { pattern: 'visualcrossing', response: mockWeather },
   ];
 
@@ -149,10 +156,20 @@ describe('useWeatherStore', () => {
   describe('location detection', () => {
     test('uses IP-based location from ipapi.co', async () => {
       const { screen } = await renderWeatherTest(
-        ({ location }) => <div data-testid="location">{location}</div>,
+        ({ location }) => (
+          <div data-testid="location">{(location as LocationData)?.displayName}</div>
+        ),
         {
           routes: [
-            { pattern: 'ipapi.co', response: { city: 'Munich', country_name: 'Germany' } },
+            {
+              pattern: 'ipapi.co',
+              response: {
+                city: 'Munich',
+                country_name: 'Germany',
+                latitude: 48.1351,
+                longitude: 11.582,
+              },
+            },
             { pattern: 'visualcrossing', response: createMockWeatherData() },
           ],
         },
@@ -165,11 +182,16 @@ describe('useWeatherStore', () => {
 
     test('falls back to ipinfo.io when ipapi.co fails', async () => {
       const { screen } = await renderWeatherTest(
-        ({ location }) => <div data-testid="location">{location}</div>,
+        ({ location }) => (
+          <div data-testid="location">{(location as LocationData)?.displayName}</div>
+        ),
         {
           routes: [
             { pattern: 'ipapi.co', shouldFail: true, response: null },
-            { pattern: 'ipinfo.io', response: { city: 'Hamburg', country: 'DE' } },
+            {
+              pattern: 'ipinfo.io',
+              response: { city: 'Hamburg', country: 'DE', loc: '53.5511,9.9937' },
+            },
             { pattern: 'visualcrossing', response: createMockWeatherData() },
           ],
         },
@@ -182,7 +204,9 @@ describe('useWeatherStore', () => {
 
     test('falls back to default location when all services fail', async () => {
       const { screen } = await renderWeatherTest(
-        ({ location }) => <div data-testid="location">{location}</div>,
+        ({ location }) => (
+          <div data-testid="location">{(location as LocationData)?.displayName}</div>
+        ),
         {
           config: { defaultLocation: 'Default City' },
           routes: [
@@ -245,7 +269,7 @@ describe('useWeatherStore', () => {
       expect(screen.getByTestId('feelslike')).toHaveTextContent('26');
       expect(screen.getByTestId('humidity')).toHaveTextContent('50');
       expect(screen.getByTestId('conditions')).toHaveTextContent('Clear');
-      expect(screen.getByTestId('icon')).toHaveTextContent('clear-day');
+      expect(screen.getByTestId('icon')).toHaveTextContent('clearDay');
     });
 
     test('exposes forecast days', async () => {
@@ -330,7 +354,10 @@ describe('useWeatherStore', () => {
       let capturedUrl = '';
 
       const queryClient = createTestQueryClient();
-      const mockConfig = createMockWeatherConfig({ visualCrossingApiKey: 'my-secret-key' });
+      const mockConfig = createMockWeatherConfig({
+        visualCrossingApiKey: 'my-secret-key',
+        provider: 'visual-crossing',
+      });
       mockInvoke.mockResolvedValue(mockConfig);
 
       const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
@@ -372,7 +399,7 @@ describe('useWeatherStore', () => {
           </div>
         ),
         {
-          config: { visualCrossingApiKey: '' },
+          config: { visualCrossingApiKey: '', provider: 'visual-crossing' },
           routes: [{ pattern: 'ipapi.co', response: { city: 'Berlin', country_name: 'Germany' } }],
         },
       );

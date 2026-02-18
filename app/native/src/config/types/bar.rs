@@ -5,10 +5,43 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Weather provider options.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum WeatherProvider {
+    /// Automatically select provider based on available API keys.
+    /// Uses Visual Crossing if API key is available, otherwise Open Meteo.
+    #[default]
+    Auto,
+    /// Force use of Visual Crossing Weather API (requires API key).
+    VisualCrossing,
+    /// Use Open Meteo (free, no API key required).
+    OpenMeteo,
+}
+
+impl WeatherProvider {
+    /// Returns true if this provider requires an API key.
+    #[must_use]
+    pub const fn requires_api_key(self) -> bool { matches!(self, Self::VisualCrossing) }
+
+    /// Returns the display name of the provider.
+    #[must_use]
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::Auto => "Auto",
+            Self::VisualCrossing => "Visual Crossing",
+            Self::OpenMeteo => "Open Meteo",
+        }
+    }
+}
+
 /// Weather configuration for the status bar.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(default, rename_all = "camelCase")]
 pub struct WeatherConfig {
+    /// Weather data provider.
+    /// Default: "auto" - Uses Visual Crossing if API key exists, otherwise Open Meteo.
+    pub provider: WeatherProvider,
     /// Path to an environment file containing API keys.
     ///
     /// The file should contain key-value pairs in the format `KEY=value`.
@@ -34,9 +67,17 @@ pub struct WeatherConfig {
 impl WeatherConfig {
     /// Returns whether weather functionality is enabled.
     ///
-    /// Weather is considered enabled if an API keys file is configured.
+    /// Weather is considered enabled if:
+    /// - Provider is Auto and API keys file is configured, OR
+    /// - Provider is `VisualCrossing` and API keys file is configured, OR
+    /// - Provider is `OpenMeteo` (always works without API key)
     #[must_use]
-    pub const fn is_enabled(&self) -> bool { !self.api_keys.is_empty() }
+    pub const fn is_enabled(&self) -> bool {
+        match self.provider {
+            WeatherProvider::Auto | WeatherProvider::VisualCrossing => !self.api_keys.is_empty(),
+            WeatherProvider::OpenMeteo => true,
+        }
+    }
 }
 
 /// Bar configuration for the status bar UI components.
