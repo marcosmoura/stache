@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use crate::config::env::load_api_keys;
 use crate::config::types::WeatherProvider;
-use crate::config::{WeatherConfig, get_config, get_config_path};
+use crate::config::{get_config, get_config_path, WeatherConfig};
 
 /// Weather configuration payload for the frontend.
 #[derive(Debug, Clone, Serialize)]
@@ -131,7 +131,7 @@ mod tests {
         };
 
         // Config dir doesn't matter for absolute paths
-        let config_dir = Path::New("/some/other/dir");
+        let config_dir = Path::new("/some/other/dir");
         let info = WeatherConfigInfo::from_config(&config, config_dir);
 
         assert_eq!(info.visual_crossing_api_key, "absolute_path_key");
