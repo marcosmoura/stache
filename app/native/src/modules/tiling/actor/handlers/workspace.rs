@@ -307,9 +307,10 @@ pub fn on_balance_workspace(state: &mut TilingState, workspace_id: Uuid) {
         .map(|ws| ws.window_ids.to_vec())
         .unwrap_or_default();
 
-    // Clear split ratios
+    // Clear all runtime ratio overrides, restoring config defaults
     state.update_workspace(workspace_id, |ws| {
         ws.split_ratios.clear();
+        ws.master_ratio = None;
     });
 
     // Clear inferred minimum sizes for all windows in the workspace

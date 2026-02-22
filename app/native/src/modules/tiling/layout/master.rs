@@ -25,13 +25,13 @@
 //!
 //! ```text
 //! Top:              Bottom:
-//! ┌─────────┐       ┌────┬────┐
-//! │         │       │ 2  │ 3  │
-//! │ Master  │       ├────┴────┤
-//! │         │       │         │
-//! ├────┬────┤       │ Master  │
-//! │ 2  │ 3  │       │         │
-//! └────┴────┘       └─────────┘
+//! ┌───────────┐       ┌─────┬─────┐
+//! │           │       │  2  │  3  │
+//! │   Master  │       ├─────┴─────┤
+//! │           │       │           │
+//! ├─────┬─────┤       │   Master  │
+//! │  2  │  3  │       │           │
+//! └─────┴─────┘       └───────────┘
 //! ```
 
 use smallvec::{SmallVec, smallvec};
@@ -53,6 +53,18 @@ pub enum MasterPosition {
     /// Adapts to screen orientation (left for landscape, top for portrait).
     #[default]
     Auto,
+}
+
+impl From<crate::config::types::tiling::MasterPosition> for MasterPosition {
+    fn from(config_pos: crate::config::types::tiling::MasterPosition) -> Self {
+        match config_pos {
+            crate::config::types::tiling::MasterPosition::Left => Self::Left,
+            crate::config::types::tiling::MasterPosition::Right => Self::Right,
+            crate::config::types::tiling::MasterPosition::Top => Self::Top,
+            crate::config::types::tiling::MasterPosition::Bottom => Self::Bottom,
+            crate::config::types::tiling::MasterPosition::Auto => Self::Auto,
+        }
+    }
 }
 
 /// Master layout - one master window with remaining windows in a stack.

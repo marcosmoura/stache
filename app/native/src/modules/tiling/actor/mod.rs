@@ -434,8 +434,14 @@ impl StateActor {
         };
         let gaps = Gaps::from_config(&config.tiling.gaps, &screen.name, screen.is_main, bar_offset);
 
-        // Get master ratio from config (default 0.5)
-        let master_ratio = f64::from(config.tiling.master.ratio) / 100.0;
+        // Get master ratio: prefer workspace runtime value (set by user resize),
+        // falling back to the config default.
+        let master_ratio = workspace
+            .master_ratio
+            .unwrap_or_else(|| f64::from(config.tiling.master.ratio) / 100.0);
+
+        // Get master position from config
+        let master_position = MasterPosition::from(config.tiling.master.position);
 
         // Get split ratios from workspace (may be adjusted for minimum sizes)
         let split_ratios = workspace.split_ratios.clone();
@@ -448,7 +454,7 @@ impl StateActor {
             master_ratio,
             &gaps,
             &split_ratios,
-            MasterPosition::Auto,
+            master_position,
         );
 
         // Enforce minimum sizes by adjusting ratios if needed

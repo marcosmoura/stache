@@ -15,8 +15,9 @@ use crate::modules::tiling::state::{LayoutType, TilingState};
 pub fn on_set_layout(state: &mut TilingState, workspace_id: Uuid, layout: LayoutType) {
     state.update_workspace(workspace_id, |ws| {
         ws.layout = layout;
-        // Clear split ratios when layout changes
+        // Clear all runtime ratio overrides when layout changes
         ws.split_ratios.clear();
+        ws.master_ratio = None;
     });
 
     tracing::debug!("Set workspace {workspace_id} layout to {layout:?}");

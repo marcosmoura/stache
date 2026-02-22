@@ -216,6 +216,13 @@ pub struct Workspace {
     /// Each ratio represents the proportion of space for a split.
     pub split_ratios: Vec<f64>,
 
+    /// Runtime-overridden master ratio for the Master layout.
+    ///
+    /// `None` means "use the global config default (`tiling.master.ratio`)".
+    /// Set to `Some(ratio)` when the user resizes windows in Master layout,
+    /// and cleared back to `None` on balance or layout change.
+    pub master_ratio: Option<f64>,
+
     /// Configured screen name (for reconnection after screen hotplug).
     pub configured_screen: Option<String>,
 }
@@ -232,6 +239,7 @@ impl Default for Workspace {
             window_ids: WindowIdList::new(),
             focused_window_index: None,
             split_ratios: Vec::new(),
+            master_ratio: None,
             configured_screen: None,
         }
     }

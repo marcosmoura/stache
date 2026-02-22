@@ -164,6 +164,7 @@ mod tests {
             window_ids: WindowIdList::new(),
             focused_window_index: None,
             split_ratios: Vec::new(),
+            master_ratio: None,
             configured_screen: None,
         };
         let ws_id = ws.id;

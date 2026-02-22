@@ -202,6 +202,7 @@ fn create_workspaces_from_config(state: &mut TilingState) {
                     window_ids: WindowIdList::new(),
                     focused_window_index: None,
                     split_ratios: Vec::new(),
+                    master_ratio: None,
                     configured_screen: Some(ws_config.screen.clone()),
                 };
                 state.upsert_workspace(workspace);
@@ -237,6 +238,7 @@ fn create_default_workspaces(state: &mut TilingState) {
             window_ids: WindowIdList::new(),
             focused_window_index: None,
             split_ratios: Vec::new(),
+            master_ratio: None,
             configured_screen: None,
         };
         state.upsert_workspace(workspace);
@@ -263,6 +265,7 @@ fn ensure_screen_workspaces(state: &mut TilingState) {
                 window_ids: WindowIdList::new(),
                 focused_window_index: None,
                 split_ratios: Vec::new(),
+                master_ratio: None,
                 configured_screen: None,
             };
             state.upsert_workspace(workspace);
@@ -702,6 +705,7 @@ mod tests {
             window_ids: WindowIdList::new(),
             focused_window_index: None,
             split_ratios: Vec::new(),
+            master_ratio: None,
             configured_screen: None,
         }
     }

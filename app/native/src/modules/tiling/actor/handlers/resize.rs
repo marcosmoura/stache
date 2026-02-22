@@ -5,8 +5,10 @@
 
 use uuid::Uuid;
 
+use crate::config::get_config;
 use crate::modules::tiling::actor::messages::ResizeDimension;
 use crate::modules::tiling::init::get_subscriber_handle;
+use crate::modules::tiling::layout::MasterPosition;
 use crate::modules::tiling::state::{LayoutType, Rect, TilingState};
 
 // ============================================================================
@@ -197,6 +199,62 @@ pub fn on_resize_split(
     // Notify subscriber to recalculate layout
     if let Some(handle) = get_subscriber_handle() {
         handle.notify_layout_changed(workspace_id, true);
+    }
+}
+
+// ============================================================================
+// Master Ratio Resize
+// ============================================================================
+
+/// Resize the master/stack split in a Master layout workspace.
+///
+/// `delta` is added to the current master ratio (positive = master grows,
+/// negative = master shrinks). The result is clamped to `0.1..=0.9`.
+///
+/// If the workspace has no runtime-overridden ratio yet the config default
+/// is used as the starting point, so the first resize feels natural.
+fn on_resize_master(state: &mut TilingState, workspace_id: Uuid, delta: f64) {
+    let config = get_config();
+
+    let current_ratio = state.get_workspace(workspace_id).map_or(0.6, |ws| {
+        ws.master_ratio.unwrap_or_else(|| f64::from(config.tiling.master.ratio) / 100.0)
+    });
+
+    let new_ratio = (current_ratio + delta).clamp(0.1, 0.9);
+
+    state.update_workspace(workspace_id, |ws| {
+        ws.master_ratio = Some(new_ratio);
+    });
+
+    tracing::debug!(
+        "Resized master ratio: {current_ratio:.4} -> {new_ratio:.4} (delta: {delta:.4})"
+    );
+
+    if let Some(handle) = get_subscriber_handle() {
+        handle.notify_layout_changed(workspace_id, true);
+    }
+}
+
+/// Resolve the effective master position for the given workspace/screen,
+/// applying the same Auto logic used by the layout engine.
+fn resolve_master_position(state: &TilingState, workspace_id: Uuid) -> MasterPosition {
+    let config = get_config();
+    let config_pos = MasterPosition::from(config.tiling.master.position);
+
+    // Auto needs to know the screen orientation
+    if config_pos != MasterPosition::Auto {
+        return config_pos;
+    }
+
+    let is_landscape = state
+        .get_workspace(workspace_id)
+        .and_then(|ws| state.get_screen(ws.screen_id))
+        .is_none_or(|s| s.visible_frame.width >= s.visible_frame.height);
+
+    if is_landscape {
+        MasterPosition::Left
+    } else {
+        MasterPosition::Top
     }
 }
 
@@ -518,6 +576,42 @@ pub fn on_resize_focused_window(state: &mut TilingState, dimension: ResizeDimens
         return;
     };
 
+    // Master layout: resize the master/stack boundary directly (no split_ratios needed)
+    if layout == LayoutType::Master {
+        let master_pos = resolve_master_position(state, workspace_id);
+
+        // Determine which dimension drives the master/stack split
+        let master_uses_width = matches!(master_pos, MasterPosition::Left | MasterPosition::Right);
+
+        let effective_delta = match (dimension, master_uses_width) {
+            // Resizing the master window's "primary" dimension
+            (ResizeDimension::Width, true) | (ResizeDimension::Height, false) => {
+                // If the focused window is the master (index 0) a positive delta
+                // grows the master; for stack windows it shrinks it.
+                if window_index == 0 {
+                    delta_ratio
+                } else {
+                    -delta_ratio
+                }
+            }
+            // Perpendicular dimension has no effect on the master/stack ratio
+            _ => {
+                tracing::debug!(
+                    "resize_focused_window: {dimension:?} has no effect on Master layout \
+                     with position {master_pos:?}"
+                );
+                return;
+            }
+        };
+
+        on_resize_master(state, workspace_id, effective_delta);
+        tracing::debug!(
+            "Resized master window {focused_id} {dimension:?} by {amount}px \
+             (master_pos: {master_pos:?}, delta: {effective_delta:.4})"
+        );
+        return;
+    }
+
     // Determine which ratio index to modify based on layout type
     let (ratio_index, effective_delta) = match layout {
         LayoutType::Dwindle => {
@@ -614,6 +708,7 @@ pub fn on_resize_focused_window(state: &mut TilingState, dimension: ResizeDimens
 /// * `window_id` - The window that was resized
 /// * `old_frame` - The window's frame before the resize
 /// * `new_frame` - The window's frame after the resize
+#[allow(clippy::too_many_lines)]
 pub fn on_user_resize_completed(
     state: &mut TilingState,
     workspace_id: Uuid,
@@ -638,13 +733,10 @@ pub fn on_user_resize_completed(
 
     let window_count = layoutable.len();
 
-    // Skip layouts that don't support split ratios
-    if matches!(
-        layout,
-        LayoutType::Floating | LayoutType::Monocle | LayoutType::Master
-    ) {
-        tracing::debug!("user_resize_completed: layout {layout:?} doesn't use split ratios");
-        // Just re-apply layout to snap back
+    // Skip layouts that cannot be resized at all
+    if matches!(layout, LayoutType::Floating | LayoutType::Monocle) {
+        tracing::debug!("user_resize_completed: layout {layout:?} doesn't support resize");
+        // Re-apply layout to snap windows back to their tiled positions
         if let Some(handle) = get_subscriber_handle() {
             handle.notify_layout_changed(workspace_id, true);
         }
@@ -685,6 +777,35 @@ pub fn on_user_resize_completed(
     } else {
         (height_delta / screen_height, ResizeDimension::Height)
     };
+
+    // Master layout: map the drag delta onto the single master/stack ratio
+    if layout == LayoutType::Master {
+        let master_pos = resolve_master_position(state, workspace_id);
+        let master_uses_width = matches!(master_pos, MasterPosition::Left | MasterPosition::Right);
+
+        // Choose the delta component that drives the master/stack boundary
+        let effective_delta = if master_uses_width {
+            // Left/Right: width change moves the boundary.
+            // When the master (index 0) grows wider (+width_delta > 0) ratio increases.
+            // When a stack window is dragged so that it grows (+width_delta > 0)
+            // the master shrinks, so ratio decreases.
+            if window_index == 0 {
+                width_delta / screen_width
+            } else {
+                -(width_delta / screen_width)
+            }
+        } else {
+            // Top/Bottom: height change moves the boundary.
+            if window_index == 0 {
+                height_delta / screen_height
+            } else {
+                -(height_delta / screen_height)
+            }
+        };
+
+        on_resize_master(state, workspace_id, effective_delta);
+        return;
+    }
 
     // Determine which split ratio to modify based on layout type
     let (ratio_index, effective_delta) = match layout {
