@@ -33,6 +33,26 @@ pub enum LayoutType {
     Floating,
 }
 
+impl LayoutType {
+    /// Returns the layout name as a static lowercase string.
+    ///
+    /// This matches the kebab-case serde serialization format and avoids
+    /// heap allocations from `format!("{:?}").to_lowercase()`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Dwindle => "dwindle",
+            Self::Split => "split",
+            Self::SplitVertical => "split-vertical",
+            Self::SplitHorizontal => "split-horizontal",
+            Self::Monocle => "monocle",
+            Self::Master => "master",
+            Self::Grid => "grid",
+            Self::Floating => "floating",
+        }
+    }
+}
+
 /// Easing function for animations.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
@@ -237,6 +257,18 @@ mod tests {
     #[test]
     fn test_layout_type_default_is_floating() {
         assert_eq!(LayoutType::default(), LayoutType::Floating);
+    }
+
+    #[test]
+    fn test_layout_type_as_str() {
+        assert_eq!(LayoutType::Dwindle.as_str(), "dwindle");
+        assert_eq!(LayoutType::Split.as_str(), "split");
+        assert_eq!(LayoutType::SplitVertical.as_str(), "split-vertical");
+        assert_eq!(LayoutType::SplitHorizontal.as_str(), "split-horizontal");
+        assert_eq!(LayoutType::Monocle.as_str(), "monocle");
+        assert_eq!(LayoutType::Master.as_str(), "master");
+        assert_eq!(LayoutType::Grid.as_str(), "grid");
+        assert_eq!(LayoutType::Floating.as_str(), "floating");
     }
 
     #[test]
