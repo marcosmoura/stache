@@ -7,8 +7,8 @@ use std::fs::{self, File};
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 
-use image::codecs::jpeg::JpegEncoder;
-use image::{DynamicImage, GenericImageView, ImageReader, Rgb, RgbImage};
+use image::codecs::png::{CompressionType, FilterType as PngFilterType, PngEncoder};
+use image::{DynamicImage, GenericImageView, ImageReader, Rgb, RgbImage, imageops};
 use natord::compare;
 use objc::runtime::{Class, Object};
 use objc::{msg_send, sel, sel_impl};
@@ -182,16 +182,17 @@ pub fn get_screen_count() -> usize {
 pub fn cache_dir() -> PathBuf { get_cache_subdir("wallpapers") }
 
 /// Generates a unique cache filename based on the source file, processing parameters, and screen size.
-/// Always uses JPEG format for fast saving.
+/// Uses lossless PNG format for maximum image quality.
 fn cache_filename(source: &Path, config: &WallpaperConfig, screen: ScreenSize) -> String {
     let stem = source.file_stem().and_then(|s| s.to_str()).unwrap_or("wallpaper");
     format!(
-        "{stem}_{}x{}_r{}_b{}.jpg",
+        "{stem}_{}x{}_r{}_b{}.png",
         screen.width, screen.height, config.radius, config.blur
     )
 }
 
 /// Generates a unique cache filename for a specific screen.
+/// Uses lossless PNG format for maximum image quality.
 fn cache_filename_for_screen(
     source: &Path,
     config: &WallpaperConfig,
@@ -200,7 +201,7 @@ fn cache_filename_for_screen(
 ) -> String {
     let stem = source.file_stem().and_then(|s| s.to_str()).unwrap_or("wallpaper");
     format!(
-        "{stem}_s{screen_index}_{}x{}_r{}_b{}.jpg",
+        "{stem}_s{screen_index}_{}x{}_r{}_b{}.png",
         screen.width, screen.height, config.radius, config.blur
     )
 }
@@ -287,11 +288,15 @@ fn process_image_internal(
     // Apply processing (blur, rounded corners)
     let processed = apply_effects(resized, config.radius, config.blur);
 
-    // Save as JPEG with high quality (much faster than PNG)
+    // Save as lossless PNG for maximum image quality.
+    // CompressionType::Best gives the smallest file size at the cost of slower compression,
+    // which is acceptable because encoding only happens once during cache generation.
+    // PngFilterType::Adaptive selects the optimal row filter per scanline for best compression.
     let file = File::create(&cache_path)
         .map_err(|_| ProcessingError::ImageSave(cache_path.display().to_string()))?;
     let writer = BufWriter::new(file);
-    let encoder = JpegEncoder::new_with_quality(writer, 95);
+    let encoder =
+        PngEncoder::new_with_quality(writer, CompressionType::Best, PngFilterType::Adaptive);
     processed
         .to_rgb8()
         .write_with_encoder(encoder)
@@ -373,11 +378,13 @@ fn resize_to_screen(img: &DynamicImage, screen: ScreenSize) -> DynamicImage {
     let scaled_width = (f64::from(img_width) * scale) as u32;
     let scaled_height = (f64::from(img_height) * scale) as u32;
 
-    // Resize the image using CatmullRom (good quality, much faster than Lanczos3)
+    // Resize the image using Lanczos3: the highest quality resampling filter available.
+    // The performance cost is acceptable because resizing only happens once during
+    // cache generation — the result is stored and reused on every subsequent wallpaper set.
     let resized = img.resize_exact(
         scaled_width,
         scaled_height,
-        image::imageops::FilterType::CatmullRom,
+        image::imageops::FilterType::Lanczos3,
     );
 
     // Crop to exact target dimensions (center crop)
@@ -405,43 +412,35 @@ fn apply_effects(img: DynamicImage, radius: u32, blur: u32) -> DynamicImage {
     result
 }
 
-/// Applies a fast box blur approximation to an image.
+/// Applies a high-quality blur to an image at full resolution.
 ///
-/// Uses multiple passes of box blur to approximate Gaussian blur.
-/// Much faster than true Gaussian blur for large blur radii.
-#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+/// For small radii (≤ 5), uses a true Gaussian blur which is mathematically exact.
+/// For larger radii, uses `imageops::fast_blur` — a separable box-blur approximation
+/// that converges to Gaussian to within ~3% after three passes. This runs entirely
+/// at native resolution, avoiding the spatial aliasing introduced by the previous
+/// downscale-blur-upscale approach. Because blur is applied only once during cache
+/// generation, the higher per-pixel cost is an acceptable trade-off for correct output.
+#[allow(clippy::cast_precision_loss)]
 fn apply_fast_blur(img: &DynamicImage, blur_radius: u32) -> DynamicImage {
-    // For small blur values, use the built-in blur (acceptable performance)
-    // For larger values, we'd use box blur, but the built-in is fine for typical values
     if blur_radius <= 5 {
+        // True Gaussian blur: exact and fast for small radii.
         return img.blur(blur_radius as f32);
     }
 
-    // For larger blur values, use a scaled approach:
-    // Downscale -> blur at smaller size -> upscale
-    let (width, height) = img.dimensions();
-    let scale_factor = 4u32; // Downscale by 4x for faster processing
-
-    let small_width = (width / scale_factor).max(1);
-    let small_height = (height / scale_factor).max(1);
-
-    // Downscale using CatmullRom for better quality
-    let small = img.resize_exact(
-        small_width,
-        small_height,
-        image::imageops::FilterType::CatmullRom,
-    );
-
-    // Apply blur at smaller size (blur radius also scaled down)
-    let blur_at_scale = (blur_radius / scale_factor).max(1);
-    let blurred_small = small.blur(blur_at_scale as f32);
-
-    // Upscale back using CatmullRom for smoother result
-    blurred_small.resize_exact(width, height, image::imageops::FilterType::CatmullRom)
+    // Box-blur approximation of Gaussian at full resolution.
+    // Operates on a plain RgbImage to avoid an intermediate DynamicImage allocation.
+    let rgb = img.to_rgb8();
+    let blurred = imageops::fast_blur(&rgb, blur_radius as f32);
+    DynamicImage::ImageRgb8(blurred)
 }
 
 /// Number of samples per axis for supersampling anti-aliasing.
-const AA_SAMPLES: u32 = 4;
+///
+/// At 8, each corner pixel is evaluated against 8×8 = 64 subpixel samples, producing
+/// a perceptibly smoother curve on Retina displays. The cost is negligible because
+/// only pixels within the `radius × radius` corner bounding box are affected —
+/// for a typical radius of 20px on a 2560×1440 image that is just 400 pixels × 64 samples.
+const AA_SAMPLES: u32 = 8;
 
 /// Applies rounded corners to an image using black fill with high-quality anti-aliasing.
 ///
@@ -467,7 +466,7 @@ fn apply_rounded_corners(img: &DynamicImage, radius: u32) -> DynamicImage {
     let radius_f = f64::from(radius);
     let black = Rgb([0u8, 0, 0]);
 
-    // Use 4x4 supersampling for high-quality anti-aliasing
+    // Use AA_SAMPLES×AA_SAMPLES supersampling (currently 8×8 = 64 subpixel samples per pixel)
     let sample_step = 1.0 / f64::from(AA_SAMPLES);
 
     // Process each corner
@@ -561,7 +560,7 @@ mod tests {
         let screen = ScreenSize { width: 1920, height: 1080 };
 
         let filename = cache_filename(Path::new("/path/to/wallpaper.jpg"), &config, screen);
-        assert_eq!(filename, "wallpaper_1920x1080_r10_b5.jpg");
+        assert_eq!(filename, "wallpaper_1920x1080_r10_b5.png");
     }
 
     #[test]
@@ -575,10 +574,10 @@ mod tests {
         };
 
         let path = cached_path(Path::new("/path/to/wallpaper.png"), &config);
-        // The path should contain the screen size, radius, and blur (always .jpg for performance)
+        // The path should contain the screen size, radius, and blur as a lossless .png
         let path_str = path.to_string_lossy();
         assert!(path_str.contains("wallpaper_"));
-        assert!(path_str.contains("_r10_b5.jpg"));
+        assert!(path_str.contains("_r10_b5.png"));
     }
 
     #[test]
@@ -782,7 +781,7 @@ mod tests {
         assert!(
             std::path::Path::new(&name)
                 .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("jpg"))
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
         );
     }
 
@@ -906,9 +905,8 @@ mod tests {
             Rgb([(x as u8), (y as u8), 128])
         }));
 
-        // Zero radius should be handled (no blur applied due to condition)
-        // But the function doesn't guard against 0, so it would call blur(0.0)
-        // which is essentially a no-op
+        // Zero radius falls into the Gaussian path (blur_radius <= 5) and calls
+        // img.blur(0.0), which is a no-op — dimensions and values are preserved.
         let result = apply_fast_blur(&img, 0);
         assert_eq!(result.dimensions(), (50, 50));
     }
