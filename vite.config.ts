@@ -9,19 +9,16 @@ import { defineConfig } from 'vite';
 
 const host = process.env.TAURI_DEV_HOST;
 
-// WebKit target configuration
-const WEBKIT_SAFARI_VERSION = 18; // Targets Safari 18 to cover the latest two WebKit releases
-const WEBKIT_TARGET = `safari${WEBKIT_SAFARI_VERSION}`;
-const WEBKIT_TARGET_LIST = [WEBKIT_TARGET];
+const UI_DIR = './app/ui';
+const SAFARI_VERSION = 18;
+const BROWSER_TARGET = `safari${SAFARI_VERSION}`;
+const BROWSER_TARGET_LIST = [BROWSER_TARGET];
 
 const hmr = {
   host,
   protocol: 'ws',
   port: 1421,
 };
-
-// Path to the UI source directory
-const UI_DIR = './app/ui';
 
 export default defineConfig({
   root: UI_DIR,
@@ -43,7 +40,6 @@ export default defineConfig({
           ],
         ],
       },
-      // Allow project-internal imports to reach Node resolver during eval
       importOverrides: {
         './app/ui/design-system/index.ts': { unknown: 'allow' },
         './app/ui/design-system/colors.ts': { unknown: 'allow' },
@@ -65,12 +61,10 @@ export default defineConfig({
     conditions: ['module', 'production'],
   },
   optimizeDeps: {
-    esbuildOptions: {
-      target: WEBKIT_TARGET_LIST,
-    },
     include: [
       '@hugeicons/core-free-icons',
       '@hugeicons/react',
+      '@icons-pack/react-simple-icons',
       '@tanstack/react-query',
       '@tauri-apps/api/webviewWindow',
       '@tauri-store/zustand',
@@ -91,15 +85,12 @@ export default defineConfig({
       ignored: ['**/app/native/**', '**/coverage/**'],
     },
   },
-  experimental: {
-    enableNativePlugin: true,
-  },
   build: {
-    target: WEBKIT_TARGET_LIST,
-    cssTarget: WEBKIT_TARGET,
+    target: BROWSER_TARGET_LIST,
+    cssTarget: BROWSER_TARGET,
     minify: 'oxc',
     cssMinify: 'lightningcss',
-    assetsInlineLimit: 0,
+    assetsInlineLimit: 4096,
     sourcemap: 'hidden',
     modulePreload: { polyfill: false },
     reportCompressedSize: true,
@@ -109,26 +100,21 @@ export default defineConfig({
       output: {
         advancedChunks: {
           groups: [
-            // React and React DOM in a separate chunk
             {
               name: 'react',
               test: /[\\/]node_modules[\\/](react|react-dom)[\\/]/,
             },
-            // Other vendor dependencies (icons stay in main bundle)
             {
               name: 'vendor',
-              test(id: string) {
-                // Ignore non-node_modules
+              test(id: string): boolean {
                 if (!id.includes('node_modules')) {
                   return false;
                 }
 
-                // Exclude icon libraries - they stay in main bundle
                 if (/@hugeicons|@icons-pack|hugeicons|simple-icons/.test(id)) {
                   return false;
                 }
 
-                // Exclude react (handled above)
                 if (/[\\/](react|react-dom)[\\/]/.test(id)) {
                   return false;
                 }
@@ -145,12 +131,9 @@ export default defineConfig({
     transformer: 'lightningcss',
     lightningcss: {
       targets: {
-        safari: WEBKIT_SAFARI_VERSION,
+        safari: SAFARI_VERSION,
       },
     },
-  },
-  ssr: {
-    external: [],
   },
   test: {
     css: true,
