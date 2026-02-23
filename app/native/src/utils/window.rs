@@ -159,14 +159,20 @@ pub fn set_window_level(window: &WebviewWindow, level: i32) {
     }
 }
 
+/// `CGWindowLevelKey` for the menu bar level (`kCGMainMenuWindowLevelKey`).
+const CG_MAIN_MENU_WINDOW_LEVEL_KEY: i32 = 8;
+
+/// `CGWindowLevelKey` for the screen-saver level (`kCGScreenSaverWindowLevelKey`).
+/// Used here to ensure the window floats above almost everything.
+const CG_SCREEN_SAVER_WINDOW_LEVEL_KEY: i32 = 20;
+
 pub fn set_window_below_menu(window: &WebviewWindow) {
-    // Menu level
-    set_window_level(window, 8);
+    set_window_level(window, CG_MAIN_MENU_WINDOW_LEVEL_KEY);
     let _ = window.set_always_on_bottom(true);
 }
 
 pub fn set_window_always_on_top(window: &WebviewWindow) {
-    set_window_level(window, 20);
+    set_window_level(window, CG_SCREEN_SAVER_WINDOW_LEVEL_KEY);
     let _ = window.set_always_on_top(true);
 }
 
