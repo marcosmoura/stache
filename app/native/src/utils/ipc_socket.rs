@@ -203,6 +203,18 @@ where F: Fn(IpcQuery) -> IpcResponse + Send + Sync + 'static {
         }
     };
 
+    // Restrict socket permissions to owner-only (0o600) to prevent other
+    // local users from querying or injecting commands into the tiling WM.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) =
+            std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))
+        {
+            tracing::warn!(error = %e, "failed to set socket permissions to 0600");
+        }
+    }
+
     tracing::info!(path = %socket_path.display(), "ipc server listening");
 
     // Spawn server thread
