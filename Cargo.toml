@@ -24,13 +24,12 @@ unexpected_cfgs = { level = "allow", check-cfg = [
 
 [profile.dev]
 incremental = true
-rustflags = ["-Zthreads=8"]
 
 [profile.release]
 codegen-units = 1
 lto = true
 opt-level = "s"
 panic = "abort"
-rustflags = ["-Cdebuginfo=0", "-Zthreads=8"]
+rustflags = ["-Cdebuginfo=0"]
 strip = true
 trim-paths = "all"
