@@ -6,6 +6,21 @@
 //! The notification center allows different processes to communicate without
 //! requiring a shared file or socket. This is ideal for CLI -> desktop app
 //! communication where the CLI needs to notify the running app about events.
+//!
+//! # Security considerations
+//!
+//! `NSDistributedNotificationCenter` broadcasts notifications to **all** processes
+//! on the same user session. Any local process can:
+//!
+//! - **Observe** notifications: read workspace names, layout changes, etc.
+//! - **Post** notifications: send arbitrary commands (focus, swap, resize, etc.)
+//!
+//! This is acceptable for a single-user desktop app where all processes run under
+//! the same UID. However, be aware that a malicious local process could inject
+//! tiling commands. Sensitive operations should not rely solely on this channel.
+//!
+//! For bidirectional queries with responses, use the Unix Domain Socket IPC
+//! in [`super::ipc_socket`], which restricts access via filesystem permissions.
 
 use std::sync::OnceLock;
 
