@@ -30,7 +30,7 @@ default = []
 base64 = { version = "0.22.1", default-features = false, features = ["std"] }
 
 # CLI dependencies
-clap = { version = "4.5.59", features = ["derive", "env", "string"] }
+clap = { version = "4.5.60", features = ["derive", "env", "string"] }
 clap_complete = "4.5.66"
 colored = { version = "3.1.1", default-features = false }
 core-foundation = { version = "0.10.1", default-features = false }
@@ -71,7 +71,7 @@ serde = { version = "1.0.228", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0.149", default-features = false, features = [
   "std",
 ] }
-shellexpand = { version = "3.1.1", default-features = false, features = [
+shellexpand = { version = "3.1.2", default-features = false, features = [
   "base-0",
   "tilde",
 ] }
@@ -100,7 +100,7 @@ tauri-plugin-global-shortcut = "2.3.1"
 tauri-plugin-process = "2.3.1"
 tauri-plugin-shell = "2.3.5"
 tauri-plugin-single-instance = "2.4.0"
-tauri-plugin-zustand = "1.1.1"
+tauri-plugin-zustand = "1.2.0"
 tempfile = "3.25.0"
 thiserror = "2.0.18"
 tokio = { version = "1.49.0", default-features = false, features = [
