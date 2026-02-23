@@ -333,15 +333,23 @@ unsafe fn get_focused_window_id_unsafe() -> Option<u32> {
 
     const K_AX_ERROR_SUCCESS: i32 = 0;
 
-    // Create CFString for "AXFocusedWindow"
+    // Cached CFString for "AXFocusedWindow" — created once and reused.
     fn cf_focused_window() -> *const c_void {
+        use std::sync::OnceLock;
+
         use core_foundation::base::TCFType;
         use core_foundation::string::CFString;
-        // Leak the string so it's static (this is fine, it's a constant)
-        let s = CFString::new("AXFocusedWindow");
-        let ptr = s.as_concrete_TypeRef().cast();
-        std::mem::forget(s);
-        ptr
+
+        static CF_FOCUSED_WINDOW: OnceLock<usize> = OnceLock::new();
+
+        let ptr = *CF_FOCUSED_WINDOW.get_or_init(|| {
+            let s = CFString::new("AXFocusedWindow");
+            let ptr = s.as_concrete_TypeRef().cast::<c_void>() as usize;
+            std::mem::forget(s); // Intentional: leaked once to create a 'static CFString
+            ptr
+        });
+
+        ptr as *const c_void
     }
 
     // Get the frontmost application
