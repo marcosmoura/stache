@@ -47,8 +47,9 @@ fn load_base_modules(app: &App) {
 
     // Start IPC socket server for CLI queries
     utils::ipc_socket::init(|query| {
-        tiling::init::handle_ipc_query(&query)
-            .unwrap_or_else(|| utils::ipc_socket::IpcResponse::error("Unknown query"))
+        tiling::init::handle_ipc_query(&query).unwrap_or_else(|| {
+            utils::ipc_socket::IpcResponse::error("Tiling not initialized or runtime unavailable")
+        })
     });
 
     // Initialize system tray
