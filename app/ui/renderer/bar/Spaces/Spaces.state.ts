@@ -36,37 +36,49 @@ const getSortedWorkspaces = (workspaces: TilingWorkspace[] | undefined) => {
 };
 
 const fetchWorkspacesData = async () => {
-  const workspaces = await invoke<TilingWorkspace[]>('get_tiling_workspaces');
-  const focusedWorkspace = await invoke<string | null>('get_tiling_focused_workspace');
+  try {
+    const workspaces = await invoke<TilingWorkspace[]>('get_tiling_workspaces');
+    const focusedWorkspace = await invoke<string | null>('get_tiling_focused_workspace');
 
-  return {
-    workspacesData: getSortedWorkspaces(workspaces)?.map(({ name }) => name),
-    focusedWorkspace,
-  };
+    return {
+      workspacesData: getSortedWorkspaces(workspaces)?.map(({ name }) => name),
+      focusedWorkspace,
+    };
+  } catch {
+    // Tiling may not be initialized yet — return empty defaults.
+    // The INITIALIZED event listener will invalidate queries once tiling is ready.
+    return { workspacesData: undefined, focusedWorkspace: null };
+  }
 };
 
 const fetchAppsData = async () => {
-  const windows = await invoke<TilingWindow[]>('get_tiling_current_workspace_windows');
-  const focusedWindow = await invoke<TilingWindow | null>('get_tiling_focused_window');
+  try {
+    const windows = await invoke<TilingWindow[]>('get_tiling_current_workspace_windows');
+    const focusedWindow = await invoke<TilingWindow | null>('get_tiling_focused_window');
 
-  const apps = windows.map(({ appName, id, title }) => ({
-    appName,
-    windowId: id,
-    windowTitle: title,
-  }));
+    const apps = windows.map(({ appName, id, title }) => ({
+      appName,
+      windowId: id,
+      windowTitle: title,
+    }));
 
-  const focusedApp = focusedWindow
-    ? {
-        appName: focusedWindow.appName,
-        windowId: focusedWindow.id,
-        windowTitle: focusedWindow.title,
-      }
-    : null;
+    const focusedApp = focusedWindow
+      ? {
+          appName: focusedWindow.appName,
+          windowId: focusedWindow.id,
+          windowTitle: focusedWindow.title,
+        }
+      : null;
 
-  return {
-    appsList: apps,
-    focusedApp,
-  };
+    return {
+      appsList: apps,
+      focusedApp,
+    };
+  } catch {
+    // Tiling may not be initialized yet — return empty defaults.
+    // The INITIALIZED event listener will invalidate queries once tiling is ready.
+    return { appsList: [], focusedApp: null };
+  }
 };
 
 const invokeWithErrorHandling = async <T>(
@@ -183,6 +195,14 @@ export const useSpaces = () => {
     [],
   );
 
+  // Listen for tiling initialization — when tiling finishes its async startup,
+  // flip isEnabled and refetch workspace data that was empty on first render.
+  useTauriEvent(TilingEvents.INITIALIZED, () => {
+    setIsEnabled(true);
+    queryClient.invalidateQueries({ queryKey: ['tiling_workspace_data'] });
+    queryClient.invalidateQueries({ queryKey: ['tiling_workspace_apps'] });
+  });
+
   // Listen for tiling events
   useTauriEvent(TilingEvents.WORKSPACE_WINDOWS_CHANGED, onWindowFocusChanged);
   useTauriEvent(TilingEvents.WINDOW_TRACKED, onWindowFocusChanged);
@@ -191,7 +211,8 @@ export const useSpaces = () => {
   useTauriEvent(TilingEvents.WINDOW_FOCUS_CHANGED, onWindowFocusChanged);
   useTauriEvent(TilingEvents.WORKSPACE_CHANGED, onWorkspaceChanged);
 
-  // Check if tiling is already initialized on mount
+  // Fast-path: if tiling is already initialized (e.g. after a manual reload),
+  // enable immediately without waiting for the INITIALIZED event.
   useLayoutEffect(() => {
     invoke<boolean>('is_tiling_enabled').then((enabled) => {
       if (enabled) {
