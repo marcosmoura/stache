@@ -3,7 +3,7 @@ mod window;
 
 use tauri::{App, Manager};
 
-use crate::utils::window::{set_window_always_on_top, set_window_sticky};
+use crate::platform::window::{set_window_always_on_top, set_window_sticky};
 use crate::widgets::window::monitor_click_outside;
 
 pub fn init(app: &App) {

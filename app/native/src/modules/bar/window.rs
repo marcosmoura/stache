@@ -3,7 +3,7 @@ use tauri::Manager;
 
 use crate::config::get_config;
 use crate::error::StacheError;
-use crate::utils::window::{get_screen_size, set_position};
+use crate::platform::window::{get_screen_size, set_position};
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]

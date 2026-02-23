@@ -12,11 +12,8 @@ pub mod constants;
 pub mod error;
 pub mod events;
 mod logging;
+mod platform;
 pub mod schema;
-mod utils;
-
-// New infrastructure (being phased in)
-pub mod platform;
 pub mod services;
 
 // Feature modules
@@ -38,7 +35,7 @@ static ACCESSIBILITY_GRANTED: OnceLock<bool> = OnceLock::new();
 /// If permissions are not granted on first check, it prompts the user.
 #[must_use]
 pub fn is_accessibility_granted() -> bool {
-    *ACCESSIBILITY_GRANTED.get_or_init(utils::accessibility::check_and_prompt)
+    *ACCESSIBILITY_GRANTED.get_or_init(platform::accessibility::check_and_prompt)
 }
 
 fn load_base_modules(app: &App) {
@@ -46,9 +43,11 @@ fn load_base_modules(app: &App) {
     config::watch_config_file(app.handle().clone());
 
     // Start IPC socket server for CLI queries
-    utils::ipc_socket::init(|query| {
+    platform::ipc_socket::init(|query| {
         tiling::init::handle_ipc_query(&query).unwrap_or_else(|| {
-            utils::ipc_socket::IpcResponse::error("Tiling not initialized or runtime unavailable")
+            platform::ipc_socket::IpcResponse::error(
+                "Tiling not initialized or runtime unavailable",
+            )
         })
     });
 
@@ -205,7 +204,7 @@ pub fn run() {
             if matches!(event, tauri::RunEvent::Exit) {
                 tracing::info!("application exiting, cleaning up");
                 // Clean up IPC socket on exit
-                utils::ipc_socket::stop_server();
+                platform::ipc_socket::stop_server();
             }
         });
 }

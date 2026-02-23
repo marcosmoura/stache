@@ -23,7 +23,7 @@ After modifying any struct in `config/types.rs`, run:
 User-provided paths may contain `~` or relative paths. Always use:
 
 ```rust
-use crate::utils::path::{expand, expand_and_resolve};
+use crate::platform::path::{expand, expand_and_resolve};
 ```
 
 Never use raw path strings from config directly.

@@ -31,8 +31,7 @@ send_notification("TilingFocusWorkspace", Some("workspace_name"));
 - `services/` — Shared services and traits
 - `config/` — Configuration types and hot-reload
 - `cli/` — Clap command definitions
-- `platform/` — macOS-specific platform code
-- `utils/` — Shared utilities (IPC, paths, cache)
+- `platform/` — macOS platform abstractions (IPC, accessibility, window management, ObjC helpers, paths, threads)
 
 ### React Frontend (`app/ui/`)
 

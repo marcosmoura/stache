@@ -12,9 +12,9 @@ use tabled::{Table, Tabled};
 use super::types::{CliLayoutType, Direction};
 use crate::cli::output;
 use crate::error::StacheError;
+use crate::platform::ipc::{self, StacheNotification};
+use crate::platform::ipc_socket::{self, IpcError, IpcQuery, IpcResponse};
 use crate::tiling;
-use crate::utils::ipc::{self, StacheNotification};
-use crate::utils::ipc_socket::{self, IpcError, IpcQuery, IpcResponse};
 
 /// Tiling window manager subcommands.
 #[derive(Subcommand, Debug)]

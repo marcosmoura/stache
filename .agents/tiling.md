@@ -46,7 +46,7 @@ janky::update_colors_for_workspace(is_monocle, is_floating);
 
 ## Adding a New Tiling CLI Command
 
-1. Add IPC notification constant to `utils/ipc.rs`
+1. Add IPC notification constant to `platform/ipc.rs`
 2. Add CLI command to `cli/commands.rs`
 3. Send notification in `main.rs` command handler
 4. Handle notification in `modules/bar/ipc_listener.rs`

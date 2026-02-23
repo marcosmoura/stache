@@ -1,8 +1,3 @@
-//! Window manipulation utilities for macOS.
-//!
-//! Provides utilities for manipulating Tauri windows using macOS-specific APIs
-//! including `SkyLight` private framework for sticky window behavior.
-
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::OnceLock;
@@ -114,13 +109,11 @@ extern "C" fn forward_send_event(this: &Object, _: Sel, event: ObjcId) {
 const OBJC_ASSOCIATION_RETAIN_NONATOMIC: usize = 0x301;
 static TRACKING_AREA_ASSOC_KEY: u8 = 0;
 
-/// Sets the position and size of a window.
 pub fn set_position(window: &WebviewWindow, x: f64, y: f64, width: f64, height: f64) {
     let _ = window.set_size(Size::Logical(LogicalSize { width, height }));
     let _ = window.set_position(Position::Logical(LogicalPosition { x, y }));
 }
 
-/// Makes a window sticky (visible on all spaces) using `SkyLight`.
 pub fn set_window_sticky(window: &WebviewWindow) {
     let _ = window.set_resizable(false);
     let _ = window.set_focusable(true);
@@ -151,7 +144,6 @@ pub fn set_window_sticky(window: &WebviewWindow) {
     }
 }
 
-/// Sets the window level using Core Graphics window level keys.
 pub fn set_window_level(window: &WebviewWindow, level: i32) {
     #[link(name = "CoreGraphics", kind = "framework")]
     unsafe extern "C" {
@@ -167,24 +159,23 @@ pub fn set_window_level(window: &WebviewWindow, level: i32) {
     }
 }
 
-/// Sets the window level below the menu bar.
+/// `CGWindowLevelKey` for the menu bar level (`kCGMainMenuWindowLevelKey`).
+const CG_MAIN_MENU_WINDOW_LEVEL_KEY: i32 = 8;
+
+/// `CGWindowLevelKey` for the screen-saver level (`kCGScreenSaverWindowLevelKey`).
+/// Used here to ensure the window floats above almost everything.
+const CG_SCREEN_SAVER_WINDOW_LEVEL_KEY: i32 = 20;
+
 pub fn set_window_below_menu(window: &WebviewWindow) {
-    // Menu level
-    set_window_level(window, 8);
+    set_window_level(window, CG_MAIN_MENU_WINDOW_LEVEL_KEY);
     let _ = window.set_always_on_bottom(true);
 }
 
-/// Sets the window to always be on top.
 pub fn set_window_always_on_top(window: &WebviewWindow) {
-    set_window_level(window, 20);
+    set_window_level(window, CG_SCREEN_SAVER_WINDOW_LEVEL_KEY);
     let _ = window.set_always_on_top(true);
 }
 
-/// Gets the screen size for the window's primary monitor.
-///
-/// # Errors
-///
-/// Returns an error if the primary monitor cannot be determined.
 pub fn get_screen_size(window: &WebviewWindow) -> Result<(f64, f64), Box<dyn std::error::Error>> {
     let monitor = window.primary_monitor()?.ok_or("No primary monitor found")?;
 

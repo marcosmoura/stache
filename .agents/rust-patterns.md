@@ -66,7 +66,7 @@ After modifying config types, regenerate the schema:
 Always use the centralized path utility for user-provided paths:
 
 ```rust
-use crate::utils::path::{expand, expand_and_resolve};
+use crate::platform::path::{expand, expand_and_resolve};
 
 // Tilde expansion only
 let home_path = expand("~/.config/stache");

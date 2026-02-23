@@ -15,7 +15,7 @@ use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Generator, Shell, generate};
 
 use crate::error::StacheError;
-use crate::utils::ipc::{self, StacheNotification};
+use crate::platform::ipc::{self, StacheNotification};
 use crate::{config, schema};
 
 pub mod audio;

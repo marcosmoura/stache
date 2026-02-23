@@ -18,8 +18,8 @@ use objc::runtime::{Class, Object, Sel};
 use objc::{class, msg_send, sel, sel_impl};
 
 use crate::config::{self, TargetMusicApp};
-use crate::utils::objc::{get_app_bundle_id, nsstring};
-use crate::utils::thread::spawn_named_thread;
+use crate::platform::objc::{get_app_bundle_id, nsstring};
+use crate::platform::thread::spawn_named_thread;
 
 /// Bundle identifier for Apple Music.
 const APPLE_MUSIC_BUNDLE_ID: &str = "com.apple.Music";

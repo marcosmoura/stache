@@ -3,7 +3,7 @@ use std::sync::mpsc::{Sender, channel};
 
 use core_graphics::display::CGDisplayRegisterReconfigurationCallback;
 
-use crate::utils::thread::spawn_named_thread;
+use crate::platform::thread::spawn_named_thread;
 
 pub fn init_screen_watcher(callback: impl Fn() + Send + 'static) {
     spawn_named_thread("screen-watcher", move || {

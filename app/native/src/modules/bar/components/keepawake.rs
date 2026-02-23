@@ -13,7 +13,7 @@ use serde::Serialize;
 use tauri::{Emitter, Manager};
 
 use crate::error::StacheError;
-use crate::utils::thread::spawn_named_thread;
+use crate::platform::thread::spawn_named_thread;
 use crate::{constants, events};
 
 const KEEP_AWAKE_REASON: &str = "Stache requested system wake lock";

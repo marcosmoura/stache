@@ -23,7 +23,7 @@ use tauri_plugin_shell::process::CommandEvent;
 
 use crate::cache::get_cache_subdir_str;
 use crate::events;
-use crate::utils::thread::spawn_named_thread;
+use crate::platform::thread::spawn_named_thread;
 
 /// Resize the provided image to 128x128 and encode it as PNG.
 ///

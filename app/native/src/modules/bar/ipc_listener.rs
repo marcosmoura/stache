@@ -7,7 +7,7 @@ use tauri::{AppHandle, Emitter, Runtime};
 
 use crate::events;
 use crate::modules::tiling;
-use crate::utils::ipc::{self, StacheNotification};
+use crate::platform::ipc::{self, StacheNotification};
 
 /// Initializes the IPC listener for CLI notifications.
 ///

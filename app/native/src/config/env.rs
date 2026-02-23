@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::utils::path::expand_and_resolve;
+use crate::platform::path::expand_and_resolve;
 
 /// Environment variable names for API keys.
 pub mod keys {

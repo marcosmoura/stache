@@ -20,7 +20,7 @@ use super::device::{
 };
 use super::priority;
 use crate::config::ProxyAudioConfig;
-use crate::utils::thread::spawn_named_thread;
+use crate::platform::thread::spawn_named_thread;
 
 /// Stores the Sender used by audio property listeners.
 /// This is intentionally kept alive for the application's lifetime since the

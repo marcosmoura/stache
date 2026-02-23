@@ -12,7 +12,7 @@ use rayon::prelude::*;
 use super::macos;
 use super::processing::{self, ProcessingError};
 use crate::config::{WallpaperConfig, WallpaperMode};
-use crate::utils::path::expand;
+use crate::platform::path::expand;
 
 /// Global wallpaper manager instance.
 static MANAGER: OnceLock<Arc<WallpaperManager>> = OnceLock::new();

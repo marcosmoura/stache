@@ -14,7 +14,7 @@ use tauri::Runtime;
 use tauri_plugin_global_shortcut::{Builder, Shortcut, ShortcutState};
 
 use crate::config::{ShortcutCommands, get_config};
-use crate::utils::command::resolve_binary;
+use crate::platform::command::resolve_binary;
 
 /// Maps registered shortcuts to their corresponding commands.
 ///
