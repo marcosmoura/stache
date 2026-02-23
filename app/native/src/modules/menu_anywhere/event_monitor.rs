@@ -5,7 +5,6 @@
 
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use core_foundation::base::TCFType;
@@ -13,6 +12,7 @@ use core_foundation::mach_port::CFMachPort;
 use core_foundation::runloop::{CFRunLoop, kCFRunLoopCommonModes};
 use objc::runtime::{Class, Object};
 use objc::{msg_send, sel, sel_impl};
+use parking_lot::Mutex;
 
 use super::menu_builder;
 use crate::config::{MenuAnywhereConfig, MenuAnywhereMouseButton};
@@ -148,9 +148,7 @@ unsafe impl Sync for SendSyncPtr {}
 static DISPATCH_HELPER: Mutex<Option<SendSyncPtr>> = Mutex::new(None);
 
 fn trigger_menu_display(location: CGPoint) {
-    if let Ok(mut loc) = PENDING_MENU_LOCATION.lock() {
-        *loc = Some((location.x, location.y));
-    }
+    *PENDING_MENU_LOCATION.lock() = Some((location.x, location.y));
 
     unsafe {
         let helper = get_or_create_dispatch_helper();
@@ -163,11 +161,13 @@ fn trigger_menu_display(location: CGPoint) {
 
 #[allow(clippy::items_after_statements)]
 fn get_or_create_dispatch_helper() -> *mut Object {
-    if let Ok(guard) = DISPATCH_HELPER.lock()
-        && let Some(SendSyncPtr(ptr)) = guard.as_ref()
-        && !ptr.is_null()
     {
-        return *ptr;
+        let guard = DISPATCH_HELPER.lock();
+        if let Some(SendSyncPtr(ptr)) = guard.as_ref()
+            && !ptr.is_null()
+        {
+            return *ptr;
+        }
     }
 
     use objc::declare::ClassDecl;
@@ -176,9 +176,7 @@ fn get_or_create_dispatch_helper() -> *mut Object {
 
     if let Some(existing) = Class::get("StacheMenuDispatchHelper") {
         let helper: *mut Object = unsafe { msg_send![existing, new] };
-        if let Ok(mut guard) = DISPATCH_HELPER.lock() {
-            *guard = Some(SendSyncPtr(helper));
-        }
+        *DISPATCH_HELPER.lock() = Some(SendSyncPtr(helper));
         return helper;
     }
 
@@ -187,7 +185,7 @@ fn get_or_create_dispatch_helper() -> *mut Object {
     };
 
     extern "C" fn show_menu_at_pending_location(_this: &Object, _sel: objc::runtime::Sel) {
-        let location = PENDING_MENU_LOCATION.lock().ok().and_then(|mut guard| guard.take());
+        let location = PENDING_MENU_LOCATION.lock().take();
 
         let Some((x, y)) = location else {
             return;
@@ -212,9 +210,7 @@ fn get_or_create_dispatch_helper() -> *mut Object {
     let helper_class = decl.register();
     let helper: *mut Object = unsafe { msg_send![helper_class, new] };
 
-    if let Ok(mut guard) = DISPATCH_HELPER.lock() {
-        *guard = Some(SendSyncPtr(helper));
-    }
+    *DISPATCH_HELPER.lock() = Some(SendSyncPtr(helper));
 
     helper
 }
