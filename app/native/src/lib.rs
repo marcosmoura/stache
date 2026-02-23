@@ -16,7 +16,6 @@ pub mod schema;
 mod utils;
 
 // New infrastructure (being phased in)
-pub mod core;
 pub mod platform;
 pub mod services;
 
