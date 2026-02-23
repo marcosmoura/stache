@@ -15,7 +15,6 @@ dist-ssr
 # Rust build artifacts
 target/
 
-
 # Editor directories and files
 .idea
 .DS_Store

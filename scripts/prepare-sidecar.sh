@@ -13,16 +13,16 @@ TARGET_TRIPLE=$(rustc -vV | grep host | cut -f2 -d' ')
 
 # Check if media-control is installed
 if ! command -v media-control &>/dev/null; then
-	echo "Error: media-control is not installed."
-	echo "Install it with: brew install media-control"
-	exit 1
+  echo "Error: media-control is not installed."
+  echo "Install it with: brew install media-control"
+  exit 1
 fi
 
 # Get the Homebrew prefix for media-control
 MEDIA_CONTROL_PREFIX=$(brew --prefix media-control 2>/dev/null)
 if [ -z "$MEDIA_CONTROL_PREFIX" ]; then
-	echo "Error: Could not find media-control Homebrew prefix"
-	exit 1
+  echo "Error: Could not find media-control Homebrew prefix"
+  exit 1
 fi
 
 # Copy the binary with the target triple suffix

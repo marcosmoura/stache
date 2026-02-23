@@ -13,10 +13,10 @@ echo "Generating Stache configuration schema..."
 # Check if the binary exists (workspace builds go to root target/)
 STACHE_BINARY="$ROOT_DIR/target/release/stache"
 if [ ! -f "$STACHE_BINARY" ]; then
-	echo "Stache binary not found at $STACHE_BINARY"
-	echo "Building binary..."
-	cd "$ROOT_DIR"
-	cargo build --package stache --release
+  echo "Stache binary not found at $STACHE_BINARY"
+  echo "Building binary..."
+  cd "$ROOT_DIR"
+  cargo build --package stache --release
 fi
 
 # Generate the schema using the CLI
@@ -27,12 +27,12 @@ echo "Schema saved to $SCHEMA_FILE"
 
 # Validate the generated JSON
 if command -v jq &>/dev/null; then
-	if jq empty "$SCHEMA_FILE" 2>/dev/null; then
-		echo "Schema is valid JSON"
-	else
-		echo "Warning: Generated schema may not be valid JSON"
-		exit 1
-	fi
+  if jq empty "$SCHEMA_FILE" 2>/dev/null; then
+    echo "Schema is valid JSON"
+  else
+    echo "Warning: Generated schema may not be valid JSON"
+    exit 1
+  fi
 fi
 
 echo "Done!"
