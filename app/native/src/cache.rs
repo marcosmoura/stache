@@ -95,7 +95,7 @@ pub fn clear_cache() -> std::io::Result<u64> {
 }
 
 /// Calculates the total size of a directory in bytes.
-fn calculate_dir_size(path: &PathBuf) -> std::io::Result<u64> {
+fn calculate_dir_size(path: &std::path::Path) -> std::io::Result<u64> {
     let mut total = 0u64;
 
     if path.is_dir() {
