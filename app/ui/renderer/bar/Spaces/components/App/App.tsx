@@ -43,6 +43,7 @@ export const App = memo(function App({
         as={Button}
         className={cx(styles.app, isFocused && styles.appFocused)}
         onClick={onClick}
+        animated={false}
       >
         <Icon icon={getAppIcon(appName)} />
         <AnimatePresence>
