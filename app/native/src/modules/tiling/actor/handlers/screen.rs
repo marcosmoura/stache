@@ -551,7 +551,7 @@ fn get_screen_info(display_id: u32, main_screen_height: f64) -> Option<Screen> {
                 continue;
             }
 
-            let screen_number_key = crate::utils::objc::nsstring("NSScreenNumber");
+            let screen_number_key = crate::platform::objc::nsstring("NSScreenNumber");
             let screen_number_obj: *mut Object =
                 msg_send![device_description, objectForKey: screen_number_key];
             if screen_number_obj.is_null() {
@@ -574,7 +574,7 @@ fn get_screen_info(display_id: u32, main_screen_height: f64) -> Option<Screen> {
                 if name_ns.is_null() {
                     format!("Display {display_id}")
                 } else {
-                    crate::utils::objc::nsstring_to_string(name_ns)
+                    crate::platform::objc::nsstring_to_string(name_ns)
                 }
             };
 

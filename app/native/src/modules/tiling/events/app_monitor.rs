@@ -44,7 +44,7 @@ use crate::modules::tiling::events::EventProcessor;
 use crate::modules::tiling::events::observer::{
     add_observer_for_pid, remove_observer_for_pid, should_observe_app,
 };
-use crate::utils::objc::nsstring;
+use crate::platform::objc::nsstring;
 
 // ============================================================================
 // App Monitor Adapter
@@ -273,7 +273,7 @@ fn extract_app_info(notification: *mut Object) -> (i32, Option<String>, Option<S
             if bundle_id_ns.is_null() {
                 None
             } else {
-                Some(crate::utils::objc::nsstring_to_string(bundle_id_ns))
+                Some(crate::platform::objc::nsstring_to_string(bundle_id_ns))
             }
         };
 
@@ -283,7 +283,7 @@ fn extract_app_info(notification: *mut Object) -> (i32, Option<String>, Option<S
             if name_ns.is_null() {
                 None
             } else {
-                Some(crate::utils::objc::nsstring_to_string(name_ns))
+                Some(crate::platform::objc::nsstring_to_string(name_ns))
             }
         };
 

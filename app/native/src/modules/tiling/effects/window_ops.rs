@@ -440,7 +440,7 @@ pub fn set_window_frame(window_id: u32, frame: &Rect) -> bool {
     // Dispatch to main thread using the project's existing dispatch utility
     // This is async (fire-and-forget) but avoids potential deadlocks
     let frame_copy = *frame;
-    crate::utils::thread::dispatch_on_main(move || {
+    crate::platform::thread::dispatch_on_main(move || {
         set_window_frame_impl(window_id, &frame_copy);
     });
 
@@ -659,7 +659,7 @@ fn get_ax_element_for_window(
 #[must_use]
 pub fn focus_window(window_id: u32) -> bool {
     // Dispatch to main thread using the project's existing dispatch utility
-    crate::utils::thread::dispatch_on_main(move || {
+    crate::platform::thread::dispatch_on_main(move || {
         focus_window_impl(window_id);
     });
 
@@ -781,7 +781,7 @@ fn activate_app(pid: i32) -> bool {
 #[must_use]
 pub fn raise_window(window_id: u32) -> bool {
     // Dispatch to main thread using the project's existing dispatch utility
-    crate::utils::thread::dispatch_on_main(move || {
+    crate::platform::thread::dispatch_on_main(move || {
         raise_window_impl(window_id);
     });
 
@@ -825,7 +825,7 @@ pub fn set_window_frames_batch(frames: &[(u32, Rect)]) -> usize {
     let frames_copy: Vec<(u32, Rect)> = frames.to_vec();
 
     // Single main thread dispatch for all frames
-    crate::utils::thread::dispatch_on_main(move || {
+    crate::platform::thread::dispatch_on_main(move || {
         for (window_id, frame) in frames_copy {
             set_window_frame_impl(window_id, &frame);
         }

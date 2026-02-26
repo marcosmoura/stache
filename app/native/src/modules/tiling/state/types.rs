@@ -134,7 +134,7 @@ impl Screen {
 
 /// Layout algorithm for arranging windows in a workspace.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 pub enum LayoutType {
     /// No automatic positioning, windows stay where placed.
     #[default]
@@ -163,6 +163,24 @@ pub enum LayoutType {
 }
 
 impl LayoutType {
+    /// Returns the layout name as a static kebab-case string.
+    ///
+    /// This matches the `#[serde(rename_all = "kebab-case")]` format and avoids
+    /// heap allocations from `format!("{self:?}").to_lowercase()`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Floating => "floating",
+            Self::Dwindle => "dwindle",
+            Self::Monocle => "monocle",
+            Self::Master => "master",
+            Self::Split => "split",
+            Self::SplitVertical => "split-vertical",
+            Self::SplitHorizontal => "split-horizontal",
+            Self::Grid => "grid",
+        }
+    }
+
     /// Returns true if this layout stacks windows on top of each other.
     #[must_use]
     pub const fn is_stacking(&self) -> bool { matches!(self, Self::Monocle) }

@@ -559,7 +559,7 @@ pub fn emit_workspace_windows_changed(workspace: &str, window_ids: &[u32]) {
 // IPC Query Handler
 // ============================================================================
 
-use crate::utils::ipc_socket::{IpcQuery, IpcResponse};
+use crate::platform::ipc_socket::{IpcQuery, IpcResponse};
 
 /// Handles IPC queries for tiling v2.
 ///
@@ -729,7 +729,7 @@ pub fn handle_ipc_query(query: &IpcQuery) -> Option<IpcResponse> {
                             "id": ws.id.to_string(),
                             "name": ws.name,
                             "screenId": ws.screen_id,
-                            "layout": format!("{layout:?}").to_lowercase(),
+                            "layout": layout.as_str(),
                             "isVisible": ws.is_visible,
                             "isFocused": ws.is_focused,
                             "windowCount": ws.window_ids.len(),
@@ -940,7 +940,7 @@ fn handle_workspaces_query(screen: Option<&str>, focused_screen: bool) -> Option
                     "id": ws.id.to_string(),
                     "name": ws.name,
                     "screenName": screen_name,
-                    "layout": format!("{layout:?}").to_lowercase(),
+                    "layout": layout.as_str(),
                     "isVisible": ws.is_visible,
                     "isFocused": ws.is_focused,
                     "windowCount": ws.window_ids.len(),
