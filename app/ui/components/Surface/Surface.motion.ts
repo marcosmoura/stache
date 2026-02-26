@@ -4,12 +4,13 @@ import { motionRaw } from '@/design-system';
 
 import type { MotionableComponent } from './Surface.types';
 
-export const initial = { y: '-100%', opacity: 0 };
-export const animate = { y: '0%', opacity: 1 };
+export const initial = { scale: 0.8, opacity: 0.2 };
+export const animate = { scale: 1, opacity: 1 };
 export const transition = {
+  type: 'spring',
+  bounce: 0,
   duration: motionRaw.durationSlow,
-  ease: motionRaw.easing.split(',').map(Number) as [number, number, number, number],
-};
+} as const;
 
 const motionComponentCache = new WeakMap<MotionableComponent, MotionableComponent>();
 
