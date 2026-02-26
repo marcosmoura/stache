@@ -4,7 +4,7 @@ import { defineConfig, globalIgnores } from 'eslint/config';
 import { createTypeScriptImportResolver } from 'eslint-import-resolver-typescript';
 import { importX } from 'eslint-plugin-import-x';
 import reactHooks from 'eslint-plugin-react-hooks';
-import reactRefresh from 'eslint-plugin-react-refresh';
+import reactRefreshPlugin from 'eslint-plugin-react-refresh';
 import globals from 'globals';
 import { configs as tseslintConfigs } from 'typescript-eslint';
 
@@ -14,7 +14,7 @@ export default defineConfig([
   ...pluginQuery.configs['flat/recommended'],
   {
     files: ['**/*.{ts,tsx}'],
-    extends: [js.configs.recommended, tseslintConfigs.recommended, reactRefresh.configs.vite],
+    extends: [js.configs.recommended, tseslintConfigs.recommended, reactRefreshPlugin.configs.vite],
     languageOptions: {
       ecmaVersion: 'latest',
       globals: {
