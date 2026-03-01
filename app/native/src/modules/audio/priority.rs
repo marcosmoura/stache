@@ -5,17 +5,15 @@
 
 use super::device::{AudioDevice, find_device_by_name, find_device_by_priority};
 use crate::config::ProxyAudioConfig;
+use crate::platform::display::is_screen_mirroring_active;
 
 /// Determines the target output device based on priority rules from config.
 ///
 /// Priority order:
-/// 1. Keep current `AirPlay` device (don't switch away from `AirPlay`)
-/// 2. Devices in the config priority list (in order)
-/// 3. Fallback to `MacBook` Pro speakers
-///
-/// Note: This function does NOT automatically switch to `AirPlay`. The watcher
-/// should call this when devices change, and `AirPlay` devices will be selected
-/// when they appear in the device list and match the priority config.
+/// 1. `AirPlay` device when screen mirroring is active (always highest priority)
+/// 2. Keep current `AirPlay` device (don't switch away from `AirPlay`)
+/// 3. Devices in the config priority list (in order)
+/// 4. Fallback to `MacBook` Pro speakers
 ///
 /// # Arguments
 ///
@@ -32,32 +30,45 @@ pub fn get_target_output_device<'a>(
     devices: &'a [AudioDevice],
     config: &ProxyAudioConfig,
 ) -> Option<&'a AudioDevice> {
-    // 1. Don't switch away from AirPlay - keep it if it's the current device
+    resolve_output_device(current, devices, config, is_screen_mirroring_active())
+}
+
+/// Inner implementation that accepts screen mirroring state for testability.
+fn resolve_output_device<'a>(
+    current: &AudioDevice,
+    devices: &'a [AudioDevice],
+    config: &ProxyAudioConfig,
+    screen_mirroring_active: bool,
+) -> Option<&'a AudioDevice> {
+    // 1. When screen mirroring is active, AirPlay always gets highest priority
+    if screen_mirroring_active && let Some(airplay) = devices.iter().find(|d| d.is_airplay()) {
+        return Some(airplay);
+    }
+
+    // 2. Don't switch away from AirPlay - keep it if it's the current device
     if current.is_airplay() {
         return devices.iter().find(|d| d.id == current.id);
     }
 
-    // 2. Check devices in config priority order
+    // 3. Check devices in config priority order
     for priority_device in &config.output {
         if let Some(device) = find_device_by_priority(devices, priority_device) {
             return Some(device);
         }
     }
 
-    // 3. Fallback to MacBook Pro speakers
+    // 4. Fallback to MacBook Pro speakers
     find_device_by_name(devices, "MacBook Pro")
 }
 
 /// Determines the target input device based on priority rules from config.
 ///
 /// Priority order:
-/// 1. Keep current `AirPlay` device (don't switch away from `AirPlay`)
-/// 2. Devices in the config priority list (in order)
-/// 3. Fallback to `MacBook` Pro microphone
-///
-/// Note: This function does NOT automatically switch to `AirPlay`. The watcher
-/// should call this when devices change, and `AirPlay` devices will be selected
-/// when they appear in the device list and match the priority config.
+/// 1. `AirPlay` device when screen mirroring is active (always highest priority)
+/// 2. Keep current `AirPlay` device (don't switch away from `AirPlay`)
+/// 3. Devices in the config priority list (in order)
+/// 4. Fallback to `MacBook` Pro microphone
+/// 5. Keep current if nothing else matches
 ///
 /// # Arguments
 ///
@@ -74,24 +85,39 @@ pub fn get_target_input_device<'a>(
     devices: &'a [AudioDevice],
     config: &ProxyAudioConfig,
 ) -> Option<&'a AudioDevice> {
-    // 1. Don't switch away from AirPlay - keep it if it's the current device
+    resolve_input_device(current, devices, config, is_screen_mirroring_active())
+}
+
+/// Inner implementation that accepts screen mirroring state for testability.
+fn resolve_input_device<'a>(
+    current: &AudioDevice,
+    devices: &'a [AudioDevice],
+    config: &ProxyAudioConfig,
+    screen_mirroring_active: bool,
+) -> Option<&'a AudioDevice> {
+    // 1. When screen mirroring is active, AirPlay always gets highest priority
+    if screen_mirroring_active && let Some(airplay) = devices.iter().find(|d| d.is_airplay()) {
+        return Some(airplay);
+    }
+
+    // 2. Don't switch away from AirPlay - keep it if it's the current device
     if current.is_airplay() {
         return devices.iter().find(|d| d.id == current.id);
     }
 
-    // 2. Check devices in config priority order
+    // 3. Check devices in config priority order
     for priority_device in &config.input {
         if let Some(device) = find_device_by_priority(devices, priority_device) {
             return Some(device);
         }
     }
 
-    // 3. Fallback to MacBook Pro microphone
+    // 4. Fallback to MacBook Pro microphone
     if let Some(macbook) = find_device_by_name(devices, "MacBook Pro") {
         return Some(macbook);
     }
 
-    // 4. Keep current if nothing else matches
+    // 5. Keep current if nothing else matches
     devices.iter().find(|d| d.id == current.id)
 }
 
@@ -141,7 +167,7 @@ mod tests {
     }
 
     #[test]
-    fn output_follows_config_priority() {
+    fn output_follows_config_priority_without_mirroring() {
         let config = create_test_config();
         let current = AudioDevice {
             id: 1,
@@ -163,10 +189,64 @@ mod tests {
             },
         ];
 
-        let target = get_target_output_device(&current, &devices, &config);
+        // Without screen mirroring, config priority wins over AirPlay
+        let target = resolve_output_device(&current, &devices, &config, false);
         assert!(target.is_some());
-        // AirPods Pro is first in config priority list (not AirPlay)
-        // AirPlay is only kept if it's the current device
+        assert_eq!(target.unwrap().id, 2);
+    }
+
+    #[test]
+    fn output_selects_airplay_when_screen_mirroring_active() {
+        let config = create_test_config();
+        let current = AudioDevice {
+            id: 1,
+            name: "MacBook Pro Speakers".to_string(),
+        };
+
+        let devices = vec![
+            AudioDevice {
+                id: 1,
+                name: "MacBook Pro Speakers".to_string(),
+            },
+            AudioDevice {
+                id: 2,
+                name: "AirPods Pro".to_string(),
+            },
+            AudioDevice {
+                id: 3,
+                name: "Living Room AirPlay".to_string(),
+            },
+        ];
+
+        // With screen mirroring, AirPlay wins over config priority
+        let target = resolve_output_device(&current, &devices, &config, true);
+        assert!(target.is_some());
+        assert_eq!(target.unwrap().id, 3);
+    }
+
+    #[test]
+    fn output_uses_config_priority_when_mirroring_but_no_airplay_device() {
+        let config = create_test_config();
+        let current = AudioDevice {
+            id: 1,
+            name: "MacBook Pro Speakers".to_string(),
+        };
+
+        let devices = vec![
+            AudioDevice {
+                id: 1,
+                name: "MacBook Pro Speakers".to_string(),
+            },
+            AudioDevice {
+                id: 2,
+                name: "AirPods Pro".to_string(),
+            },
+        ];
+
+        // Screen mirroring is active but no AirPlay audio device exists,
+        // so fall through to config priority
+        let target = resolve_output_device(&current, &devices, &config, true);
+        assert!(target.is_some());
         assert_eq!(target.unwrap().id, 2);
     }
 
@@ -193,9 +273,8 @@ mod tests {
             },
         ];
 
-        let target = get_target_output_device(&current, &devices, &config);
+        let target = resolve_output_device(&current, &devices, &config, false);
         assert!(target.is_some());
-        // AirPods Pro is first in config priority
         assert_eq!(target.unwrap().id, 2);
     }
 
@@ -222,9 +301,37 @@ mod tests {
             },
         ];
 
-        let target = get_target_output_device(&current, &devices, &config);
+        // Even without screen mirroring, don't switch away from AirPlay
+        let target = resolve_output_device(&current, &devices, &config, false);
         assert!(target.is_some());
-        // Should keep current AirPlay device
+        assert_eq!(target.unwrap().id, 3);
+    }
+
+    #[test]
+    fn input_selects_airplay_when_screen_mirroring_active() {
+        let config = create_test_config();
+        let current = AudioDevice {
+            id: 1,
+            name: "MacBook Pro Microphone".to_string(),
+        };
+
+        let devices = vec![
+            AudioDevice {
+                id: 1,
+                name: "MacBook Pro Microphone".to_string(),
+            },
+            AudioDevice {
+                id: 2,
+                name: "AT2020USB+".to_string(),
+            },
+            AudioDevice {
+                id: 3,
+                name: "TV AirPlay".to_string(),
+            },
+        ];
+
+        let target = resolve_input_device(&current, &devices, &config, true);
+        assert!(target.is_some());
         assert_eq!(target.unwrap().id, 3);
     }
 
@@ -247,9 +354,8 @@ mod tests {
             },
         ];
 
-        let target = get_target_input_device(&current, &devices, &config);
+        let target = resolve_input_device(&current, &devices, &config, false);
         assert!(target.is_some());
-        // AT2020USB is in config priority
         assert_eq!(target.unwrap().id, 2);
     }
 
@@ -297,8 +403,7 @@ mod tests {
             },
         ];
 
-        // MiniFuse is present, so External Speakers should be selected
-        let target = get_target_output_device(&current, &devices, &config);
+        let target = resolve_output_device(&current, &devices, &config, false);
         assert!(target.is_some());
         assert_eq!(target.unwrap().id, 2);
     }
@@ -332,7 +437,6 @@ mod tests {
             name: "MacBook Pro Speakers".to_string(),
         };
 
-        // MiniFuse is NOT present
         let devices = vec![
             AudioDevice {
                 id: 1,
@@ -344,19 +448,15 @@ mod tests {
             },
         ];
 
-        // MiniFuse is NOT present, so External Speakers should be skipped
-        // and MacBook Pro should be selected instead
-        let target = get_target_output_device(&current, &devices, &config);
+        let target = resolve_output_device(&current, &devices, &config, false);
         assert!(target.is_some());
-        assert_eq!(target.unwrap().id, 1); // MacBook Pro Speakers
+        assert_eq!(target.unwrap().id, 1);
     }
 
     #[test]
     fn dependency_device_is_never_selected() {
         use crate::config::AudioDeviceDependency;
 
-        // Even if MiniFuse is in the device list, it should NEVER be
-        // selected as the target - it's only a condition
         let config = ProxyAudioConfig {
             enabled: true,
             input: Vec::new(),
@@ -375,16 +475,12 @@ mod tests {
             name: "MiniFuse 2".to_string(),
         };
 
-        // External Speakers is not present, only MiniFuse
         let devices = vec![AudioDevice {
             id: 3,
             name: "MiniFuse 2".to_string(),
         }];
 
-        // External Speakers is not present, so nothing should be selected
-        // MiniFuse should NOT be selected even though it's the only device
-        let target = get_target_output_device(&current, &devices, &config);
-        // Falls back to find_device_by_name for MacBook Pro, which is also not present
+        let target = resolve_output_device(&current, &devices, &config, false);
         assert!(target.is_none());
     }
 }

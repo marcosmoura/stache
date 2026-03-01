@@ -1,5 +1,6 @@
 pub mod accessibility;
 pub mod command;
+pub mod display;
 pub mod ipc;
 pub mod ipc_socket;
 pub mod objc;
