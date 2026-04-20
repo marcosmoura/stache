@@ -34,6 +34,8 @@ pub fn on_app_launched(state: &mut TilingState, pid: i32, bundle_id: &str, name:
 pub fn on_app_terminated(state: &mut TilingState, pid: i32) -> HashSet<Uuid> {
     tracing::debug!("Handling app terminated: pid={pid}");
 
+    crate::modules::tiling::tabs::clear_tabs_for_pid(pid);
+
     // Find all windows for this PID
     let window_ids: Vec<u32> = state.get_windows_for_pid(pid).iter().map(|w| w.id).collect();
 
@@ -150,6 +152,7 @@ mod tests {
 
     use super::*;
     use crate::modules::tiling::state::{LayoutType, Rect, Window, WindowIdList, Workspace};
+    use crate::modules::tiling::tabs;
 
     fn make_state_with_workspace() -> (TilingState, Uuid) {
         let mut state = TilingState::new();
@@ -294,5 +297,20 @@ mod tests {
 
         // Should report the affected workspace
         assert!(affected.contains(&ws_id));
+    }
+
+    #[test]
+    fn test_app_terminated_clears_tab_registry_even_without_tracked_windows() {
+        tabs::clear_all_tabs();
+        tabs::register_tab(100, 1000);
+        tabs::register_tab(200, 2000);
+
+        let mut state = TilingState::new();
+        let _ = on_app_terminated(&mut state, 1000);
+
+        assert!(!tabs::is_tab(100));
+        assert!(tabs::is_tab(200));
+
+        tabs::clear_all_tabs();
     }
 }

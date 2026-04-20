@@ -125,6 +125,15 @@ impl TabRegistry {
         }
     }
 
+    /// Replaces all tracked tabs for a given PID with a fresh snapshot.
+    pub fn replace_tabs_for_pid(&mut self, pid: i32, window_ids: impl IntoIterator<Item = u32>) {
+        self.clear_for_pid(pid);
+
+        for window_id in window_ids {
+            self.register_tab(window_id, pid);
+        }
+    }
+
     /// Clears the entire registry.
     pub fn clear(&mut self) {
         self.tab_window_ids.clear();
@@ -207,6 +216,7 @@ pub fn scan_and_register_tabs_for_app(pid: i32) {
 
         let window_count = CFArrayGetCount(windows_value);
         let ax_type_id = AXUIElementGetTypeID();
+        let mut tab_window_ids = Vec::new();
 
         for i in 0..window_count {
             let window = CFArrayGetValueAtIndex(windows_value, i);
@@ -215,14 +225,14 @@ pub fn scan_and_register_tabs_for_app(pid: i32) {
             }
 
             // Find AXTabGroup child and get tabs from it
-            let tab_window_ids = get_tab_window_ids_from_window(window.cast_mut());
+            let tabs_from_window = get_tab_window_ids_from_window(window.cast_mut());
 
-            for tab_wid in tab_window_ids {
-                register_tab(tab_wid, pid);
-            }
+            tab_window_ids.extend(tabs_from_window);
         }
 
         CFRelease(windows_value);
+
+        get_registry().write().replace_tabs_for_pid(pid, tab_window_ids);
     }
 }
 
@@ -440,6 +450,25 @@ mod tests {
         assert!(!registry.is_tab(101));
         assert!(registry.is_tab(200));
         assert_eq!(registry.count(), 1);
+    }
+
+    #[test]
+    fn test_tab_registry_replace_tabs_for_pid() {
+        let mut registry = TabRegistry::new();
+
+        registry.register_tab(100, 1000);
+        registry.register_tab(101, 1000);
+        registry.register_tab(200, 2000);
+
+        registry.replace_tabs_for_pid(1000, [102, 103]);
+
+        assert!(!registry.is_tab(100));
+        assert!(!registry.is_tab(101));
+        assert!(registry.is_tab(102));
+        assert!(registry.is_tab(103));
+        assert!(registry.is_tab(200));
+        assert_eq!(registry.tabs_for_pid(1000).len(), 2);
+        assert_eq!(registry.tabs_for_pid(2000).len(), 1);
     }
 
     #[test]

@@ -183,6 +183,8 @@ pub fn run() {
             bar::window::get_bar_window_frame,
         ])
         .setup(move |app| {
+            hotkey::register_configured_hotkeys(app.handle());
+
             // Make the app not appear in the dock (must be synchronous, first thing)
             if let Err(e) = app.handle().set_activation_policy(tauri::ActivationPolicy::Prohibited)
             {

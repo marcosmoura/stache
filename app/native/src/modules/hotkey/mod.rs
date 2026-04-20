@@ -8,51 +8,58 @@
 
 use std::collections::HashMap;
 use std::process::Command;
-use std::sync::Arc;
 
-use tauri::Runtime;
-use tauri_plugin_global_shortcut::{Builder, Shortcut, ShortcutState};
+use tauri::{AppHandle, Runtime};
+use tauri_plugin_global_shortcut::{Builder, GlobalShortcutExt, Shortcut, ShortcutState};
 
 use crate::config::{ShortcutCommands, get_config};
 use crate::platform::command::resolve_binary;
 
-/// Maps registered shortcuts to their corresponding commands.
+/// Creates the global-shortcut plugin.
 ///
-/// The key is the parsed `Shortcut` struct, and the value contains the commands to execute.
-type ShortcutCommandMap = Arc<HashMap<Shortcut, ShortcutCommands>>;
-
-/// Creates the global-shortcut plugin with all configured shortcuts registered.
-///
-/// This function reads the shortcuts from the global configuration and sets up
-/// a handler that executes the corresponding command when a shortcut is triggered.
+/// Configured shortcuts are registered separately during application setup via
+/// [`register_configured_hotkeys`] so individual registration failures do not
+/// abort startup.
 ///
 /// # Returns
 ///
 /// Returns a configured `TauriPlugin` that can be added to the Tauri app builder.
 #[must_use]
 pub fn create_hotkey_plugin<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    Builder::<R>::new().build()
+}
+
+/// Registers configured global shortcuts after the plugin has initialized.
+///
+/// Registration is performed one shortcut at a time so a single unavailable macOS
+/// hotkey does not abort application startup.
+pub fn register_configured_hotkeys<R: Runtime>(app: &AppHandle<R>) {
     let config = get_config();
     let keybindings = &config.keybindings;
 
     if keybindings.is_empty() {
-        // No keybindings configured, return a no-op plugin
-        return Builder::<R>::new().build();
+        return;
     }
 
-    // Build the shortcut-to-command mapping
-    let mut shortcut_map: HashMap<Shortcut, ShortcutCommands> = HashMap::new();
-    let mut valid_shortcuts: Vec<Shortcut> = Vec::new();
+    let mut planned_shortcuts: HashMap<Shortcut, (String, String, ShortcutCommands)> =
+        HashMap::new();
 
     for (shortcut_key, commands) in keybindings {
-        // Normalize the shortcut string for consistency
         let shortcut_str = normalize_shortcut(shortcut_key);
 
-        // Try to parse the shortcut to validate it
         match shortcut_str.parse::<Shortcut>() {
             Ok(shortcut) => {
-                shortcut_map.insert(shortcut, commands.clone());
-                valid_shortcuts.push(shortcut);
-                tracing::debug!(shortcut = %shortcut_key, "registered shortcut");
+                if let Some((previous_raw, _, _)) = planned_shortcuts.insert(
+                    shortcut,
+                    (shortcut_key.clone(), shortcut_str.clone(), commands.clone()),
+                ) {
+                    tracing::warn!(
+                        shortcut = %shortcut_key,
+                        normalized = %shortcut_str,
+                        previous = %previous_raw,
+                        "duplicate shortcut after normalization; only one binding will be used"
+                    );
+                }
             }
             Err(err) => {
                 tracing::warn!(shortcut = %shortcut_key, error = %err, "invalid shortcut");
@@ -60,36 +67,48 @@ pub fn create_hotkey_plugin<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
         }
     }
 
-    if valid_shortcuts.is_empty() {
-        return Builder::<R>::new().build();
+    if planned_shortcuts.is_empty() {
+        return;
     }
 
-    let shortcut_map: ShortcutCommandMap = Arc::new(shortcut_map);
-    let shortcut_map_handler = Arc::clone(&shortcut_map);
+    tracing::info!(count = planned_shortcuts.len(), "registering global shortcuts");
 
-    tracing::info!(count = shortcut_map.len(), "registering global shortcuts");
+    let global_shortcut = app.global_shortcut();
+    let mut registered = 0usize;
+    let mut failed = 0usize;
 
-    // Build the plugin with all valid shortcuts using with_shortcuts (batch registration)
-    let builder = match Builder::<R>::new().with_shortcuts(valid_shortcuts) {
-        Ok(b) => b,
-        Err(err) => {
-            tracing::error!(error = %err, "failed to register shortcuts");
-            return Builder::<R>::new().build();
-        }
-    };
+    for (shortcut, (raw_shortcut, normalized_shortcut, commands)) in planned_shortcuts {
+        let description = commands.commands_display();
 
-    builder
-        .with_handler(move |_app, shortcut, event| {
-            // Only trigger on key press, not release
+        match global_shortcut.on_shortcut(shortcut, move |_app, _shortcut, event| {
             if event.state != ShortcutState::Pressed {
                 return;
             }
 
-            if let Some(config) = shortcut_map_handler.get(shortcut) {
-                execute_shortcut_commands(config);
+            execute_shortcut_commands(&commands);
+        }) {
+            Ok(()) => {
+                registered += 1;
+                tracing::debug!(
+                    shortcut = %raw_shortcut,
+                    normalized = %normalized_shortcut,
+                    command = %description,
+                    "registered shortcut"
+                );
             }
-        })
-        .build()
+            Err(err) => {
+                failed += 1;
+                tracing::warn!(
+                    shortcut = %raw_shortcut,
+                    normalized = %normalized_shortcut,
+                    error = %err,
+                    "failed to register shortcut"
+                );
+            }
+        }
+    }
+
+    tracing::info!(registered, failed, "finished registering global shortcuts");
 }
 
 /// Normalizes a shortcut string to a consistent format for macOS.
@@ -418,28 +437,6 @@ mod tests {
         // Command with arguments
         let result = execute_single_command("echo test arg1 arg2", "test", 1, 1);
         assert!(result);
-    }
-
-    // ========================================================================
-    // ShortcutCommandMap type alias tests
-    // ========================================================================
-
-    #[test]
-    fn test_shortcut_command_map_creation() {
-        let map: HashMap<Shortcut, ShortcutCommands> = HashMap::new();
-        let arc_map: ShortcutCommandMap = Arc::new(map);
-        assert!(arc_map.is_empty());
-    }
-
-    #[test]
-    fn test_shortcut_command_map_insert_and_retrieve() {
-        let mut map: HashMap<Shortcut, ShortcutCommands> = HashMap::new();
-        let shortcut: Shortcut = "Command+K".parse().unwrap();
-        let commands = ShortcutCommands::Single("echo hello".to_string());
-        map.insert(shortcut, commands);
-
-        let arc_map: ShortcutCommandMap = Arc::new(map);
-        assert_eq!(arc_map.len(), 1);
     }
 
     // ========================================================================
