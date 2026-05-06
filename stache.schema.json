@@ -27,6 +27,11 @@
         "holdDuration": 1500
       }
     },
+    "execOnStartup": {
+      "description": "Commands to execute once when Stache starts.\n\nThe value is either a single command string or an array of commands.\nMultiple commands are executed sequentially.",
+      "$ref": "#/$defs/ShortcutCommands",
+      "default": []
+    },
     "keybindings": {
       "description": "Global keyboard keybindings configuration.\n\nThe key is the shortcut string (e.g., \"Command+Control+R\").\nThe value is either a single command string or an array of commands.",
       "type": "object",
@@ -853,7 +858,7 @@
       "required": ["screen"]
     },
     "ShortcutCommands": {
-      "description": "Commands to execute for a keyboard shortcut.\n\nCan be either a single command string or an array of commands\nthat will be executed sequentially.",
+      "description": "Commands to execute from configuration.\n\nCan be either a single command string or an array of commands\nthat will be executed sequentially.",
       "anyOf": [
         {
           "description": "A single command to execute.",

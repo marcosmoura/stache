@@ -68,9 +68,15 @@ fn lazy_load_modules(app: &App, config: &config::StacheConfig) {
     let handle = app.handle().clone();
     let tiling_config = config.tiling.clone();
     let cmd_q_config = config.command_quit.clone();
+    let startup_commands = config.exec_on_startup.clone();
 
     tauri::async_runtime::spawn(async move {
         tracing::debug!("starting parallel background initialization");
+
+        if !startup_commands.get_commands().is_empty() {
+            tracing::debug!("executing startup commands");
+            hotkey::execute_shortcut_commands(&startup_commands);
+        }
 
         // All these modules are independent - initialize in parallel
         let results = tokio::join!(
