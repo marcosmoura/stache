@@ -19,7 +19,7 @@ multiple_crate_versions = "allow"
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "allow", check-cfg = [
-  'cfg(feature, values("cargo-clippy"))',
+    'cfg(feature, values("cargo-clippy"))',
 ] }
 
 [profile.dev]
