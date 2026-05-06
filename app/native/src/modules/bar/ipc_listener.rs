@@ -27,6 +27,16 @@ pub fn init<R: Runtime>(app_handle: AppHandle<R>) {
     ipc::start_notification_listener();
 }
 
+fn build_tiling_runtime() -> Option<tokio::runtime::Runtime> {
+    match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        Ok(runtime) => Some(runtime),
+        Err(err) => {
+            tracing::warn!(error = %err, "tiling: failed to create runtime");
+            None
+        }
+    }
+}
+
 /// Handles incoming Stache notifications.
 #[allow(clippy::too_many_lines)]
 fn handle_notification<R: Runtime>(app_handle: &AppHandle<R>, notification: StacheNotification) {
@@ -112,10 +122,9 @@ fn handle_notification<R: Runtime>(app_handle: &AppHandle<R>, notification: Stac
                             return;
                         };
                         // Get focused workspace ID
-                        let rt = tokio::runtime::Builder::new_current_thread()
-                            .enable_all()
-                            .build()
-                            .unwrap();
+                        let Some(rt) = build_tiling_runtime() else {
+                            return;
+                        };
                         let Ok(result) = rt.block_on(handle.get_focused_workspace()) else {
                             return;
                         };
@@ -232,8 +241,9 @@ fn handle_notification<R: Runtime>(app_handle: &AppHandle<R>, notification: Stac
 
                 if let Some(handle) = tiling::init::get_handle() {
                     // Get the workspace ID by name, then get focused window ID
-                    let rt =
-                        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+                    let Some(rt) = build_tiling_runtime() else {
+                        return;
+                    };
 
                     // Get workspace by name
                     let ws_result = rt.block_on(handle.get_workspace_by_name(&workspace));
@@ -305,8 +315,9 @@ fn handle_notification<R: Runtime>(app_handle: &AppHandle<R>, notification: Stac
                     return;
                 };
                 // Get focused workspace ID
-                let rt =
-                    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+                let Some(rt) = build_tiling_runtime() else {
+                    return;
+                };
                 let Ok(result) = rt.block_on(handle.get_focused_workspace()) else {
                     return;
                 };
@@ -343,6 +354,11 @@ fn handle_notification<R: Runtime>(app_handle: &AppHandle<R>, notification: Stac
 #[cfg(test)]
 mod tests {
     use crate::events;
+
+    #[test]
+    fn test_tiling_runtime_can_be_created() {
+        assert!(super::build_tiling_runtime().is_some());
+    }
 
     #[test]
     fn test_event_names() {
