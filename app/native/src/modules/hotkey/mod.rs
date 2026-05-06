@@ -151,7 +151,7 @@ fn normalize_shortcut(shortcut: &str) -> String {
 /// If no commands are configured (empty string or empty array), the function
 /// returns immediately without executing anything. This is useful for capturing
 /// shortcuts to disable global OS shortcuts.
-fn execute_shortcut_commands(shortcut_commands: &ShortcutCommands) {
+pub(crate) fn execute_shortcut_commands(shortcut_commands: &ShortcutCommands) {
     let commands = shortcut_commands.get_commands();
 
     // No commands configured - this shortcut is just for capturing/blocking
@@ -177,6 +177,85 @@ fn execute_shortcut_commands(shortcut_commands: &ShortcutCommands) {
     });
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CommandParseError {
+    UnterminatedQuote(char),
+    TrailingEscape,
+}
+
+impl std::fmt::Display for CommandParseError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnterminatedQuote(quote) => write!(formatter, "unterminated {quote} quote"),
+            Self::TrailingEscape => formatter.write_str("trailing escape character"),
+        }
+    }
+}
+
+fn split_command(command: &str) -> Result<Vec<String>, CommandParseError> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+    let mut has_token = false;
+
+    for character in command.chars() {
+        if escaped {
+            current.push(character);
+            escaped = false;
+            has_token = true;
+            continue;
+        }
+
+        if let Some(active_quote) = quote {
+            if character == active_quote {
+                quote = None;
+            } else if active_quote == '"' && character == '\\' {
+                escaped = true;
+            } else {
+                current.push(character);
+            }
+            has_token = true;
+            continue;
+        }
+
+        match character {
+            '\'' | '"' => {
+                quote = Some(character);
+                has_token = true;
+            }
+            '\\' => {
+                escaped = true;
+                has_token = true;
+            }
+            character if character.is_whitespace() => {
+                if has_token {
+                    parts.push(std::mem::take(&mut current));
+                    has_token = false;
+                }
+            }
+            _ => {
+                current.push(character);
+                has_token = true;
+            }
+        }
+    }
+
+    if escaped {
+        return Err(CommandParseError::TrailingEscape);
+    }
+
+    if let Some(active_quote) = quote {
+        return Err(CommandParseError::UnterminatedQuote(active_quote));
+    }
+
+    if has_token {
+        parts.push(current);
+    }
+
+    Ok(parts)
+}
+
 /// Executes a single command and returns true if successful.
 ///
 /// # Arguments
@@ -185,15 +264,18 @@ fn execute_shortcut_commands(shortcut_commands: &ShortcutCommands) {
 /// * `index` - 1-based index of this command in the sequence
 /// * `total` - Total number of commands in the sequence
 fn execute_single_command(command: &str, description: &str, index: usize, total: usize) -> bool {
-    // Parse the command into parts
-    let parts: Vec<&str> = command.split_whitespace().collect();
-    if parts.is_empty() {
+    let parts = match split_command(command) {
+        Ok(parts) => parts,
+        Err(err) => {
+            tracing::warn!(command = %command, error = %err, "failed to parse shortcut command");
+            return false;
+        }
+    };
+
+    let Some((binary, args)) = parts.split_first() else {
         tracing::warn!("empty command for shortcut");
         return false;
-    }
-
-    let binary = parts[0];
-    let args = &parts[1..];
+    };
 
     // Resolve the binary path
     let binary_path = match resolve_binary(binary) {
@@ -437,6 +519,42 @@ mod tests {
         // Command with arguments
         let result = execute_single_command("echo test arg1 arg2", "test", 1, 1);
         assert!(result);
+    }
+
+    #[test]
+    fn test_split_command_preserves_double_quoted_arg() {
+        assert_eq!(
+            split_command(r#"open -a "Activity Monitor""#).expect("command should parse"),
+            vec![
+                "open".to_string(),
+                "-a".to_string(),
+                "Activity Monitor".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn test_split_command_preserves_single_quoted_arg() {
+        assert_eq!(
+            split_command("echo 'hello world'").expect("command should parse"),
+            vec!["echo".to_string(), "hello world".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_split_command_preserves_empty_quoted_arg() {
+        assert_eq!(
+            split_command(r#"echo "" trailing"#).expect("command should parse"),
+            vec!["echo".to_string(), String::new(), "trailing".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_split_command_rejects_unterminated_quote() {
+        assert_eq!(
+            split_command(r#"open -a "Activity Monitor"#),
+            Err(CommandParseError::UnterminatedQuote('"'))
+        );
     }
 
     // ========================================================================
