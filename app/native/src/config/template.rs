@@ -98,6 +98,16 @@ pub fn generate_config_template() -> String {
   // },
 
   // ============================================================================
+  // Startup Commands
+  // ============================================================================
+  // Commands to execute once when Stache starts. Commands can be a single
+  // command string or an array of commands executed sequentially.
+  // "execOnStartup": [
+  //   "open -a Terminal",
+  //   "stache wallpaper set --random"
+  // ],
+
+  // ============================================================================
   // Menu Anywhere
   // ============================================================================
   // Summon the current app's menu bar at your cursor position
@@ -273,6 +283,7 @@ mod tests {
         assert!(template.contains("commandQuit"));
         assert!(template.contains("wallpapers"));
         assert!(template.contains("keybindings"));
+        assert!(template.contains("execOnStartup"));
         assert!(template.contains("menuAnywhere"));
         assert!(template.contains("proxyAudio"));
         assert!(template.contains("notunes"));

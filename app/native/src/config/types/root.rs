@@ -17,7 +17,7 @@ use super::notunes::NoTunesConfig;
 use super::tiling::TilingConfig;
 use super::wallpaper::WallpaperConfig;
 
-/// Commands to execute for a keyboard shortcut.
+/// Commands to execute from configuration.
 ///
 /// Can be either a single command string or an array of commands
 /// that will be executed sequentially.
@@ -28,6 +28,10 @@ pub enum ShortcutCommands {
     Single(String),
     /// Multiple commands to execute sequentially (never in parallel).
     Multiple(Vec<String>),
+}
+
+impl Default for ShortcutCommands {
+    fn default() -> Self { Self::Multiple(Vec::new()) }
 }
 
 impl ShortcutCommands {
@@ -93,6 +97,13 @@ pub struct StacheConfig {
     /// The key is the shortcut string (e.g., "Command+Control+R").
     /// The value is either a single command string or an array of commands.
     pub keybindings: HashMap<String, ShortcutCommands>,
+
+    /// Commands to execute once when Stache starts.
+    ///
+    /// The value is either a single command string or an array of commands.
+    /// Multiple commands are executed sequentially.
+    #[serde(rename = "execOnStartup")]
+    pub exec_on_startup: ShortcutCommands,
 
     /// `MenuAnywhere` configuration.
     ///
@@ -319,6 +330,24 @@ mod tests {
     fn test_default_config_is_empty() {
         let config = StacheConfig::default();
         assert!(config.keybindings.is_empty());
+        assert!(config.exec_on_startup.get_commands().is_empty());
+    }
+
+    #[test]
+    fn test_config_deserializes_exec_on_startup_commands() {
+        let json = r#"{
+            "execOnStartup": [
+                "open -a Terminal",
+                "stache reload"
+            ]
+        }"#;
+
+        let config: StacheConfig = serde_json::from_str(json).unwrap();
+
+        assert_eq!(config.exec_on_startup.get_commands(), vec![
+            "open -a Terminal",
+            "stache reload"
+        ]);
     }
 
     #[test]
