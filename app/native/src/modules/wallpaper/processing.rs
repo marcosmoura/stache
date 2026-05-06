@@ -6,6 +6,7 @@
 use std::fs::{self, File};
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 
 use image::codecs::png::{CompressionType, FilterType as PngFilterType, PngEncoder};
 use image::{DynamicImage, GenericImageView, ImageReader, Rgb, RgbImage, imageops};
@@ -18,6 +19,8 @@ use crate::config::WallpaperConfig;
 
 /// Supported image file extensions.
 const SUPPORTED_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp"];
+const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
 /// Errors that can occur during image processing.
 #[derive(Debug)]
@@ -185,8 +188,9 @@ pub fn cache_dir() -> PathBuf { get_cache_subdir("wallpapers") }
 /// Uses lossless PNG format for maximum image quality.
 fn cache_filename(source: &Path, config: &WallpaperConfig, screen: ScreenSize) -> String {
     let stem = source.file_stem().and_then(|s| s.to_str()).unwrap_or("wallpaper");
+    let source_key = source_cache_key(source);
     format!(
-        "{stem}_{}x{}_r{}_b{}.png",
+        "{stem}_{source_key}_{}x{}_r{}_b{}.png",
         screen.width, screen.height, config.radius, config.blur
     )
 }
@@ -200,11 +204,46 @@ fn cache_filename_for_screen(
     screen_index: usize,
 ) -> String {
     let stem = source.file_stem().and_then(|s| s.to_str()).unwrap_or("wallpaper");
+    let source_key = source_cache_key(source);
     format!(
-        "{stem}_s{screen_index}_{}x{}_r{}_b{}.png",
+        "{stem}_{source_key}_s{screen_index}_{}x{}_r{}_b{}.png",
         screen.width, screen.height, config.radius, config.blur
     )
 }
+
+fn source_cache_key(source: &Path) -> String {
+    let mut hash = FNV_OFFSET_BASIS;
+    let source_identity = source.canonicalize().unwrap_or_else(|_| source.to_path_buf());
+    hash_bytes(&mut hash, b"path\0");
+    hash_bytes(&mut hash, source_identity.to_string_lossy().as_bytes());
+    hash_bytes(&mut hash, b"\0");
+
+    if let Ok(metadata) = fs::metadata(source) {
+        hash_bytes(&mut hash, b"len\0");
+        hash_u64(&mut hash, metadata.len());
+
+        if let Ok(modified) = metadata.modified()
+            && let Ok(duration) = modified.duration_since(UNIX_EPOCH)
+        {
+            hash_bytes(&mut hash, b"mtime\0");
+            hash_u64(&mut hash, duration.as_secs());
+            hash_u32(&mut hash, duration.subsec_nanos());
+        }
+    }
+
+    format!("{hash:016x}")
+}
+
+fn hash_bytes(hash: &mut u64, bytes: &[u8]) {
+    for byte in bytes {
+        *hash ^= u64::from(*byte);
+        *hash = hash.wrapping_mul(FNV_PRIME);
+    }
+}
+
+fn hash_u64(hash: &mut u64, value: u64) { hash_bytes(hash, &value.to_le_bytes()); }
+
+fn hash_u32(hash: &mut u64, value: u32) { hash_bytes(hash, &value.to_le_bytes()); }
 
 /// Returns the full path to the cached processed image.
 pub fn cached_path(source: &Path, config: &WallpaperConfig) -> PathBuf {
@@ -560,7 +599,8 @@ mod tests {
         let screen = ScreenSize { width: 1920, height: 1080 };
 
         let filename = cache_filename(Path::new("/path/to/wallpaper.jpg"), &config, screen);
-        assert_eq!(filename, "wallpaper_1920x1080_r10_b5.png");
+        assert!(filename.starts_with("wallpaper_"));
+        assert!(filename.ends_with("_1920x1080_r10_b5.png"));
     }
 
     #[test]
@@ -746,6 +786,41 @@ mod tests {
 
         let name1 = cache_filename(path, &config, screen1);
         let name2 = cache_filename(path, &config, screen2);
+
+        assert_ne!(name1, name2);
+    }
+
+    #[test]
+    fn test_cache_filename_different_source_paths_produce_different_names() {
+        let config = WallpaperConfig {
+            radius: 10,
+            blur: 5,
+            ..Default::default()
+        };
+        let screen = ScreenSize { width: 1920, height: 1080 };
+
+        let name1 = cache_filename(Path::new("/first/wallpaper.jpg"), &config, screen);
+        let name2 = cache_filename(Path::new("/second/wallpaper.jpg"), &config, screen);
+
+        assert_ne!(name1, name2);
+    }
+
+    #[test]
+    fn test_cache_filename_changes_when_source_size_changes() {
+        let dir = tempfile::tempdir().expect("temp dir should be created");
+        let path = dir.path().join("wallpaper.jpg");
+        let config = WallpaperConfig {
+            radius: 10,
+            blur: 5,
+            ..Default::default()
+        };
+        let screen = ScreenSize { width: 1920, height: 1080 };
+
+        std::fs::write(&path, b"small").expect("source should be written");
+        let name1 = cache_filename(&path, &config, screen);
+
+        std::fs::write(&path, b"larger-source-data").expect("source should be rewritten");
+        let name2 = cache_filename(&path, &config, screen);
 
         assert_ne!(name1, name2);
     }
