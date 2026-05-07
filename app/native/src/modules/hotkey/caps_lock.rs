@@ -149,12 +149,14 @@ fn keycode_for_name(key_name: &str) -> Option<i64> {
 }
 
 #[derive(Debug, Default)]
+#[allow(dead_code)]
 struct CapsState {
     mode: CapsMode,
     active_key: Option<CapsKey>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 enum CapsMode {
     #[default]
     Idle,
@@ -163,6 +165,7 @@ enum CapsMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 enum CapsInput {
     CapsDown,
     CapsUp,
@@ -171,6 +174,7 @@ enum CapsInput {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 enum CapsDecision {
     Pass,
     Suppress,
@@ -179,6 +183,7 @@ enum CapsDecision {
 }
 
 impl CapsState {
+    #[allow(dead_code)]
     fn handle_input(
         &mut self,
         input: CapsInput,
@@ -198,7 +203,6 @@ impl CapsState {
                 }
                 CapsMode::ChordUsed => {
                     self.mode = CapsMode::Idle;
-                    self.active_key = None;
                     CapsDecision::Suppress
                 }
                 CapsMode::Idle => CapsDecision::Pass,
@@ -213,7 +217,7 @@ impl CapsState {
                 _ => CapsDecision::Pass,
             },
             CapsInput::KeyUp(key) => {
-                if self.mode == CapsMode::ChordUsed && self.active_key == Some(key) {
+                if self.active_key == Some(key) {
                     self.active_key = None;
                     CapsDecision::Suppress
                 } else {
@@ -324,6 +328,30 @@ mod tests {
         );
         assert_eq!(
             state.handle_input(CapsInput::CapsUp, has_binding),
+            CapsDecision::Suppress
+        );
+    }
+
+    #[test]
+    fn state_machine_suppresses_chord_key_up_after_caps_released() {
+        let mut state = CapsState::default();
+        let key = CapsKey::new(1);
+        let has_binding = |candidate: CapsKey| candidate == key;
+
+        assert_eq!(
+            state.handle_input(CapsInput::CapsDown, has_binding),
+            CapsDecision::Suppress
+        );
+        assert_eq!(
+            state.handle_input(CapsInput::KeyDown(key, false), has_binding),
+            CapsDecision::Execute(key)
+        );
+        assert_eq!(
+            state.handle_input(CapsInput::CapsUp, has_binding),
+            CapsDecision::Suppress
+        );
+        assert_eq!(
+            state.handle_input(CapsInput::KeyUp(key), has_binding),
             CapsDecision::Suppress
         );
     }
