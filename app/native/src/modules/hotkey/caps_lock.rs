@@ -148,6 +148,82 @@ fn keycode_for_name(key_name: &str) -> Option<i64> {
     }
 }
 
+#[derive(Debug, Default)]
+struct CapsState {
+    mode: CapsMode,
+    active_key: Option<CapsKey>,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum CapsMode {
+    #[default]
+    Idle,
+    CapsHeld,
+    ChordUsed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CapsInput {
+    CapsDown,
+    CapsUp,
+    KeyDown(CapsKey, bool),
+    KeyUp(CapsKey),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CapsDecision {
+    Pass,
+    Suppress,
+    Execute(CapsKey),
+    SynthesizeCapsTap,
+}
+
+impl CapsState {
+    fn handle_input(
+        &mut self,
+        input: CapsInput,
+        has_binding: impl Fn(CapsKey) -> bool,
+    ) -> CapsDecision {
+        match input {
+            CapsInput::CapsDown => {
+                self.mode = CapsMode::CapsHeld;
+                self.active_key = None;
+                CapsDecision::Suppress
+            }
+            CapsInput::CapsUp => match self.mode {
+                CapsMode::CapsHeld => {
+                    self.mode = CapsMode::Idle;
+                    self.active_key = None;
+                    CapsDecision::SynthesizeCapsTap
+                }
+                CapsMode::ChordUsed => {
+                    self.mode = CapsMode::Idle;
+                    self.active_key = None;
+                    CapsDecision::Suppress
+                }
+                CapsMode::Idle => CapsDecision::Pass,
+            },
+            CapsInput::KeyDown(key, is_repeat) => match self.mode {
+                CapsMode::CapsHeld if has_binding(key) && !is_repeat => {
+                    self.mode = CapsMode::ChordUsed;
+                    self.active_key = Some(key);
+                    CapsDecision::Execute(key)
+                }
+                CapsMode::ChordUsed if self.active_key == Some(key) => CapsDecision::Suppress,
+                _ => CapsDecision::Pass,
+            },
+            CapsInput::KeyUp(key) => {
+                if self.mode == CapsMode::ChordUsed && self.active_key == Some(key) {
+                    self.active_key = None;
+                    CapsDecision::Suppress
+                } else {
+                    CapsDecision::Pass
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,6 +282,73 @@ mod tests {
         assert_eq!(
             parse_shortcut("CapsLock+DefinitelyNotAKey"),
             CapsShortcut::Invalid(CapsShortcutError::UnknownKey("DefinitelyNotAKey".to_string()))
+        );
+    }
+
+    #[test]
+    fn state_machine_synthesizes_caps_tap_for_plain_tap() {
+        let mut state = CapsState::default();
+        let has_binding = |_: CapsKey| false;
+
+        assert_eq!(
+            state.handle_input(CapsInput::CapsDown, has_binding),
+            CapsDecision::Suppress
+        );
+        assert_eq!(
+            state.handle_input(CapsInput::CapsUp, has_binding),
+            CapsDecision::SynthesizeCapsTap
+        );
+    }
+
+    #[test]
+    fn state_machine_executes_configured_chord_once() {
+        let mut state = CapsState::default();
+        let key = CapsKey::new(1);
+        let has_binding = |candidate: CapsKey| candidate == key;
+
+        assert_eq!(
+            state.handle_input(CapsInput::CapsDown, has_binding),
+            CapsDecision::Suppress
+        );
+        assert_eq!(
+            state.handle_input(CapsInput::KeyDown(key, false), has_binding),
+            CapsDecision::Execute(key)
+        );
+        assert_eq!(
+            state.handle_input(CapsInput::KeyDown(key, true), has_binding),
+            CapsDecision::Suppress
+        );
+        assert_eq!(
+            state.handle_input(CapsInput::KeyUp(key), has_binding),
+            CapsDecision::Suppress
+        );
+        assert_eq!(
+            state.handle_input(CapsInput::CapsUp, has_binding),
+            CapsDecision::Suppress
+        );
+    }
+
+    #[test]
+    fn state_machine_passes_unbound_key_while_caps_held() {
+        let mut state = CapsState::default();
+        let key = CapsKey::new(1);
+        let has_binding = |_: CapsKey| false;
+
+        assert_eq!(
+            state.handle_input(CapsInput::CapsDown, has_binding),
+            CapsDecision::Suppress
+        );
+        assert_eq!(
+            state.handle_input(CapsInput::KeyDown(key, false), has_binding),
+            CapsDecision::Pass
+        );
+        assert_eq!(
+            state.handle_input(CapsInput::KeyUp(key), has_binding),
+            CapsDecision::Pass
+        );
+        assert_eq!(
+            state.handle_input(CapsInput::CapsUp, has_binding),
+            CapsDecision::SynthesizeCapsTap
         );
     }
 }
