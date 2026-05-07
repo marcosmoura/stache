@@ -94,7 +94,10 @@ pub struct StacheConfig {
 
     /// Global keyboard keybindings configuration.
     ///
-    /// The key is the shortcut string (e.g., "Command+Control+R").
+    /// The key is the shortcut string (e.g., "Command+Control+R" or "CapsLock+S").
+    /// `CapsLock+<key>` is handled as a Stache-only pseudo modifier: tapping
+    /// Caps Lock alone still toggles capitalization, while holding Caps Lock
+    /// with a configured key executes the command.
     /// The value is either a single command string or an array of commands.
     pub keybindings: HashMap<String, ShortcutCommands>,
 

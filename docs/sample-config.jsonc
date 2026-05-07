@@ -88,6 +88,7 @@
   //   - "Option" or "Alt" (Option/Alt key)
   //   - "Shift" (Shift key)
   //   - "Super" or "Meta" (mapped to Command on macOS)
+  //   - "CapsLock" (Stache-only pseudo modifier; tap alone toggles Caps Lock)
   //
   // Values can be:
   //   - A single command string
@@ -110,6 +111,11 @@
     // Block a system shortcut (capture without executing any action)
     // Useful for preventing accidental hiding of windows
     // "Command+H": "",
+
+    // Example: Use Caps Lock as a Stache modifier
+    // Press and hold Caps Lock with S to run the command.
+    // Press and release Caps Lock alone to toggle capitalization normally.
+    // "CapsLock+S": "screencapture -i -c",
 
     // Example: Open specific applications
     // "Command+Control+S": "open -a Safari",
