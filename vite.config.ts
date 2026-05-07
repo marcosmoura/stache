@@ -2,7 +2,8 @@
 
 import path from 'node:path';
 
-import react from '@vitejs/plugin-react';
+import babel from '@rolldown/plugin-babel';
+import react, { reactCompilerPreset } from '@vitejs/plugin-react';
 import { playwright } from '@vitest/browser-playwright';
 import wyw from '@wyw-in-js/vite';
 import { defineConfig } from 'vite';
@@ -48,11 +49,8 @@ export default defineConfig({
         './app/ui/renderer/widgets/components/Calendar/Calendar.constants.ts': { unknown: 'allow' },
       },
     }),
-    react({
-      babel: {
-        plugins: ['babel-plugin-react-compiler'],
-      },
-    }),
+    react(),
+    babel({ presets: [reactCompilerPreset()] }),
   ],
   resolve: {
     alias: {
