@@ -2,30 +2,27 @@ use std::collections::HashMap;
 
 use crate::config::ShortcutCommands;
 
-#[allow(dead_code)]
 pub(super) type CapsBindings = HashMap<CapsKey, CapsBinding>;
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(super) struct CapsBinding {
     pub raw_shortcut: String,
+    #[allow(dead_code)]
     pub commands: ShortcutCommands,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct CapsKey(i64);
 
-#[allow(dead_code)]
 impl CapsKey {
     #[must_use]
     pub(super) const fn new(keycode: i64) -> Self { Self(keycode) }
 
+    #[allow(dead_code)]
     #[must_use]
     pub(super) const fn keycode(self) -> i64 { self.0 }
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum CapsShortcut {
     NotCaps,
@@ -33,7 +30,6 @@ pub(super) enum CapsShortcut {
     Invalid(CapsShortcutError),
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum CapsShortcutError {
     MissingKey,
@@ -53,7 +49,6 @@ impl std::fmt::Display for CapsShortcutError {
     }
 }
 
-#[allow(dead_code)]
 pub(super) fn parse_shortcut(shortcut: &str) -> CapsShortcut {
     let mut parts = shortcut.split('+');
     let Some(first) = parts.next() else {
@@ -76,6 +71,18 @@ pub(super) fn parse_shortcut(shortcut: &str) -> CapsShortcut {
         || CapsShortcut::Invalid(CapsShortcutError::UnknownKey(key_name.to_string())),
         |keycode| CapsShortcut::Binding(CapsKey::new(keycode)),
     )
+}
+
+pub(super) fn start(bindings: CapsBindings) -> bool {
+    let count = bindings.len();
+
+    drop(bindings);
+
+    tracing::warn!(
+        count,
+        "CapsLock keybindings parsed but event tap is not initialized yet"
+    );
+    false
 }
 
 fn keycode_for_name(key_name: &str) -> Option<i64> {

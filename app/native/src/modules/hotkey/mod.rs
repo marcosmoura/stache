@@ -17,6 +17,8 @@ use tauri_plugin_global_shortcut::{Builder, GlobalShortcutExt, Shortcut, Shortcu
 use crate::config::{ShortcutCommands, get_config};
 use crate::platform::command::resolve_binary;
 
+type PlannedShortcutMap = HashMap<Shortcut, (String, String, ShortcutCommands)>;
+
 /// Creates the global-shortcut plugin.
 ///
 /// Configured shortcuts are registered separately during application setup via
@@ -43,30 +45,10 @@ pub fn register_configured_hotkeys<R: Runtime>(app: &AppHandle<R>) {
         return;
     }
 
-    let mut planned_shortcuts: HashMap<Shortcut, (String, String, ShortcutCommands)> =
-        HashMap::new();
+    let (planned_shortcuts, caps_bindings) = collect_planned_shortcuts(keybindings);
 
-    for (shortcut_key, commands) in keybindings {
-        let shortcut_str = normalize_shortcut(shortcut_key);
-
-        match shortcut_str.parse::<Shortcut>() {
-            Ok(shortcut) => {
-                if let Some((previous_raw, _, _)) = planned_shortcuts.insert(
-                    shortcut,
-                    (shortcut_key.clone(), shortcut_str.clone(), commands.clone()),
-                ) {
-                    tracing::warn!(
-                        shortcut = %shortcut_key,
-                        normalized = %shortcut_str,
-                        previous = %previous_raw,
-                        "duplicate shortcut after normalization; only one binding will be used"
-                    );
-                }
-            }
-            Err(err) => {
-                tracing::warn!(shortcut = %shortcut_key, error = %err, "invalid shortcut");
-            }
-        }
+    if !caps_bindings.is_empty() {
+        caps_lock::start(caps_bindings);
     }
 
     if planned_shortcuts.is_empty() {
@@ -111,6 +93,59 @@ pub fn register_configured_hotkeys<R: Runtime>(app: &AppHandle<R>) {
     }
 
     tracing::info!(registered, failed, "finished registering global shortcuts");
+}
+
+fn collect_planned_shortcuts(
+    keybindings: &HashMap<String, ShortcutCommands>,
+) -> (PlannedShortcutMap, caps_lock::CapsBindings) {
+    let mut planned_shortcuts = HashMap::new();
+    let mut caps_bindings = HashMap::new();
+    let mut sorted_keybindings: Vec<_> = keybindings.iter().collect();
+
+    sorted_keybindings.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+    for (shortcut_key, commands) in sorted_keybindings {
+        let shortcut_str = normalize_shortcut(shortcut_key);
+
+        match caps_lock::parse_shortcut(&shortcut_str) {
+            caps_lock::CapsShortcut::Binding(key) => {
+                if let Some(previous) = caps_bindings.insert(key, caps_lock::CapsBinding {
+                    raw_shortcut: shortcut_key.clone(),
+                    commands: commands.clone(),
+                }) {
+                    tracing::warn!(
+                        shortcut = %shortcut_key,
+                        normalized = %shortcut_str,
+                        previous = %previous.raw_shortcut,
+                        "duplicate CapsLock shortcut after normalization; only one binding will be used"
+                    );
+                }
+            }
+            caps_lock::CapsShortcut::Invalid(err) => {
+                tracing::warn!(shortcut = %shortcut_key, normalized = %shortcut_str, error = %err, "invalid CapsLock shortcut");
+            }
+            caps_lock::CapsShortcut::NotCaps => match shortcut_str.parse::<Shortcut>() {
+                Ok(shortcut) => {
+                    if let Some((previous_raw, _, _)) = planned_shortcuts.insert(
+                        shortcut,
+                        (shortcut_key.clone(), shortcut_str.clone(), commands.clone()),
+                    ) {
+                        tracing::warn!(
+                            shortcut = %shortcut_key,
+                            normalized = %shortcut_str,
+                            previous = %previous_raw,
+                            "duplicate shortcut after normalization; only one binding will be used"
+                        );
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(shortcut = %shortcut_key, error = %err, "invalid shortcut");
+                }
+            },
+        }
+    }
+
+    (planned_shortcuts, caps_bindings)
 }
 
 /// Normalizes a shortcut string to a consistent format for macOS.
@@ -443,6 +478,64 @@ mod tests {
         // Edge case: only modifiers, no key
         assert_eq!(normalize_shortcut("Ctrl+Cmd"), "Control+Command");
         assert_eq!(normalize_shortcut("Alt+Shift"), "Option+Shift");
+    }
+
+    #[test]
+    fn test_collect_planned_shortcuts_separates_caps_bindings() {
+        let mut keybindings = HashMap::new();
+        keybindings.insert(
+            "CapsLock+S".to_string(),
+            ShortcutCommands::Single("screencapture -i -c".to_string()),
+        );
+        keybindings.insert(
+            "Command+Control+R".to_string(),
+            ShortcutCommands::Single("stache reload".to_string()),
+        );
+
+        let (standard, caps) = collect_planned_shortcuts(&keybindings);
+
+        assert_eq!(standard.len(), 1);
+        assert_eq!(caps.len(), 1);
+        assert!(caps.contains_key(&caps_lock::CapsKey::new(1)));
+    }
+
+    #[test]
+    fn test_collect_planned_shortcuts_rejects_invalid_caps_binding() {
+        let mut keybindings = HashMap::new();
+        keybindings.insert(
+            "CapsLock+Command+S".to_string(),
+            ShortcutCommands::Single("ignored".to_string()),
+        );
+        keybindings.insert(
+            "Command+Control+R".to_string(),
+            ShortcutCommands::Single("stache reload".to_string()),
+        );
+
+        let (standard, caps) = collect_planned_shortcuts(&keybindings);
+
+        assert_eq!(standard.len(), 1);
+        assert!(caps.is_empty());
+    }
+
+    #[test]
+    fn test_collect_planned_shortcuts_caps_duplicate_last_wins() {
+        let keybindings = HashMap::from([
+            (
+                "CapsLock+S".to_string(),
+                ShortcutCommands::Single("first".to_string()),
+            ),
+            (
+                "CapsLock+s".to_string(),
+                ShortcutCommands::Single("second".to_string()),
+            ),
+        ]);
+
+        let (_standard, caps) = collect_planned_shortcuts(&keybindings);
+        let binding = caps.get(&caps_lock::CapsKey::new(1)).expect("caps binding exists");
+
+        assert!(
+            matches!(&binding.commands, ShortcutCommands::Single(command) if command == "second")
+        );
     }
 
     // ========================================================================
