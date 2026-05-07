@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, Ordering};
 
 use core_foundation::base::TCFType;
 use core_foundation::mach_port::CFMachPort;
@@ -54,12 +54,15 @@ const K_CG_EVENT_TAP_OPTION_DEFAULT: u32 = 0;
 const K_CG_EVENT_KEY_DOWN: u32 = 10;
 const K_CG_EVENT_KEY_UP: u32 = 11;
 const K_CG_EVENT_FLAGS_CHANGED: u32 = 12;
+const K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT: u32 = 0xFFFF_FFFE;
+const K_CG_EVENT_TAP_DISABLED_BY_USER_INPUT: u32 = 0xFFFF_FFFF;
 const K_CG_KEYBOARD_EVENT_AUTOREPEAT: u32 = 8;
 const K_CG_KEYBOARD_EVENT_KEYCODE: u32 = 9;
 const KEY_CAPS_LOCK: i64 = 57;
 const KEY_CAPS_LOCK_U16: u16 = 57;
 
 static BINDINGS: Mutex<Option<CapsBindings>> = Mutex::new(None);
+static EVENT_TAP: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 static STATE: Mutex<CapsState> = Mutex::new(CapsState {
     mode: CapsMode::Idle,
     active_key: None,
@@ -184,9 +187,12 @@ fn start_event_tap() {
             return;
         }
 
+        EVENT_TAP.store(tap, Ordering::SeqCst);
+
         let tap_port = CFMachPort::wrap_under_create_rule(tap.cast());
         let Ok(run_loop_source) = tap_port.create_runloop_source(0) else {
             tracing::warn!("failed to create CapsLock event tap run loop source");
+            EVENT_TAP.store(ptr::null_mut(), Ordering::SeqCst);
             INITIALIZED.store(false, Ordering::SeqCst);
             return;
         };
@@ -205,6 +211,11 @@ extern "C" fn event_tap_callback(
     event: CGEventRef,
     _user_info: *mut c_void,
 ) -> CGEventRef {
+    if is_tap_disabled_event(event_type) {
+        reenable_event_tap();
+        return event;
+    }
+
     if event.is_null() {
         return event;
     }
@@ -244,6 +255,24 @@ extern "C" fn event_tap_callback(
     } else {
         event
     }
+}
+
+const fn is_tap_disabled_event(event_type: u32) -> bool {
+    matches!(
+        event_type,
+        K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT | K_CG_EVENT_TAP_DISABLED_BY_USER_INPUT
+    )
+}
+
+fn reenable_event_tap() {
+    let tap = EVENT_TAP.load(Ordering::SeqCst);
+    if tap.is_null() {
+        tracing::warn!("CapsLock event tap disabled but tap handle is unavailable");
+        return;
+    }
+
+    unsafe { CGEventTapEnable(tap, true) };
+    tracing::debug!("re-enabled CapsLock event tap");
 }
 
 fn input_for_event(event_type: u32, event: CGEventRef, keycode: i64) -> Option<CapsInput> {
@@ -696,5 +725,20 @@ mod tests {
         assert!(action.suppress);
         assert!(action.synthesize_caps_tap);
         assert!(action.commands.is_none());
+    }
+
+    #[test]
+    fn tap_disabled_timeout_event_is_detected() {
+        assert!(is_tap_disabled_event(K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT));
+    }
+
+    #[test]
+    fn tap_disabled_user_input_event_is_detected() {
+        assert!(is_tap_disabled_event(K_CG_EVENT_TAP_DISABLED_BY_USER_INPUT));
+    }
+
+    #[test]
+    fn tap_disabled_helper_ignores_normal_event_type() {
+        assert!(!is_tap_disabled_event(K_CG_EVENT_KEY_DOWN));
     }
 }
