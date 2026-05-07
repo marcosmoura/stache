@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
 use core_foundation::base::TCFType;
 use core_foundation::mach_port::CFMachPort;
@@ -35,6 +35,7 @@ unsafe extern "C" {
 
     fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
     fn CGEventGetIntegerValueField(event: CGEventRef, field: u32) -> i64;
+    fn CGEventSetIntegerValueField(event: CGEventRef, field: u32, value: i64);
     fn CGEventCreateKeyboardEvent(
         source: *mut c_void,
         virtual_key: u16,
@@ -58,8 +59,10 @@ const K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT: u32 = 0xFFFF_FFFE;
 const K_CG_EVENT_TAP_DISABLED_BY_USER_INPUT: u32 = 0xFFFF_FFFF;
 const K_CG_KEYBOARD_EVENT_AUTOREPEAT: u32 = 8;
 const K_CG_KEYBOARD_EVENT_KEYCODE: u32 = 9;
+const K_CG_EVENT_SOURCE_USER_DATA: u32 = 42;
 const KEY_CAPS_LOCK: i64 = 57;
 const KEY_CAPS_LOCK_U16: u16 = 57;
+const STACHE_SYNTHETIC_CAPS_MARKER: i64 = 0x5354_4341_5053;
 
 static BINDINGS: Mutex<Option<CapsBindings>> = Mutex::new(None);
 static EVENT_TAP: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
@@ -68,7 +71,6 @@ static STATE: Mutex<CapsState> = Mutex::new(CapsState {
     active_key: None,
 });
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
-static SYNTHETIC_CAPS_EVENTS: AtomicU8 = AtomicU8::new(0);
 
 pub(super) type CapsBindings = HashMap<CapsKey, CapsBinding>;
 
@@ -222,6 +224,10 @@ extern "C" fn event_tap_callback(
 
     let keycode = unsafe { CGEventGetIntegerValueField(event, K_CG_KEYBOARD_EVENT_KEYCODE) };
 
+    if is_stache_synthetic_caps_event(event, keycode) {
+        return event;
+    }
+
     let Some(input) = input_for_event(event_type, event, keycode) else {
         return event;
     };
@@ -275,16 +281,15 @@ fn reenable_event_tap() {
     tracing::debug!("re-enabled CapsLock event tap");
 }
 
+fn is_stache_synthetic_caps_event(event: CGEventRef, keycode: i64) -> bool {
+    keycode == KEY_CAPS_LOCK
+        && unsafe { CGEventGetIntegerValueField(event, K_CG_EVENT_SOURCE_USER_DATA) }
+            == STACHE_SYNTHETIC_CAPS_MARKER
+}
+
 fn input_for_event(event_type: u32, event: CGEventRef, keycode: i64) -> Option<CapsInput> {
     match event_type {
-        K_CG_EVENT_FLAGS_CHANGED if keycode == KEY_CAPS_LOCK => {
-            if SYNTHETIC_CAPS_EVENTS.load(Ordering::SeqCst) > 0 {
-                SYNTHETIC_CAPS_EVENTS.fetch_sub(1, Ordering::SeqCst);
-                None
-            } else {
-                next_caps_input()
-            }
-        }
+        K_CG_EVENT_FLAGS_CHANGED if keycode == KEY_CAPS_LOCK => next_caps_input(),
         K_CG_EVENT_KEY_DOWN => {
             let is_repeat =
                 unsafe { CGEventGetIntegerValueField(event, K_CG_KEYBOARD_EVENT_AUTOREPEAT) != 0 };
@@ -308,8 +313,6 @@ fn next_caps_input() -> Option<CapsInput> {
 }
 
 fn synthesize_caps_lock_tap() {
-    SYNTHETIC_CAPS_EVENTS.store(2, Ordering::SeqCst);
-
     unsafe {
         let down_event = CGEventCreateKeyboardEvent(ptr::null_mut(), KEY_CAPS_LOCK_U16, true);
         let up_event = CGEventCreateKeyboardEvent(ptr::null_mut(), KEY_CAPS_LOCK_U16, false);
@@ -319,14 +322,26 @@ fn synthesize_caps_lock_tap() {
         }
 
         if !down_event.is_null() {
+            mark_synthetic_caps_event(down_event);
             CGEventPost(K_CG_HID_EVENT_TAP, down_event);
             CFRelease(down_event.cast_const());
         }
 
         if !up_event.is_null() {
+            mark_synthetic_caps_event(up_event);
             CGEventPost(K_CG_HID_EVENT_TAP, up_event);
             CFRelease(up_event.cast_const());
         }
+    }
+}
+
+unsafe fn mark_synthetic_caps_event(event: CGEventRef) {
+    unsafe {
+        CGEventSetIntegerValueField(
+            event,
+            K_CG_EVENT_SOURCE_USER_DATA,
+            STACHE_SYNTHETIC_CAPS_MARKER,
+        );
     }
 }
 
@@ -449,7 +464,9 @@ impl CapsState {
             },
             CapsInput::KeyDown(key, true) if self.active_key == Some(key) => CapsDecision::Suppress,
             CapsInput::KeyDown(key, is_repeat) => match self.mode {
-                CapsMode::CapsHeld if has_binding(key) && !is_repeat => {
+                CapsMode::CapsHeld | CapsMode::ChordUsed
+                    if has_binding(key) && !is_repeat && self.active_key.is_none() =>
+                {
                     self.mode = CapsMode::ChordUsed;
                     self.active_key = Some(key);
                     CapsDecision::Execute(key)
@@ -605,6 +622,38 @@ mod tests {
     }
 
     #[test]
+    fn state_machine_executes_repeated_discrete_configured_chords() {
+        let mut state = CapsState::default();
+        let key = CapsKey::new(1);
+        let has_binding = |candidate: CapsKey| candidate == key;
+
+        assert_eq!(
+            state.handle_input(CapsInput::CapsDown, has_binding),
+            CapsDecision::Suppress
+        );
+        assert_eq!(
+            state.handle_input(CapsInput::KeyDown(key, false), has_binding),
+            CapsDecision::Execute(key)
+        );
+        assert_eq!(
+            state.handle_input(CapsInput::KeyUp(key), has_binding),
+            CapsDecision::Suppress
+        );
+        assert_eq!(
+            state.handle_input(CapsInput::KeyDown(key, false), has_binding),
+            CapsDecision::Execute(key)
+        );
+        assert_eq!(
+            state.handle_input(CapsInput::KeyUp(key), has_binding),
+            CapsDecision::Suppress
+        );
+        assert_eq!(
+            state.handle_input(CapsInput::CapsUp, has_binding),
+            CapsDecision::Suppress
+        );
+    }
+
+    #[test]
     fn state_machine_suppresses_chord_key_up_after_caps_released() {
         let mut state = CapsState::default();
         let key = CapsKey::new(1);
@@ -740,5 +789,10 @@ mod tests {
     #[test]
     fn tap_disabled_helper_ignores_normal_event_type() {
         assert!(!is_tap_disabled_event(K_CG_EVENT_KEY_DOWN));
+    }
+
+    #[test]
+    fn synthetic_caps_helper_ignores_non_caps_key() {
+        assert!(!is_stache_synthetic_caps_event(ptr::null_mut(), 1));
     }
 }
