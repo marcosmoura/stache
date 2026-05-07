@@ -2,17 +2,21 @@ use std::collections::HashMap;
 
 use crate::config::ShortcutCommands;
 
+#[allow(dead_code)]
 pub(super) type CapsBindings = HashMap<CapsKey, CapsBinding>;
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(super) struct CapsBinding {
     pub raw_shortcut: String,
     pub commands: ShortcutCommands,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct CapsKey(i64);
 
+#[allow(dead_code)]
 impl CapsKey {
     #[must_use]
     pub(super) const fn new(keycode: i64) -> Self { Self(keycode) }
@@ -21,13 +25,15 @@ impl CapsKey {
     pub(super) const fn keycode(self) -> i64 { self.0 }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum CapsShortcut {
-    NotCapsShortcut,
+    NotCaps,
     Binding(CapsKey),
     Invalid(CapsShortcutError),
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum CapsShortcutError {
     MissingKey,
@@ -47,14 +53,15 @@ impl std::fmt::Display for CapsShortcutError {
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn parse_shortcut(shortcut: &str) -> CapsShortcut {
     let mut parts = shortcut.split('+');
     let Some(first) = parts.next() else {
-        return CapsShortcut::NotCapsShortcut;
+        return CapsShortcut::NotCaps;
     };
 
     if first != "CapsLock" {
-        return CapsShortcut::NotCapsShortcut;
+        return CapsShortcut::NotCaps;
     }
 
     let Some(key_name) = parts.next() else {
@@ -65,10 +72,10 @@ pub(super) fn parse_shortcut(shortcut: &str) -> CapsShortcut {
         return CapsShortcut::Invalid(CapsShortcutError::UnsupportedShape);
     }
 
-    match keycode_for_name(key_name) {
-        Some(keycode) => CapsShortcut::Binding(CapsKey::new(keycode)),
-        None => CapsShortcut::Invalid(CapsShortcutError::UnknownKey(key_name.to_string())),
-    }
+    keycode_for_name(key_name).map_or_else(
+        || CapsShortcut::Invalid(CapsShortcutError::UnknownKey(key_name.to_string())),
+        |keycode| CapsShortcut::Binding(CapsKey::new(keycode)),
+    )
 }
 
 fn keycode_for_name(key_name: &str) -> Option<i64> {
@@ -168,10 +175,7 @@ mod tests {
 
     #[test]
     fn parse_non_caps_shortcut() {
-        assert_eq!(
-            parse_shortcut("Command+Control+S"),
-            CapsShortcut::NotCapsShortcut
-        );
+        assert_eq!(parse_shortcut("Command+Control+S"), CapsShortcut::NotCaps);
     }
 
     #[test]
