@@ -88,7 +88,8 @@
   //   - "Option" or "Alt" (Option/Alt key)
   //   - "Shift" (Shift key)
   //   - "Super" or "Meta" (mapped to Command on macOS)
-  //   - "CapsLock" (Stache-only pseudo modifier; tap alone toggles Caps Lock)
+  //   - "CapsLock" (Stache-only pseudo modifier; only "CapsLock+<single key>" is supported;
+  //     tap alone toggles Caps Lock)
   //
   // Values can be:
   //   - A single command string

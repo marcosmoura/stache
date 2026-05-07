@@ -33,7 +33,7 @@
       "default": []
     },
     "keybindings": {
-      "description": "Global keyboard keybindings configuration.\n\nThe key is the shortcut string (e.g., \"Command+Control+R\" or \"CapsLock+S\").\n`CapsLock+<key>` is handled as a Stache-only pseudo modifier: tapping\nCaps Lock alone still toggles capitalization, while holding Caps Lock\nwith a configured key executes the command.\nThe value is either a single command string or an array of commands.",
+      "description": "Global keyboard keybindings configuration.\n\nThe key is the shortcut string (e.g., \"Command+Control+R\" or \"CapsLock+S\").\n`CapsLock+<key>` is handled as a Stache-only pseudo modifier: tapping\nCaps Lock alone still toggles capitalization, while holding Caps Lock\nwith a configured key executes the command.\nOnly `CapsLock+<single key>` is supported; combinations such as\n`CapsLock+Command+S` are ignored.\nThe value is either a single command string or an array of commands.",
       "type": "object",
       "additionalProperties": {
         "$ref": "#/$defs/ShortcutCommands"

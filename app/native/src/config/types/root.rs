@@ -98,6 +98,8 @@ pub struct StacheConfig {
     /// `CapsLock+<key>` is handled as a Stache-only pseudo modifier: tapping
     /// Caps Lock alone still toggles capitalization, while holding Caps Lock
     /// with a configured key executes the command.
+    /// Only `CapsLock+<single key>` is supported; combinations such as
+    /// `CapsLock+Command+S` are ignored.
     /// The value is either a single command string or an array of commands.
     pub keybindings: HashMap<String, ShortcutCommands>,
 
