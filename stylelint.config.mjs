@@ -13,11 +13,7 @@ propertiesOrder
 
 /** @type {import('stylelint').Config} */
 export default {
-  extends: [
-    'stylelint-config-recommended',
-    'stylelint-prettier/recommended',
-    'stylelint-config-clean-order',
-  ],
+  extends: ['stylelint-config-recommended', 'stylelint-config-clean-order'],
   plugins: ['stylelint-high-performance-animation'],
   rules: {
     'nesting-selector-no-missing-scoping-root': null,

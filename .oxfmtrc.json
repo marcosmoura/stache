@@ -1,0 +1,46 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "ignorePatterns": [
+    "**/*.toml",
+    "**/dist/**",
+    "coverage/**",
+    "node_modules/**",
+    "app/native/**",
+    "pnpm-lock.yaml",
+    "target/**"
+  ],
+  "printWidth": 100,
+  "semi": true,
+  "singleQuote": true,
+  "sortImports": {
+    "customGroups": [
+      {
+        "groupName": "react",
+        "elementNamePattern": [
+          "react",
+          "react/**",
+          "react-dom",
+          "react-dom/**",
+          "react-*",
+          "react-*/**"
+        ]
+      },
+      {
+        "groupName": "internal",
+        "elementNamePattern": ["@/**"]
+      }
+    ],
+    "groups": [
+      ["type-builtin", "value-builtin"],
+      "react",
+      ["type-external", "value-external"],
+      ["type-internal", "value-internal", "internal"],
+      ["type-parent", "value-parent"],
+      ["type-sibling", "value-sibling", "type-index", "value-index"],
+      "unknown"
+    ]
+  },
+  "sortPackageJson": true,
+  "tabWidth": 2,
+  "trailingComma": "all"
+}

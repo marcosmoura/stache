@@ -6,12 +6,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { queryClientDefaults } from '@/utils/queryClientDefaults';
 
+import { useBar } from './Bar.state';
+import * as styles from './Bar.styles';
 import { Media } from './Media';
 import { Spaces } from './Spaces';
 import { Status } from './Status';
-
-import { useBar } from './Bar.state';
-import * as styles from './Bar.styles';
 
 const queryClient = new QueryClient({
   defaultOptions: queryClientDefaults,

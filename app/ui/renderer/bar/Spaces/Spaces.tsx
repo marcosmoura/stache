@@ -5,7 +5,6 @@ import { Surface } from '@/components/Surface';
 
 import { AppList } from './components/AppList';
 import { WorkspaceList } from './components/WorkspaceList';
-
 import { useSpaces } from './Spaces.state';
 import * as styles from './Spaces.styles';
 

@@ -8,12 +8,12 @@
   "css.lint.vendorPrefix": "ignore",
   "editor.codeActionsOnSave": {
     "source.addMissingImports.ts": "always",
-    "source.fixAll.eslint": "always",
+    "source.fixAll.oxc": "always",
     "source.fixAll.stylelint": "always",
     "source.fixAll.ts": "always",
     "source.removeUnusedImports": "always"
   },
   "editor.experimental.preferTreeSitter.typescript": false,
-  "oxc.enable": false,
+  "oxc.fmt.configPath": ".oxfmtrc.json",
   "stylelint.validate": ["css", "typescript"]
 }

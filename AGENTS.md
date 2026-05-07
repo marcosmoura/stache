@@ -11,10 +11,10 @@
 ## Commands
 
 ```bash
-pnpm tauri:dev      # Development (full app with hot reload)
-pnpm test           # All tests
-pnpm lint           # All linters
-pnpm format         # Prettier + cargo fmt
+pnpm tauri:dev                # Development (full app with hot reload)
+pnpm test                     # All tests
+pnpm lint                     # All linters
+pnpm format                   # Oxfmt + cargo fmt
 ./scripts/generate-schema.sh  # Regenerate JSON Schema after config changes
 ```
 

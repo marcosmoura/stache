@@ -7,7 +7,6 @@ import { render } from 'vitest-browser-react';
 import { createQueryClientWrapper, createTestQueryClient } from '@/tests/utils';
 
 import { useBatteryStore } from './BatteryStore';
-
 import type { BatteryInfo } from './BatteryStore.types';
 
 // Mock Tauri APIs

@@ -13,7 +13,6 @@ import {
 
 import type { LocationData } from './location';
 import { useWeatherStore } from './WeatherStore';
-
 import type { WeatherConfig, WeatherData } from './WeatherStore.types';
 
 // Mock Tauri APIs
