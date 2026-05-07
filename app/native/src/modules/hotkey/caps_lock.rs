@@ -207,6 +207,7 @@ impl CapsState {
                 }
                 CapsMode::Idle => CapsDecision::Pass,
             },
+            CapsInput::KeyDown(key, true) if self.active_key == Some(key) => CapsDecision::Suppress,
             CapsInput::KeyDown(key, is_repeat) => match self.mode {
                 CapsMode::CapsHeld if has_binding(key) && !is_repeat => {
                     self.mode = CapsMode::ChordUsed;
@@ -348,6 +349,34 @@ mod tests {
         );
         assert_eq!(
             state.handle_input(CapsInput::CapsUp, has_binding),
+            CapsDecision::Suppress
+        );
+        assert_eq!(
+            state.handle_input(CapsInput::KeyUp(key), has_binding),
+            CapsDecision::Suppress
+        );
+    }
+
+    #[test]
+    fn state_machine_suppresses_chord_repeat_after_caps_released() {
+        let mut state = CapsState::default();
+        let key = CapsKey::new(1);
+        let has_binding = |candidate: CapsKey| candidate == key;
+
+        assert_eq!(
+            state.handle_input(CapsInput::CapsDown, has_binding),
+            CapsDecision::Suppress
+        );
+        assert_eq!(
+            state.handle_input(CapsInput::KeyDown(key, false), has_binding),
+            CapsDecision::Execute(key)
+        );
+        assert_eq!(
+            state.handle_input(CapsInput::CapsUp, has_binding),
+            CapsDecision::Suppress
+        );
+        assert_eq!(
+            state.handle_input(CapsInput::KeyDown(key, true), has_binding),
             CapsDecision::Suppress
         );
         assert_eq!(
