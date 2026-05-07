@@ -6,6 +6,8 @@
 //! The daemon reads its configuration from the global Stache configuration file
 //! and uses Tauri's global-shortcut plugin to register system-wide hotkeys.
 
+mod caps_lock;
+
 use std::collections::HashMap;
 use std::process::Command;
 
