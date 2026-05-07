@@ -140,6 +140,7 @@ export default defineConfig({
     root: path.resolve(__dirname, UI_DIR),
     setupFiles: ['./tests/setup.ts'],
     include: ['./**/*.test.{ts,tsx}'],
+    isolate: true,
     coverage: {
       provider: 'istanbul',
       reporter: ['text', 'json', 'html'],
@@ -163,7 +164,6 @@ export default defineConfig({
       provider: playwright(),
       enabled: true,
       headless: true,
-      isolate: true,
       instances: [{ browser: 'webkit' }],
       viewport: { width: 800, height: 600 },
       screenshotFailures: true,

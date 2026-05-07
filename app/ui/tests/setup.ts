@@ -17,7 +17,6 @@ console.error = (...args: unknown[]) => {
   originalError.apply(console, args);
 };
 
-// Default mock implementations for Tauri invoke commands
 const defaultInvokeMocks: Record<string, unknown> = {
   get_current_media_info: {},
   get_battery_info: { percentage: 100, state: 'Full' },
@@ -65,23 +64,61 @@ const defaultInvokeMocks: Record<string, unknown> = {
 // Mock window.__TAURI_INTERNALS__ for @tauri-store/zustand and other plugins
 // that directly access Tauri internals instead of using the API
 if (typeof window !== 'undefined') {
+  let callbackId = 0;
+  const callbacks = new Map<number, (payload: unknown) => void>();
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (window as any).__TAURI_INTERNALS__ = {
-    invoke: (cmd: string) => {
+    invoke: (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'plugin:event|listen') {
+        const eventId = typeof args?.handler === 'number' ? args.handler : 0;
+        if (args?.event === 'stache://tiling/initialized') {
+          setTimeout(() => callbacks.get(eventId)?.({ payload: { enabled: true } }), 0);
+        }
+
+        return Promise.resolve(eventId);
+      }
+
+      if (cmd === 'plugin:event|unlisten') {
+        if (typeof args?.eventId === 'number') {
+          callbacks.delete(args.eventId);
+        }
+
+        return Promise.resolve(null);
+      }
+
       // Handle plugin commands (e.g., plugin:zustand|...)
       if (cmd.startsWith('plugin:')) {
         return Promise.resolve(null);
       }
+
       if (cmd in defaultInvokeMocks) {
         return Promise.resolve(defaultInvokeMocks[cmd]);
       }
+
       return Promise.resolve(null);
     },
-    transformCallback: () => 0,
+    transformCallback: (callback: (payload: unknown) => void) => {
+      callbackId += 1;
+      callbacks.set(callbackId, callback);
+
+      return callbackId;
+    },
     convertFileSrc: (path: string) => path,
     metadata: { currentWindow: { label: 'bar' }, currentWebview: { label: 'bar' } },
   };
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (window as any).__TAURI_EVENT_PLUGIN_INTERNALS__ = {
+    unregisterListener: (_event: string, eventId: number) => {
+      callbacks.delete(eventId);
+    },
+  };
 }
+
+vi.doMock('@hugeicons/react', () => ({
+  HugeiconsIcon: () => null,
+}));
 
 // Polyfill crypto.getRandomValues for browser tests
 if (typeof window !== 'undefined' && !window.crypto) {
@@ -98,34 +135,3 @@ if (typeof window !== 'undefined' && !window.crypto) {
     configurable: true,
   });
 }
-
-vi.mock('@tauri-apps/api/webviewWindow', () => ({
-  getCurrentWebviewWindow: vi.fn().mockImplementation(async () => ({
-    label: 'bar',
-  })),
-}));
-
-// Mock @hugeicons/react to avoid issues in test environment
-vi.mock('@hugeicons/react', () => ({
-  HugeiconsIcon: () => null,
-}));
-
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn().mockImplementation((cmd: string) => {
-    if (cmd in defaultInvokeMocks) {
-      return Promise.resolve(defaultInvokeMocks[cmd]);
-    }
-    return Promise.resolve(null);
-  }),
-}));
-
-vi.mock('@tauri-apps/api/event', () => ({
-  listen: vi.fn().mockImplementation((event: string, callback: (payload: unknown) => void) => {
-    // Immediately trigger the tiling initialized event so Renderer becomes ready
-    if (event === 'stache://tiling/initialized') {
-      setTimeout(() => callback({ payload: { enabled: true } }), 0);
-    }
-    return Promise.resolve(() => {});
-  }),
-  emitTo: vi.fn().mockResolvedValue(undefined),
-}));

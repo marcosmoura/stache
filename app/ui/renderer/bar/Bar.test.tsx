@@ -11,10 +11,14 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
 }));
 
-vi.mock('@tauri-apps/api/event', () => ({
-  listen: vi.fn().mockResolvedValue(() => {}),
-  emitTo: vi.fn().mockResolvedValue(undefined),
-}));
+vi.mock('@tauri-apps/api/event', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tauri-apps/api/event')>();
+  return {
+    ...actual,
+    listen: vi.fn().mockResolvedValue(() => {}),
+    emitTo: vi.fn().mockResolvedValue(undefined),
+  };
+});
 
 const mockInvoke = vi.mocked(invoke);
 
