@@ -161,6 +161,10 @@ pub fn run() {
     // Initialize wallpaper manager early so CLI commands can use it
     wallpaper::setup();
 
+    // Tauri embeds generated app metadata here, which trips Clippy's stack-size heuristic.
+    #[allow(clippy::large_stack_frames)]
+    let context = tauri::generate_context!();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|_app, _args, _| {
             // Single instance plugin ensures only one instance runs
@@ -206,7 +210,7 @@ pub fn run() {
             tracing::info!("setup complete (background tasks spawned)");
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application")
         .run(|_app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
