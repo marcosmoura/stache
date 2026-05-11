@@ -12,8 +12,9 @@ use crate::platform::display::is_screen_mirroring_active;
 /// Priority order:
 /// 1. `AirPlay` device when screen mirroring is active (always highest priority)
 /// 2. Keep current `AirPlay` device (don't switch away from `AirPlay`)
-/// 3. Devices in the config priority list (in order)
-/// 4. Fallback to `MacBook` Pro speakers
+/// 3. Switch to `HDMI` when current output is built-in and an `HDMI` device is available
+/// 4. Devices in the config priority list (in order)
+/// 5. Fallback to `MacBook` Pro speakers
 ///
 /// # Arguments
 ///
@@ -50,14 +51,21 @@ fn resolve_output_device<'a>(
         return devices.iter().find(|d| d.id == current.id);
     }
 
-    // 3. Check devices in config priority order
+    // 3. When current output is built-in, switch to HDMI if available
+    if current.is_builtin()
+        && let Some(hdmi) = devices.iter().find(|d| d.is_hdmi())
+    {
+        return Some(hdmi);
+    }
+
+    // 4. Check devices in config priority order
     for priority_device in &config.output {
         if let Some(device) = find_device_by_priority(devices, priority_device) {
             return Some(device);
         }
     }
 
-    // 4. Fallback to MacBook Pro speakers
+    // 5. Fallback to MacBook Pro speakers
     find_device_by_name(devices, "MacBook Pro")
 }
 
@@ -482,5 +490,113 @@ mod tests {
 
         let target = resolve_output_device(&current, &devices, &config, false);
         assert!(target.is_none());
+    }
+
+    #[test]
+    fn output_selects_hdmi_when_current_is_builtin_and_hdmi_available() {
+        let config = create_test_config();
+        let current = AudioDevice {
+            id: 1,
+            name: "MacBook Pro Speakers".to_string(),
+        };
+
+        let devices = vec![
+            AudioDevice {
+                id: 1,
+                name: "MacBook Pro Speakers".to_string(),
+            },
+            AudioDevice {
+                id: 2,
+                name: "HDMI Output".to_string(),
+            },
+            AudioDevice {
+                id: 3,
+                name: "AirPods Pro".to_string(),
+            },
+        ];
+
+        let target = resolve_output_device(&current, &devices, &config, false);
+        assert!(target.is_some());
+        assert_eq!(target.unwrap().id, 2);
+    }
+
+    #[test]
+    fn output_keeps_airplay_even_when_hdmi_available() {
+        let config = create_test_config();
+        let current = AudioDevice {
+            id: 3,
+            name: "Living Room AirPlay".to_string(),
+        };
+
+        let devices = vec![
+            AudioDevice {
+                id: 1,
+                name: "MacBook Pro Speakers".to_string(),
+            },
+            AudioDevice {
+                id: 2,
+                name: "HDMI Output".to_string(),
+            },
+            AudioDevice {
+                id: 3,
+                name: "Living Room AirPlay".to_string(),
+            },
+        ];
+
+        let target = resolve_output_device(&current, &devices, &config, false);
+        assert!(target.is_some());
+        assert_eq!(target.unwrap().id, 3);
+    }
+
+    #[test]
+    fn output_stays_on_builtin_when_no_hdmi_available() {
+        let config = create_test_config();
+        let current = AudioDevice {
+            id: 1,
+            name: "MacBook Pro Speakers".to_string(),
+        };
+
+        let devices = vec![
+            AudioDevice {
+                id: 1,
+                name: "MacBook Pro Speakers".to_string(),
+            },
+            AudioDevice {
+                id: 3,
+                name: "AirPods Pro".to_string(),
+            },
+        ];
+
+        let target = resolve_output_device(&current, &devices, &config, false);
+        assert!(target.is_some());
+        assert_eq!(target.unwrap().id, 3);
+    }
+
+    #[test]
+    fn output_keeps_configured_device_when_not_builtin_even_with_hdmi() {
+        let config = create_test_config();
+        let current = AudioDevice {
+            id: 2,
+            name: "AirPods Pro".to_string(),
+        };
+
+        let devices = vec![
+            AudioDevice {
+                id: 1,
+                name: "MacBook Pro Speakers".to_string(),
+            },
+            AudioDevice {
+                id: 2,
+                name: "AirPods Pro".to_string(),
+            },
+            AudioDevice {
+                id: 3,
+                name: "HDMI Output".to_string(),
+            },
+        ];
+
+        let target = resolve_output_device(&current, &devices, &config, false);
+        assert!(target.is_some());
+        assert_eq!(target.unwrap().id, 2);
     }
 }

@@ -6,8 +6,9 @@
 use coreaudio::audio_unit::Scope;
 use coreaudio::audio_unit::macos_helpers::{
     get_audio_device_ids, get_audio_device_supports_scope, get_default_device_id, get_device_name,
+    get_device_transport_type,
 };
-use objc2_core_audio::AudioDeviceID;
+use objc2_core_audio::{AudioDeviceID, kAudioDeviceTransportTypeHDMI};
 use regex::Regex;
 
 use crate::config::{AudioDeviceDependency, AudioDevicePriority, MatchStrategy};
@@ -34,6 +35,8 @@ pub enum AudioDeviceType {
     Usb,
     /// Built-in speakers or microphone.
     BuiltIn,
+    /// HDMI audio output (monitor/TV speakers via HDMI).
+    Hdmi,
     /// Unknown or other device type.
     Other,
 }
@@ -96,6 +99,7 @@ impl AudioDeviceType {
             Self::Virtual => "virtual",
             Self::Usb => "usb",
             Self::BuiltIn => "builtin",
+            Self::Hdmi => "hdmi",
             Self::Other => "other",
         }
     }
@@ -131,6 +135,24 @@ impl AudioDevice {
     /// Returns whether this is a Bluetooth device.
     #[must_use]
     pub fn is_bluetooth(&self) -> bool { self.device_type() == AudioDeviceType::Bluetooth }
+
+    /// Returns whether this is an HDMI output device.
+    ///
+    /// Uses `CoreAudio` transport type detection, falling back to name-based
+    /// detection for testability and edge cases.
+    #[must_use]
+    pub fn is_hdmi(&self) -> bool {
+        if let Ok(transport) = get_device_transport_type(self.id)
+            && transport == kAudioDeviceTransportTypeHDMI
+        {
+            return true;
+        }
+        self.name_contains("hdmi")
+    }
+
+    /// Returns whether this is a built-in device.
+    #[must_use]
+    pub fn is_builtin(&self) -> bool { self.device_type() == AudioDeviceType::BuiltIn }
 }
 
 /// Gets all output audio devices.
@@ -314,12 +336,49 @@ mod tests {
     }
 
     #[test]
+    fn audio_device_is_hdmi_by_name_fallback() {
+        let device = AudioDevice {
+            id: 99999,
+            name: "HDMI Output".to_string(),
+        };
+        assert!(device.is_hdmi());
+    }
+
+    #[test]
+    fn audio_device_is_hdmi_returns_false_for_non_hdmi() {
+        let device = AudioDevice {
+            id: 99999,
+            name: "MacBook Pro Speakers".to_string(),
+        };
+        assert!(!device.is_hdmi());
+    }
+
+    #[test]
+    fn audio_device_is_builtin_true_for_builtin() {
+        let device = AudioDevice {
+            id: 1,
+            name: "MacBook Pro Speakers".to_string(),
+        };
+        assert!(device.is_builtin());
+    }
+
+    #[test]
+    fn audio_device_is_builtin_false_for_external() {
+        let device = AudioDevice {
+            id: 99999,
+            name: "External Speakers".to_string(),
+        };
+        assert!(!device.is_builtin());
+    }
+
+    #[test]
     fn audio_device_type_as_str() {
         assert_eq!(AudioDeviceType::AirPlay.as_str(), "airplay");
         assert_eq!(AudioDeviceType::Bluetooth.as_str(), "bluetooth");
         assert_eq!(AudioDeviceType::Virtual.as_str(), "virtual");
         assert_eq!(AudioDeviceType::Usb.as_str(), "usb");
         assert_eq!(AudioDeviceType::BuiltIn.as_str(), "builtin");
+        assert_eq!(AudioDeviceType::Hdmi.as_str(), "hdmi");
         assert_eq!(AudioDeviceType::Other.as_str(), "other");
     }
 
