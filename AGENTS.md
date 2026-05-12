@@ -20,11 +20,18 @@ pnpm format                   # Oxfmt + cargo fmt
 
 ## Detailed Documentation
 
-See [.agents/](.agents/README.md) for comprehensive guides:
+See [docs/agents/](docs/agents/README.md) for comprehensive guides:
 
-- [Architecture](.agents/architecture.md) — Binary modes, IPC, directory structure
-- [Rust Patterns](.agents/rust-patterns.md) — Tauri commands, events, config types
-- [React Patterns](.agents/react-patterns.md) — Components, hooks, Linaria styling
-- [Tiling WM](.agents/tiling.md) — Layouts, borders, workspace management
-- [Common Tasks](.agents/common-tasks.md) — Adding widgets, CLI commands, config options
-- [Gotchas](.agents/gotchas.md) — Critical pitfalls to avoid
+- [Architecture](docs/agents/architecture.md) — Binary modes, IPC, directory structure
+- [Rust Patterns](docs/agents/rust-patterns.md) — Tauri commands, events, config types
+- [React Patterns](docs/agents/react-patterns.md) — Components, hooks, Linaria styling
+- [Tiling WM](docs/agents/tiling.md) — Layouts, borders, workspace management
+- [Common Tasks](docs/agents/common-tasks.md) — Adding widgets, CLI commands, config options
+- [Gotchas](docs/agents/gotchas.md) — Critical pitfalls to avoid
+
+## Superpowers Preferences
+
+- Save Superpowers specs in `docs/tasks/specs/`.
+- Save Superpowers plans in `docs/tasks/plans/`.
+- When a Superpowers skill references `docs/superpowers/specs`, use `docs/tasks/specs/` instead.
+- When a Superpowers skill references `docs/superpowers/plans`, use `docs/tasks/plans/` instead.
