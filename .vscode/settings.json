@@ -1,10 +1,4 @@
 {
-  "rust-analyzer.cargo.extraEnv": {
-    "PATH": "/opt/homebrew/opt/rustup/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-  },
-  "rust-analyzer.server.extraEnv": {
-    "PATH": "/opt/homebrew/opt/rustup/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-  },
   "css.lint.vendorPrefix": "ignore",
   "editor.codeActionsOnSave": {
     "source.addMissingImports.ts": "always",
@@ -15,5 +9,11 @@
   },
   "editor.experimental.preferTreeSitter.typescript": false,
   "oxc.fmt.configPath": ".oxfmtrc.json",
+  "rust-analyzer.cargo.extraEnv": {
+    "PATH": "/opt/homebrew/opt/rustup/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+  },
+  "rust-analyzer.server.extraEnv": {
+    "PATH": "/opt/homebrew/opt/rustup/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+  },
   "stylelint.validate": ["css", "typescript"]
 }
