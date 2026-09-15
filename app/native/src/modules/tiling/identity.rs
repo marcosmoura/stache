@@ -25,7 +25,8 @@ pub struct WindowTarget {
 }
 
 /// High-precision launch-date bits from
-/// `NSRunningApplication.launchDate.timeIntervalSinceReferenceDate`.
+/// `NSRunningApplication.launchDate.timeIntervalSinceReferenceDate`, falling
+/// back to the kernel process start time when `AppKit` has no launch date.
 ///
 /// Stored as `f64::to_bits` for `Send + Sync + Copy`.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -52,9 +53,9 @@ impl LaunchDateBits {
 impl AppIdentity {
     /// Captures identity from an `NSRunningApplication` `ObjC` object.
     ///
-    /// Returns `None` if pid ≤ 0, launchDate is null, or the time interval is
-    /// not finite and positive. This is fail-closed: callers must skip the app
-    /// rather than proceeding with an invalid identity.
+    /// Uses the kernel process start time when `launchDate` is null (as it can
+    /// be for Finder). Returns `None` if neither source provides a valid start
+    /// time. Callers must skip the app rather than use a PID-only identity.
     ///
     /// # Safety
     ///
@@ -72,7 +73,8 @@ impl AppIdentity {
             }
             let launch_date: *mut objc::runtime::Object = msg_send![app, launchDate];
             if launch_date.is_null() {
-                return None;
+                let launch_date = kernel_launch_date(pid)?;
+                return Some(Self { pid, launch_date });
             }
             let interval: f64 = msg_send![launch_date, timeIntervalSinceReferenceDate];
             let bits = LaunchDateBits::from_time_interval_since_reference_date(interval)?;
@@ -81,9 +83,67 @@ impl AppIdentity {
     }
 }
 
+/// Reads a process incarnation from the kernel without relying on `AppKit`'s
+/// optional launch date. The timestamp uses the same reference epoch as `NSDate`.
+fn kernel_launch_date(pid: i32) -> Option<LaunchDateBits> {
+    if pid <= 0 {
+        return None;
+    }
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::uninit();
+    let size = i32::try_from(std::mem::size_of::<libc::proc_bsdinfo>()).ok()?;
+    // SAFETY: info points to writable storage of exactly the supplied size.
+    let bytes = unsafe {
+        libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, info.as_mut_ptr().cast(), size)
+    };
+    if bytes != size {
+        return None;
+    }
+    // SAFETY: proc_pidinfo successfully initialized the complete structure.
+    let info = unsafe { info.assume_init() };
+    #[allow(clippy::cast_precision_loss)]
+    let interval =
+        info.pbi_start_tvsec as f64 - 978_307_200.0 + info.pbi_start_tvusec as f64 / 1_000_000.0;
+    LaunchDateBits::from_time_interval_since_reference_date(interval)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn captures_finder_identity_when_running() {
+        use core_foundation::base::TCFType;
+
+        objc::rc::autoreleasepool(|| unsafe {
+            let class = objc::runtime::Class::get("NSRunningApplication").unwrap();
+            let bundle_id = core_foundation::string::CFString::new("com.apple.finder");
+            let apps: *mut objc::runtime::Object = msg_send![class,
+                runningApplicationsWithBundleIdentifier: bundle_id.as_concrete_TypeRef()
+            ];
+            let count: usize = msg_send![apps, count];
+            for index in 0..count {
+                let app: *mut objc::runtime::Object = msg_send![apps, objectAtIndex: index];
+                let first = AppIdentity::from_ns_running_app(app).expect(
+                    "Finder must have a process identity even without an AppKit launch date",
+                );
+                assert_eq!(Some(first), AppIdentity::from_ns_running_app(app));
+            }
+        });
+    }
+
+    #[test]
+    fn kernel_launch_date_is_stable_for_current_process() {
+        let pid = i32::try_from(std::process::id()).unwrap();
+        let first = kernel_launch_date(pid).expect("current process has a kernel start time");
+        assert_eq!(Some(first), kernel_launch_date(pid));
+    }
+
+    #[test]
+    fn kernel_launch_date_rejects_invalid_processes() {
+        assert!(kernel_launch_date(0).is_none());
+        assert!(kernel_launch_date(-1).is_none());
+        assert!(kernel_launch_date(i32::MAX).is_none());
+    }
 
     #[test]
     fn capture_from_null_fails_closed() {
