@@ -286,7 +286,7 @@ mod tests {
 
     #[test]
     fn parse_mappings_reads_openstep_plist_output() {
-        let output = r#"{
+        let output = r"{
     UserKeyMapping =     (
                 {
             HIDKeyboardModifierMappingSrc = 30064771129;
@@ -298,18 +298,18 @@ mod tests {
         }
     );
 }
-"#;
+";
 
         let mappings = parse_mappings(output);
 
         assert_eq!(mappings, vec![
             HidMapping {
-                src: 30064771129,
-                dst: 30064771181,
+                src: 30_064_771_129,
+                dst: 30_064_771_181,
             },
             HidMapping {
-                src: 30064771136,
-                dst: 30064771137,
+                src: 30_064_771_136,
+                dst: 30_064_771_137,
             },
         ]);
     }
@@ -327,8 +327,8 @@ mod tests {
 "#;
 
         assert_eq!(parse_mappings(output), vec![HidMapping {
-            src: 30064771129,
-            dst: 30064771181,
+            src: 30_064_771_129,
+            dst: 30_064_771_181,
         }]);
     }
 
