@@ -32,10 +32,74 @@ use crate::modules::tiling::state::Rect;
 
 type AXUIElementRef = *mut c_void;
 
+/// Owns one retained `AXUIElement` reference returned by a create, copy, or
+/// enumeration API.
+struct OwnedAXElement {
+    element: AXUIElementRef,
+}
+
+impl OwnedAXElement {
+    const fn new(element: AXUIElementRef) -> Self { Self { element } }
+
+    const fn as_raw(&self) -> AXUIElementRef { self.element }
+
+    fn into_raw(mut self) -> AXUIElementRef {
+        let element = self.element;
+        self.element = std::ptr::null_mut();
+        element
+    }
+}
+
+impl Drop for OwnedAXElement {
+    fn drop(&mut self) { release_element(self.element); }
+}
+
 #[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {
     fn CFRetain(cf: *const c_void) -> *const c_void;
     fn CFRelease(cf: *const c_void);
+}
+
+fn retain_element(element: AXUIElementRef) {
+    if !element.is_null() {
+        #[cfg(test)]
+        if record_cf_ownership_operation(true) {
+            return;
+        }
+        unsafe { CFRetain(element.cast()) };
+    }
+}
+
+fn release_element(element: AXUIElementRef) {
+    if !element.is_null() {
+        #[cfg(test)]
+        if record_cf_ownership_operation(false) {
+            return;
+        }
+        unsafe { CFRelease(element.cast()) };
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static CF_OWNERSHIP_COUNTER: std::cell::Cell<Option<(usize, usize)>> = const {
+        std::cell::Cell::new(None)
+    };
+}
+
+#[cfg(test)]
+fn record_cf_ownership_operation(retain: bool) -> bool {
+    CF_OWNERSHIP_COUNTER.with(|counter| {
+        let Some((retains, releases)) = counter.get() else {
+            return false;
+        };
+        counter.set(Some(if retain {
+            (retains + 1, releases)
+        } else {
+            (retains, releases + 1)
+        }));
+        true
+    })
 }
 
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -115,9 +179,7 @@ struct CachedWindowElement {
 impl CachedWindowElement {
     fn new(element: AXUIElementRef) -> Self {
         // Retain the element for cache storage
-        if !element.is_null() {
-            unsafe { CFRetain(element.cast()) };
-        }
+        retain_element(element);
         Self {
             element,
             cached_at: Instant::now(),
@@ -126,11 +188,7 @@ impl CachedWindowElement {
 }
 
 impl Drop for CachedWindowElement {
-    fn drop(&mut self) {
-        if !self.element.is_null() {
-            unsafe { CFRelease(self.element.cast()) };
-        }
-    }
+    fn drop(&mut self) { release_element(self.element); }
 }
 
 // SAFETY: AXUIElements are thread-safe per Apple's documentation
@@ -148,9 +206,10 @@ struct CachedAppElement {
 
 impl CachedAppElement {
     fn new(element: AXUIElementRef) -> Self {
-        if !element.is_null() {
-            unsafe { CFRetain(element.cast()) };
-        }
+        // The cache owns an independent retain. Callers retain their own
+        // reference while resolving windows, so eviction cannot invalidate an
+        // in-flight AX operation.
+        retain_element(element);
         Self {
             element,
             cached_at: Instant::now(),
@@ -159,11 +218,7 @@ impl CachedAppElement {
 }
 
 impl Drop for CachedAppElement {
-    fn drop(&mut self) {
-        if !self.element.is_null() {
-            unsafe { CFRelease(self.element.cast()) };
-        }
-    }
+    fn drop(&mut self) { release_element(self.element); }
 }
 
 unsafe impl Send for CachedAppElement {}
@@ -216,7 +271,7 @@ impl WindowElementCache {
                 if is_element_valid(entry.element) {
                     self.hits.fetch_add(1, Ordering::Relaxed);
                     // Retain for caller
-                    unsafe { CFRetain(entry.element.cast()) };
+                    retain_element(entry.element);
                     return Some(entry.element);
                 }
             }
@@ -246,12 +301,10 @@ impl WindowElementCache {
         let app_element = self.get_or_create_app_element(target.identity)?;
 
         // Search windows of this app
-        if let Some(element) = find_window_in_app(app_element, target.window_id) {
+        if let Some(element) = find_window_in_app(app_element.as_raw(), target.window_id) {
             // Cache the result
-            self.windows.insert(target, CachedWindowElement::new(element));
-            // Return retained element
-            unsafe { CFRetain(element.cast()) };
-            return Some(element);
+            self.windows.insert(target, CachedWindowElement::new(element.as_raw()));
+            return Some(element.into_raw());
         }
 
         tracing::trace!("window_cache: target {target:?} not found");
@@ -259,23 +312,26 @@ impl WindowElementCache {
     }
 
     /// Gets or creates a cached app element for an identity.
-    fn get_or_create_app_element(&self, identity: AppIdentity) -> Option<AXUIElementRef> {
+    fn get_or_create_app_element(&self, identity: AppIdentity) -> Option<OwnedAXElement> {
         // Check cache first
         if let Some(entry) = self.apps.get(&identity) {
             if entry.cached_at.elapsed() < CACHE_MAX_AGE {
-                return Some(entry.element);
+                retain_element(entry.element);
+                return Some(OwnedAXElement::new(entry.element));
             }
             drop(entry);
             self.apps.remove(&identity);
         }
 
         // Create new app element
-        let element = unsafe { AXUIElementCreateApplication(identity.pid) };
-        if element.is_null() {
+        let element = OwnedAXElement::new(unsafe { AXUIElementCreateApplication(identity.pid) });
+        if element.as_raw().is_null() {
             return None;
         }
 
-        self.apps.insert(identity, CachedAppElement::new(element));
+        // Keep the creation retain as the caller's lease and give the cache
+        // its own retain. Cache eviction may now safely race with resolution.
+        self.apps.insert(identity, CachedAppElement::new(element.as_raw()));
         Some(element)
     }
 
@@ -294,7 +350,7 @@ impl WindowElementCache {
             if let Some(entry) = self.windows.get(&target) {
                 if entry.cached_at.elapsed() < CACHE_MAX_AGE && is_element_valid(entry.element) {
                     self.hits.fetch_add(1, Ordering::Relaxed);
-                    unsafe { CFRetain(entry.element.cast()) };
+                    retain_element(entry.element);
                     results.push((target, entry.element));
                     continue;
                 }
@@ -329,18 +385,14 @@ impl WindowElementCache {
             };
 
             // Get all windows for this app
-            let windows = get_app_window_ids_with_elements(app_element);
+            let windows = get_app_window_ids_with_elements(app_element.as_raw());
 
             for (wid, element) in windows {
                 let target = WindowTarget { identity, window_id: wid };
                 if remaining.remove(&target) {
                     // Cache and add to results
-                    self.windows.insert(target, CachedWindowElement::new(element));
-                    unsafe { CFRetain(element.cast()) };
-                    results.push((target, element));
-
-                    // Release the element from get_app_window_ids_with_elements
-                    unsafe { CFRelease(element.cast()) };
+                    self.windows.insert(target, CachedWindowElement::new(element.as_raw()));
+                    results.push((target, element.into_raw()));
                 }
             }
         }
@@ -388,7 +440,9 @@ impl WindowElementCache {
 
             // No cached element - try to resolve
             // If resolution fails, window is likely destroyed
-            if self.resolve(target).is_none() {
+            if let Some(element) = self.resolve(target) {
+                release_element(element);
+            } else {
                 invalid.push(target.window_id);
             }
         }
@@ -476,7 +530,7 @@ fn is_element_valid(element: AXUIElementRef) -> bool {
 fn find_window_in_app(
     app_element: AXUIElementRef,
     target_window_id: u32,
-) -> Option<AXUIElementRef> {
+) -> Option<OwnedAXElement> {
     if app_element.is_null() {
         return None;
     }
@@ -511,9 +565,9 @@ fn find_window_in_app(
             // Verify it's actually a window (has AXWindow role)
             if is_window_element(window.cast_mut()) {
                 // Retain before returning
-                unsafe { CFRetain(window) };
+                retain_element(window.cast_mut());
                 unsafe { CFRelease(value) };
-                return Some(window.cast_mut());
+                return Some(OwnedAXElement::new(window.cast_mut()));
             }
         }
     }
@@ -523,7 +577,7 @@ fn find_window_in_app(
 }
 
 /// Gets all window IDs and elements for an app.
-fn get_app_window_ids_with_elements(app_element: AXUIElementRef) -> Vec<(u32, AXUIElementRef)> {
+fn get_app_window_ids_with_elements(app_element: AXUIElementRef) -> Vec<(u32, OwnedAXElement)> {
     if app_element.is_null() {
         return Vec::new();
     }
@@ -558,8 +612,8 @@ fn get_app_window_ids_with_elements(app_element: AXUIElementRef) -> Vec<(u32, AX
             && window_id != 0
             && is_window_element(window.cast_mut())
         {
-            unsafe { CFRetain(window) };
-            results.push((window_id, window.cast_mut()));
+            retain_element(window.cast_mut());
+            results.push((window_id, OwnedAXElement::new(window.cast_mut())));
         }
     }
 
@@ -715,6 +769,18 @@ mod tests {
     use super::*;
     use crate::modules::tiling::identity::{AppIdentity, LaunchDateBits};
 
+    fn test_with_cf_ownership_counter(
+        action: impl FnOnce(),
+        assert_counts: impl FnOnce(usize, usize),
+    ) {
+        CF_OWNERSHIP_COUNTER.with(|counter| {
+            assert!(counter.replace(Some((0, 0))).is_none());
+        });
+        action();
+        let counts = CF_OWNERSHIP_COUNTER.with(|counter| counter.take().unwrap());
+        assert_counts(counts.0, counts.1);
+    }
+
     fn test_identity() -> AppIdentity {
         AppIdentity {
             pid: 42,
@@ -749,6 +815,48 @@ mod tests {
         });
         cache.invalidate_app_identity(test_identity());
         cache.clear();
+    }
+
+    #[test]
+    fn test_owned_element_releases_its_single_reference() {
+        test_with_cf_ownership_counter(
+            || {
+                let element = OwnedAXElement::new(std::ptr::dangling_mut());
+                drop(element);
+            },
+            |retains, releases| {
+                assert_eq!(retains, 0);
+                assert_eq!(releases, 1);
+            },
+        );
+    }
+
+    #[test]
+    fn test_cached_window_retains_borrowed_element() {
+        test_with_cf_ownership_counter(
+            || {
+                let entry = CachedWindowElement::new(std::ptr::dangling_mut());
+                drop(entry);
+            },
+            |retains, releases| {
+                assert_eq!(retains, 1);
+                assert_eq!(releases, 1);
+            },
+        );
+    }
+
+    #[test]
+    fn test_cached_app_retains_an_independent_reference() {
+        test_with_cf_ownership_counter(
+            || {
+                let entry = CachedAppElement::new(std::ptr::dangling_mut());
+                drop(entry);
+            },
+            |retains, releases| {
+                assert_eq!(retains, 1);
+                assert_eq!(releases, 1);
+            },
+        );
     }
 
     #[test]

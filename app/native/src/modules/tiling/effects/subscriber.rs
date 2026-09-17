@@ -37,13 +37,16 @@
 //! tauri::async_runtime::spawn(subscriber.run());
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 
+use parking_lot::Mutex;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
+use super::animation::{AnimationOutcome, OutcomeReporter};
 use super::executor::{EffectExecutor, effects_from_layout_change};
-use super::{LayoutChange, TilingEffect, begin_animation, cancel_animation};
+use super::{LayoutChange, TilingEffect};
 use crate::modules::tiling::actor::{QueryResult, StateActorHandle, StateQuery};
 use crate::modules::tiling::identity::WindowTarget;
 use crate::modules::tiling::state::{LayoutType, Rect};
@@ -55,8 +58,17 @@ use crate::modules::tiling::state::{LayoutType, Rect};
 /// Tracks the previous state for computing deltas.
 #[derive(Debug, Default)]
 struct SubscriberState {
-    /// Previous layout positions per workspace.
-    layout_positions: HashMap<Uuid, Vec<(WindowTarget, Rect)>>,
+    /// Latest desired layout positions per workspace.
+    desired_layout_positions: HashMap<Uuid, Vec<(WindowTarget, Rect)>>,
+
+    /// Frames confirmed by a successful immediate native write. Deferred
+    /// animation targets deliberately remain dirty until outcomes are wired
+    /// back from the animation worker.
+    applied_layout_positions: HashMap<Uuid, Vec<(WindowTarget, Rect)>>,
+
+    /// Monotonic generation for each desired layout. A frame can recur after
+    /// A -> B -> A, so target/frame alone is not a safe acknowledgement.
+    layout_revisions: HashMap<Uuid, u64>,
 
     /// Previous focused window (exact target).
     focused_window: Option<WindowTarget>,
@@ -88,7 +100,8 @@ impl SubscriberState {
         new_positions: Vec<(WindowTarget, Rect)>,
         user_triggered: bool,
     ) -> Option<LayoutChange> {
-        let old_positions = self.layout_positions.get(&workspace_id).cloned().unwrap_or_default();
+        let old_positions =
+            self.applied_layout_positions.get(&workspace_id).cloned().unwrap_or_default();
 
         // For user-triggered changes (like after a drag), always apply the layout
         // because the actual window positions might differ from our tracked positions.
@@ -104,9 +117,76 @@ impl SubscriberState {
             user_triggered,
         );
 
-        self.layout_positions.insert(workspace_id, new_positions);
+        self.desired_layout_positions.insert(workspace_id, new_positions);
+        let revision = self.layout_revisions.entry(workspace_id).or_default();
+        *revision = revision.wrapping_add(1);
 
         Some(change)
+    }
+
+    /// Records only targets for which a native frame write completed.
+    fn mark_frames_applied(&mut self, workspace_id: Uuid, targets: &[WindowTarget]) {
+        let Some(desired) = self.desired_layout_positions.get(&workspace_id) else {
+            return;
+        };
+        let applied = self.applied_layout_positions.entry(workspace_id).or_default();
+        for target in targets {
+            let Some((_, frame)) = desired.iter().find(|(candidate, _)| candidate == target) else {
+                continue;
+            };
+            if let Some((_, applied_frame)) =
+                applied.iter_mut().find(|(candidate, _)| candidate == target)
+            {
+                *applied_frame = *frame;
+            } else {
+                applied.push((*target, *frame));
+            }
+        }
+        applied.retain(|(target, _)| desired.iter().any(|(candidate, _)| candidate == target));
+    }
+
+    fn prune_applied_frames(&mut self, workspace_id: Uuid) {
+        let Some(desired) = self.desired_layout_positions.get(&workspace_id) else {
+            return;
+        };
+        if let Some(applied) = self.applied_layout_positions.get_mut(&workspace_id) {
+            applied.retain(|(target, _)| desired.iter().any(|(candidate, _)| candidate == target));
+        }
+    }
+
+    /// Records exact frames confirmed by an animation worker. A completion
+    /// from a replaced plan cannot acknowledge a newer desired destination.
+    fn mark_animated_frames_applied(
+        &mut self,
+        workspace_id: Uuid,
+        revision: u64,
+        frames: &[(WindowTarget, Rect)],
+    ) {
+        if self.layout_revisions.get(&workspace_id) != Some(&revision) {
+            return;
+        }
+        let Some(desired) = self.desired_layout_positions.get(&workspace_id) else {
+            return;
+        };
+        let targets: Vec<_> = frames
+            .iter()
+            .filter(|(target, frame)| {
+                desired
+                    .iter()
+                    .any(|(candidate, desired)| candidate == target && desired == frame)
+            })
+            .map(|(target, _)| *target)
+            .collect();
+        self.mark_frames_applied(workspace_id, &targets);
+    }
+
+    fn layout_is_dirty(&self, workspace_id: Uuid) -> bool {
+        self.desired_layout_positions.get(&workspace_id)
+            != self.applied_layout_positions.get(&workspace_id)
+    }
+
+    fn layout_revision(&self, workspace_id: Uuid) -> u64 {
+        self.layout_revisions.get(&workspace_id).copied().unwrap_or_default()
     }
 
     /// Updates focus and returns whether anything changed.
@@ -214,8 +294,127 @@ pub enum SubscriberNotification {
     /// Window was destroyed (prune cached per-window state).
     WindowDestroyed { window_id: u32 },
 
+    /// A deferred animation job completed on the native worker.
+    AnimationCompleted { outcome: AnimationOutcome },
+
     /// Shutdown the subscriber.
     Shutdown,
+}
+
+/// Notifications retained when the subscriber's bounded channel is full.
+///
+/// State changes coalesce to the newest value per target because effects query
+/// current actor state. Animation completions are different: each completion
+/// can require reconciliation, so they retain their arrival order.
+#[derive(Debug, Default)]
+struct PendingNotifications {
+    layouts: HashMap<Uuid, bool>,
+    focus: Option<PendingFocus>,
+    visibility: HashMap<Uuid, bool>,
+    floating: HashMap<WindowTarget, bool>,
+    workspace_layouts: HashMap<Uuid, LayoutType>,
+    destroyed: HashSet<u32>,
+    animation_outcomes: VecDeque<AnimationOutcome>,
+    shutdown_requested: bool,
+}
+
+#[derive(Debug)]
+struct PendingFocus(Option<(Uuid, LayoutType)>);
+
+impl PendingNotifications {
+    fn push(&mut self, notification: &SubscriberNotification) {
+        match *notification {
+            SubscriberNotification::LayoutChanged { workspace_id, user_triggered } => {
+                self.layouts
+                    .entry(workspace_id)
+                    .and_modify(|pending| *pending |= user_triggered)
+                    .or_insert(user_triggered);
+            }
+            SubscriberNotification::FocusChanged { workspace_layout } => {
+                self.focus = Some(PendingFocus(workspace_layout));
+            }
+            SubscriberNotification::VisibilityChanged { workspace_id, visible } => {
+                self.visibility.insert(workspace_id, visible);
+            }
+            SubscriberNotification::FloatingChanged { target, floating } => {
+                self.floating.insert(target, floating);
+            }
+            SubscriberNotification::WorkspaceLayoutChanged { workspace_id, layout } => {
+                self.workspace_layouts.insert(workspace_id, layout);
+            }
+            SubscriberNotification::WindowDestroyed { window_id } => {
+                self.destroyed.insert(window_id);
+            }
+            SubscriberNotification::AnimationCompleted { ref outcome } => {
+                self.animation_outcomes.push_back(AnimationOutcome {
+                    attempted: outcome.attempted.clone(),
+                    successful: outcome.successful.clone(),
+                    layout_revision: outcome.layout_revision,
+                });
+            }
+            SubscriberNotification::Shutdown => self.shutdown_requested = true,
+        }
+    }
+
+    fn pop(&mut self) -> Option<SubscriberNotification> {
+        if self.shutdown_requested {
+            return Some(SubscriberNotification::Shutdown);
+        }
+        if let Some(window_id) = self.destroyed.iter().next().copied() {
+            self.destroyed.remove(&window_id);
+            return Some(SubscriberNotification::WindowDestroyed { window_id });
+        }
+        if let Some(outcome) = self.animation_outcomes.pop_front() {
+            return Some(SubscriberNotification::AnimationCompleted { outcome });
+        }
+        if let Some((workspace_id, layout)) = self
+            .workspace_layouts
+            .iter()
+            .next()
+            .map(|(workspace_id, layout)| (*workspace_id, *layout))
+        {
+            self.workspace_layouts.remove(&workspace_id);
+            return Some(SubscriberNotification::WorkspaceLayoutChanged { workspace_id, layout });
+        }
+        if let Some(PendingFocus(workspace_layout)) = self.focus.take() {
+            return Some(SubscriberNotification::FocusChanged { workspace_layout });
+        }
+        if let Some((workspace_id, visible)) = self
+            .visibility
+            .iter()
+            .next()
+            .map(|(workspace_id, visible)| (*workspace_id, *visible))
+        {
+            self.visibility.remove(&workspace_id);
+            return Some(SubscriberNotification::VisibilityChanged { workspace_id, visible });
+        }
+        if let Some((target, floating)) =
+            self.floating.iter().next().map(|(target, floating)| (*target, *floating))
+        {
+            self.floating.remove(&target);
+            return Some(SubscriberNotification::FloatingChanged { target, floating });
+        }
+        let (workspace_id, user_triggered) = self
+            .layouts
+            .iter()
+            .next()
+            .map(|(workspace_id, user_triggered)| (*workspace_id, *user_triggered))?;
+        self.layouts.remove(&workspace_id);
+        Some(SubscriberNotification::LayoutChanged { workspace_id, user_triggered })
+    }
+
+    fn is_empty(&self) -> bool {
+        !self.shutdown_requested
+            && self.layouts.is_empty()
+            && self.focus.is_none()
+            && self.visibility.is_empty()
+            && self.floating.is_empty()
+            && self.workspace_layouts.is_empty()
+            && self.destroyed.is_empty()
+            && self.animation_outcomes.is_empty()
+    }
+
+    fn take_shutdown(&mut self) -> bool { std::mem::take(&mut self.shutdown_requested) }
 }
 
 /// Subscribes to state changes and computes effects.
@@ -232,30 +431,69 @@ pub struct EffectSubscriber {
     /// Receiver for notifications.
     notification_rx: mpsc::Receiver<SubscriberNotification>,
 
+    /// Shared semantic overflow for a saturated notification channel.
+    pending: Arc<Mutex<PendingNotifications>>,
+
     /// Previous state for computing deltas.
     state: SubscriberState,
 
+    /// Layout awaiting immediate frame-write outcomes from the executor.
+    pending_layout_apply: Option<(Uuid, u64)>,
+
+    /// Prevents a persistent native failure from keeping the worker busy
+    /// forever while still allowing transient failures to converge.
+    reconciliation_attempts: HashMap<Uuid, u8>,
+
     /// Marked complete when the event loop exits (after `Shutdown` or channel close).
     stopped: crate::modules::tiling::init::CompletionLatch,
+
+    /// Acknowledges that initialization has completed and queued bootstrap
+    /// layouts can be consumed by the event loop.
+    ready: crate::modules::tiling::init::CompletionLatch,
 }
 
 /// Handle for sending notifications to the subscriber.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct EffectSubscriberHandle {
     notification_tx: mpsc::Sender<SubscriberNotification>,
+    pending: Arc<Mutex<PendingNotifications>>,
+    ready: crate::modules::tiling::init::CompletionLatch,
 }
 
 impl EffectSubscriberHandle {
+    fn notify(&self, notification: SubscriberNotification) {
+        let mut pending = self.pending.lock();
+        if matches!(notification, SubscriberNotification::Shutdown) {
+            pending.push(&notification);
+            // A pending shutdown is authoritative, but it alone cannot wake an
+            // idle subscriber blocked in `recv`. Try to wake it as well; a full
+            // channel is safe because the next received item checks pending
+            // shutdown before handling further work.
+            match self.notification_tx.try_send(notification) {
+                Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => {}
+                Err(mpsc::error::TrySendError::Closed(notification)) => {
+                    tracing::debug!(?notification, "tiling: subscriber is already stopped");
+                }
+            }
+            return;
+        }
+        if !pending.is_empty() {
+            pending.push(&notification);
+            return;
+        }
+
+        match self.notification_tx.try_send(notification) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(notification)) => pending.push(&notification),
+            Err(mpsc::error::TrySendError::Closed(notification)) => {
+                tracing::debug!(?notification, "tiling: subscriber is already stopped");
+            }
+        }
+    }
+
     /// Notifies the subscriber that a layout changed.
     pub fn notify_layout_changed(&self, workspace_id: Uuid, user_triggered: bool) {
-        if let Err(e) = self
-            .notification_tx
-            .try_send(SubscriberNotification::LayoutChanged { workspace_id, user_triggered })
-        {
-            tracing::warn!(
-                "tiling: dropped LayoutChanged notification for workspace {workspace_id}: {e}"
-            );
-        }
+        self.notify(SubscriberNotification::LayoutChanged { workspace_id, user_triggered });
     }
 
     /// Notifies the subscriber that focus changed.
@@ -270,49 +508,22 @@ impl EffectSubscriberHandle {
     }
 
     fn notify_focus_changed_inner(&self, workspace_layout: Option<(Uuid, LayoutType)>) {
-        if let Err(e) = self
-            .notification_tx
-            .try_send(SubscriberNotification::FocusChanged { workspace_layout })
-        {
-            tracing::warn!("tiling: dropped FocusChanged notification: {e}");
-        }
+        self.notify(SubscriberNotification::FocusChanged { workspace_layout });
     }
 
     /// Notifies the subscriber that workspace visibility changed.
     pub fn notify_visibility_changed(&self, workspace_id: Uuid, visible: bool) {
-        if let Err(e) = self
-            .notification_tx
-            .try_send(SubscriberNotification::VisibilityChanged { workspace_id, visible })
-        {
-            tracing::warn!(
-                "tiling: dropped VisibilityChanged notification for workspace {workspace_id}: {e}"
-            );
-        }
+        self.notify(SubscriberNotification::VisibilityChanged { workspace_id, visible });
     }
 
     /// Notifies the subscriber that a window's floating state changed.
     pub fn notify_floating_changed(&self, target: WindowTarget, floating: bool) {
-        if let Err(e) = self
-            .notification_tx
-            .try_send(SubscriberNotification::FloatingChanged { target, floating })
-        {
-            tracing::warn!(
-                "tiling: dropped FloatingChanged notification for window {}: {e}",
-                target.window_id
-            );
-        }
+        self.notify(SubscriberNotification::FloatingChanged { target, floating });
     }
 
     /// Notifies the subscriber that a workspace's layout changed.
     pub fn notify_workspace_layout_changed(&self, workspace_id: Uuid, layout: LayoutType) {
-        if let Err(e) = self
-            .notification_tx
-            .try_send(SubscriberNotification::WorkspaceLayoutChanged { workspace_id, layout })
-        {
-            tracing::warn!(
-                "tiling: dropped WorkspaceLayoutChanged notification for workspace {workspace_id}: {e}"
-            );
-        }
+        self.notify(SubscriberNotification::WorkspaceLayoutChanged { workspace_id, layout });
     }
 
     /// Notifies the subscriber that a window was destroyed.
@@ -320,21 +531,16 @@ impl EffectSubscriberHandle {
     /// The subscriber prunes cached per-window state (e.g. floating state)
     /// so a reused window ID does not inherit stale flags.
     pub fn notify_window_destroyed(&self, window_id: u32) {
-        if let Err(e) = self
-            .notification_tx
-            .try_send(SubscriberNotification::WindowDestroyed { window_id })
-        {
-            tracing::warn!(
-                "tiling: dropped WindowDestroyed notification for window {window_id}: {e}"
-            );
-        }
+        self.notify(SubscriberNotification::WindowDestroyed { window_id });
     }
 
     /// Shuts down the subscriber.
-    pub fn shutdown(&self) {
-        if let Err(e) = self.notification_tx.try_send(SubscriberNotification::Shutdown) {
-            tracing::warn!("tiling: dropped Shutdown notification: {e}");
-        }
+    pub fn shutdown(&self) { self.notify(SubscriberNotification::Shutdown); }
+
+    /// Waits until the subscriber has initialized its state caches.
+    #[must_use]
+    pub(crate) fn wait_until_ready(&self, timeout: std::time::Duration) -> bool {
+        self.ready.wait_timeout(timeout)
     }
 }
 
@@ -357,24 +563,39 @@ impl EffectSubscriber {
     #[must_use]
     pub(crate) fn new(
         actor_handle: StateActorHandle,
-        executor: EffectExecutor,
+        mut executor: EffectExecutor,
     ) -> (
         Self,
         EffectSubscriberHandle,
         crate::modules::tiling::init::CompletionLatch,
     ) {
         let (notification_tx, notification_rx) = mpsc::channel(256);
+        let pending = Arc::new(Mutex::new(PendingNotifications::default()));
         let stopped = crate::modules::tiling::init::CompletionLatch::new();
+        let ready = crate::modules::tiling::init::CompletionLatch::new();
+
+        let handle = EffectSubscriberHandle {
+            notification_tx,
+            pending: Arc::clone(&pending),
+            ready: ready.clone(),
+        };
+        let outcome_handle = handle.clone();
+        let reporter: OutcomeReporter = Arc::new(move |outcome| {
+            outcome_handle.notify(SubscriberNotification::AnimationCompleted { outcome });
+        });
+        executor.set_animation_outcome_reporter(reporter);
 
         let subscriber = Self {
             actor_handle,
             executor,
             notification_rx,
+            pending: Arc::clone(&pending),
             state: SubscriberState::new(),
+            pending_layout_apply: None,
+            reconciliation_attempts: HashMap::new(),
             stopped: stopped.clone(),
+            ready,
         };
-
-        let handle = EffectSubscriberHandle { notification_tx };
 
         (subscriber, handle, stopped)
     }
@@ -394,8 +615,32 @@ impl EffectSubscriber {
 
         // Apply initial border colors based on focused workspace layout
         self.apply_initial_border_colors();
+        self.ready.mark_complete();
 
-        while let Some(notification) = self.notification_rx.recv().await {
+        loop {
+            let notification = if self.pending.lock().take_shutdown() {
+                SubscriberNotification::Shutdown
+            } else {
+                match self.notification_rx.try_recv() {
+                    Ok(notification) => notification,
+                    Err(mpsc::error::TryRecvError::Empty) => {
+                        let pending_notification = self.pending.lock().pop();
+                        if let Some(notification) = pending_notification {
+                            notification
+                        } else if let Some(notification) = self.notification_rx.recv().await {
+                            notification
+                        } else {
+                            break;
+                        }
+                    }
+                    Err(mpsc::error::TryRecvError::Disconnected) => {
+                        let Some(notification) = self.pending.lock().pop() else {
+                            break;
+                        };
+                        notification
+                    }
+                }
+            };
             match notification {
                 SubscriberNotification::Shutdown => {
                     tracing::debug!("Effect subscriber received shutdown");
@@ -414,18 +659,6 @@ impl EffectSubscriber {
     /// Handles a single notification.
     async fn handle_notification(&mut self, notification: SubscriberNotification) {
         tracing::debug!("tiling: subscriber received notification: {notification:?}");
-
-        // For layout changes that may trigger animations, signal cancellation
-        // of any ongoing animation so the new one can take priority, then
-        // immediately decrement to indicate we're now the active command.
-        // This pattern ensures:
-        // 1. Any running animation sees WAITING_COMMANDS > 0 and cancels
-        // 2. Our animation sees WAITING_COMMANDS == 0 and runs normally
-        let is_layout_change = matches!(notification, SubscriberNotification::LayoutChanged { .. });
-        if is_layout_change {
-            cancel_animation();
-            begin_animation();
-        }
 
         let effects = match notification {
             SubscriberNotification::LayoutChanged { workspace_id, user_triggered } => {
@@ -479,12 +712,31 @@ impl EffectSubscriber {
                 Vec::new()
             }
 
+            SubscriberNotification::AnimationCompleted { outcome } => {
+                self.handle_animation_completed(outcome).await
+            }
+
             SubscriberNotification::Shutdown => Vec::new(),
         };
 
         tracing::debug!("tiling: subscriber generated {} effects", effects.len());
         if !effects.is_empty() {
-            let count = self.executor.execute_batch(effects);
+            let has_deferred_frames = effects
+                .iter()
+                .any(|effect| matches!(effect, TilingEffect::SetWindowFrame { animate: true, .. }));
+            let layout_apply = self.pending_layout_apply.take();
+            let (count, applied_frames) =
+                self.executor.execute_batch_with_applied_frames(effects, layout_apply);
+            if let Some((workspace_id, revision)) = layout_apply
+                && self.state.layout_revision(workspace_id) == revision
+            {
+                self.state.mark_frames_applied(workspace_id, &applied_frames);
+                if !has_deferred_frames && self.state.layout_is_dirty(workspace_id) {
+                    self.retry_immediate_layout(workspace_id).await;
+                } else {
+                    self.reconciliation_attempts.remove(&workspace_id);
+                }
+            }
             tracing::debug!("tiling: subscriber executed {count} effects");
         }
     }
@@ -495,6 +747,7 @@ impl EffectSubscriber {
         workspace_id: Uuid,
         user_triggered: bool,
     ) -> Vec<TilingEffect> {
+        self.pending_layout_apply = None;
         tracing::debug!(
             "tiling: handle_layout_changed for workspace {workspace_id}, user_triggered={user_triggered}"
         );
@@ -527,6 +780,7 @@ impl EffectSubscriber {
         }
 
         // Update state and get the change
+        let previous_desired = self.state.desired_layout_positions.get(&workspace_id).cloned();
         let Some(change) = self.state.update_layout(workspace_id, new_positions, user_triggered)
         else {
             tracing::debug!(
@@ -534,6 +788,12 @@ impl EffectSubscriber {
             );
             return Vec::new(); // No actual change
         };
+        if previous_desired.as_ref() != Some(&change.new_positions) {
+            self.reconciliation_attempts.remove(&workspace_id);
+        }
+        // A membership-only change can have no frame writes. Prune now so a
+        // removed target does not keep the workspace permanently dirty.
+        self.state.prune_applied_frames(workspace_id);
 
         tracing::debug!(
             "tiling: layout change detected - old: {} windows, new: {} windows",
@@ -541,8 +801,68 @@ impl EffectSubscriber {
             change.new_positions.len()
         );
 
-        // Convert change to effects
-        effects_from_layout_change(&change)
+        // Convert change to effects. Empty layouts have no native frame write
+        // to acknowledge, so never leave stale pending outcome state behind.
+        let effects = effects_from_layout_change(&change);
+        if !effects.is_empty() {
+            self.pending_layout_apply =
+                Some((workspace_id, self.state.layout_revision(workspace_id)));
+        }
+        effects
+    }
+
+    async fn handle_animation_completed(&mut self, outcome: AnimationOutcome) -> Vec<TilingEffect> {
+        const MAX_RECONCILIATION_ATTEMPTS: u8 = 3;
+
+        let Some((workspace_id, revision)) = outcome.layout_revision else {
+            return Vec::new();
+        };
+        if self.state.layout_revision(workspace_id) != revision {
+            return Vec::new();
+        }
+        self.state
+            .mark_animated_frames_applied(workspace_id, revision, &outcome.successful);
+
+        for workspace_id in [workspace_id] {
+            if !self.state.layout_is_dirty(workspace_id) {
+                self.reconciliation_attempts.remove(&workspace_id);
+                continue;
+            }
+            let attempts = self.reconciliation_attempts.entry(workspace_id).or_default();
+            if *attempts >= MAX_RECONCILIATION_ATTEMPTS {
+                tracing::warn!(%workspace_id, "tiling: animation reconciliation limit reached");
+                continue;
+            }
+            *attempts += 1;
+            return self.handle_layout_changed(workspace_id, false).await;
+        }
+
+        Vec::new()
+    }
+
+    async fn retry_immediate_layout(&mut self, workspace_id: Uuid) {
+        const MAX_RECONCILIATION_ATTEMPTS: u8 = 3;
+        while self.state.layout_is_dirty(workspace_id) {
+            let attempts = self.reconciliation_attempts.entry(workspace_id).or_default();
+            if *attempts >= MAX_RECONCILIATION_ATTEMPTS {
+                tracing::warn!(%workspace_id, "tiling: immediate reconciliation limit reached");
+                return;
+            }
+            *attempts += 1;
+            let effects = self.handle_layout_changed(workspace_id, false).await;
+            if effects.is_empty() {
+                return;
+            }
+            let layout_apply = self.pending_layout_apply.take();
+            let (_, applied_frames) =
+                self.executor.execute_batch_with_applied_frames(effects, layout_apply);
+            if let Some((workspace_id, revision)) = layout_apply
+                && self.state.layout_revision(workspace_id) == revision
+            {
+                self.state.mark_frames_applied(workspace_id, &applied_frames);
+            }
+        }
+        self.reconciliation_attempts.remove(&workspace_id);
     }
 
     /// Handles a focus change notification.
@@ -590,6 +910,8 @@ impl EffectSubscriber {
                 .await;
 
             if let Ok(QueryResult::TargetLayout(positions)) = layout_result {
+                let _ = self.state.update_layout(workspace_id, positions.clone(), false);
+                self.state.prune_applied_frames(workspace_id);
                 // --- DIAGNOSTIC: compare layout vs all workspace windows ---
                 // GetWindowsForWorkspace returns ALL windows (including floating/excluded),
                 // unlike GetWindowLayoutTargets which only returns layoutable positions.
@@ -649,19 +971,20 @@ impl EffectSubscriber {
                         animate: false,
                     });
                 }
+                if !positions.is_empty() {
+                    self.pending_layout_apply =
+                        Some((workspace_id, self.state.layout_revision(workspace_id)));
+                }
 
                 // Show borders for all windows in this workspace
                 let targets: Vec<WindowTarget> = positions.iter().map(|(t, _)| *t).collect();
                 if !targets.is_empty() {
                     effects.push(TilingEffect::ShowBorders { targets });
                 }
-
-                // Update cached positions
-                let _ = self.state.update_layout(workspace_id, positions, false);
             }
         } else {
             // Workspace became hidden - hide borders for its windows
-            if let Some(positions) = self.state.layout_positions.get(&workspace_id) {
+            if let Some(positions) = self.state.desired_layout_positions.get(&workspace_id) {
                 let targets: Vec<WindowTarget> = positions.iter().map(|(t, _)| *t).collect();
                 if !targets.is_empty() {
                     effects.push(TilingEffect::HideBorders { targets });
@@ -717,7 +1040,7 @@ impl EffectSubscriber {
                     .await;
 
                 if let Ok(QueryResult::TargetLayout(positions)) = layout_result {
-                    self.state.layout_positions.insert(ws.id, positions);
+                    self.state.desired_layout_positions.insert(ws.id, positions);
                 }
             }
         }
@@ -813,7 +1136,8 @@ mod tests {
     #[test]
     fn test_subscriber_state_default() {
         let state = SubscriberState::new();
-        assert!(state.layout_positions.is_empty());
+        assert!(state.desired_layout_positions.is_empty());
+        assert!(state.applied_layout_positions.is_empty());
         assert!(state.focused_window.is_none());
         assert!(state.visible_workspaces.is_empty());
     }
@@ -829,7 +1153,10 @@ mod tests {
         assert!(change.is_some());
         assert_eq!(change.unwrap().new_positions, positions);
 
-        // Same update should not produce a change
+        // The same desired layout remains dirty until its native frame write
+        // succeeds, then becomes suppressible as already applied.
+        assert!(state.update_layout(ws_id, positions.clone(), false).is_some());
+        state.mark_frames_applied(ws_id, &[t(1)]);
         let change = state.update_layout(ws_id, positions, false);
         assert!(change.is_none());
 
@@ -837,6 +1164,75 @@ mod tests {
         let new_positions = vec![(t(1), Rect::new(50.0, 50.0, 100.0, 100.0))];
         let change = state.update_layout(ws_id, new_positions, false);
         assert!(change.is_some());
+    }
+
+    #[test]
+    fn membership_only_layout_change_prunes_removed_applied_targets() {
+        let mut state = SubscriberState::new();
+        let workspace_id = Uuid::now_v7();
+        let frame = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let _ = state.update_layout(workspace_id, vec![(t(1), frame), (t(2), frame)], false);
+        state.mark_frames_applied(workspace_id, &[t(1), t(2)]);
+
+        let change = state.update_layout(workspace_id, vec![(t(1), frame)], false);
+        assert!(change.is_some());
+        state.prune_applied_frames(workspace_id);
+
+        assert!(!state.layout_is_dirty(workspace_id));
+    }
+
+    #[test]
+    fn animated_outcome_requires_the_current_layout_revision() {
+        let mut state = SubscriberState::new();
+        let workspace_id = Uuid::now_v7();
+        let desired = Rect::new(100.0, 0.0, 100.0, 100.0);
+        let replacement = Rect::new(200.0, 0.0, 100.0, 100.0);
+
+        let _ = state.update_layout(workspace_id, vec![(t(1), desired)], false);
+        let first_revision = state.layout_revision(workspace_id);
+        let _ = state.update_layout(workspace_id, vec![(t(1), replacement)], false);
+        let _ = state.update_layout(workspace_id, vec![(t(1), desired)], false);
+        let current_revision = state.layout_revision(workspace_id);
+
+        // A delayed completion for the first A must not acknowledge the
+        // latest A after the desired layout cycled through B.
+        state.mark_animated_frames_applied(workspace_id, first_revision, &[(t(1), desired)]);
+        assert!(state.layout_is_dirty(workspace_id));
+
+        state.mark_animated_frames_applied(workspace_id, current_revision, &[(t(1), desired)]);
+        assert!(!state.layout_is_dirty(workspace_id));
+    }
+
+    #[test]
+    fn pending_animation_completions_are_retained_when_channel_is_full() {
+        let mut pending = PendingNotifications::default();
+        let first_frame = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let second_frame = Rect::new(100.0, 0.0, 100.0, 100.0);
+        pending.push(&SubscriberNotification::AnimationCompleted {
+            outcome: AnimationOutcome {
+                attempted: vec![(t(1), first_frame)],
+                successful: vec![(t(1), first_frame)],
+                ..AnimationOutcome::default()
+            },
+        });
+        pending.push(&SubscriberNotification::AnimationCompleted {
+            outcome: AnimationOutcome {
+                attempted: vec![(t(2), second_frame)],
+                successful: vec![(t(2), second_frame)],
+                ..AnimationOutcome::default()
+            },
+        });
+
+        let Some(SubscriberNotification::AnimationCompleted { outcome: first }) = pending.pop()
+        else {
+            panic!("expected first retained animation completion");
+        };
+        let Some(SubscriberNotification::AnimationCompleted { outcome: second }) = pending.pop()
+        else {
+            panic!("expected second retained animation completion");
+        };
+        assert_eq!(first.successful, vec![(t(1), first_frame)]);
+        assert_eq!(second.successful, vec![(t(2), second_frame)]);
     }
 
     #[test]
@@ -1000,7 +1396,11 @@ mod tests {
     #[test]
     fn test_subscriber_handle_send() {
         let (tx, mut rx) = mpsc::channel(10);
-        let handle = EffectSubscriberHandle { notification_tx: tx };
+        let handle = EffectSubscriberHandle {
+            notification_tx: tx,
+            pending: Arc::new(Mutex::new(PendingNotifications::default())),
+            ready: crate::modules::tiling::init::CompletionLatch::new(),
+        };
 
         let ws_id = Uuid::now_v7();
         handle.notify_layout_changed(ws_id, true);
@@ -1018,7 +1418,11 @@ mod tests {
     #[test]
     fn test_subscriber_handle_window_destroyed_notification() {
         let (tx, mut rx) = mpsc::channel(10);
-        let handle = EffectSubscriberHandle { notification_tx: tx };
+        let handle = EffectSubscriberHandle {
+            notification_tx: tx,
+            pending: Arc::new(Mutex::new(PendingNotifications::default())),
+            ready: crate::modules::tiling::init::CompletionLatch::new(),
+        };
 
         handle.notify_window_destroyed(42);
 
@@ -1029,5 +1433,78 @@ mod tests {
             }
             _ => panic!("Wrong notification type"),
         }
+    }
+
+    #[test]
+    fn subscriber_handle_readiness_ack_is_observable() {
+        let (tx, _rx) = mpsc::channel(1);
+        let ready = crate::modules::tiling::init::CompletionLatch::new();
+        let handle = EffectSubscriberHandle {
+            notification_tx: tx,
+            pending: Arc::new(Mutex::new(PendingNotifications::default())),
+            ready: ready.clone(),
+        };
+
+        assert!(!handle.wait_until_ready(std::time::Duration::ZERO));
+        ready.mark_complete();
+        assert!(handle.wait_until_ready(std::time::Duration::ZERO));
+    }
+
+    #[test]
+    fn saturated_handle_coalesces_layouts_and_preserves_user_intent() {
+        let (tx, _rx) = mpsc::channel(1);
+        let pending = Arc::new(Mutex::new(PendingNotifications::default()));
+        let handle = EffectSubscriberHandle {
+            notification_tx: tx,
+            pending: Arc::clone(&pending),
+            ready: crate::modules::tiling::init::CompletionLatch::new(),
+        };
+        let first = Uuid::now_v7();
+        let second = Uuid::now_v7();
+
+        // Fill the primary bounded channel, then prove full-queue writes are
+        // retained as authoritative per-workspace state.
+        handle.notify_layout_changed(first, false);
+        handle.notify_layout_changed(second, false);
+        handle.notify_layout_changed(second, true);
+
+        assert!(matches!(
+            pending.lock().pop(),
+            Some(SubscriberNotification::LayoutChanged { workspace_id, user_triggered: true })
+                if workspace_id == second
+        ));
+    }
+
+    #[test]
+    fn saturated_handle_retains_shutdown_independently_of_queue_capacity() {
+        let (tx, _rx) = mpsc::channel(1);
+        let pending = Arc::new(Mutex::new(PendingNotifications::default()));
+        let handle = EffectSubscriberHandle {
+            notification_tx: tx,
+            pending: Arc::clone(&pending),
+            ready: crate::modules::tiling::init::CompletionLatch::new(),
+        };
+
+        handle.notify_focus_changed();
+        handle.shutdown();
+
+        assert!(matches!(
+            pending.lock().pop(),
+            Some(SubscriberNotification::Shutdown)
+        ));
+    }
+
+    #[test]
+    fn shutdown_wakes_an_idle_subscriber() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let handle = EffectSubscriberHandle {
+            notification_tx: tx,
+            pending: Arc::new(Mutex::new(PendingNotifications::default())),
+            ready: crate::modules::tiling::init::CompletionLatch::new(),
+        };
+
+        handle.shutdown();
+
+        assert!(matches!(rx.try_recv(), Ok(SubscriberNotification::Shutdown)));
     }
 }

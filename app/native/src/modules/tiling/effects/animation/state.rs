@@ -76,12 +76,10 @@ pub fn cancel_animation() { WAITING_COMMANDS.fetch_add(1, Ordering::Relaxed); }
 
 /// Called after acquiring the lock to signal we're no longer waiting.
 ///
-/// IMPORTANT: This MUST be called after every `cancel_animation()` call.
-pub fn begin_animation() {
-    let _ = WAITING_COMMANDS.try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-        Some(current.saturating_sub(1))
-    });
-}
+/// A serialized worker calls this when it accepts its newest replacement. It
+/// consumes every earlier request at once; retaining a count would make a
+/// burst of replacements cancel the final, authoritative job as well.
+pub fn begin_animation() { WAITING_COMMANDS.store(0, Ordering::Relaxed); }
 
 /// Checks if other commands are waiting to run.
 #[inline]

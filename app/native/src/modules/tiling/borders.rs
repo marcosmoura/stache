@@ -154,6 +154,39 @@ fn run_animation(
     animation: &BorderAnimationConfig,
     epoch: u64,
 ) -> Option<AnimationCommand> {
+    run_animation_with_frame_sender(rx, gradient, animation, epoch, |args| {
+        send_animation_frame(args)
+    })
+}
+
+fn run_animation_with_frame_sender(
+    rx: &mpsc::Receiver<AnimationCommand>,
+    gradient: &GradientConfig,
+    animation: &BorderAnimationConfig,
+    epoch: u64,
+    send_frame: impl FnMut(&[String]) -> bool,
+) -> Option<AnimationCommand> {
+    run_animation_with_frame_sender_and_wait(
+        rx,
+        gradient,
+        animation,
+        epoch,
+        send_frame,
+        wait_for_animation_command,
+    )
+}
+
+fn run_animation_with_frame_sender_and_wait(
+    rx: &mpsc::Receiver<AnimationCommand>,
+    gradient: &GradientConfig,
+    animation: &BorderAnimationConfig,
+    epoch: u64,
+    mut send_frame: impl FnMut(&[String]) -> bool,
+    mut wait_for_command: impl FnMut(
+        &mpsc::Receiver<AnimationCommand>,
+        Duration,
+    ) -> Result<Option<AnimationCommand>, mpsc::RecvTimeoutError>,
+) -> Option<AnimationCommand> {
     let Ok(from) = parse_hex_color(&gradient.from) else {
         return None;
     };
@@ -178,19 +211,21 @@ fn run_animation(
         if let Some(cmd) = take_queued_animation_command(rx) {
             return Some(cmd);
         }
-        let _send_lock = get_border_send_lock().lock();
-        if ANIMATION_EPOCH.load(Ordering::SeqCst) != epoch {
-            tracing::trace!("tiling: dropping stale border animation frames (epoch {epoch})");
-            return None;
+        {
+            let _send_lock = get_border_send_lock().lock();
+            if ANIMATION_EPOCH.load(Ordering::SeqCst) != epoch {
+                tracing::trace!("tiling: dropping stale border animation frames (epoch {epoch})");
+                return None;
+            }
+            let _ = send_frame(&[format!("active_color={active_color}")]);
         }
-        let _ = send_animation_frame(&[format!("active_color={active_color}")]);
 
         if raw_progress >= 1.0 {
             forward = !forward;
             start = Instant::now();
         }
 
-        match wait_for_animation_command(rx, frame_duration) {
+        match wait_for_command(rx, frame_duration) {
             Ok(Some(cmd)) => return Some(cmd),
             Ok(None) => {}
             Err(_) => return None,
@@ -1078,6 +1113,39 @@ mod tests {
     fn test_animation_frame_duration_is_low_rate() {
         assert_eq!(BORDER_ANIMATION_FPS, 8);
         assert_eq!(animation_frame_duration(), Duration::from_millis(125));
+    }
+
+    #[test]
+    fn test_animation_wait_does_not_hold_border_send_lock() {
+        let _test_lock = BORDER_TEST_LOCK.lock();
+        ANIMATION_EPOCH.store(1, Ordering::SeqCst);
+
+        let (tx, rx) = mpsc::channel();
+        let (frame_sent_tx, frame_sent_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            run_animation_with_frame_sender_and_wait(
+                &rx,
+                &GradientConfig::default(),
+                &BorderAnimationConfig {
+                    duration: 16,
+                    easing: crate::config::types::tiling::EasingType::Linear,
+                },
+                1,
+                |_| true,
+                |rx, frame_duration| {
+                    frame_sent_tx.send(()).unwrap();
+                    wait_for_animation_command(rx, frame_duration)
+                },
+            )
+        });
+
+        frame_sent_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let send_lock = get_border_send_lock().try_lock();
+        assert!(send_lock.is_some());
+        drop(send_lock);
+
+        tx.send(AnimationCommand::Update { epoch: 1, animation: None }).unwrap();
+        assert!(worker.join().unwrap().is_some());
     }
 
     #[test]

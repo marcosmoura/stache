@@ -18,8 +18,9 @@
 
 use tauri::Emitter;
 
+use super::animation::OutcomeReporter;
 use super::{
-    AnimationSystem, BorderState, TilingEffect, WindowTransition, get_interrupted_position,
+    BorderState, TilingEffect, WindowTransition, get_interrupted_position, submit_animation,
     window_cache, window_ops,
 };
 use crate::modules::tiling::identity::WindowTarget;
@@ -43,8 +44,8 @@ pub struct EffectExecutor {
     /// Whether borders are enabled.
     borders_enabled: bool,
 
-    /// Animation system for smooth window transitions.
-    animation_system: AnimationSystem,
+    /// Receives deferred animation outcomes for layout reconciliation.
+    animation_outcome_reporter: Option<OutcomeReporter>,
 }
 
 impl Default for EffectExecutor {
@@ -56,26 +57,31 @@ impl EffectExecutor {
     ///
     /// Events will be logged but not emitted.
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             app_handle: None,
             borders_enabled: false,
-            animation_system: AnimationSystem::from_config(),
+            animation_outcome_reporter: None,
         }
     }
 
     /// Creates a new effect executor with a Tauri handle.
     #[must_use]
-    pub fn with_app_handle(app_handle: tauri::AppHandle) -> Self {
+    pub const fn with_app_handle(app_handle: tauri::AppHandle) -> Self {
         Self {
             app_handle: Some(app_handle),
             borders_enabled: false,
-            animation_system: AnimationSystem::from_config(),
+            animation_outcome_reporter: None,
         }
     }
 
     /// Sets whether borders are enabled.
     pub const fn set_borders_enabled(&mut self, enabled: bool) { self.borders_enabled = enabled; }
+
+    /// Sets the receiver for deferred animation outcomes.
+    pub fn set_animation_outcome_reporter(&mut self, reporter: OutcomeReporter) {
+        self.animation_outcome_reporter = Some(reporter);
+    }
 
     /// Executes a batch of effects.
     ///
@@ -89,8 +95,20 @@ impl EffectExecutor {
     /// Number of effects successfully executed.
     #[must_use]
     pub fn execute_batch(&self, effects: Vec<TilingEffect>) -> usize {
+        self.execute_batch_with_applied_frames(effects, None).0
+    }
+
+    /// Executes a batch and returns exact targets whose frame writes completed
+    /// immediately. Animated targets are deferred to the worker and are not
+    /// reported as applied merely because they were accepted for execution.
+    #[must_use]
+    pub fn execute_batch_with_applied_frames(
+        &self,
+        effects: Vec<TilingEffect>,
+        layout_revision: Option<(uuid::Uuid, u64)>,
+    ) -> (usize, Vec<WindowTarget>) {
         if effects.is_empty() {
-            return 0;
+            return (0, Vec::new());
         }
 
         // Group effects by type
@@ -142,7 +160,9 @@ impl EffectExecutor {
         let mut success_count = 0;
 
         // Execute frame updates
-        success_count += self.execute_frame_updates(&frame_updates);
+        let (frame_successes, applied_frames) =
+            self.execute_frame_updates(&frame_updates, layout_revision);
+        success_count += frame_successes;
 
         // Execute focus operations
         success_count += self.execute_focus_ops(&focus_ops);
@@ -162,19 +182,25 @@ impl EffectExecutor {
         // Emit events
         success_count += self.emit_events(&events);
 
-        success_count
+        (success_count, applied_frames)
     }
 
     /// Executes frame update effects.
     ///
     /// Uses the window element cache for efficient batch resolution,
     /// avoiding repeated O(n*m) lookups during animation setup.
-    fn execute_frame_updates(&self, updates: &[(WindowTarget, Rect, bool)]) -> usize {
+    #[allow(clippy::unused_self)] // Kept for executor API symmetry.
+    fn execute_frame_updates(
+        &self,
+        updates: &[(WindowTarget, Rect, bool)],
+        layout_revision: Option<(uuid::Uuid, u64)>,
+    ) -> (usize, Vec<WindowTarget>) {
         if updates.is_empty() {
-            return 0;
+            return (0, Vec::new());
         }
 
         let mut success_count = 0;
+        let mut applied_frames = Vec::new();
 
         // Separate animated and immediate updates
         let (animated, immediate): (Vec<_>, Vec<_>) =
@@ -186,6 +212,7 @@ impl EffectExecutor {
             for (target, frame, _) in &immediate {
                 if cache.set_window_frame_fast(*target, frame) {
                     success_count += 1;
+                    applied_frames.push(*target);
                 } else {
                     tracing::warn!("Failed to set frame for window {}", target.window_id);
                 }
@@ -194,6 +221,8 @@ impl EffectExecutor {
 
         // Execute animated updates using the animation system
         if !animated.is_empty() {
+            let attempted: Vec<_> =
+                animated.iter().map(|(target, frame, _)| (*target, *frame)).collect();
             // Use the cache for efficient batch frame retrieval
             let cache = window_cache::get_cache();
 
@@ -210,12 +239,19 @@ impl EffectExecutor {
                 })
                 .collect();
 
-            if !transitions.is_empty() {
-                success_count += self.animation_system.animate(transitions);
+            let count = transitions.len();
+            submit_animation(
+                transitions,
+                attempted,
+                self.animation_outcome_reporter.clone(),
+                layout_revision,
+            );
+            if count > 0 {
+                success_count += count;
             }
         }
 
-        success_count
+        (success_count, applied_frames)
     }
 
     /// Executes focus operations.

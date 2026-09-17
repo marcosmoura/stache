@@ -179,7 +179,7 @@ static APP_HANDLE: Mutex<Option<tauri::AppHandle>> = Mutex::new(None);
 /// Repeatable completion state: unlike a consumed one-shot receiver, retries
 /// can observe that a resource has already stopped. All clones share the same
 /// flag; completion stays observable after a timeout or a successful wait.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct CompletionLatch(Arc<(parking_lot::Mutex<bool>, parking_lot::Condvar)>);
 
 impl CompletionLatch {
@@ -508,10 +508,11 @@ impl RuntimeFactory {
         &self,
         actor: StateActorHandle,
         processor: Arc<EventProcessor>,
+        subscriber: EffectSubscriberHandle,
     ) -> Result<(), String> {
         self.fail(InitStage::InitialState)?;
         crate::platform::thread::dispatch_on_main_sync(move || {
-            initialize_state(&actor, &processor);
+            initialize_state(&actor, &processor, &subscriber);
         });
         Ok(())
     }
@@ -543,7 +544,7 @@ fn build_runtime(factory: &RuntimeFactory, generation: u64) -> Result<TilingRunt
     partial.processor = Some(Arc::clone(&processor));
 
     let (subscriber_handle, subscriber_stopped) = factory.create_subscriber(actor.clone())?;
-    partial.subscriber = Some(subscriber_handle);
+    partial.subscriber = Some(subscriber_handle.clone());
     partial.subscriber_stopped = Some(subscriber_stopped);
 
     let app_monitor = factory.create_app_monitor(Arc::clone(&processor))?;
@@ -569,7 +570,12 @@ fn build_runtime(factory: &RuntimeFactory, generation: u64) -> Result<TilingRunt
         super::borders::resume();
     }
 
-    factory.enumerate_initial_state(actor, processor)?;
+    super::effects::resume_animation_worker();
+
+    factory.enumerate_initial_state(actor, processor, subscriber_handle.clone())?;
+    if !subscriber_handle.wait_until_ready(stop_timeout()) {
+        return Err("tiling: effect subscriber did not become ready during startup".to_string());
+    }
 
     TilingRuntime::try_from(partial)
 }
@@ -751,7 +757,10 @@ pub fn pause_runtime() -> Result<(), String> {
     if !runtime.teardown.transient_services_paused {
         super::events::drag_state::cancel_operation();
         super::events::mouse_monitor::set_active(false);
-        super::effects::animation::cancel_animation();
+        if !super::effects::pause_animation_worker(stop_timeout()) {
+            *RUNTIME.lock() = RuntimeSlot::Quarantined(runtime);
+            return Err("tiling: animation worker did not stop within timeout".to_string());
+        }
         super::effects::animation::reset_transient_state();
         super::borders::pause();
         runtime.teardown.transient_services_paused = true;
@@ -807,7 +816,11 @@ pub fn pause_runtime() -> Result<(), String> {
 ///
 /// Detects screens on the main thread (where macOS APIs work) and sends
 /// them to the actor via `SetScreens` message.
-fn initialize_state(handle: &StateActorHandle, processor: &EventProcessor) {
+fn initialize_state(
+    handle: &StateActorHandle,
+    processor: &EventProcessor,
+    subscriber: &EffectSubscriberHandle,
+) {
     // Detect screens on the main thread (this is called during Tauri setup)
     // NSScreen APIs must be called from the main thread
     tracing::debug!("tiling: detecting screens on main thread...");
@@ -824,6 +837,8 @@ fn initialize_state(handle: &StateActorHandle, processor: &EventProcessor) {
         screens.iter().map(|s| &s.name).collect::<Vec<_>>()
     );
 
+    processor.reconcile_screens(&screens);
+
     // Send pre-detected screens to the actor
     // This avoids calling macOS APIs from the async actor task
     if let Err(e) = handle.send(StateMessage::SetScreens { screens }) {
@@ -831,7 +846,7 @@ fn initialize_state(handle: &StateActorHandle, processor: &EventProcessor) {
     }
 
     // Track existing windows
-    track_existing_windows(handle, processor);
+    track_existing_windows(handle, processor, subscriber);
 }
 
 /// Captures the exact application identity for a PID from one local
@@ -863,9 +878,13 @@ fn capture_identity_for_pid(pid: i32) -> Option<AppIdentity> {
 /// Also sends a `WindowFocused` message for the currently focused window,
 /// and an `InitComplete` message to trigger initial layouts.
 #[allow(clippy::too_many_lines)] // initial-scan enumeration, by design
-fn track_existing_windows(handle: &StateActorHandle, processor: &EventProcessor) {
+fn track_existing_windows(
+    handle: &StateActorHandle,
+    processor: &EventProcessor,
+    subscriber: &EffectSubscriberHandle,
+) {
     use super::actor::WindowCreatedInfo;
-    use super::rules::should_tile_window;
+    use super::rules::should_tile_window_with_rules;
     use super::window::{get_all_windows_including_hidden, get_focused_window_id};
 
     tracing::debug!("tiling: tracking existing windows...");
@@ -876,6 +895,7 @@ fn track_existing_windows(handle: &StateActorHandle, processor: &EventProcessor)
 
     // Enumerate all windows including hidden ones
     let windows = get_all_windows_including_hidden();
+    let ignore_rules = &get_config().tiling.ignore;
 
     tracing::debug!("Found {} windows from system", windows.len());
     for w in &windows {
@@ -897,7 +917,12 @@ fn track_existing_windows(handle: &StateActorHandle, processor: &EventProcessor)
     // Collect unique PIDs and scan for tabs
     let mut pids_seen: std::collections::HashSet<i32> = std::collections::HashSet::new();
     for window in &windows {
-        if should_tile_window(&window.bundle_id, &window.app_name) {
+        if should_tile_window_with_rules(
+            &window.bundle_id,
+            &window.app_name,
+            &window.title,
+            ignore_rules,
+        ) {
             pids_seen.insert(window.pid);
         }
     }
@@ -918,7 +943,12 @@ fn track_existing_windows(handle: &StateActorHandle, processor: &EventProcessor)
 
     for window in &windows {
         // Filter out system apps that shouldn't be tiled
-        if !should_tile_window(&window.bundle_id, &window.app_name) {
+        if !should_tile_window_with_rules(
+            &window.bundle_id,
+            &window.app_name,
+            &window.title,
+            ignore_rules,
+        ) {
             tracing::trace!(
                 "tiling: skipping system window '{}' from '{}'",
                 window.title,
@@ -959,9 +989,9 @@ fn track_existing_windows(handle: &StateActorHandle, processor: &EventProcessor)
 
     // Also track these windows in the event processor for destroy detection
     // This is necessary because BatchWindowsCreated bypasses the processor
-    let window_targets: Vec<(u32, AppIdentity)> = window_infos
+    let window_targets: Vec<(u32, AppIdentity, super::state::Rect)> = window_infos
         .iter()
-        .filter_map(|w| w.identity.map(|identity| (w.window_id, identity)))
+        .filter_map(|w| w.identity.map(|identity| (w.window_id, identity, w.frame)))
         .collect();
     processor.track_windows_for_destroy_detection(&window_targets);
 
@@ -1001,7 +1031,7 @@ fn track_existing_windows(handle: &StateActorHandle, processor: &EventProcessor)
 
     // Signal that initialization is complete - this triggers initial layouts
     tracing::trace!("tiling: sending InitComplete...");
-    if let Err(e) = handle.send(StateMessage::InitComplete) {
+    if let Err(e) = handle.send(StateMessage::InitComplete { subscriber: subscriber.clone() }) {
         tracing::error!("tiling: failed to send InitComplete: {e}");
     }
 }

@@ -432,6 +432,11 @@ fn set_window_frame_impl(target: WindowTarget, frame: &Rect) {
         return;
     };
 
+    // Position and size are separate AX attributes. Suppress presentation
+    // until both are written so callers without the animation cache (for
+    // example a preset with no known source frame) still produce one reflow.
+    let _update_guard = crate::modules::tiling::ffi::skylight::UpdateGuard::new();
+
     // Order matters for reliable resizing:
     // 1. Set size first - allows window to shrink
     // 2. Set position - move the (now smaller) window
@@ -664,14 +669,40 @@ pub fn focus_window(target: WindowTarget) -> bool {
     true
 }
 
+/// Focuses a window on the main thread and waits until the activation and AX
+/// focus requests have been issued.
+///
+/// Workspace switches must show the destination application, activate it, and
+/// only then hide applications from the previous workspace. The asynchronous
+/// [`focus_window`] helper cannot provide that ordering guarantee.
+#[must_use]
+pub fn focus_window_sync(target: WindowTarget) -> bool {
+    crate::platform::thread::dispatch_on_main_sync(move || focus_window_impl(target))
+}
+
+/// Focuses a tracked window synchronously.
+#[must_use]
+pub fn focus_stored_window_sync(
+    state: &crate::modules::tiling::state::TilingState,
+    window_id: u32,
+) -> bool {
+    let Some(identity) = state.get_window(window_id).and_then(|w| w.identity) else {
+        tracing::trace!("focus_stored_window_sync: no identity for window {window_id}, skipping");
+        return false;
+    };
+    focus_window_sync(WindowTarget { identity, window_id })
+}
+
 /// Internal implementation of `focus_window` (runs on main thread).
-fn focus_window_impl(target: WindowTarget) {
+fn focus_window_impl(target: WindowTarget) -> bool {
     // Activate the owning application first - this is critical for focus to work
-    activate_app(target.identity.pid);
+    if !activate_app(target.identity) {
+        return false;
+    }
 
     let Some(element) = resolve_window_element(target) else {
         tracing::debug!("focus_window: could not resolve window {}", target.window_id);
-        return;
+        return false;
     };
 
     unsafe {
@@ -696,29 +727,45 @@ fn focus_window_impl(target: WindowTarget) {
 
         CFRelease(element.cast());
     };
+
+    true
 }
 
-/// Activates an application by PID.
+/// Returns whether a currently resolved application is the expected instance.
+fn identity_matches_for_activation(expected: AppIdentity, actual: AppIdentity) -> bool {
+    expected == actual
+}
+
+/// Activates an exact application instance.
 ///
 /// Uses `NSApplicationActivateAllWindows | NSApplicationActivateIgnoringOtherApps` (3)
 /// which is important for cycling through same-app windows in monocle layout.
-fn activate_app(pid: i32) -> bool {
+fn activate_app(identity: AppIdentity) -> bool {
     use objc::runtime::{BOOL, Class, Object, YES};
     use objc::{msg_send, sel, sel_impl};
 
-    unsafe {
+    objc::rc::autoreleasepool(|| unsafe {
         let Some(app_class) = Class::get("NSRunningApplication") else {
             return false;
         };
 
-        let app: *mut Object = msg_send![app_class, runningApplicationWithProcessIdentifier: pid];
+        let app: *mut Object =
+            msg_send![app_class, runningApplicationWithProcessIdentifier: identity.pid];
         if app.is_null() {
+            return false;
+        }
+
+        let Some(actual) = AppIdentity::from_ns_running_app(app) else {
+            return false;
+        };
+        if !identity_matches_for_activation(identity, actual) {
+            tracing::debug!("focus_window: refusing activation for stale application identity");
             return false;
         }
 
         let result: BOOL = msg_send![app, activateWithOptions: 3u64]; // AllWindows | IgnoringOtherApps
         result == YES
-    }
+    })
 }
 
 /// Raises (brings to front) a window.
@@ -947,6 +994,7 @@ impl HideAppOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modules::tiling::identity::LaunchDateBits;
 
     // Note: test_resolve_nonexistent_window is disabled because it requires
     // accessibility permissions and can crash if permissions are not granted.
@@ -962,5 +1010,19 @@ mod tests {
         let _ = cf_main();
         let _ = cf_raise();
         let _ = cf_role();
+    }
+
+    #[test]
+    fn test_identity_mismatch_rejects_activation() {
+        let expected = AppIdentity {
+            pid: 1000,
+            launch_date: LaunchDateBits::from_time_interval_since_reference_date(1.0).unwrap(),
+        };
+        let replacement = AppIdentity {
+            pid: 1000,
+            launch_date: LaunchDateBits::from_time_interval_since_reference_date(2.0).unwrap(),
+        };
+
+        assert!(!identity_matches_for_activation(expected, replacement));
     }
 }

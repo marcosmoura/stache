@@ -32,7 +32,9 @@ pub(crate) use state::TEST_ANIMATION_LOCK;
 mod state;
 mod sync;
 mod transition;
+mod worker;
 
+use std::collections::HashSet;
 use std::ffi::c_void;
 use std::time::{Duration, Instant};
 
@@ -52,6 +54,10 @@ pub use sync::{
     set_high_priority_thread, target_fps, wait_for_next_frame,
 };
 pub use transition::WindowTransition;
+pub use worker::{
+    AnimationOutcome, OutcomeReporter, pause as pause_worker, resume as resume_worker,
+    submit as submit_animation,
+};
 
 use crate::config::{EasingType, get_config};
 use crate::modules::tiling::effects::window_cache::get_cache;
@@ -207,8 +213,15 @@ impl AnimationSystem {
     /// Number of windows that were successfully positioned.
     #[must_use]
     pub fn animate(&self, transitions: Vec<WindowTransition>) -> usize {
+        self.animate_with_outcome(transitions).successful.len()
+    }
+
+    /// Animates transitions and reports only targets whose complete animation
+    /// (including its final native write) succeeded.
+    #[must_use]
+    pub fn animate_with_outcome(&self, transitions: Vec<WindowTransition>) -> AnimationOutcome {
         if transitions.is_empty() {
-            return 0;
+            return AnimationOutcome::default();
         }
 
         // Separate transitions into animated and instant
@@ -221,36 +234,44 @@ impl AnimationSystem {
         };
 
         // Apply instant transitions immediately
-        let mut success_count = 0;
+        let mut successful = Vec::new();
         if !instant.is_empty() {
-            success_count += self.apply_instant(&instant);
+            successful.extend(self.apply_instant(&instant));
         }
 
         // Animate remaining transitions
         if !animated.is_empty() {
-            success_count += self.run_animation(&animated);
+            successful.extend(self.run_animation(&animated));
         }
 
-        success_count
+        AnimationOutcome {
+            successful,
+            ..AnimationOutcome::default()
+        }
     }
 
     /// Applies transitions instantly (no animation).
     ///
     /// Uses the window element cache for efficient frame setting.
     #[allow(clippy::unused_self)] // Self kept for consistency and future config access
-    fn apply_instant(&self, transitions: &[WindowTransition]) -> usize {
+    fn apply_instant(&self, transitions: &[WindowTransition]) -> Vec<(WindowTarget, Rect)> {
         let cache = get_cache();
-        let mut count = 0;
+        let mut successful = Vec::new();
+
+        // AX exposes position and size as separate attributes. Keep display
+        // updates suppressed while each final frame is written so an instant
+        // update is presented as one geometry change.
+        let _update_guard = UpdateGuard::new();
         for t in transitions {
             if cache.set_window_frame_fast(t.target, &t.to) {
-                count += 1;
+                successful.push((t.target, t.to));
             }
         }
-        count
+        successful
     }
 
     /// Runs the animation loop for the given transitions.
-    fn run_animation(&self, transitions: &[WindowTransition]) -> usize {
+    fn run_animation(&self, transitions: &[WindowTransition]) -> Vec<(WindowTarget, Rect)> {
         let max_distance =
             transitions.iter().map(WindowTransition::max_distance).fold(0.0_f64, f64::max);
 
@@ -265,7 +286,11 @@ impl AnimationSystem {
     /// Runs a time-based eased animation.
     ///
     /// Uses the window element cache for efficient batch resolution.
-    fn run_eased_animation(&self, transitions: &[WindowTransition], duration: Duration) -> usize {
+    fn run_eased_animation(
+        &self,
+        transitions: &[WindowTransition],
+        duration: Duration,
+    ) -> Vec<(WindowTarget, Rect)> {
         set_animation_active(true);
         init_display_link();
         set_high_priority_thread();
@@ -294,47 +319,58 @@ impl AnimationSystem {
 
         if animatable.is_empty() {
             set_animation_active(false);
-            return 0;
+            return Vec::new();
         }
+
+        let mut failed = HashSet::new();
 
         loop {
             // Check for cancellation
             if should_cancel() {
-                // Snap to final positions
-                let _update_guard = UpdateGuard::new();
-                ca_transaction_begin_disabled();
-                for &(idx, ax) in &animatable {
-                    let frame = &transitions[idx].to;
-                    let _ = set_frame_direct(ax, frame);
-                }
-                ca_transaction_commit();
-
+                // A replacement owns the next desired frame. Do not write an
+                // obsolete destination while handing control to that revision.
                 clear_interrupted_positions(&targets);
                 cleanup_ax_elements(&animatable);
                 set_animation_active(false);
-                return animatable.len();
+                return Vec::new();
             }
 
             let elapsed = start.elapsed();
             let progress = (elapsed.as_secs_f64() / duration.as_secs_f64()).min(1.0);
             let eased_progress = apply_easing(progress, easing);
+            let finished = progress >= 1.0;
 
-            let _update_guard = UpdateGuard::new();
-            ca_transaction_begin_disabled();
-            for &(idx, ax) in &animatable {
-                let frame = transitions[idx].interpolate(eased_progress);
-                let _ = set_frame_direct(ax, &frame);
-            }
-            ca_transaction_commit();
+            run_frame_with_updates_then_wait(
+                UpdateGuard::new,
+                || {
+                    ca_transaction_begin_disabled();
+                    for &(idx, ax) in &animatable {
+                        let frame = transitions[idx].interpolate(eased_progress);
+                        if !set_frame_direct(ax, &frame) {
+                            failed.insert(transitions[idx].target);
+                        }
+                    }
+                    ca_transaction_commit();
+                },
+                || {
+                    if !finished {
+                        wait_for_next_frame(frame_duration);
+                    }
+                },
+            );
 
-            if progress >= 1.0 {
+            if finished {
                 clear_interrupted_positions(&targets);
                 cleanup_ax_elements(&animatable);
                 set_animation_active(false);
-                return animatable.len();
+                return animatable
+                    .iter()
+                    .filter_map(|&(idx, _)| {
+                        (!failed.contains(&transitions[idx].target))
+                            .then_some((transitions[idx].target, transitions[idx].to))
+                    })
+                    .collect();
             }
-
-            wait_for_next_frame(frame_duration);
         }
     }
 
@@ -342,7 +378,11 @@ impl AnimationSystem {
     ///
     /// Uses the window element cache for efficient batch resolution.
     #[allow(clippy::unused_self)] // Self kept for consistency and future config access
-    fn run_spring_animation(&self, transitions: &[WindowTransition], duration: Duration) -> usize {
+    fn run_spring_animation(
+        &self,
+        transitions: &[WindowTransition],
+        duration: Duration,
+    ) -> Vec<(WindowTarget, Rect)> {
         set_animation_active(true);
         init_display_link();
         set_high_priority_thread();
@@ -372,8 +412,10 @@ impl AnimationSystem {
 
         if animatable.is_empty() {
             set_animation_active(false);
-            return 0;
+            return Vec::new();
         }
+
+        let mut failed = HashSet::new();
 
         let mut spring_states: Vec<SpringState> =
             transitions.iter().map(|_| SpringState::new(duration)).collect();
@@ -381,18 +423,12 @@ impl AnimationSystem {
         loop {
             // Check for cancellation
             if should_cancel() {
-                let _update_guard = UpdateGuard::new();
-                ca_transaction_begin_disabled();
-                for &(idx, ax) in &animatable {
-                    let frame = &transitions[idx].to;
-                    let _ = set_frame_direct(ax, frame);
-                }
-                ca_transaction_commit();
-
+                // The replacement worker plan is authoritative; leave the
+                // current geometry in place instead of snapping stale output.
                 clear_interrupted_positions(&targets);
                 cleanup_ax_elements(&animatable);
                 set_animation_active(false);
-                return animatable.len();
+                return Vec::new();
             }
 
             let now = Instant::now();
@@ -407,32 +443,51 @@ impl AnimationSystem {
                 }
             }
 
-            let _update_guard = UpdateGuard::new();
-            ca_transaction_begin_disabled();
-            for &(idx, ax) in &animatable {
-                let progress = spring_states[idx].calculate_position(spring_states[idx].elapsed);
-                let frame = transitions[idx].interpolate(progress);
-                let _ = set_frame_direct(ax, &frame);
-            }
-            ca_transaction_commit();
+            let finished = all_settled || start.elapsed() > max_duration;
+            run_frame_with_updates_then_wait(
+                UpdateGuard::new,
+                || {
+                    ca_transaction_begin_disabled();
+                    for &(idx, ax) in &animatable {
+                        let progress =
+                            spring_states[idx].calculate_position(spring_states[idx].elapsed);
+                        let frame = transitions[idx].interpolate(progress);
+                        if !set_frame_direct(ax, &frame) {
+                            failed.insert(transitions[idx].target);
+                        }
+                    }
+                    ca_transaction_commit();
+                },
+                || {
+                    if !finished {
+                        wait_for_next_frame(frame_duration);
+                    }
+                },
+            );
 
-            if all_settled || start.elapsed() > max_duration {
+            if finished {
                 // Ensure exact final positions
                 let _update_guard = UpdateGuard::new();
                 ca_transaction_begin_disabled();
                 for &(idx, ax) in &animatable {
                     let frame = &transitions[idx].to;
-                    let _ = set_frame_direct(ax, frame);
+                    if !set_frame_direct(ax, frame) {
+                        failed.insert(transitions[idx].target);
+                    }
                 }
                 ca_transaction_commit();
 
                 clear_interrupted_positions(&targets);
                 cleanup_ax_elements(&animatable);
                 set_animation_active(false);
-                return animatable.len();
+                return animatable
+                    .iter()
+                    .filter_map(|&(idx, _)| {
+                        (!failed.contains(&transitions[idx].target))
+                            .then_some((transitions[idx].target, transitions[idx].to))
+                    })
+                    .collect();
             }
-
-            wait_for_next_frame(frame_duration);
         }
     }
 }
@@ -440,6 +495,21 @@ impl AnimationSystem {
 // ============================================================================
 // Helper Functions
 // ============================================================================
+
+/// Runs one animation frame with updates suppressed only for the writes.
+///
+/// Drops the guard (re-enabling screen updates) before invoking `wait`, so
+/// suppression covers the write batch and never the idle frame interval.
+fn run_frame_with_updates_then_wait<Guard>(
+    make_guard: impl FnOnce() -> Guard,
+    write_frame: impl FnOnce(),
+    wait_for_frame: impl FnOnce(),
+) {
+    let guard = make_guard();
+    write_frame();
+    drop(guard);
+    wait_for_frame();
+}
 
 /// Sets frame directly using a resolved AX element.
 fn set_frame_direct(element: *mut c_void, frame: &Rect) -> bool {
@@ -476,7 +546,18 @@ fn set_frame_direct(element: *mut c_void, frame: &Rect) -> bool {
         .with(|cell| cell.get_or_init(|| CFString::new("AXSize")).as_concrete_TypeRef().cast());
 
     unsafe {
-        // Set position
+        // Some applications defer a size update when position is written
+        // first, splitting an interpolated frame into a move and a resize.
+        // Match the reliable frame order used by the non-animated path. The
+        // caller's update guard keeps all three writes in one presentation.
+        let size = core_graphics::geometry::CGSize::new(frame.width, frame.height);
+        let size_value = AXValueCreate(K_AX_VALUE_TYPE_CG_SIZE, (&raw const size).cast());
+        if size_value.is_null() {
+            return false;
+        }
+        let size_result_1 = AXUIElementSetAttributeValue(element, cf_size, size_value.cast());
+        CFRelease(size_value.cast());
+
         let point = core_graphics::geometry::CGPoint::new(frame.x, frame.y);
         let pos_value = AXValueCreate(K_AX_VALUE_TYPE_CG_POINT, (&raw const point).cast());
         if pos_value.is_null() {
@@ -485,16 +566,16 @@ fn set_frame_direct(element: *mut c_void, frame: &Rect) -> bool {
         let pos_result = AXUIElementSetAttributeValue(element, cf_pos, pos_value.cast());
         CFRelease(pos_value.cast());
 
-        // Set size
         let size = core_graphics::geometry::CGSize::new(frame.width, frame.height);
         let size_value = AXValueCreate(K_AX_VALUE_TYPE_CG_SIZE, (&raw const size).cast());
         if size_value.is_null() {
             return false;
         }
-        let size_result = AXUIElementSetAttributeValue(element, cf_size, size_value.cast());
+        let size_result_2 = AXUIElementSetAttributeValue(element, cf_size, size_value.cast());
         CFRelease(size_value.cast());
 
-        pos_result == K_AX_ERROR_SUCCESS && size_result == K_AX_ERROR_SUCCESS
+        pos_result == K_AX_ERROR_SUCCESS
+            && (size_result_1 == K_AX_ERROR_SUCCESS || size_result_2 == K_AX_ERROR_SUCCESS)
     }
 }
 
@@ -513,7 +594,15 @@ fn cleanup_ax_elements(animatable: &[(usize, *mut c_void)]) {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+
     use super::*;
+
+    struct TestUpdateGuard<'a>(&'a RefCell<Vec<&'static str>>);
+
+    impl Drop for TestUpdateGuard<'_> {
+        fn drop(&mut self) { self.0.borrow_mut().push("reenable"); }
+    }
 
     #[test]
     fn test_animation_config_default() {
@@ -556,5 +645,18 @@ mod tests {
         let system = AnimationSystem::new();
         let count = system.animate(vec![]);
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_frame_reenables_updates_before_waiting() {
+        let events = RefCell::new(Vec::new());
+
+        run_frame_with_updates_then_wait(
+            || TestUpdateGuard(&events),
+            || events.borrow_mut().push("write"),
+            || events.borrow_mut().push("wait"),
+        );
+
+        assert_eq!(*events.borrow(), ["write", "reenable", "wait"]);
     }
 }
