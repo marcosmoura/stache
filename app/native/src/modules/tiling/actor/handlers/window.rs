@@ -66,7 +66,7 @@ fn on_window_created_internal(state: &mut TilingState, info: WindowCreatedInfo) 
                 "tiling: window ID {} reused by a different identity, removing stale state",
                 info.window_id
             );
-            if let Some(workspace_id) = on_window_destroyed(state, info.window_id, incoming) {
+            if let Some(workspace_id) = on_window_destroyed(state, info.window_id, existing) {
                 affected_workspaces.push(workspace_id);
             }
         }
@@ -224,6 +224,10 @@ pub fn on_window_destroyed(
     // Invalidate window cache entry for this window
     get_window_cache().invalidate_window(WindowTarget { identity, window_id });
 
+    let focused_window_id = state
+        .get_workspace(workspace_id)
+        .and_then(|workspace| workspace.focused_window_id());
+
     // Remove from workspace's window list
     state.update_workspace(workspace_id, |ws| {
         let before_count = ws.window_ids.len();
@@ -233,14 +237,7 @@ pub fn on_window_destroyed(
             "tiling: workspace {workspace_id} window count: {before_count} -> {after_count}"
         );
 
-        // Update focused window index if needed
-        if let Some(idx) = ws.focused_window_index {
-            if ws.window_ids.is_empty() {
-                ws.focused_window_index = None;
-            } else if idx >= ws.window_ids.len() {
-                ws.focused_window_index = Some(ws.window_ids.len().saturating_sub(1));
-            }
-        }
+        ws.set_focused_window_id(focused_window_id.filter(|&id| id != window_id));
     });
 
     // Clear focus if this was the focused window
@@ -421,6 +418,36 @@ pub struct VisibilityDelta {
     pub hiding: Vec<AppIdentity>,
 }
 
+/// Returns the application identities that have at least one window in a
+/// visible workspace.
+#[must_use]
+pub fn visible_app_identities(state: &TilingState) -> std::collections::BTreeSet<AppIdentity> {
+    use std::collections::HashSet;
+
+    let visible_workspace_ids: HashSet<Uuid> =
+        state.get_visible_workspaces().iter().map(|workspace| workspace.id).collect();
+    state
+        .windows
+        .iter()
+        .filter(|window| visible_workspace_ids.contains(&window.workspace_id))
+        .filter_map(|window| window.identity)
+        .collect()
+}
+
+/// Builds the application visibility actions required after a state
+/// transition from a snapshot taken before that transition.
+#[must_use]
+pub fn visibility_delta_since(
+    state: &TilingState,
+    visible_before: &std::collections::BTreeSet<AppIdentity>,
+) -> VisibilityDelta {
+    let visible_after = visible_app_identities(state);
+    VisibilityDelta {
+        showing: visible_after.difference(visible_before).copied().collect(),
+        hiding: visible_before.difference(&visible_after).copied().collect(),
+    }
+}
+
 /// Identity-based collector for workspace visibility transitions.
 ///
 /// `showing` = identities in becoming-visible workspaces; `hiding` =
@@ -432,13 +459,11 @@ pub fn sync_window_visibility_for_workspaces(
     becoming_visible: &[Uuid],
     becoming_hidden: &[Uuid],
 ) -> VisibilityDelta {
-    use std::collections::{BTreeSet, HashSet};
+    use std::collections::BTreeSet;
     let mut delta = VisibilityDelta::default();
     if becoming_visible.is_empty() && becoming_hidden.is_empty() {
         return delta;
     }
-    let visible_ws_ids: HashSet<Uuid> =
-        state.get_visible_workspaces().iter().map(|ws| ws.id).collect();
     let mut showing = BTreeSet::new();
     for ws_id in becoming_visible {
         for w in state.windows.iter().filter(|w| w.workspace_id == *ws_id) {
@@ -455,14 +480,7 @@ pub fn sync_window_visibility_for_workspaces(
             }
         }
     }
-    let mut currently_visible = BTreeSet::new();
-    for w in state.windows.iter() {
-        if visible_ws_ids.contains(&w.workspace_id)
-            && let Some(i) = w.identity
-        {
-            currently_visible.insert(i);
-        }
-    }
+    let currently_visible = visible_app_identities(state);
     delta.showing = showing.into_iter().collect();
     delta.hiding = hidden_candidates.difference(&currently_visible).copied().collect();
     delta
@@ -1124,6 +1142,54 @@ mod tests {
         on_window_destroyed(&mut state, 100, test_identity());
 
         assert!(!eyeball::Observable::get(&state.focus).has_focus());
+    }
+
+    #[test]
+    fn test_destroying_window_before_focused_window_preserves_focus_identity() {
+        let (mut state, workspace_id) = make_state_with_workspace();
+        for window_id in [100, 200, 300] {
+            on_window_created(&mut state, make_window_info(window_id));
+        }
+        state.update_workspace(workspace_id, |workspace| {
+            workspace.focused_window_index = Some(2);
+        });
+
+        on_window_destroyed(&mut state, 100, test_identity());
+
+        let workspace = state.get_workspace(workspace_id).unwrap();
+        assert_eq!(workspace.window_ids.as_slice(), &[200, 300]);
+        assert_eq!(workspace.focused_window_id(), Some(300));
+        assert_eq!(workspace.focused_window_index, Some(1));
+    }
+
+    #[test]
+    fn test_reused_window_id_removes_the_old_identity_before_admission() {
+        let (mut state, workspace_id) = make_state_with_workspace();
+        on_window_created(&mut state, make_window_info(100));
+
+        let old_identity = test_identity();
+        let new_identity = AppIdentity {
+            pid: 2000,
+            launch_date: LaunchDateBits::from_time_interval_since_reference_date(2.0).unwrap(),
+        };
+        let mut replacement = make_window_info(100);
+        replacement.pid = new_identity.pid;
+        replacement.identity = Some(new_identity);
+        replacement.app_id = "com.test.replacement".to_string();
+        replacement.app_name = "Replacement App".to_string();
+
+        on_window_created(&mut state, replacement);
+
+        let window = state.get_window(100).unwrap();
+        assert_eq!(window.identity, Some(new_identity));
+        assert_eq!(window.app_id, "com.test.replacement");
+        assert_eq!(
+            state.get_workspace(workspace_id).unwrap().window_ids.as_slice(),
+            &[100]
+        );
+
+        assert_eq!(on_window_destroyed(&mut state, 100, old_identity), None);
+        assert_eq!(state.get_window(100).unwrap().identity, Some(new_identity));
     }
 
     #[test]

@@ -56,6 +56,19 @@ use smallvec::{SmallVec, smallvec};
 use super::{Gaps, LAYOUT_INLINE_CAP, LayoutResult, helpers};
 use crate::modules::tiling::state::Rect;
 
+/// Returns whether the zero-based dwindle split index divides width.
+///
+/// This is shared by layout generation and minimum-size enforcement so the
+/// solver cannot adjust the opposite axis from the one the layout uses.
+#[must_use]
+pub const fn is_split_horizontal(split_index: usize, is_landscape: bool) -> bool {
+    if is_landscape {
+        split_index.is_multiple_of(2)
+    } else {
+        !split_index.is_multiple_of(2)
+    }
+}
+
 /// Dwindle layout - windows arranged in a dwindling spiral pattern.
 ///
 /// Each new window splits the last window's space, alternating between
@@ -105,11 +118,7 @@ pub fn layout(
         // Alternate split direction starting from the orientation-appropriate direction
         // For landscape: odd index = horizontal, even = vertical
         // For portrait: odd index = vertical, even = horizontal
-        let split_horizontal = if is_landscape {
-            i % 2 == 1 // 1st split horizontal, 2nd vertical, 3rd horizontal...
-        } else {
-            i % 2 == 0 // 1st split vertical, 2nd horizontal, 3rd vertical...
-        };
+        let split_horizontal = is_split_horizontal(i - 1, is_landscape);
 
         // Get the ratio for this split (default 0.5 if not provided)
         // ratios[0] controls split 1 (i=1), ratios[1] controls split 2 (i=2), etc.

@@ -10,7 +10,37 @@
 use smallvec::SmallVec;
 
 use super::{Gaps, LAYOUT_INLINE_CAP, LayoutResult};
-use crate::modules::tiling::state::Rect;
+use crate::modules::tiling::state::{LayoutType, Rect};
+
+/// Returns whether a split layout divides its usable width.
+///
+/// Explicit split layouts must not depend on display orientation; only the
+/// automatic split follows the landscape/portrait choice.
+#[must_use]
+pub const fn is_horizontal(layout: LayoutType, is_landscape: bool) -> bool {
+    match layout {
+        LayoutType::SplitHorizontal => true,
+        LayoutType::Split => is_landscape,
+        _ => false,
+    }
+}
+
+/// Returns whether `ratios` can describe a split for `window_count` windows.
+///
+/// Split ratios are cumulative boundaries, so a workspace with N windows needs
+/// N - 1 finite, strictly increasing values strictly inside `(0, 1)`. Invalid
+/// saved ratios must behave like no custom ratios rather than producing
+/// negative or non-finite frames.
+pub fn has_valid_cumulative_ratios(ratios: &[f64], window_count: usize) -> bool {
+    window_count > 1
+        && ratios.len() == window_count - 1
+        && ratios
+            .iter()
+            .try_fold(0.0, |previous, &ratio| {
+                (ratio.is_finite() && ratio > previous && ratio < 1.0).then_some(ratio)
+            })
+            .is_some()
+}
 
 /// Auto-split layout - splits based on screen orientation.
 ///
@@ -30,7 +60,7 @@ pub fn layout_auto(
     gaps: &Gaps,
     ratios: &[f64],
 ) -> LayoutResult {
-    if screen_frame.width >= screen_frame.height {
+    if is_horizontal(LayoutType::Split, screen_frame.width >= screen_frame.height) {
         layout_horizontal(window_ids, screen_frame, gaps, ratios)
     } else {
         layout_vertical(window_ids, screen_frame, gaps, ratios)
@@ -60,8 +90,7 @@ pub fn layout_horizontal(
 
     let count = window_ids.len();
 
-    // Check if we have valid custom ratios (N-1 ratios for N windows)
-    let use_custom_ratios = ratios.len() == count.saturating_sub(1) && count > 1;
+    let use_custom_ratios = has_valid_cumulative_ratios(ratios, count);
 
     if use_custom_ratios {
         layout_horizontal_with_ratios(window_ids, screen_frame, gaps, ratios)
@@ -93,8 +122,7 @@ pub fn layout_vertical(
 
     let count = window_ids.len();
 
-    // Check if we have valid custom ratios (N-1 ratios for N windows)
-    let use_custom_ratios = ratios.len() == count.saturating_sub(1) && count > 1;
+    let use_custom_ratios = has_valid_cumulative_ratios(ratios, count);
 
     if use_custom_ratios {
         layout_vertical_with_ratios(window_ids, screen_frame, gaps, ratios)
@@ -308,6 +336,18 @@ mod tests {
         assert!((w1.width - frame.width.mul_add(0.5, 0.0)).abs() < 1.0);
         assert!((w2.width - frame.width.mul_add(0.3, 0.0)).abs() < 1.0);
         assert!((w3.width - frame.width.mul_add(0.2, 0.0)).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_horizontal_invalid_custom_ratios_fall_back_to_equal() {
+        let frame = screen_frame();
+        let result = layout_horizontal(&[1, 2, 3], &frame, &no_gaps(), &[f64::NAN, 0.8]);
+
+        assert_eq!(result.len(), 3);
+        for (_, window_frame) in result {
+            assert!(window_frame.width.is_finite());
+            assert!((window_frame.width - frame.width / 3.0).abs() < 0.01);
+        }
     }
 
     // ========================================================================

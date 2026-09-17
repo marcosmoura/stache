@@ -49,6 +49,7 @@ mod tests {
     use uuid::Uuid;
 
     use crate::modules::tiling::actor::StateActor;
+    use crate::modules::tiling::actor::handle::PendingActorMessages;
     use crate::modules::tiling::identity::{AppIdentity, LaunchDateBits, WindowTarget};
     use crate::modules::tiling::state::{TilingState, Window, Workspace};
     use crate::modules::tiling::visibility::VisibilityRegistry;
@@ -66,6 +67,7 @@ mod tests {
         let actor = StateActor {
             state: TilingState::new(),
             receiver: tokio::sync::mpsc::channel(16).1,
+            pending: Arc::new(parking_lot::Mutex::new(PendingActorMessages::default())),
             registry: Arc::clone(&registry),
         };
         (actor, registry)

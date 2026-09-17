@@ -39,7 +39,9 @@ use crate::modules::tiling::effects::window_ops::{
 };
 use crate::modules::tiling::identity::{AppIdentity, WindowTarget};
 use crate::modules::tiling::init::get_subscriber_handle;
-use crate::modules::tiling::layout::{Gaps, MasterPosition, calculate_layout_full};
+use crate::modules::tiling::layout::{
+    Gaps, MasterPosition, calculate_layout_full, has_valid_cumulative_ratios,
+};
 use crate::modules::tiling::state::{LayoutType, Rect, TilingState};
 use crate::modules::tiling::visibility::VisibilityRegistry;
 
@@ -59,6 +61,9 @@ pub struct StateActor {
 
     /// Receiver for incoming messages.
     receiver: mpsc::Receiver<StateMessage>,
+
+    /// Shared semantic overflow used only after the bounded channel fills.
+    pending: Arc<parking_lot::Mutex<handle::PendingActorMessages>>,
 
     /// Shared visibility registry; the actor is the sole runtime writer.
     #[allow(dead_code)] // written by the actor's hide/unhide paths in 19D
@@ -95,6 +100,7 @@ impl StateActor {
         let actor = Self {
             state: TilingState::new(),
             receiver,
+            pending: Arc::clone(&handle.pending),
             registry,
         };
 
@@ -115,7 +121,30 @@ impl StateActor {
     async fn run(mut self) {
         tracing::trace!("tiling: actor message loop starting");
 
-        while let Some(msg) = self.receiver.recv().await {
+        loop {
+            let msg = if self.pending.lock().take_shutdown().is_some() {
+                StateMessage::Shutdown
+            } else {
+                match self.receiver.try_recv() {
+                    Ok(message) => message,
+                    Err(mpsc::error::TryRecvError::Empty) => {
+                        let pending_message = self.pending.lock().pop();
+                        if let Some(message) = pending_message {
+                            message
+                        } else if let Some(message) = self.receiver.recv().await {
+                            message
+                        } else {
+                            break;
+                        }
+                    }
+                    Err(mpsc::error::TryRecvError::Disconnected) => {
+                        let Some(message) = self.pending.lock().pop() else {
+                            break;
+                        };
+                        message
+                    }
+                }
+            };
             if matches!(msg, StateMessage::Shutdown) {
                 tracing::debug!("State actor received shutdown message");
                 return;
@@ -278,18 +307,17 @@ impl StateActor {
 
             // Screen events - delegated to handlers
             StateMessage::ScreensChanged => {
-                handlers::on_screens_changed(&mut self.state);
+                let delta = handlers::on_screens_changed(&mut self.state);
+                self.sync_visibility_for_workspaces(delta);
             }
             StateMessage::SetScreens { screens } => {
                 tracing::trace!("tiling: received SetScreens with {} screens", screens.len());
-                handlers::on_set_screens(&mut self.state, screens);
+                let delta = handlers::on_set_screens(&mut self.state, screens);
+                self.sync_visibility_for_workspaces(delta);
             }
 
             // User commands (stubs for Phase 4+)
-            StateMessage::SwitchWorkspace { name } => {
-                let delta = handlers::on_switch_workspace(&mut self.state, &name);
-                self.sync_visibility_for_workspaces(delta);
-            }
+            StateMessage::SwitchWorkspace { name } => self.on_switch_workspace(&name),
             StateMessage::CycleWorkspace { direction } => self.on_cycle_workspace(direction),
             StateMessage::SetLayout { workspace_id, layout } => {
                 self.on_set_layout(workspace_id, layout);
@@ -370,8 +398,8 @@ impl StateActor {
             }
 
             // Initialization complete - apply layouts
-            StateMessage::InitComplete => {
-                self.on_init_complete();
+            StateMessage::InitComplete { subscriber } => {
+                self.on_init_complete(&subscriber);
             }
 
             // Update expected frames for minimum size detection
@@ -594,8 +622,20 @@ impl StateActor {
         // Get master position from config
         let master_position = MasterPosition::from(config.tiling.master.position);
 
-        // Get split ratios from workspace (may be adjusted for minimum sizes)
-        let split_ratios = workspace.split_ratios.clone();
+        // Split ratios are tied to the current layoutable membership. A window
+        // add/remove can make persisted cumulative boundaries stale; use the
+        // same equal-split fallback for the initial layout and minimum-size
+        // enforcement until the next user resize establishes new boundaries.
+        let split_ratios =
+            if matches!(
+                workspace.layout,
+                LayoutType::Split | LayoutType::SplitHorizontal | LayoutType::SplitVertical
+            ) && !has_valid_cumulative_ratios(&workspace.split_ratios, window_ids.len())
+            {
+                Vec::new()
+            } else {
+                workspace.split_ratios.clone()
+            };
 
         // Compute initial layout
         let result = calculate_layout_full(
@@ -654,7 +694,13 @@ impl StateActor {
     // ========================================================================
 
     fn on_cycle_workspace(&mut self, direction: CycleDirection) {
-        handlers::on_cycle_workspace(&mut self.state, direction);
+        let delta = handlers::on_cycle_workspace(&mut self.state, direction);
+        self.sync_workspace_switch_visibility(delta);
+    }
+
+    fn on_switch_workspace(&mut self, name: &str) {
+        let delta = handlers::on_switch_workspace(&mut self.state, name);
+        self.sync_workspace_switch_visibility(delta);
     }
 
     fn on_set_layout(
@@ -670,7 +716,8 @@ impl StateActor {
     }
 
     fn on_move_window_to_workspace(&mut self, window_id: u32, workspace_id: uuid::Uuid) {
-        handlers::on_move_window_to_workspace(&mut self.state, window_id, workspace_id);
+        let delta = handlers::on_move_window_to_workspace(&mut self.state, window_id, workspace_id);
+        self.sync_visibility_for_workspaces(delta);
     }
 
     fn on_swap_windows(&mut self, target_a: WindowTarget, target_b: WindowTarget) {
@@ -709,7 +756,8 @@ impl StateActor {
     }
 
     fn on_send_window_to_screen(&mut self, target_screen: &messages::TargetScreen) {
-        handlers::on_send_window_to_screen(&mut self.state, target_screen);
+        let delta = handlers::on_send_window_to_screen(&mut self.state, target_screen);
+        self.sync_visibility_for_workspaces(delta);
     }
 
     fn on_resize_focused_window(&mut self, dimension: messages::ResizeDimension, amount: i32) {
@@ -771,7 +819,10 @@ impl StateActor {
     ///
     /// Triggers layout calculation for all visible workspaces and hides
     /// windows from non-visible workspaces.
-    fn on_init_complete(&mut self) {
+    fn on_init_complete(
+        &mut self,
+        subscriber: &crate::modules::tiling::effects::subscriber::EffectSubscriberHandle,
+    ) {
         tracing::debug!("Initialization complete, applying initial layouts");
 
         // Sync window visibility based on workspace visibility
@@ -782,10 +833,8 @@ impl StateActor {
             self.state.get_visible_workspaces().iter().map(|ws| ws.id).collect();
 
         // Notify subscriber for each visible workspace
-        if let Some(handle) = crate::modules::tiling::init::get_subscriber_handle() {
-            for ws_id in visible_workspace_ids {
-                handle.notify_layout_changed(ws_id, false);
-            }
+        for ws_id in visible_workspace_ids {
+            subscriber.notify_layout_changed(ws_id, false);
         }
 
         tracing::debug!("Initial layout notifications sent");
@@ -875,6 +924,31 @@ impl StateActor {
         for identity in delta.showing {
             self.handle_unhide_for_workspace(identity);
         }
+        for identity in delta.hiding {
+            self.handle_hide_for_workspace(identity);
+        }
+    }
+
+    /// Applies a user-initiated workspace switch in the order required by
+    /// `AppKit`: show the destination app, make its selected window active, then
+    /// hide apps which no longer appear on a visible workspace.
+    ///
+    /// This is deliberately separate from generic visibility deltas. Focus
+    /// events already originate from an active app; explicit switches do not.
+    fn sync_workspace_switch_visibility(&mut self, delta: VisibilityDelta) {
+        for identity in delta.showing {
+            self.handle_unhide_for_workspace(identity);
+        }
+
+        if let Some(window_id) = self.state.get_focus_state().focused_window_id
+            && !crate::modules::tiling::effects::window_ops::focus_stored_window_sync(
+                &self.state,
+                window_id,
+            )
+        {
+            tracing::debug!("workspace switch: failed to focus window {window_id}");
+        }
+
         for identity in delta.hiding {
             self.handle_hide_for_workspace(identity);
         }
@@ -988,6 +1062,7 @@ impl StateActor {
 
 #[cfg(test)]
 mod tests {
+    use super::handle::PendingActorMessages;
     use super::*;
     use crate::modules::tiling::identity::{AppIdentity, LaunchDateBits};
     use crate::modules::tiling::state::{Window, Workspace};
@@ -1005,6 +1080,7 @@ mod tests {
         let actor = StateActor {
             state: TilingState::new(),
             receiver: tokio::sync::mpsc::channel(16).1,
+            pending: Arc::new(parking_lot::Mutex::new(PendingActorMessages::default())),
             registry: Arc::clone(&registry),
         };
         (actor, registry)

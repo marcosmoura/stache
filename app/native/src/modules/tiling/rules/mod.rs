@@ -33,6 +33,10 @@ use crate::modules::tiling::state::Window;
 /// - `title`: Case-insensitive substring match
 #[must_use]
 pub fn matches_window(rule: &WindowRule, window: &Window) -> bool {
+    matches_window_fields(rule, &window.app_id, &window.app_name, &window.title)
+}
+
+fn matches_window_fields(rule: &WindowRule, app_id: &str, app_name: &str, title: &str) -> bool {
     // Rule must have at least one criterion
     if !rule.is_valid() {
         return false;
@@ -42,12 +46,12 @@ pub fn matches_window(rule: &WindowRule, window: &Window) -> bool {
     if rule.app_id.is_some() {
         if let Some(app_id_lower) = &rule.app_id_lower {
             // Fast path: use pre-computed lowercase
-            if !window.app_id.to_ascii_lowercase().eq(app_id_lower) {
+            if !app_id.to_ascii_lowercase().eq(app_id_lower) {
                 return false;
             }
         } else if let Some(app_id) = &rule.app_id {
             // Fallback: case-insensitive comparison
-            if !window.app_id.eq_ignore_ascii_case(app_id) {
+            if !app_id.eq_ignore_ascii_case(app_id) {
                 return false;
             }
         }
@@ -55,7 +59,7 @@ pub fn matches_window(rule: &WindowRule, window: &Window) -> bool {
 
     // Check app_name - case-insensitive substring match
     if rule.app_name.is_some() {
-        let window_app_lower = window.app_name.to_lowercase();
+        let window_app_lower = app_name.to_lowercase();
         if let Some(app_name_lower) = &rule.app_name_lower {
             // Fast path: use pre-computed lowercase
             if !window_app_lower.contains(app_name_lower.as_str()) {
@@ -71,7 +75,7 @@ pub fn matches_window(rule: &WindowRule, window: &Window) -> bool {
 
     // Check title - case-insensitive substring match
     if rule.title.is_some() {
-        let window_title_lower = window.title.to_lowercase();
+        let window_title_lower = title.to_lowercase();
         if let Some(title_lower) = &rule.title_lower {
             // Fast path: use pre-computed lowercase
             if !window_title_lower.contains(title_lower.as_str()) {
@@ -224,6 +228,20 @@ pub fn should_tile_window(bundle_id: &str, app_name: &str) -> bool {
     }
 
     true
+}
+
+/// Determines whether a window should be tiled after applying configured ignore rules.
+#[must_use]
+pub fn should_tile_window_with_rules(
+    bundle_id: &str,
+    app_name: &str,
+    title: &str,
+    ignore_rules: &[WindowRule],
+) -> bool {
+    should_tile_window(bundle_id, app_name)
+        && !ignore_rules
+            .iter()
+            .any(|rule| matches_window_fields(rule, bundle_id, app_name, title))
 }
 
 /// Checks if an app name should be skipped for tiling.
@@ -516,6 +534,44 @@ mod tests {
         assert!(should_tile_window("com.apple.Terminal", "Terminal"));
         assert!(should_tile_window("com.google.Chrome", "Google Chrome"));
         assert!(should_tile_window("com.microsoft.vscode", "Visual Studio Code"));
+    }
+
+    #[test]
+    fn test_should_tile_window_with_rules_rejects_matching_ignore_rules() {
+        let app_only = make_rule(Some("com.example.editor"), None, None);
+        let title_only = make_rule(None, None, Some("scratch"));
+        let combined = make_rule(Some("com.example.browser"), Some("browser"), Some("private"));
+
+        assert!(!should_tile_window_with_rules(
+            "com.example.editor",
+            "Editor",
+            "Document",
+            &[app_only]
+        ));
+        assert!(!should_tile_window_with_rules(
+            "com.example.terminal",
+            "Terminal",
+            "Scratch session",
+            &[title_only]
+        ));
+        assert!(!should_tile_window_with_rules(
+            "com.example.browser",
+            "Example Browser",
+            "Private window",
+            &[combined]
+        ));
+    }
+
+    #[test]
+    fn test_should_tile_window_with_rules_admits_nonmatching_sibling() {
+        let ignored = make_rule(Some("com.example.editor"), None, Some("Settings"));
+
+        assert!(should_tile_window_with_rules(
+            "com.example.editor",
+            "Editor",
+            "Document",
+            &[ignored]
+        ));
     }
 
     #[test]

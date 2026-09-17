@@ -53,11 +53,13 @@ mod master;
 mod monocle;
 mod split;
 
+pub(crate) use dwindle::is_split_horizontal as is_dwindle_split_horizontal;
 pub use floating::{calculate_preset_frame, find_preset, list_preset_names};
 pub use gaps::Gaps;
 pub use grid::MAX_GRID_WINDOWS;
 pub use master::MasterPosition;
 use smallvec::SmallVec;
+pub(crate) use split::{has_valid_cumulative_ratios, is_horizontal as is_split_horizontal};
 
 use crate::modules::tiling::state::{LayoutType, Rect};
 

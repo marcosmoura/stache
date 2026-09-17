@@ -8,6 +8,7 @@
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
+use crate::modules::tiling::effects::subscriber::EffectSubscriberHandle;
 use crate::modules::tiling::identity::{AppIdentity, WindowTarget};
 use crate::modules::tiling::state::{FocusState, LayoutType, Rect, Screen, Window, Workspace};
 
@@ -218,8 +219,9 @@ pub enum StateMessage {
     // ════════════════════════════════════════════════════════════════════════
     // Internal
     // ════════════════════════════════════════════════════════════════════════
-    /// Initialization complete - apply layouts for all visible workspaces.
-    InitComplete,
+    /// Initialization complete - apply layouts through the injected bootstrap
+    /// subscriber sink rather than an unpublished runtime global.
+    InitComplete { subscriber: EffectSubscriberHandle },
 
     /// Update expected frames for windows (for minimum size detection).
     /// Called after layout is computed but before effects are applied.
@@ -289,7 +291,7 @@ impl StateMessage {
             Self::UserMoveCompleted { .. } => "UserMoveCompleted",
 
             // Internal
-            Self::InitComplete => "InitComplete",
+            Self::InitComplete { .. } => "InitComplete",
             Self::SetExpectedFrames { .. } => "SetExpectedFrames",
             Self::Shutdown => "Shutdown",
         }

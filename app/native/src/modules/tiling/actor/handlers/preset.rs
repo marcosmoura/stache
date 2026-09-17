@@ -2,7 +2,7 @@
 //!
 //! These handlers manage applying floating presets to windows.
 
-use crate::modules::tiling::state::{LayoutType, TilingState};
+use crate::modules::tiling::state::{LayoutType, TilingState, Workspace};
 
 // ============================================================================
 // Floating Preset Commands
@@ -49,9 +49,8 @@ pub fn on_apply_preset(state: &mut TilingState, preset_name: &str) {
         return;
     }
 
-    let focused_idx = workspace.focused_window_index.unwrap_or(0);
-    let Some(&window_id) = workspace.window_ids.get(focused_idx) else {
-        tracing::debug!("apply_preset: no window at focused index");
+    let Some(window_id) = focused_window_id_for_preset(&workspace, focus.focused_window_id) else {
+        tracing::debug!("apply_preset: no focused window in workspace");
         return;
     };
 
@@ -72,35 +71,35 @@ pub fn on_apply_preset(state: &mut TilingState, preset_name: &str) {
     // Calculate the target frame
     let target_frame = calculate_preset_frame(&preset, &screen.visible_frame, &gaps);
 
-    // Get current frame for animation
-    let current_frame = state.get_window(window_id).map(|w| w.frame);
+    // Capture the source frame before updating actor state so enabled
+    // animations interpolate one complete frame transition.
+    let current_frame = state.get_window(window_id).map(|window| window.frame);
 
     // Update window frame in state
     state.update_window(window_id, |w| {
         w.frame = target_frame;
     });
 
-    // Apply the frame with animation
+    let Some(identity) = state.get_window(window_id).and_then(|w| w.identity) else {
+        tracing::trace!("tiling: no identity for preset on window {window_id}, skipping");
+        return;
+    };
+    let target = crate::modules::tiling::identity::WindowTarget { identity, window_id };
+
     if let Some(from_frame) = current_frame {
-        use crate::modules::tiling::effects::{AnimationSystem, WindowTransition};
+        use crate::modules::tiling::effects::{WindowTransition, submit_animation};
 
-        // Exact target required for animated/instant application.
-        let Some(identity) = state.get_window(window_id).and_then(|w| w.identity) else {
-            tracing::trace!("tiling: no identity for preset on window {window_id}, skipping");
-            return;
-        };
-        let target = crate::modules::tiling::identity::WindowTarget { identity, window_id };
-
-        let animation = AnimationSystem::from_config();
+        // The animation system writes each interpolated frame as a complete
+        // geometry update; it is not a position animation followed by a size
+        // animation.
         let transition = WindowTransition::new(target, from_frame, target_frame);
-        let _ = animation.animate(vec![transition]);
+        submit_animation(
+            vec![transition.clone()],
+            vec![(transition.target, transition.to)],
+            None,
+            None,
+        );
     } else {
-        // Fallback: no current frame, just set directly
-        let Some(identity) = state.get_window(window_id).and_then(|w| w.identity) else {
-            tracing::trace!("tiling: no identity for preset on window {window_id}, skipping");
-            return;
-        };
-        let target = crate::modules::tiling::identity::WindowTarget { identity, window_id };
         let _ =
             crate::modules::tiling::effects::window_ops::set_window_frame(target, &target_frame);
     }
@@ -113,6 +112,13 @@ pub fn on_apply_preset(state: &mut TilingState, preset_name: &str) {
         target_frame.width as i32,
         target_frame.height as i32
     );
+}
+
+fn focused_window_id_for_preset(
+    workspace: &Workspace,
+    focused_window_id: Option<u32>,
+) -> Option<u32> {
+    focused_window_id.filter(|window_id| workspace.contains_window(*window_id))
 }
 
 // ============================================================================
@@ -217,5 +223,15 @@ mod tests {
 
         // Try to apply invalid preset (should not panic)
         on_apply_preset(&mut state, "nonexistent_preset_xyz");
+    }
+
+    #[test]
+    fn test_apply_preset_uses_focused_window_id_instead_of_workspace_index() {
+        let mut workspace = Workspace::new("workspace");
+        workspace.window_ids.extend([100, 200]);
+        workspace.focused_window_index = Some(0);
+
+        assert_eq!(focused_window_id_for_preset(&workspace, Some(200)), Some(200));
+        assert_eq!(focused_window_id_for_preset(&workspace, Some(300)), None);
     }
 }

@@ -4,7 +4,9 @@
 //! - Screens changed → refresh screen list, create/reassign workspaces
 
 use core_graphics::display::CGDisplay;
+use uuid::Uuid;
 
+use super::window::{VisibilityDelta, visibility_delta_since, visible_app_identities};
 use crate::config::get_config;
 use crate::modules::tiling::init::get_subscriber_handle;
 use crate::modules::tiling::state::{
@@ -16,7 +18,7 @@ use crate::modules::tiling::state::{
 /// Refreshes the screen list from macOS and creates/reassigns workspaces.
 /// On first run (no existing screens), creates workspaces from config.
 /// On subsequent runs (screen hotplug), reassigns workspaces as needed.
-pub fn on_screens_changed(state: &mut TilingState) {
+pub fn on_screens_changed(state: &mut TilingState) -> VisibilityDelta {
     tracing::debug!("Handling screens changed");
 
     // Get current screens from macOS
@@ -24,8 +26,10 @@ pub fn on_screens_changed(state: &mut TilingState) {
 
     if new_screens.is_empty() {
         tracing::warn!("No screens detected!");
-        return;
+        return VisibilityDelta::default();
     }
+
+    let visible_before = visible_app_identities(state);
 
     tracing::info!("tiling: detected {} screen(s)", new_screens.len());
 
@@ -73,32 +77,40 @@ pub fn on_screens_changed(state: &mut TilingState) {
     // Ensure each screen has at least one workspace
     ensure_screen_workspaces(state);
 
-    // Set initial focus if not already set
-    if state.get_focused_workspace().is_none() {
-        set_initial_focus(state);
-    }
+    let visibility_changes = reconcile_workspace_visibility_and_focus(state);
 
     // Trigger layout recomputation for affected workspaces
     if let Some(handle) = get_subscriber_handle() {
+        for (workspace_id, visible) in visibility_changes {
+            handle.notify_visibility_changed(workspace_id, visible);
+            if visible {
+                affected_workspaces.push(workspace_id);
+            }
+        }
+        affected_workspaces.sort_unstable();
+        affected_workspaces.dedup();
         for ws_id in affected_workspaces {
             handle.notify_layout_changed(ws_id, true);
         }
     }
 
     tracing::info!("tiling: {} workspace(s) configured", state.workspaces.len());
+    visibility_delta_since(state, &visible_before)
 }
 
 /// Handles pre-detected screens being set.
 ///
 /// This is the preferred way to set screens during initialization, as it
 /// doesn't require calling macOS APIs from the async actor task.
-pub fn on_set_screens(state: &mut TilingState, screens: Vec<Screen>) {
+pub fn on_set_screens(state: &mut TilingState, screens: Vec<Screen>) -> VisibilityDelta {
     tracing::debug!("tiling: on_set_screens called with {} screens", screens.len());
 
     if screens.is_empty() {
         tracing::warn!("tiling: no screens provided to on_set_screens");
-        return;
+        return VisibilityDelta::default();
     }
+
+    let visible_before = visible_app_identities(state);
 
     // Check if this is initial setup (no screens yet)
     let is_initial_setup = state.screens.is_empty();
@@ -144,13 +156,18 @@ pub fn on_set_screens(state: &mut TilingState, screens: Vec<Screen>) {
     // Ensure each screen has at least one workspace
     ensure_screen_workspaces(state);
 
-    // Set initial focus if not already set
-    if state.get_focused_workspace().is_none() {
-        set_initial_focus(state);
-    }
+    let visibility_changes = reconcile_workspace_visibility_and_focus(state);
 
     // Trigger layout recomputation for affected workspaces
     if let Some(handle) = get_subscriber_handle() {
+        for (workspace_id, visible) in visibility_changes {
+            handle.notify_visibility_changed(workspace_id, visible);
+            if visible {
+                affected_workspaces.push(workspace_id);
+            }
+        }
+        affected_workspaces.sort_unstable();
+        affected_workspaces.dedup();
         for ws_id in affected_workspaces {
             handle.notify_layout_changed(ws_id, true);
         }
@@ -161,6 +178,7 @@ pub fn on_set_screens(state: &mut TilingState, screens: Vec<Screen>) {
         state.workspaces.len(),
         state.screens.len()
     );
+    visibility_delta_since(state, &visible_before)
 }
 
 /// Creates workspaces from configuration.
@@ -300,48 +318,114 @@ fn resolve_screen_name(state: &TilingState, name: &str) -> Option<u32> {
         .map(|s| s.id)
 }
 
-/// Sets initial focus and visibility for workspaces.
+/// Normalizes workspace state after a screen-topology transition.
 ///
-/// - One workspace per screen is marked as visible (the first one assigned to that screen)
-/// - Only the workspace on the main screen is focused
-fn set_initial_focus(state: &mut TilingState) {
-    let main_screen_id = state.get_main_screen().map(|s| s.id);
-
-    // Collect all screen IDs
-    let screen_ids: Vec<u32> = state.screens.iter().map(|s| s.id).collect();
-
-    // For each screen, find the first workspace and mark it visible
-    let mut focused_ws_id: Option<uuid::Uuid> = None;
+/// Each active screen receives exactly one visible workspace, while focus is
+/// global: precisely one of those visible workspaces is focused. Existing
+/// visible/focused destinations are retained where possible to avoid an
+/// unnecessary workspace switch during hotplug.
+fn reconcile_workspace_visibility_and_focus(state: &mut TilingState) -> Vec<(Uuid, bool)> {
+    let focus_before = state.get_focus_state();
+    let screen_ids: Vec<u32> = state.screens.iter().map(|screen| screen.id).collect();
+    let active_screen_ids: std::collections::HashSet<u32> = screen_ids.iter().copied().collect();
+    let mut visible_workspace_ids = std::collections::HashSet::new();
 
     for screen_id in &screen_ids {
-        // Find first workspace on this screen
-        let first_ws_on_screen =
-            state.workspaces.iter().find(|ws| ws.screen_id == *screen_id).map(|ws| ws.id);
-
-        if let Some(ws_id) = first_ws_on_screen {
-            let is_main_screen = main_screen_id == Some(*screen_id);
-
-            state.update_workspace(ws_id, |ws| {
-                ws.is_visible = true;
-                ws.is_focused = is_main_screen;
-            });
-
-            // Track the focused workspace (on main screen)
-            if is_main_screen {
-                focused_ws_id = Some(ws_id);
-            }
-
-            tracing::debug!(
-                "Set workspace {ws_id} as visible on screen {screen_id} (focused: {is_main_screen})"
-            );
+        let workspaces: Vec<_> = state
+            .workspaces
+            .iter()
+            .filter(|workspace| workspace.screen_id == *screen_id)
+            .cloned()
+            .collect();
+        let selected = workspaces
+            .iter()
+            .find(|workspace| {
+                workspace.id == focus_before.focused_workspace_id.unwrap_or(Uuid::nil())
+                    && workspace.is_visible
+            })
+            .or_else(|| workspaces.iter().find(|workspace| workspace.is_visible))
+            .or_else(|| workspaces.first());
+        if let Some(workspace) = selected {
+            visible_workspace_ids.insert(workspace.id);
         }
     }
 
-    // Set the focused workspace in the focus state
-    if let Some(ws_id) = focused_ws_id {
-        state.set_focused_workspace(Some(ws_id));
-        tracing::debug!("Set initial focus to workspace {ws_id}");
+    let focused_workspace_id = focus_before
+        .focused_workspace_id
+        .filter(|workspace_id| visible_workspace_ids.contains(workspace_id))
+        .or_else(|| {
+            state
+                .workspaces
+                .iter()
+                .find(|workspace| {
+                    workspace.is_focused && visible_workspace_ids.contains(&workspace.id)
+                })
+                .map(|workspace| workspace.id)
+        })
+        .or_else(|| {
+            state.screens.iter().find(|screen| screen.is_main).and_then(|screen| {
+                state
+                    .workspaces
+                    .iter()
+                    .find(|workspace| {
+                        workspace.screen_id == screen.id
+                            && visible_workspace_ids.contains(&workspace.id)
+                    })
+                    .map(|workspace| workspace.id)
+            })
+        })
+        .or_else(|| visible_workspace_ids.iter().next().copied());
+
+    let desired: Vec<(Uuid, bool, bool)> = state
+        .workspaces
+        .iter()
+        .map(|workspace| {
+            let visible = active_screen_ids.contains(&workspace.screen_id)
+                && visible_workspace_ids.contains(&workspace.id);
+            (workspace.id, visible, Some(workspace.id) == focused_workspace_id)
+        })
+        .collect();
+    let mut visibility_changes = Vec::new();
+    for (workspace_id, visible, focused) in desired {
+        let Some(workspace) = state.get_workspace(workspace_id) else {
+            continue;
+        };
+        if workspace.is_visible != visible {
+            visibility_changes.push((workspace_id, visible));
+        }
+        if workspace.is_visible != visible || workspace.is_focused != focused {
+            state.update_workspace(workspace_id, |workspace| {
+                workspace.is_visible = visible;
+                workspace.is_focused = focused;
+            });
+        }
     }
+
+    if let Some(workspace_id) = focused_workspace_id {
+        let screen_id = state.get_workspace(workspace_id).map(|workspace| workspace.screen_id);
+        let focused_window_id = focus_before
+            .focused_window_id
+            .filter(|window_id| {
+                state
+                    .get_window(*window_id)
+                    .is_some_and(|window| window.workspace_id == workspace_id)
+            })
+            .or_else(|| {
+                state
+                    .get_workspace(workspace_id)
+                    .and_then(|workspace| workspace.focused_window_id())
+            })
+            .or_else(|| {
+                state
+                    .get_workspace(workspace_id)
+                    .and_then(|workspace| workspace.window_ids.first().copied())
+            });
+        state.set_focus(focused_window_id, Some(workspace_id), screen_id);
+    } else {
+        state.clear_focus();
+    }
+
+    visibility_changes
 }
 
 /// Converts config `LayoutType` to state `LayoutType`.
@@ -679,7 +763,16 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::modules::tiling::state::{LayoutType, Workspace};
+    use crate::modules::tiling::identity::{AppIdentity, LaunchDateBits};
+    use crate::modules::tiling::state::{LayoutType, Window, Workspace};
+
+    fn identity(pid: i32, launch_date: f64) -> AppIdentity {
+        AppIdentity {
+            pid,
+            launch_date: LaunchDateBits::from_time_interval_since_reference_date(launch_date)
+                .unwrap(),
+        }
+    }
 
     fn make_screen(id: u32, name: &str, is_main: bool) -> Screen {
         Screen {
@@ -806,6 +899,70 @@ mod tests {
 
         // Workspace should return to external screen
         assert_eq!(state.get_workspace(ws_id).unwrap().screen_id, 2);
+    }
+
+    #[test]
+    fn set_screens_reconciles_visibility_and_global_focus() {
+        let mut state = TilingState::new();
+        let main = make_screen(1, "Main", true);
+        let external = make_screen(2, "External", false);
+        state.upsert_screen(main.clone());
+        state.upsert_screen(external.clone());
+
+        let main_visible = make_workspace("main-visible", 1);
+        let main_visible_id = main_visible.id;
+        let mut main_extra = make_workspace("main-extra", 1);
+        main_extra.is_visible = true;
+        let main_extra_id = main_extra.id;
+        let mut external_workspace = make_workspace("external", 2);
+        external_workspace.is_visible = false;
+        external_workspace.is_focused = true;
+        let external_workspace_id = external_workspace.id;
+        state.upsert_workspace(main_visible);
+        state.upsert_workspace(main_extra);
+        state.upsert_workspace(external_workspace);
+
+        let main_app = identity(10, 1.0);
+        let extra_app = identity(20, 2.0);
+        let external_app = identity(30, 3.0);
+        for (window_id, workspace_id, app) in [
+            (1, main_visible_id, main_app),
+            (2, main_extra_id, extra_app),
+            (3, external_workspace_id, external_app),
+        ] {
+            state.upsert_window(Window {
+                id: window_id,
+                identity: Some(app),
+                workspace_id,
+                ..Window::default()
+            });
+        }
+        state.set_focus(Some(3), Some(external_workspace_id), Some(2));
+
+        let delta = on_set_screens(&mut state, vec![main, external]);
+
+        assert_eq!(delta.showing, vec![external_app]);
+        assert_eq!(delta.hiding, vec![extra_app]);
+        for screen_id in [1, 2] {
+            assert_eq!(
+                state
+                    .workspaces
+                    .iter()
+                    .filter(|workspace| workspace.screen_id == screen_id && workspace.is_visible)
+                    .count(),
+                1
+            );
+        }
+        assert_eq!(
+            state.workspaces.iter().filter(|workspace| workspace.is_focused).count(),
+            1
+        );
+        assert_eq!(
+            state.get_focus_state().focused_workspace_id,
+            Some(external_workspace_id)
+        );
+        assert!(state.get_workspace(external_workspace_id).unwrap().is_visible);
+        assert!(state.get_workspace(external_workspace_id).unwrap().is_focused);
     }
 
     #[test]

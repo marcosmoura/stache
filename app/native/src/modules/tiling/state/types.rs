@@ -281,6 +281,16 @@ impl Workspace {
         self.focused_window_index.and_then(|idx| self.window_ids.get(idx).copied())
     }
 
+    /// Restore the focused-window index from its stable window identity.
+    ///
+    /// Window ordering changes during moves, removals, and swaps. Retaining an
+    /// index across those operations can silently point focus at another
+    /// window, so callers should preserve the ID and derive the index after
+    /// changing membership.
+    pub fn set_focused_window_id(&mut self, window_id: Option<u32>) {
+        self.focused_window_index = window_id.and_then(|id| self.window_index(id));
+    }
+
     /// Get the number of windows in this workspace.
     #[must_use]
     pub fn window_count(&self) -> usize { self.window_ids.len() }

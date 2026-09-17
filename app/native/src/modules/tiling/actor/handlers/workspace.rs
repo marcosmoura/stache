@@ -18,6 +18,7 @@ use crate::modules::tiling::state::TilingState;
 ///
 /// If the workspace exists and is not already visible, it becomes the focused
 /// workspace on its assigned screen.
+#[allow(clippy::too_many_lines)] // one complete state/visibility/focus transition
 pub fn on_switch_workspace(state: &mut TilingState, name: &str) -> VisibilityDelta {
     tracing::debug!("Switching to workspace '{name}'");
 
@@ -28,12 +29,6 @@ pub fn on_switch_workspace(state: &mut TilingState, name: &str) -> VisibilityDel
 
     let workspace_id = workspace.id;
     let screen_id = workspace.screen_id;
-
-    // Check if already visible
-    if workspace.is_visible && workspace.is_focused {
-        tracing::trace!("Workspace '{name}' already visible and focused, skipping");
-        return VisibilityDelta::default();
-    }
 
     // Capture previous workspace for event emission and focus history
     let previous_focus = eyeball::Observable::get(&state.focus).clone();
@@ -68,6 +63,20 @@ pub fn on_switch_workspace(state: &mut TilingState, name: &str) -> VisibilityDel
                 ws.is_focused = false;
             });
         }
+    }
+
+    // There can be one focused workspace globally, even though each screen
+    // keeps one visible workspace. Clear stale focus flags on other screens.
+    let stale_focused_workspace_ids: Vec<Uuid> = state
+        .workspaces
+        .iter()
+        .filter(|workspace| workspace.id != workspace_id && workspace.is_focused)
+        .map(|workspace| workspace.id)
+        .collect();
+    for stale_workspace_id in stale_focused_workspace_ids {
+        state.update_workspace(stale_workspace_id, |workspace| {
+            workspace.is_focused = false;
+        });
     }
 
     // Mark target workspace as visible and focused
@@ -126,9 +135,9 @@ pub fn on_switch_workspace(state: &mut TilingState, name: &str) -> VisibilityDel
             state.update_focus(|focus| {
                 focus.focused_window_id = Some(window_id);
             });
-            // Use the window_ops to focus the window via AX API (exact target)
-            let _ =
-                crate::modules::tiling::effects::window_ops::focus_stored_window(state, window_id);
+            // The actor focuses this target after it has shown the destination
+            // application. Focusing a hidden application's window fails on
+            // macOS, so this cannot happen during the pure state transition.
         } else {
             // No windows in workspace - clear focused window
             state.update_focus(|focus| {
@@ -165,28 +174,17 @@ use crate::modules::tiling::actor::CycleDirection;
 /// Cycle through workspaces in a direction.
 ///
 /// Cycles through visible workspaces on the currently focused screen.
-pub fn on_cycle_workspace(state: &mut TilingState, direction: CycleDirection) {
+pub fn on_cycle_workspace(state: &mut TilingState, direction: CycleDirection) -> VisibilityDelta {
     let focus = state.get_focus_state();
     let Some(current_workspace_id) = focus.focused_workspace_id else {
         tracing::debug!("cycle_workspace: no focused workspace");
-        return;
+        return VisibilityDelta::default();
     };
 
     let Some(screen_id) = focus.focused_screen_id else {
         tracing::debug!("cycle_workspace: no focused screen");
-        return;
+        return VisibilityDelta::default();
     };
-
-    // Capture previous workspace name for event emission
-    let previous_workspace_name = state.get_workspace(current_workspace_id).map(|ws| ws.name);
-
-    // Record focus history for the workspace we're leaving
-    if let Some(current_window_id) = focus.focused_window_id {
-        state.record_focus_history(current_workspace_id, current_window_id);
-        tracing::debug!(
-            "Recorded focus history: workspace {current_workspace_id} -> window {current_window_id}"
-        );
-    }
 
     // Get all workspaces on this screen
     let screen_workspaces: Vec<Uuid> = state
@@ -198,7 +196,7 @@ pub fn on_cycle_workspace(state: &mut TilingState, direction: CycleDirection) {
 
     if screen_workspaces.len() <= 1 {
         tracing::debug!("cycle_workspace: only one workspace on screen");
-        return;
+        return VisibilityDelta::default();
     }
 
     // Find current position
@@ -218,82 +216,14 @@ pub fn on_cycle_workspace(state: &mut TilingState, direction: CycleDirection) {
     };
 
     let next_workspace_id = screen_workspaces[next_idx];
+    let Some(next_workspace) = state.get_workspace(next_workspace_id) else {
+        return VisibilityDelta::default();
+    };
 
-    // Switch to next workspace
-    // Mark current as not visible/focused
-    state.update_workspace(current_workspace_id, |ws| {
-        ws.is_visible = false;
-        ws.is_focused = false;
-    });
-
-    // Mark next as visible and focused
-    state.update_workspace(next_workspace_id, |ws| {
-        ws.is_visible = true;
-        ws.is_focused = true;
-    });
-
-    // Update focus state
-    state.update_focus(|focus| {
-        focus.focused_workspace_id = Some(next_workspace_id);
-    });
-
-    tracing::debug!("Cycled to workspace {next_workspace_id} ({direction:?})");
-
-    // Focus a window in the new workspace, preferring focus history
-    if let Some(ws) = state.get_workspace(next_workspace_id) {
-        // Check focus history first - prefer the last focused window in this workspace
-        let target_window_id = state
-            .get_focus_history(next_workspace_id)
-            .filter(|&id| ws.window_ids.contains(&id))
-            .or_else(|| ws.window_ids.first().copied());
-
-        if let Some(window_id) = target_window_id {
-            tracing::debug!(
-                "Focusing window {} in workspace {} (from {})",
-                window_id,
-                next_workspace_id,
-                if state.get_focus_history(next_workspace_id).is_some_and(|id| id == window_id) {
-                    "focus history"
-                } else {
-                    "first window"
-                }
-            );
-            // Update focus state to track the new focused window
-            state.update_focus(|focus| {
-                focus.focused_window_id = Some(window_id);
-            });
-            // Use the window_ops to focus the window via AX API (exact target)
-            let _ =
-                crate::modules::tiling::effects::window_ops::focus_stored_window(state, window_id);
-        } else {
-            // No windows in workspace - clear focused window
-            state.update_focus(|focus| {
-                focus.focused_window_id = None;
-            });
-        }
-    }
-
-    // Notify subscriber about visibility and layout changes
-    if let Some(handle) = get_subscriber_handle() {
-        handle.notify_visibility_changed(current_workspace_id, false);
-        handle.notify_visibility_changed(next_workspace_id, true);
-        handle.notify_layout_changed(next_workspace_id, true);
-        // Notify about focus change to update borders
-        handle.notify_focus_changed();
-    }
-
-    // Emit workspace changed event to frontend
-    if let Some(next_ws) = state.get_workspace(next_workspace_id) {
-        let screen_name = state
-            .get_screen(screen_id)
-            .map_or_else(|| format!("screen-{screen_id}"), |s| s.name);
-
-        crate::modules::tiling::init::emit_workspace_changed(
-            &next_ws.name,
-            &screen_name,
-            previous_workspace_name.as_deref(),
-        );
-    }
+    tracing::debug!("Cycling to workspace {next_workspace_id} ({direction:?})");
+    // Cycling must use the exact same state, notification, focus, and native
+    // visibility transition as a named switch.
+    on_switch_workspace(state, &next_workspace.name)
 }
 
 // ============================================================================
@@ -580,5 +510,36 @@ mod tests {
 
         let focus = state.get_focus_state();
         assert_eq!(focus.focused_workspace_id, Some(ws2_id));
+    }
+
+    #[test]
+    fn switching_to_another_screen_clears_the_old_global_focus() {
+        let mut state = create_test_state();
+        let old_workspace_id = state.get_workspace_by_name("workspace1").unwrap().id;
+
+        state.upsert_screen(Screen {
+            id: 2,
+            name: "External".to_string(),
+            is_main: false,
+            ..Default::default()
+        });
+        let mut external_workspace = Workspace::new("external");
+        external_workspace.screen_id = 2;
+        external_workspace.is_visible = true;
+        let external_workspace_id = external_workspace.id;
+        state.upsert_workspace(external_workspace);
+
+        on_switch_workspace(&mut state, "external");
+
+        assert!(!state.get_workspace(old_workspace_id).unwrap().is_focused);
+        assert!(state.get_workspace(external_workspace_id).unwrap().is_focused);
+        assert_eq!(
+            state.workspaces.iter().filter(|workspace| workspace.is_focused).count(),
+            1
+        );
+        assert_eq!(
+            state.get_focus_state().focused_workspace_id,
+            Some(external_workspace_id)
+        );
     }
 }

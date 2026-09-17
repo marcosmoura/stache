@@ -3,12 +3,18 @@
 //! The `StateActorHandle` provides a safe, cloneable interface for sending
 //! messages to the state actor and subscribing to state changes.
 
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
+use parking_lot::Mutex;
 use tokio::sync::{mpsc, oneshot};
 
-use super::messages::{QueryResult, ResizeDimension, StateMessage, StateQuery, TargetScreen};
+use super::messages::{
+    GeometryUpdate, GeometryUpdateType, QueryResult, ResizeDimension, StateMessage, StateQuery,
+    TargetScreen,
+};
+use crate::modules::tiling::identity::WindowTarget;
 use crate::modules::tiling::visibility::VisibilityRegistry;
 
 /// Error types for actor communication.
@@ -17,6 +23,10 @@ pub enum ActorError {
     /// Failed to send message to actor.
     #[error("Failed to send message to actor: channel closed")]
     SendFailed,
+
+    /// The bounded overflow mailbox is full.
+    #[error("Actor overflow mailbox is full")]
+    OverflowFull,
 
     /// Failed to receive response from actor.
     #[error("Failed to receive response from actor: channel closed")]
@@ -27,12 +37,119 @@ pub enum ActorError {
     Timeout(Duration),
 }
 
+/// Work retained only while the actor's bounded primary channel is saturated.
+///
+/// Geometry is compacted by exact window identity. The reliable queue is also
+/// bounded: producers must observe backpressure rather than turning a stalled
+/// actor into an unbounded allocation sink.
+const MAX_RELIABLE_OVERFLOW: usize = 1024;
+#[derive(Default)]
+pub(super) struct PendingActorMessages {
+    reliable: VecDeque<StateMessage>,
+    geometry: HashMap<WindowTarget, GeometryUpdate>,
+    shutdown_requested: bool,
+}
+
+impl PendingActorMessages {
+    fn push(&mut self, message: StateMessage) -> bool {
+        if matches!(message, StateMessage::Shutdown) {
+            self.shutdown_requested = true;
+            return true;
+        }
+
+        match message {
+            StateMessage::BatchedGeometryUpdates(updates) => {
+                for update in updates {
+                    self.merge_geometry(update);
+                }
+            }
+            StateMessage::WindowMoved { window_id, identity, frame } => {
+                self.merge_geometry(GeometryUpdate {
+                    window_id,
+                    identity,
+                    frame,
+                    update_type: GeometryUpdateType::Move,
+                });
+            }
+            StateMessage::WindowResized { window_id, identity, frame } => {
+                self.merge_geometry(GeometryUpdate {
+                    window_id,
+                    identity,
+                    frame,
+                    update_type: GeometryUpdateType::Resize,
+                });
+            }
+            message => {
+                if self.reliable.len() == MAX_RELIABLE_OVERFLOW {
+                    tracing::warn!(
+                        message = message.name(),
+                        capacity = MAX_RELIABLE_OVERFLOW,
+                        "tiling: actor reliable overflow is full"
+                    );
+                    return false;
+                }
+                self.reliable.push_back(message);
+            }
+        }
+        true
+    }
+
+    fn merge_geometry(&mut self, update: GeometryUpdate) {
+        let target = WindowTarget {
+            identity: update.identity,
+            window_id: update.window_id,
+        };
+        self.geometry
+            .entry(target)
+            .and_modify(|existing| {
+                existing.frame = update.frame;
+                existing.update_type = match (existing.update_type, update.update_type) {
+                    (GeometryUpdateType::MoveResize, _)
+                    | (_, GeometryUpdateType::MoveResize)
+                    | (GeometryUpdateType::Move, GeometryUpdateType::Resize)
+                    | (GeometryUpdateType::Resize, GeometryUpdateType::Move) => {
+                        GeometryUpdateType::MoveResize
+                    }
+                    (kind, _) => kind,
+                };
+            })
+            .or_insert(update);
+    }
+
+    pub(crate) fn pop(&mut self) -> Option<StateMessage> {
+        if self.take_shutdown().is_some() {
+            return Some(StateMessage::Shutdown);
+        }
+        if let Some(message) = self.reliable.pop_front() {
+            return Some(message);
+        }
+        (!self.geometry.is_empty()).then(|| {
+            StateMessage::BatchedGeometryUpdates(
+                self.geometry.drain().map(|(_, update)| update).collect(),
+            )
+        })
+    }
+
+    fn is_empty(&self) -> bool {
+        !self.shutdown_requested && self.reliable.is_empty() && self.geometry.is_empty()
+    }
+
+    /// Removes and returns the shutdown request when it must preempt queued
+    /// work. `None` means normal FIFO delivery should continue.
+    pub(crate) fn take_shutdown(&mut self) -> Option<()> {
+        self.shutdown_requested.then(|| {
+            self.shutdown_requested = false;
+        })
+    }
+}
+
 /// Handle for communicating with the state actor.
 ///
 /// This handle is cheap to clone and can be shared across threads.
 #[derive(Clone)]
 pub struct StateActorHandle {
     sender: mpsc::Sender<StateMessage>,
+    pub(super) pending: Arc<Mutex<PendingActorMessages>>,
     #[allow(dead_code)] // sealed/drained by the 19D cutover
     registry: Arc<VisibilityRegistry>,
 }
@@ -45,11 +162,15 @@ impl StateActorHandle {
     }
 
     /// Create a handle sharing an explicit visibility registry with the actor.
-    pub(crate) const fn new_with_registry(
+    pub(crate) fn new_with_registry(
         sender: mpsc::Sender<StateMessage>,
         registry: Arc<VisibilityRegistry>,
     ) -> Self {
-        Self { sender, registry }
+        Self {
+            sender,
+            pending: Arc::new(Mutex::new(PendingActorMessages::default())),
+            registry,
+        }
     }
 
     /// Atomically seals the registry and drains all owned identities for
@@ -72,9 +193,48 @@ impl StateActorHandle {
     ///
     /// # Errors
     ///
-    /// Returns [`ActorError::SendFailed`] if the channel is closed (actor has stopped).
+    /// On saturation, retains the message in a bounded semantic overflow
+    /// mailbox. Returns [`ActorError::OverflowFull`] when that mailbox is
+    /// full, or [`ActorError::SendFailed`] once the actor has stopped.
     pub fn send(&self, msg: StateMessage) -> Result<(), ActorError> {
-        self.sender.try_send(msg).map_err(|_| ActorError::SendFailed)
+        if self.sender.is_closed() {
+            return Err(ActorError::SendFailed);
+        }
+        let mut pending = self.pending.lock();
+        if matches!(msg, StateMessage::Shutdown) {
+            pending.push(msg);
+            // The actor may be idle in `recv`. Retaining shutdown in the
+            // semantic mailbox preserves preemption, while this wake-up lets
+            // the actor observe it without waiting for another event.
+            match self.sender.try_send(StateMessage::Shutdown) {
+                Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => {}
+                Err(mpsc::error::TrySendError::Closed(_)) => return Err(ActorError::SendFailed),
+            }
+            drop(pending);
+            return Ok(());
+        }
+        if !pending.is_empty() {
+            if !pending.push(msg) {
+                return Err(ActorError::OverflowFull);
+            }
+            drop(pending);
+            return Ok(());
+        }
+
+        match self.sender.try_send(msg) {
+            Ok(()) => Ok(()),
+            Err(mpsc::error::TrySendError::Full(message)) => {
+                if !pending.push(message) {
+                    return Err(ActorError::OverflowFull);
+                }
+                drop(pending);
+                Ok(())
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                drop(pending);
+                Err(ActorError::SendFailed)
+            }
+        }
     }
 
     /// Send a message to the actor and wait for delivery.
@@ -101,10 +261,10 @@ impl StateActorHandle {
     pub async fn query(&self, query: StateQuery) -> Result<QueryResult, ActorError> {
         let (tx, rx) = oneshot::channel();
 
-        self.sender
-            .send(StateMessage::Query { query, respond_to: tx })
-            .await
-            .map_err(|_| ActorError::SendFailed)?;
+        // Route queries through the same semantic mailbox as commands. A raw
+        // sender call could otherwise overtake state updates retained during a
+        // saturated burst and observe stale actor state.
+        self.send(StateMessage::Query { query, respond_to: tx })?;
 
         rx.await.map_err(|_| ActorError::ReceiveFailed)
     }
@@ -458,5 +618,52 @@ mod tests {
 
         let result = handle.send(StateMessage::Shutdown);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn saturated_channel_retains_reliable_messages_and_prioritizes_shutdown() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let handle = StateActorHandle::new(tx);
+
+        handle.send(StateMessage::SetEnabled { enabled: true }).unwrap();
+        handle.send(StateMessage::SetEnabled { enabled: false }).unwrap();
+
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(StateMessage::SetEnabled { enabled: true })
+        ));
+        assert!(matches!(
+            handle.pending.lock().pop(),
+            Some(StateMessage::SetEnabled { enabled: false })
+        ));
+
+        handle.shutdown().unwrap();
+        assert!(matches!(
+            handle.pending.lock().pop(),
+            Some(StateMessage::Shutdown)
+        ));
+    }
+
+    #[test]
+    fn reliable_overflow_has_a_fixed_capacity() {
+        let (tx, _rx) = mpsc::channel(1);
+        let handle = StateActorHandle::new(tx);
+        handle.send(StateMessage::SetEnabled { enabled: true }).unwrap();
+
+        for _ in 0..MAX_RELIABLE_OVERFLOW {
+            handle.send(StateMessage::SetEnabled { enabled: false }).unwrap();
+        }
+        assert!(handle.send(StateMessage::SetEnabled { enabled: false }).is_err());
+        assert_eq!(handle.pending.lock().reliable.len(), MAX_RELIABLE_OVERFLOW);
+    }
+
+    #[test]
+    fn shutdown_wakes_an_idle_actor() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let handle = StateActorHandle::new(tx);
+
+        handle.shutdown().unwrap();
+
+        assert!(matches!(rx.try_recv(), Ok(StateMessage::Shutdown)));
     }
 }
