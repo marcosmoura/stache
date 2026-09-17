@@ -15,10 +15,31 @@ use crate::error::StacheError;
 use crate::platform::ipc_socket::{self, IpcCommand, IpcError, IpcQuery, IpcResponse};
 use crate::tiling;
 
+/// Screen shape returned by the IPC query API.
+///
+/// It intentionally differs from the internal `Screen`: the public response
+/// uses camelCase and does not expose the refresh rate.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QueriedScreen {
+    id: u32,
+    name: String,
+    frame: tiling::Rect,
+    scale_factor: f64,
+    is_main: bool,
+    is_builtin: bool,
+}
+
 /// Tiling window manager subcommands.
 #[derive(Subcommand, Debug)]
 #[command(next_display_order = None)]
 pub enum TilingCommands {
+    /// Pause tiling and wait for active native effects to stop.
+    Pause,
+
+    /// Resume a paused tiling runtime.
+    Resume,
+
     /// Query tiling state (screens, workspaces, windows, apps).
     ///
     /// Without a subcommand, outputs all query results.
@@ -121,7 +142,7 @@ pub enum TilingQueryCommands {
 /// Tiling window command arguments.
 ///
 /// Multiple operations can be combined in a single command.
-/// Operations are executed in order: focus -> swap -> preset -> resize -> send.
+/// Operations are executed in order: focus -> swap -> toggle floating -> preset -> resize -> send.
 #[derive(Debug, clap::Args)]
 #[command(after_long_help = r#"Examples:
   stache tiling window --focus left                            # Focus window to the left
@@ -143,6 +164,10 @@ pub struct TilingWindowArgs {
     /// Direction: up, down, left, right, previous, next.
     #[arg(long, value_name = "DIRECTION", value_enum)]
     pub swap: Option<Direction>,
+
+    /// Toggle the focused window between tiled and floating.
+    #[arg(long)]
+    pub toggle_floating: bool,
 
     /// Apply a floating preset to the focused window.
     ///
@@ -218,6 +243,8 @@ pub fn execute(cmd: &TilingCommands) -> Result<(), StacheError> {
         }
         TilingCommands::Window(args) => execute_window(args),
         TilingCommands::Workspace(args) => execute_workspace(args),
+        TilingCommands::Pause => send_tiling_command(IpcCommand::TilingPause),
+        TilingCommands::Resume => send_tiling_command(IpcCommand::TilingResume),
     }
 }
 
@@ -315,7 +342,7 @@ fn execute_query_screens(json: bool) {
                 output::print_highlighted_json(&data);
             } else {
                 // Parse screens from response
-                let screens: Vec<tiling::Screen> = serde_json::from_value(data).unwrap_or_default();
+                let screens: Vec<QueriedScreen> = serde_json::from_value(data).unwrap_or_default();
 
                 if screens.is_empty() {
                     println!("{}", "No screens detected.".dimmed());
@@ -737,7 +764,7 @@ fn execute_query_apps(json: bool, _detailed: bool) {
 
 /// Execute tiling window commands.
 ///
-/// Operations are executed in order: focus -> swap -> preset -> resize -> send.
+/// Operations are executed in order: focus -> swap -> toggle floating -> preset -> resize -> send.
 /// Multiple operations can be combined in a single command.
 #[allow(clippy::useless_let_if_seq)] // Clearer to track operation state this way
 fn execute_window(args: &TilingWindowArgs) -> Result<(), StacheError> {
@@ -757,13 +784,19 @@ fn execute_window(args: &TilingWindowArgs) -> Result<(), StacheError> {
         has_operation = true;
     }
 
-    // 3. Apply floating preset
+    // 3. Toggle floating before applying a preset.
+    if args.toggle_floating {
+        send_tiling_command(IpcCommand::TilingWindowToggleFloating)?;
+        has_operation = true;
+    }
+
+    // 4. Apply floating preset
     if let Some(name) = &args.preset {
         send_tiling_command(IpcCommand::TilingWindowPreset { preset: name.clone() })?;
         has_operation = true;
     }
 
-    // 4. Resize (can be multiple, collected as pairs in a flat Vec)
+    // 5. Resize (can be multiple, collected as pairs in a flat Vec)
     if !args.resize.is_empty() {
         // Process resize args in pairs: [dim1, amt1, dim2, amt2, ...]
         for pair in args.resize.chunks(2) {
@@ -790,13 +823,13 @@ fn execute_window(args: &TilingWindowArgs) -> Result<(), StacheError> {
         has_operation = true;
     }
 
-    // 5. Send to screen
+    // 6. Send to screen
     if let Some(screen) = &args.send_to_screen {
         send_tiling_command(IpcCommand::TilingWindowSendToScreen { screen: screen.clone() })?;
         has_operation = true;
     }
 
-    // 6. Send to workspace
+    // 7. Send to workspace
     if let Some(workspace) = &args.send_to_workspace {
         send_tiling_command(IpcCommand::TilingWindowSendToWorkspace {
             workspace: workspace.clone(),
@@ -899,6 +932,14 @@ mod tests {
     }
 
     #[test]
+    fn test_tiling_lifecycle_commands_parse() {
+        let pause = TestCli::try_parse_from(["test", "pause"]).unwrap();
+        assert!(matches!(pause.command, TilingCommands::Pause));
+        let resume = TestCli::try_parse_from(["test", "resume"]).unwrap();
+        assert!(matches!(resume.command, TilingCommands::Resume));
+    }
+
+    #[test]
     fn test_tiling_query_screens_json_parse() {
         let cli = TestCli::try_parse_from(["test", "query", "--json", "screens"]).unwrap();
         match cli.command {
@@ -909,6 +950,26 @@ mod tests {
             }
             _ => panic!("Expected Query command"),
         }
+    }
+
+    #[test]
+    fn screen_table_response_deserializes_public_ipc_shape() {
+        let screens: Vec<QueriedScreen> = serde_json::from_value(serde_json::json!([{
+            "id": 1,
+            "name": "Built-in Display",
+            "frame": { "x": 0.0, "y": 0.0, "width": 1920.0, "height": 1200.0 },
+            "visibleFrame": { "x": 0.0, "y": 0.0, "width": 1920.0, "height": 1200.0 },
+            "scaleFactor": 1.0,
+            "isMain": true,
+            "isBuiltin": true
+        }]))
+        .unwrap();
+
+        assert_eq!(screens.len(), 1);
+        assert_eq!(screens[0].name, "Built-in Display");
+        assert_eq!(screens[0].frame.width, 1920.0);
+        assert!(screens[0].is_main);
+        assert!(screens[0].is_builtin);
     }
 
     #[test]
@@ -1086,6 +1147,15 @@ mod tests {
             TilingCommands::Window(args) => {
                 assert_eq!(args.preset, Some("center".to_string()));
             }
+            _ => panic!("Expected Window command"),
+        }
+    }
+
+    #[test]
+    fn test_tiling_window_toggle_floating_parse() {
+        let cli = TestCli::try_parse_from(["test", "window", "--toggle-floating"]).unwrap();
+        match cli.command {
+            TilingCommands::Window(args) => assert!(args.toggle_floating),
             _ => panic!("Expected Window command"),
         }
     }

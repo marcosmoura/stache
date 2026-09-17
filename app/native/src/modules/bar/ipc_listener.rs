@@ -76,10 +76,20 @@ fn focused_workspace_id(handle: &StateActorHandle) -> Result<Uuid, String> {
 }
 
 fn execute_tiling_command(command: IpcCommand) -> Result<(), String> {
+    match command {
+        IpcCommand::TilingPause => return tiling::pause_runtime(),
+        IpcCommand::TilingResume => {
+            let app_handle = tiling::init::get_app_handle()
+                .ok_or_else(|| "Tiling app handle is unavailable".to_string())?;
+            return tiling::resume(app_handle);
+        }
+        _ => {}
+    }
     let handle = get_tiling_handle()?;
 
     match command {
         IpcCommand::Reload => unreachable!("reload is handled before tiling dispatch"),
+        IpcCommand::TilingPause | IpcCommand::TilingResume => unreachable!("handled above"),
         IpcCommand::TilingFocusWorkspace { workspace } => {
             handle.switch_workspace(&workspace).map_err(|error| error.to_string())
         }
@@ -103,6 +113,14 @@ fn execute_tiling_command(command: IpcCommand) -> Result<(), String> {
         IpcCommand::TilingWindowResize { dimension, amount } => handle
             .resize_focused_window(&dimension, amount)
             .map_err(|error| error.to_string()),
+        IpcCommand::TilingWindowToggleFloating => {
+            let window_id = query_tiling(&handle, StateQuery::GetFocusedWindow)?
+                .into_window()
+                .flatten()
+                .map(|window| window.id)
+                .ok_or_else(|| "No focused window".to_string())?;
+            handle.toggle_floating(window_id).map_err(|error| error.to_string())
+        }
         IpcCommand::TilingWindowPreset { preset } => {
             handle.apply_preset(&preset).map_err(|error| error.to_string())
         }
@@ -138,6 +156,8 @@ impl From<IpcCommand> for StacheNotification {
     fn from(command: IpcCommand) -> Self {
         match command {
             IpcCommand::Reload => Self::Reload,
+            IpcCommand::TilingPause => Self::TilingPause,
+            IpcCommand::TilingResume => Self::TilingResume,
             IpcCommand::TilingFocusWorkspace { workspace } => Self::TilingFocusWorkspace(workspace),
             IpcCommand::TilingSetLayout { layout } => Self::TilingSetLayout(layout),
             IpcCommand::TilingWindowFocus { target } => Self::TilingWindowFocus(target),
@@ -145,6 +165,7 @@ impl From<IpcCommand> for StacheNotification {
             IpcCommand::TilingWindowResize { dimension, amount } => {
                 Self::TilingWindowResize { dimension, amount }
             }
+            IpcCommand::TilingWindowToggleFloating => Self::TilingWindowToggleFloating,
             IpcCommand::TilingWindowPreset { preset } => Self::TilingWindowPreset(preset),
             IpcCommand::TilingWindowSendToWorkspace { workspace } => {
                 Self::TilingWindowSendToWorkspace(workspace)
@@ -204,6 +225,22 @@ fn handle_notification<R: Runtime>(app_handle: &AppHandle<R>, notification: Stac
             {
                 tracing::info!("reload requested via CLI, restarting application");
                 crate::app_shutdown::restart(app_handle);
+            }
+        }
+
+        StacheNotification::TilingPause => {
+            if let Err(error) = tiling::pause_runtime() {
+                tracing::warn!(%error, "tiling: failed to pause runtime");
+            }
+        }
+
+        StacheNotification::TilingResume => {
+            if let Some(handle) = tiling::init::get_app_handle() {
+                if let Err(error) = tiling::resume(handle) {
+                    tracing::warn!(%error, "tiling: failed to resume runtime");
+                }
+            } else {
+                tracing::warn!("tiling: app handle is unavailable");
             }
         }
 
@@ -344,6 +381,29 @@ fn handle_notification<R: Runtime>(app_handle: &AppHandle<R>, notification: Stac
                     } else {
                         tracing::debug!("tiling: resized window {dimension} by {amount}px");
                     }
+                }
+            });
+        }
+
+        StacheNotification::TilingWindowToggleFloating => {
+            std::thread::spawn(move || {
+                let Some(handle) = tiling::init::get_handle() else {
+                    tracing::warn!("tiling: handle not available");
+                    return;
+                };
+                let Some(rt) = build_tiling_runtime() else {
+                    return;
+                };
+                let window_id = rt
+                    .block_on(handle.get_focused_window())
+                    .ok()
+                    .and_then(QueryResult::into_window)
+                    .flatten()
+                    .map(|window| window.id);
+                if let Some(window_id) = window_id
+                    && let Err(error) = handle.toggle_floating(window_id)
+                {
+                    tracing::warn!(%error, "tiling: failed to toggle floating window");
                 }
             });
         }

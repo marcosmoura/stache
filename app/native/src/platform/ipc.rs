@@ -45,6 +45,10 @@ pub enum StacheNotification {
     WorkspaceChanged(String),
     /// Reload configuration request.
     Reload,
+    /// Pause tiling.
+    TilingPause,
+    /// Resume tiling.
+    TilingResume,
 
     // Tiling window manager notifications
     /// Focus a workspace by name.
@@ -57,6 +61,8 @@ pub enum StacheNotification {
     TilingWindowSwap(String),
     /// Resize focused window.
     TilingWindowResize { dimension: String, amount: i32 },
+    /// Toggle the focused window's floating state.
+    TilingWindowToggleFloating,
     /// Apply floating preset to focused window.
     TilingWindowPreset(String),
     /// Send focused window to workspace.
@@ -76,12 +82,15 @@ impl StacheNotification {
             Self::WindowFocusChanged => "window-focus-changed",
             Self::WorkspaceChanged(_) => "workspace-changed",
             Self::Reload => "reload",
+            Self::TilingPause => "tiling-pause",
+            Self::TilingResume => "tiling-resume",
             // Tiling notifications
             Self::TilingFocusWorkspace(_) => "tiling-focus-workspace",
             Self::TilingSetLayout(_) => "tiling-set-layout",
             Self::TilingWindowFocus(_) => "tiling-window-focus",
             Self::TilingWindowSwap(_) => "tiling-window-swap",
             Self::TilingWindowResize { .. } => "tiling-window-resize",
+            Self::TilingWindowToggleFloating => "tiling-window-toggle-floating",
             Self::TilingWindowPreset(_) => "tiling-window-preset",
             Self::TilingWindowSendToWorkspace(_) => "tiling-window-send-to-workspace",
             Self::TilingWindowSendToScreen(_) => "tiling-window-send-to-screen",
@@ -147,6 +156,8 @@ impl StacheNotification {
                 Some(Self::WorkspaceChanged(workspace))
             }
             "reload" => Some(Self::Reload),
+            "tiling-pause" => Some(Self::TilingPause),
+            "tiling-resume" => Some(Self::TilingResume),
             // Tiling notifications
             "tiling-focus-workspace" => {
                 let workspace =
@@ -177,6 +188,7 @@ impl StacheNotification {
                     .unwrap_or(0);
                 Some(Self::TilingWindowResize { dimension, amount })
             }
+            "tiling-window-toggle-floating" => Some(Self::TilingWindowToggleFloating),
             "tiling-window-preset" => {
                 let preset =
                     user_info.and_then(|info| info.get("preset")).cloned().unwrap_or_default();

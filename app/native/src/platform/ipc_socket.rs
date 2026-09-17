@@ -180,6 +180,10 @@ impl IpcResponse {
 pub enum IpcCommand {
     /// Reload/restart the desktop app.
     Reload,
+    /// Pause the tiling runtime.
+    TilingPause,
+    /// Resume the tiling runtime.
+    TilingResume,
     /// Focus a workspace by name.
     TilingFocusWorkspace { workspace: String },
     /// Change layout of the focused workspace.
@@ -190,6 +194,8 @@ pub enum IpcCommand {
     TilingWindowSwap { direction: String },
     /// Resize the focused window.
     TilingWindowResize { dimension: String, amount: i32 },
+    /// Toggle whether the focused window is floating.
+    TilingWindowToggleFloating,
     /// Apply a floating preset to the focused window.
     TilingWindowPreset { preset: String },
     /// Send the focused window to a workspace.
@@ -702,6 +708,10 @@ mod tests {
         let command = IpcCommand::TilingWorkspaceBalance;
         let json = serde_json::to_string(&command).unwrap();
         assert_eq!(json, r#"{"type":"tilingWorkspaceBalance"}"#);
+
+        let command = IpcCommand::TilingWindowToggleFloating;
+        let json = serde_json::to_string(&command).unwrap();
+        assert_eq!(json, r#"{"type":"tilingWindowToggleFloating"}"#);
     }
 
     #[test]
