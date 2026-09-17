@@ -26,7 +26,7 @@
         ]
       },
       {
-        "groupName": "alias",
+        "groupName": "internal",
         "elementNamePattern": ["@/**"]
       }
     ],
@@ -34,7 +34,7 @@
       ["type-builtin", "value-builtin"],
       "react",
       ["type-external", "value-external"],
-      ["type-internal", "value-internal", "alias"],
+      ["type-internal", "value-internal", "internal"],
       ["type-parent", "value-parent"],
       ["type-sibling", "value-sibling", "type-index", "value-index"],
       "unknown"
