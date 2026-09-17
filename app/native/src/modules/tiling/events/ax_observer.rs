@@ -43,7 +43,7 @@ use super::types::{WindowEvent, WindowEventType};
 use crate::modules::tiling::actor::WindowCreatedInfo;
 use crate::modules::tiling::events::EventProcessor;
 use crate::modules::tiling::identity::AppIdentity;
-use crate::modules::tiling::rules::is_pip_window;
+use crate::modules::tiling::rules::{is_pip_window, should_tile_window_with_rules};
 use crate::modules::tiling::state::Rect;
 
 // ============================================================================
@@ -212,6 +212,16 @@ impl AXObserverAdapter {
         let title = get_window_title(ax_element).unwrap_or_default();
         let frame = get_window_frame(ax_element).unwrap_or_default();
 
+        let (app_id, app_name) = get_app_info_for_pid(pid);
+        if !should_tile_window_with_rules(
+            &app_id,
+            &app_name,
+            &title,
+            &crate::config::get_config().tiling.ignore,
+        ) {
+            return;
+        }
+
         // Determine if window should be managed based on subrole and size
         // Use blacklist approach: only reject known popup/sheet subroles
         let should_manage = match subrole.as_deref() {
@@ -241,9 +251,6 @@ impl AXObserverAdapter {
         let is_minimized = get_window_minimized(ax_element).unwrap_or(false);
         let is_fullscreen = get_window_fullscreen(ax_element).unwrap_or(false);
         let minimum_size = get_window_minimum_size(ax_element);
-
-        // Get app info from PID
-        let (app_id, app_name) = get_app_info_for_pid(pid);
 
         // Note: Tab detection is now handled in the window handler using the TabRegistry.
         // We pass tab_group_id=None and is_active_tab=true here; the handler will
@@ -337,7 +344,13 @@ impl AXObserverAdapter {
             return;
         };
 
-        self.processor.on_window_moved(window_id, identity, frame);
+        self.handle_window_geometry(
+            window_id,
+            identity,
+            frame,
+            get_window_fullscreen(ax_element),
+            true,
+        );
     }
 
     fn handle_window_resized(&self, _pid: i32, identity: AppIdentity, ax_element: AXUIElementRef) {
@@ -349,7 +362,33 @@ impl AXObserverAdapter {
             return;
         };
 
-        self.processor.on_window_resized(window_id, identity, frame);
+        self.handle_window_geometry(
+            window_id,
+            identity,
+            frame,
+            get_window_fullscreen(ax_element),
+            false,
+        );
+    }
+
+    /// Reconciles the AX fullscreen attribute before forwarding a geometry event.
+    fn handle_window_geometry(
+        &self,
+        window_id: u32,
+        identity: AppIdentity,
+        frame: Rect,
+        fullscreen: Option<bool>,
+        moved: bool,
+    ) {
+        if let Some(fullscreen) = fullscreen {
+            self.processor.on_window_fullscreen_changed(window_id, identity, fullscreen);
+        }
+
+        if moved {
+            self.processor.on_window_moved(window_id, identity, frame);
+        } else {
+            self.processor.on_window_resized(window_id, identity, frame);
+        }
     }
 
     fn handle_window_minimized(
@@ -793,10 +832,59 @@ pub fn adapter_callback(event: WindowEvent) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::modules::tiling::actor::StateActor;
+    use crate::modules::tiling::actor::{QueryResult, StateActor, WindowCreatedInfo};
+    use crate::modules::tiling::identity::{AppIdentity, LaunchDateBits};
 
     /// Serializes tests that install into / clear the global adapter slot.
     static TEST_SLOT_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
+    fn test_identity() -> AppIdentity {
+        AppIdentity {
+            pid: 1000,
+            launch_date: LaunchDateBits::from_time_interval_since_reference_date(1.0).unwrap(),
+        }
+    }
+
+    fn window_info(identity: AppIdentity) -> WindowCreatedInfo {
+        WindowCreatedInfo {
+            window_id: 100,
+            pid: identity.pid,
+            identity: Some(identity),
+            app_id: "com.example.Test".to_string(),
+            app_name: "Test".to_string(),
+            title: "Test window".to_string(),
+            frame: Rect::new(0.0, 0.0, 800.0, 600.0),
+            is_minimized: false,
+            is_fullscreen: false,
+            minimum_size: None,
+            tab_group_id: None,
+            is_active_tab: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_geometry_callback_reconciles_fullscreen_state() {
+        let (handle, _stopped) = StateActor::spawn();
+        let processor = Arc::new(EventProcessor::new(handle.clone()));
+        let adapter = AXObserverAdapter::new(Arc::clone(&processor));
+        let identity = test_identity();
+        processor.on_window_created(window_info(identity));
+
+        adapter.handle_window_geometry(
+            100,
+            identity,
+            Rect::new(0.0, 0.0, 1_000.0, 800.0),
+            Some(true),
+            false,
+        );
+
+        let QueryResult::Window(Some(window)) = handle.get_window(100).await.unwrap() else {
+            panic!("expected the tracked window");
+        };
+        assert!(window.is_fullscreen);
+
+        handle.shutdown().unwrap();
+    }
 
     #[tokio::test]
     async fn test_adapter_creation() {

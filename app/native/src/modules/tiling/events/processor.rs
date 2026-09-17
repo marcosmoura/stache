@@ -25,7 +25,7 @@ use crate::modules::tiling::actor::{
     GeometryUpdate, GeometryUpdateType, StateActorHandle, StateMessage, WindowCreatedInfo,
 };
 use crate::modules::tiling::identity::{AppIdentity, WindowTarget};
-use crate::modules::tiling::state::Rect;
+use crate::modules::tiling::state::{Rect, Screen};
 
 /// Default refresh rate if detection fails (60 Hz).
 const DEFAULT_REFRESH_RATE: f64 = 60.0;
@@ -35,6 +35,9 @@ const MIN_REFRESH_RATE: f64 = 30.0;
 
 /// Maximum refresh rate to prevent too-slow batching.
 const MAX_REFRESH_RATE: f64 = 360.0;
+
+/// Differences below this are display-mode rounding noise, not a retiming request.
+const REFRESH_RATE_EPSILON: f64 = 0.001;
 
 /// Repeatable, resettable completion signal used to acknowledge that a screen
 /// batch timer task has fully exited its loop.
@@ -70,23 +73,31 @@ struct ScreenBatch {
     /// Refresh rate in Hz.
     refresh_rate: f64,
 
+    /// Full display frame used to route geometry without querying CoreGraphics.
+    frame: Rect,
+
     /// Pending geometry updates for windows on this screen.
     updates: HashMap<(AppIdentity, u32), GeometryUpdate>,
 
     /// Whether the timer for this screen is running.
     timer_running: AtomicBool,
 
+    /// Wakes the timer when its configuration changes or it must stop.
+    wakeup: Arc<tokio::sync::Notify>,
+
     /// Completion acknowledgment for the currently running timer task.
     timer_done: Arc<TimerCompletion>,
 }
 
 impl ScreenBatch {
-    fn new(screen_id: u32, refresh_rate: f64) -> Self {
+    fn new(screen_id: u32, refresh_rate: f64, frame: Rect) -> Self {
         Self {
             screen_id,
             refresh_rate: refresh_rate.clamp(MIN_REFRESH_RATE, MAX_REFRESH_RATE),
+            frame,
             updates: HashMap::new(),
             timer_running: AtomicBool::new(false),
+            wakeup: Arc::new(tokio::sync::Notify::new()),
             timer_done: Arc::new(TimerCompletion::default()),
         }
     }
@@ -114,6 +125,9 @@ pub struct EventProcessor {
     /// (Identity, Window ID) → Screen ID mapping for routing geometry events.
     window_screen_map: Arc<DashMap<(AppIdentity, u32), u32>>,
 
+    /// Last known window frame, used to remap routes after a display change.
+    window_frames: Arc<DashMap<(AppIdentity, u32), Rect>>,
+
     /// Identity → Set of Window IDs mapping for destroy detection.
     /// When we get a destroy event but can't get the window ID, we compare
     /// against current windows from macOS to find which one was destroyed.
@@ -138,6 +152,7 @@ impl EventProcessor {
             actor_handle,
             screen_batches: Arc::new(Mutex::new(HashMap::new())),
             window_screen_map: Arc::new(DashMap::new()),
+            window_frames: Arc::new(DashMap::new()),
             pid_windows: Arc::new(Mutex::new(HashMap::new())),
             default_screen_id: AtomicU32::new(0),
             running: Arc::new(AtomicBool::new(false)),
@@ -155,6 +170,9 @@ impl EventProcessor {
             if let Some(batch) = batches.get_mut(&screen_id) {
                 let old_rate = batch.refresh_rate;
                 batch.refresh_rate = refresh_rate.clamp(MIN_REFRESH_RATE, MAX_REFRESH_RATE);
+                if (batch.refresh_rate - old_rate).abs() > REFRESH_RATE_EPSILON {
+                    batch.wakeup.notify_one();
+                }
                 tracing::debug!(
                     "Updated screen {} refresh rate: {} Hz → {} Hz",
                     screen_id,
@@ -165,7 +183,7 @@ impl EventProcessor {
             return;
         }
 
-        let batch = ScreenBatch::new(screen_id, refresh_rate);
+        let batch = ScreenBatch::new(screen_id, refresh_rate, Rect::zero());
         tracing::debug!(
             "Registered screen {} with refresh rate {} Hz (batch interval {:?})",
             screen_id,
@@ -187,32 +205,118 @@ impl EventProcessor {
         }
     }
 
+    /// Reconcile registered geometry batches with an authoritative display snapshot.
+    ///
+    /// The screen monitor captures this snapshot on the main thread, allowing
+    /// geometry callbacks to route using cached frames without native work.
+    pub fn reconcile_screens(&self, screens: &[Screen]) {
+        if screens.is_empty() {
+            tracing::warn!("tiling: ignoring empty screen topology snapshot");
+            return;
+        }
+
+        let mut screen_iter = screens.iter();
+        let Some(first_screen) = screen_iter.next() else {
+            return;
+        };
+        let screen_ids: HashSet<u32> = screens.iter().map(|screen| screen.id).collect();
+        let default_screen = screen_iter
+            .filter(|screen| screen.is_main)
+            .map(|screen| screen.id)
+            .min()
+            .unwrap_or(first_screen.id);
+
+        let removed_updates = {
+            let mut batches = self.screen_batches.lock();
+            for screen in screens {
+                let refresh_rate = screen.refresh_rate.clamp(MIN_REFRESH_RATE, MAX_REFRESH_RATE);
+                match batches.get_mut(&screen.id) {
+                    Some(batch) => {
+                        batch.frame = screen.frame;
+                        if (batch.refresh_rate - refresh_rate).abs() > REFRESH_RATE_EPSILON {
+                            batch.refresh_rate = refresh_rate;
+                            batch.wakeup.notify_one();
+                        }
+                    }
+                    None => {
+                        batches.insert(
+                            screen.id,
+                            ScreenBatch::new(screen.id, refresh_rate, screen.frame),
+                        );
+                    }
+                }
+            }
+
+            let removed: Vec<u32> = batches
+                .keys()
+                .copied()
+                .filter(|screen_id| !screen_ids.contains(screen_id))
+                .collect();
+            let mut updates = Vec::new();
+            for screen_id in removed {
+                if let Some(mut batch) = batches.remove(&screen_id) {
+                    batch.timer_running.store(false, Ordering::SeqCst);
+                    batch.wakeup.notify_waiters();
+                    updates.extend(batch.updates.drain().map(|(_, update)| update));
+                }
+            }
+            updates
+        };
+
+        self.default_screen_id.store(default_screen, Ordering::SeqCst);
+        for mut entry in self.window_screen_map.iter_mut() {
+            if !screen_ids.contains(entry.value()) {
+                let key = *entry.key();
+                let screen_id = self
+                    .window_frames
+                    .get(&key)
+                    .and_then(|frame| self.screen_for_frame(*frame))
+                    .unwrap_or(default_screen);
+                *entry.value_mut() = screen_id;
+            }
+        }
+
+        if !removed_updates.is_empty() {
+            let _ = self.actor_handle.send(StateMessage::BatchedGeometryUpdates(removed_updates));
+        }
+
+        if self.running.load(Ordering::SeqCst) {
+            for screen in screens {
+                self.start_screen_timer(screen.id);
+            }
+        }
+    }
+
     /// Unregister a screen.
     ///
     /// Any pending geometry updates for windows on this screen will be flushed.
     pub fn unregister_screen(&self, screen_id: u32) {
-        let mut batches = self.screen_batches.lock();
+        let (updates, was_registered, new_default) = {
+            let mut batches = self.screen_batches.lock();
+            let removed = batches.remove(&screen_id);
+            let was_registered = removed.is_some();
+            let updates = removed.map_or_else(Vec::new, |mut batch| {
+                batch.timer_running.store(false, Ordering::SeqCst);
+                batch.wakeup.notify_waiters();
+                batch.updates.drain().map(|(_, update)| update).collect()
+            });
+            let new_default = (self.default_screen_id.load(Ordering::SeqCst) == screen_id)
+                .then(|| batches.keys().next().copied().unwrap_or_default());
 
-        if let Some(mut batch) = batches.remove(&screen_id) {
-            // Stop the timer
-            batch.timer_running.store(false, Ordering::SeqCst);
+            drop(batches);
+            (updates, was_registered, new_default)
+        };
 
-            // Flush any pending updates
-            if !batch.updates.is_empty() {
-                let updates: Vec<GeometryUpdate> = batch.updates.drain().map(|(_, v)| v).collect();
-                drop(batches); // Release lock before sending
-                let _ = self.actor_handle.send(StateMessage::BatchedGeometryUpdates(updates));
-            }
-
-            tracing::debug!("Unregistered screen {screen_id}");
+        if let Some(new_default) = new_default {
+            self.default_screen_id.store(new_default, Ordering::SeqCst);
         }
 
-        // Update default screen if needed
-        let batches = self.screen_batches.lock();
-        if self.default_screen_id.load(Ordering::SeqCst) == screen_id
-            && let Some((&new_default, _)) = batches.iter().next()
-        {
-            self.default_screen_id.store(new_default, Ordering::SeqCst);
+        if !updates.is_empty() {
+            let _ = self.actor_handle.send(StateMessage::BatchedGeometryUpdates(updates));
+        }
+
+        if was_registered {
+            tracing::debug!("Unregistered screen {screen_id}");
         }
     }
 
@@ -226,6 +330,7 @@ impl EventProcessor {
     /// Remove the screen assignment for a window.
     pub fn remove_window(&self, identity: AppIdentity, window_id: u32) {
         self.window_screen_map.remove(&(identity, window_id));
+        self.window_frames.remove(&(identity, window_id));
     }
 
     /// Get the screen ID for a window.
@@ -235,14 +340,73 @@ impl EventProcessor {
             .map_or_else(|| self.default_screen_id.load(Ordering::SeqCst), |entry| *entry)
     }
 
+    fn screen_for_frame(&self, frame: Rect) -> Option<u32> {
+        let (x, y) = frame.center();
+        self.screen_batches
+            .lock()
+            .iter()
+            .filter(|(_, batch)| batch.frame.is_valid() && batch.frame.contains_point(x, y))
+            .map(|(screen_id, _)| *screen_id)
+            .min()
+    }
+
+    fn route_window_frame(&self, identity: AppIdentity, window_id: u32, frame: Rect) -> u32 {
+        let key = (identity, window_id);
+        self.window_frames.insert(key, frame);
+
+        let current = self.get_window_screen(identity, window_id);
+        let (x, y) = frame.center();
+        let remains_assigned = self
+            .screen_batches
+            .lock()
+            .get(&current)
+            .is_some_and(|batch| !batch.frame.is_valid() || batch.frame.contains_point(x, y));
+        if remains_assigned {
+            return current;
+        }
+
+        let screen_id = self
+            .screen_for_frame(frame)
+            .unwrap_or_else(|| self.default_screen_id.load(Ordering::SeqCst));
+        self.window_screen_map.insert(key, screen_id);
+        if screen_id != current {
+            // A timer on the old display may flush after the new display's
+            // timer. Move its coalesced entry with the routing assignment so
+            // an old frame cannot roll the actor state backwards.
+            let mut batches = self.screen_batches.lock();
+            let pending = batches.get_mut(&current).and_then(|batch| batch.updates.remove(&key));
+            if let Some(update) = pending
+                && let Some(batch) = batches.get_mut(&screen_id)
+            {
+                batch
+                    .updates
+                    .entry(key)
+                    .and_modify(|existing| {
+                        // The frame that caused reassignment is newer than
+                        // the old queued one; preserve only the combined kind.
+                        existing.update_type = match (existing.update_type, update.update_type) {
+                            (GeometryUpdateType::MoveResize, _)
+                            | (_, GeometryUpdateType::MoveResize)
+                            | (GeometryUpdateType::Move, GeometryUpdateType::Resize)
+                            | (GeometryUpdateType::Resize, GeometryUpdateType::Move) => {
+                                GeometryUpdateType::MoveResize
+                            }
+                            (kind, _) => kind,
+                        };
+                    })
+                    .or_insert(update);
+            }
+        }
+        screen_id
+    }
+
     /// Start the timer for a specific screen.
     fn start_screen_timer(&self, screen_id: u32) {
         let batches = self.screen_batches.clone();
         let actor_handle = self.actor_handle.clone();
         let running = self.running.clone();
 
-        // Get the batch interval for this screen
-        let interval = {
+        {
             let batches = batches.lock();
             match batches.get(&screen_id) {
                 Some(batch) => {
@@ -254,44 +418,44 @@ impl EventProcessor {
                         return; // Timer already running
                     }
                     batch.timer_done.reset();
-                    batch.batch_interval()
                 }
                 None => return,
             }
-        };
+        }
 
         tauri::async_runtime::spawn(async move {
-            let mut ticker = tokio::time::interval(interval);
-            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
             loop {
-                ticker.tick().await;
-
-                // Check if we should stop
-                if !running.load(Ordering::SeqCst) {
-                    break;
-                }
-
-                // Collect and clear pending updates for this screen
-                let updates: Vec<GeometryUpdate> = {
-                    let mut batches = batches.lock();
-                    match batches.get_mut(&screen_id) {
-                        Some(batch) => {
-                            if !batch.timer_running.load(Ordering::SeqCst) {
-                                break;
-                            }
-                            if batch.updates.is_empty() {
-                                continue;
-                            }
-                            batch.updates.drain().map(|(_, v)| v).collect()
+                let (interval, wakeup) = {
+                    let batches = batches.lock();
+                    match batches.get(&screen_id) {
+                        Some(batch) if batch.timer_running.load(Ordering::SeqCst) => {
+                            (batch.batch_interval(), Arc::clone(&batch.wakeup))
                         }
-                        None => break, // Screen was unregistered
+                        _ => break,
                     }
                 };
 
-                // Send batched updates to actor
-                if !updates.is_empty() {
-                    let _ = actor_handle.send(StateMessage::BatchedGeometryUpdates(updates));
+                tokio::select! {
+                    () = tokio::time::sleep(interval) => {
+                        if !running.load(Ordering::SeqCst) {
+                            break;
+                        }
+
+                        let updates: Vec<GeometryUpdate> = {
+                            let mut batches = batches.lock();
+                            match batches.get_mut(&screen_id) {
+                                Some(batch) if batch.timer_running.load(Ordering::SeqCst) => {
+                                    batch.updates.drain().map(|(_, v)| v).collect()
+                                }
+                                _ => break,
+                            }
+                        };
+
+                        if !updates.is_empty() {
+                            let _ = actor_handle.send(StateMessage::BatchedGeometryUpdates(updates));
+                        }
+                    }
+                    () = wakeup.notified() => {}
                 }
             }
 
@@ -307,7 +471,7 @@ impl EventProcessor {
             tracing::trace!("Batch timer stopped for screen {screen_id}");
         });
 
-        tracing::trace!("Batch timer started for screen {screen_id} ({interval:?})");
+        tracing::trace!("Batch timer started for screen {screen_id}");
     }
 
     /// Stop the batch flush timers.
@@ -318,6 +482,7 @@ impl EventProcessor {
             let batches = self.screen_batches.lock();
             for batch in batches.values() {
                 batch.timer_running.store(false, Ordering::SeqCst);
+                batch.wakeup.notify_waiters();
             }
         }
 
@@ -337,8 +502,12 @@ impl EventProcessor {
             let mut batches = self.screen_batches.lock();
             batches
                 .values_mut()
-                .filter(|batch| batch.timer_running.swap(false, Ordering::SeqCst))
-                .map(|batch| Arc::clone(&batch.timer_done))
+                .filter_map(|batch| {
+                    batch.timer_running.swap(false, Ordering::SeqCst).then(|| {
+                        batch.wakeup.notify_waiters();
+                        Arc::clone(&batch.timer_done)
+                    })
+                })
                 .collect()
         };
 
@@ -367,6 +536,7 @@ impl EventProcessor {
             }
         }
         self.window_screen_map.clear();
+        self.window_frames.clear();
         self.pid_windows.lock().clear();
     }
 
@@ -409,6 +579,7 @@ impl EventProcessor {
             tracing::trace!("tiling: dropping window created event without identity");
             return;
         };
+        self.route_window_frame(identity, info.window_id, info.frame);
         self.pid_windows.lock().entry(identity).or_default().insert(info.window_id);
 
         let _ = self.actor_handle.send(StateMessage::WindowCreated(info));
@@ -422,6 +593,7 @@ impl EventProcessor {
 
         // Remove from window-screen mapping
         let screen_id = self.window_screen_map.remove(&(identity, window_id)).map(|(_, id)| id);
+        self.window_frames.remove(&(identity, window_id));
 
         // Remove from geometry batch
         if let Some(screen_id) = screen_id
@@ -540,7 +712,7 @@ impl EventProcessor {
     ///
     /// The event is routed to the appropriate screen's batch queue.
     pub fn on_window_moved(&self, window_id: u32, identity: AppIdentity, frame: Rect) {
-        let screen_id = self.get_window_screen(identity, window_id);
+        let screen_id = self.route_window_frame(identity, window_id, frame);
         let mut batches = self.screen_batches.lock();
 
         // Find the target screen, falling back to any available screen
@@ -558,8 +730,10 @@ impl EventProcessor {
                     .and_modify(|e| {
                         e.frame = frame;
                         e.update_type = match e.update_type {
-                            GeometryUpdateType::Resize => GeometryUpdateType::MoveResize,
-                            _ => GeometryUpdateType::Move,
+                            GeometryUpdateType::Resize | GeometryUpdateType::MoveResize => {
+                                GeometryUpdateType::MoveResize
+                            }
+                            GeometryUpdateType::Move => GeometryUpdateType::Move,
                         };
                     })
                     .or_insert(GeometryUpdate {
@@ -581,7 +755,7 @@ impl EventProcessor {
     ///
     /// The event is routed to the appropriate screen's batch queue.
     pub fn on_window_resized(&self, window_id: u32, identity: AppIdentity, frame: Rect) {
-        let screen_id = self.get_window_screen(identity, window_id);
+        let screen_id = self.route_window_frame(identity, window_id, frame);
         let mut batches = self.screen_batches.lock();
 
         // Find the target screen, falling back to any available screen
@@ -599,8 +773,10 @@ impl EventProcessor {
                     .and_modify(|e| {
                         e.frame = frame;
                         e.update_type = match e.update_type {
-                            GeometryUpdateType::Move => GeometryUpdateType::MoveResize,
-                            _ => GeometryUpdateType::Resize,
+                            GeometryUpdateType::Move | GeometryUpdateType::MoveResize => {
+                                GeometryUpdateType::MoveResize
+                            }
+                            GeometryUpdateType::Resize => GeometryUpdateType::Resize,
                         };
                     })
                     .or_insert(GeometryUpdate {
@@ -727,9 +903,10 @@ impl EventProcessor {
     ///
     /// This is the batch version of `track_window_for_destroy_detection`.
     #[allow(clippy::significant_drop_tightening)]
-    pub fn track_windows_for_destroy_detection(&self, windows: &[(u32, AppIdentity)]) {
+    pub fn track_windows_for_destroy_detection(&self, windows: &[(u32, AppIdentity, Rect)]) {
         let mut pid_windows = self.pid_windows.lock();
-        for (window_id, identity) in windows {
+        for (window_id, identity, frame) in windows {
+            self.route_window_frame(*identity, *window_id, *frame);
             pid_windows.entry(*identity).or_default().insert(*window_id);
         }
         tracing::debug!(
@@ -800,11 +977,42 @@ mod tests {
     use super::*;
     use crate::modules::tiling::actor::StateActor;
     use crate::modules::tiling::identity::{AppIdentity, LaunchDateBits};
+    use crate::modules::tiling::state::Screen;
 
     fn test_identity() -> AppIdentity {
         AppIdentity {
             pid: 1000,
             launch_date: LaunchDateBits::from_time_interval_since_reference_date(1.0).unwrap(),
+        }
+    }
+
+    fn screen(id: u32, x: f64, refresh_rate: f64, is_main: bool) -> Screen {
+        Screen {
+            id,
+            name: format!("Screen {id}"),
+            frame: Rect::new(x, 0.0, 1_000.0, 800.0),
+            visible_frame: Rect::new(x, 0.0, 1_000.0, 800.0),
+            scale_factor: 1.0,
+            is_main,
+            is_builtin: false,
+            refresh_rate,
+        }
+    }
+
+    fn window_info(identity: AppIdentity, window_id: u32, frame: Rect) -> WindowCreatedInfo {
+        WindowCreatedInfo {
+            window_id,
+            pid: identity.pid,
+            identity: Some(identity),
+            app_id: "com.example.Test".to_string(),
+            app_name: "Test".to_string(),
+            title: "Test window".to_string(),
+            frame,
+            is_minimized: false,
+            is_fullscreen: false,
+            minimum_size: None,
+            tab_group_id: None,
+            is_active_tab: true,
         }
     }
 
@@ -875,6 +1083,101 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_window_admission_routes_geometry_to_its_display() {
+        let (handle, _stopped) = StateActor::spawn();
+        let processor = EventProcessor::new(handle.clone());
+        let identity = test_identity();
+
+        processor
+            .reconcile_screens(&[screen(1, 0.0, 60.0, true), screen(2, 1_000.0, 144.0, false)]);
+        processor.on_window_created(window_info(
+            identity,
+            100,
+            Rect::new(1_100.0, 100.0, 500.0, 500.0),
+        ));
+        processor.on_window_moved(100, identity, Rect::new(1_120.0, 100.0, 500.0, 500.0));
+
+        assert_eq!(processor.pending_geometry_count_for_screen(1), 0);
+        assert_eq!(processor.pending_geometry_count_for_screen(2), 1);
+
+        handle.shutdown().unwrap();
+    }
+
+    #[tokio::test]
+    async fn moving_between_displays_moves_the_pending_geometry_entry() {
+        let (handle, _stopped) = StateActor::spawn();
+        let processor = EventProcessor::new(handle.clone());
+        let identity = test_identity();
+
+        processor
+            .reconcile_screens(&[screen(1, 0.0, 60.0, true), screen(2, 1_000.0, 144.0, false)]);
+        processor.on_window_moved(100, identity, Rect::new(100.0, 100.0, 500.0, 500.0));
+        processor.on_window_moved(100, identity, Rect::new(1_100.0, 100.0, 500.0, 500.0));
+
+        assert_eq!(processor.pending_geometry_count_for_screen(1), 0);
+        assert_eq!(processor.pending_geometry_count_for_screen(2), 1);
+        let frame = processor
+            .screen_batches
+            .lock()
+            .get(&2)
+            .and_then(|batch| batch.updates.get(&(identity, 100)))
+            .map(|update| update.frame);
+        assert_eq!(frame, Some(Rect::new(1_100.0, 100.0, 500.0, 500.0)));
+
+        handle.shutdown().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_screen_reconciliation_rearms_running_timer_for_new_refresh_rate() {
+        let (handle, _stopped) = StateActor::spawn();
+        let processor = EventProcessor::new(handle.clone());
+        let identity = test_identity();
+
+        processor.reconcile_screens(&[screen(1, 0.0, 30.0, true)]);
+        processor.start();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        processor.set_window_screen(identity, 100, 1);
+        processor.on_window_moved(100, identity, Rect::new(100.0, 100.0, 500.0, 500.0));
+        processor.reconcile_screens(&[screen(1, 0.0, 360.0, true)]);
+
+        tokio::time::timeout(Duration::from_millis(20), async {
+            while processor.pending_geometry_count() != 0 {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("the retimed batch timer must flush using the new interval");
+
+        assert!(processor.stop_and_wait(Duration::from_secs(1)));
+        handle.shutdown().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_removed_screen_remaps_tracked_window_to_remaining_display() {
+        let (handle, _stopped) = StateActor::spawn();
+        let processor = EventProcessor::new(handle.clone());
+        let identity = test_identity();
+
+        processor
+            .reconcile_screens(&[screen(1, 0.0, 60.0, true), screen(2, 1_000.0, 144.0, false)]);
+        processor.on_window_created(window_info(
+            identity,
+            100,
+            Rect::new(1_100.0, 100.0, 500.0, 500.0),
+        ));
+        processor.on_window_moved(100, identity, Rect::new(1_120.0, 100.0, 500.0, 500.0));
+
+        processor.reconcile_screens(&[screen(1, 0.0, 60.0, true)]);
+        processor.on_window_moved(100, identity, Rect::new(120.0, 100.0, 500.0, 500.0));
+
+        assert_eq!(processor.screen_count(), 1);
+        assert_eq!(processor.pending_geometry_count_for_screen(1), 1);
+        assert_eq!(processor.pending_geometry_count_for_screen(2), 0);
+
+        handle.shutdown().unwrap();
+    }
+
+    #[tokio::test]
     async fn test_geometry_batching_per_screen() {
         let (handle, _stopped) = StateActor::spawn();
         let processor = EventProcessor::new(handle.clone());
@@ -926,6 +1229,76 @@ mod tests {
 
         assert_eq!(processor.screen_count(), 0);
         assert_eq!(processor.pending_geometry_count(), 0);
+
+        handle.shutdown().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_screen_unregistration_without_updates_does_not_deadlock() {
+        let (handle, _stopped) = StateActor::spawn();
+        let processor = std::sync::Arc::new(EventProcessor::new(handle.clone()));
+        processor.register_screen(1, 60.0);
+
+        let processor_for_unregister = std::sync::Arc::clone(&processor);
+        let completion = tokio::time::timeout(
+            Duration::from_secs(1),
+            tokio::task::spawn_blocking(move || processor_for_unregister.unregister_screen(1)),
+        )
+        .await
+        .expect("unregistering an empty batch must not block");
+        completion.expect("unregister task must not panic");
+
+        assert_eq!(processor.screen_count(), 0);
+        handle.shutdown().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_unknown_screen_unregistration_does_not_deadlock() {
+        let (handle, _stopped) = StateActor::spawn();
+        let processor = std::sync::Arc::new(EventProcessor::new(handle.clone()));
+
+        let processor_for_unregister = std::sync::Arc::clone(&processor);
+        let completion = tokio::time::timeout(
+            Duration::from_secs(1),
+            tokio::task::spawn_blocking(move || processor_for_unregister.unregister_screen(99)),
+        )
+        .await
+        .expect("unregistering an unknown screen must not block");
+        completion.expect("unregister task must not panic");
+
+        assert_eq!(processor.screen_count(), 0);
+        handle.shutdown().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_geometry_coalescing_keeps_move_resize_classification() {
+        let (handle, _stopped) = StateActor::spawn();
+        let processor = EventProcessor::new(handle.clone());
+        let identity = test_identity();
+        processor.register_screen(1, 60.0);
+        processor.set_window_screen(identity, 100, 1);
+
+        processor.on_window_resized(100, identity, Rect::new(0.0, 0.0, 100.0, 100.0));
+        processor.on_window_moved(100, identity, Rect::new(10.0, 20.0, 120.0, 100.0));
+        processor.on_window_moved(100, identity, Rect::new(20.0, 30.0, 120.0, 100.0));
+        processor.on_window_moved(101, identity, Rect::new(0.0, 0.0, 100.0, 100.0));
+        processor.on_window_resized(101, identity, Rect::new(0.0, 0.0, 120.0, 100.0));
+        processor.on_window_resized(101, identity, Rect::new(0.0, 0.0, 140.0, 100.0));
+
+        let update_types: Vec<GeometryUpdateType> = processor
+            .screen_batches
+            .lock()
+            .get(&1)
+            .map(|batch| {
+                [100, 101]
+                    .into_iter()
+                    .filter_map(|window_id| {
+                        batch.updates.get(&(identity, window_id)).map(|update| update.update_type)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert_eq!(update_types, vec![GeometryUpdateType::MoveResize; 2]);
 
         handle.shutdown().unwrap();
     }

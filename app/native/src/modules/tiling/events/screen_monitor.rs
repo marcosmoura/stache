@@ -46,10 +46,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use core_graphics::display::CGDisplay;
 use parking_lot::RwLock;
 
-use crate::modules::tiling::events::{EventProcessor, get_display_refresh_rate};
+use crate::modules::tiling::events::EventProcessor;
 
 /// Delay before processing screen changes (ms).
 ///
@@ -63,10 +62,6 @@ const SCREEN_CHANGE_DELAY_MS: u64 = 200;
 /// Display reconfiguration flags from CoreGraphics.
 #[allow(non_upper_case_globals)]
 mod cg_flags {
-    /// Display has been added.
-    pub const kCGDisplayAddFlag: u32 = 1 << 4;
-    /// Display has been removed.
-    pub const kCGDisplayRemoveFlag: u32 = 1 << 5;
     /// Display is being reconfigured (about to change).
     pub const kCGDisplayBeginConfigurationFlag: u32 = 1 << 0;
 }
@@ -191,13 +186,8 @@ impl ScreenMonitorAdapter {
 
     /// Registers all currently connected screens with the `EventProcessor`.
     pub fn register_all_screens(&self) {
-        let displays = get_all_display_ids();
-
-        for display_id in displays {
-            let refresh_rate = get_display_refresh_rate(display_id);
-            self.processor.register_screen(display_id, refresh_rate);
-            tracing::debug!("Registered screen {display_id} with refresh rate {refresh_rate} Hz");
-        }
+        let screens = crate::modules::tiling::actor::handlers::get_screens_from_macos();
+        self.processor.reconcile_screens(&screens);
     }
 
     /// Handles a screen configuration change.
@@ -223,10 +213,7 @@ impl ScreenMonitorAdapter {
             return;
         }
 
-        for display_id in get_all_display_ids() {
-            let refresh_rate = get_display_refresh_rate(display_id);
-            self.processor.register_screen(display_id, refresh_rate);
-        }
+        self.processor.reconcile_screens(&screens);
         self.processor.on_set_screens(screens);
         self.set_processing(false);
     }
@@ -247,16 +234,7 @@ unsafe extern "C" fn display_reconfiguration_callback(
     flags: u32,
     _user_info: *mut c_void,
 ) {
-    // Ignore "begin configuration" events - wait for the actual change
-    if flags & cg_flags::kCGDisplayBeginConfigurationFlag != 0 {
-        return;
-    }
-
-    // Only handle add/remove events (actual screen connect/disconnect)
-    let is_add = flags & cg_flags::kCGDisplayAddFlag != 0;
-    let is_remove = flags & cg_flags::kCGDisplayRemoveFlag != 0;
-
-    if !is_add && !is_remove {
+    if !should_debounce_reconfiguration(flags) {
         return;
     }
 
@@ -270,8 +248,7 @@ unsafe extern "C" fn display_reconfiguration_callback(
         return;
     }
 
-    let event_type = if is_add { "connected" } else { "disconnected" };
-    tracing::debug!("Screen {event_type} (display reconfiguration)");
+    tracing::debug!("Screen display reconfiguration completed");
 
     // Mark that we're processing to prevent reentrancy
     adapter.set_processing(true);
@@ -290,56 +267,10 @@ unsafe extern "C" fn display_reconfiguration_callback(
     });
 }
 
-// ============================================================================
-// Display Enumeration
-// ============================================================================
-
-/// Gets all connected display IDs.
-fn get_all_display_ids() -> Vec<u32> {
-    // CGGetActiveDisplayList
-    let mut display_count: u32 = 0;
-
-    // First, get the count
-    let result = unsafe {
-        #[link(name = "CoreGraphics", kind = "framework")]
-        unsafe extern "C" {
-            fn CGGetActiveDisplayList(
-                max_displays: u32,
-                active_displays: *mut u32,
-                display_count: *mut u32,
-            ) -> i32;
-        }
-
-        CGGetActiveDisplayList(0, std::ptr::null_mut(), &raw mut display_count)
-    };
-
-    if result != 0 || display_count == 0 {
-        // Fall back to just the main display
-        return vec![CGDisplay::main().id];
-    }
-
-    // Allocate buffer and get display list
-    let mut displays = vec![0u32; display_count as usize];
-
-    let result = unsafe {
-        #[link(name = "CoreGraphics", kind = "framework")]
-        unsafe extern "C" {
-            fn CGGetActiveDisplayList(
-                max_displays: u32,
-                active_displays: *mut u32,
-                display_count: *mut u32,
-            ) -> i32;
-        }
-
-        CGGetActiveDisplayList(display_count, displays.as_mut_ptr(), &raw mut display_count)
-    };
-
-    if result != 0 {
-        return vec![CGDisplay::main().id];
-    }
-
-    displays.truncate(display_count as usize);
-    displays
+/// Returns whether a CoreGraphics display callback represents a completed
+/// configuration that requires a debounced topology snapshot.
+const fn should_debounce_reconfiguration(flags: u32) -> bool {
+    flags & cg_flags::kCGDisplayBeginConfigurationFlag == 0
 }
 
 // ============================================================================
@@ -425,21 +356,17 @@ mod tests {
     }
 
     #[test]
-    fn test_get_all_display_ids() {
-        let displays = get_all_display_ids();
-        // Should have at least one display
-        assert!(!displays.is_empty());
-        // Main display should be in the list
-        let main_id = CGDisplay::main().id;
-        assert!(displays.contains(&main_id));
+    fn test_cg_flags() {
+        // Verify flag values match CoreGraphics
+        assert_eq!(cg_flags::kCGDisplayBeginConfigurationFlag, 0x01);
     }
 
     #[test]
-    fn test_cg_flags() {
-        // Verify flag values match CoreGraphics
-        assert_eq!(cg_flags::kCGDisplayAddFlag, 0x10);
-        assert_eq!(cg_flags::kCGDisplayRemoveFlag, 0x20);
-        assert_eq!(cg_flags::kCGDisplayBeginConfigurationFlag, 0x01);
+    fn test_completed_reconfiguration_is_debounced_without_add_or_remove_flags() {
+        assert!(!should_debounce_reconfiguration(
+            cg_flags::kCGDisplayBeginConfigurationFlag
+        ));
+        assert!(should_debounce_reconfiguration(0));
     }
 
     #[tokio::test]
