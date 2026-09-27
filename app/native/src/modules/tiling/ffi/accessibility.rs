@@ -318,6 +318,18 @@ impl AXElement {
     #[must_use]
     pub fn is_hidden(&self) -> Option<bool> { unsafe { get_bool_attr(self.raw, cf_hidden()) } }
 
+    /// Sets the application's `AXHidden` attribute.
+    ///
+    /// Fallback for applications where `NSRunningApplication.hide()` is a
+    /// no-op (e.g. Device Hub), and which `AppKit`'s `isHidden` never reports.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the attribute cannot be set.
+    pub fn set_hidden(&self, hidden: bool) -> Result<(), String> {
+        unsafe { set_bool_attr(self.raw, cf_hidden(), hidden) }
+    }
+
     /// Returns whether this is the main window.
     #[must_use]
     pub fn is_main(&self) -> Option<bool> { unsafe { get_bool_attr(self.raw, cf_main()) } }
@@ -667,6 +679,28 @@ unsafe fn get_bool_attr(element: AXUIElementRef, attr: *const c_void) -> Option<
     unsafe { CFRelease(value) };
 
     Some(result)
+}
+
+/// Sets a boolean attribute on an element.
+unsafe fn set_bool_attr(
+    element: AXUIElementRef,
+    attr: *const c_void,
+    value: bool,
+) -> Result<(), String> {
+    if element.is_null() {
+        return Err("Null element".to_string());
+    }
+
+    let cf_value = if value {
+        CFBoolean::true_value()
+    } else {
+        CFBoolean::false_value()
+    };
+    let result = unsafe {
+        AXUIElementSetAttributeValue(element, attr, cf_value.as_concrete_TypeRef().cast())
+    };
+
+    ax_result_to_error(result, "set boolean attribute")
 }
 
 /// Gets the position attribute from an element.

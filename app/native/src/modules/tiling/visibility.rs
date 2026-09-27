@@ -9,7 +9,9 @@ use std::collections::BTreeSet;
 
 use parking_lot::Mutex;
 
-use super::effects::window_ops::{HideAppOutcome, UnhideAppOutcome};
+use super::effects::window_ops::{
+    HideAppOutcome, UnhideAppOutcome, ax_app_hidden, set_ax_app_hidden,
+};
 use crate::modules::tiling::identity::AppIdentity;
 
 /// Summary of a best-effort restoration attempt.
@@ -67,11 +69,14 @@ fn restore_one_exact(owned: AppIdentity) -> bool {
             |app| unsafe { AppIdentity::from_ns_running_app_with_pid(*app, owned_pid) },
             |app| unsafe {
                 let hidden: BOOL = msg_send![*app, isHidden];
-                Some(hidden == YES)
+                if hidden == YES {
+                    return Some(true);
+                }
+                ax_app_hidden(owned_pid)
             },
             |app| unsafe {
                 let result: BOOL = msg_send![*app, unhide];
-                result == YES
+                result == YES || set_ax_app_hidden(owned_pid, false)
             },
         )
     })

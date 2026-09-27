@@ -29,6 +29,7 @@ use core_foundation::string::CFString;
 use objc::runtime::{BOOL, Class, Object, YES};
 use objc::{msg_send, sel, sel_impl};
 
+use crate::modules::tiling::ffi::accessibility::AXElement;
 use crate::modules::tiling::identity::{AppIdentity, WindowTarget};
 use crate::modules::tiling::state::Rect;
 
@@ -864,12 +865,27 @@ impl UnhideAppOutcome {
     }
 }
 
+/// Reads an application's accessibility `AXHidden` state.
+///
+/// `NSRunningApplication.isHidden` neither reflects `AXHidden` nor changes for
+/// apps whose `hide()` is a no-op (e.g. Device Hub).
+#[must_use]
+pub(crate) fn ax_app_hidden(pid: i32) -> Option<bool> { AXElement::application(pid)?.is_hidden() }
+
+/// Sets an application's accessibility `AXHidden` attribute.
+pub(crate) fn set_ax_app_hidden(pid: i32, hidden: bool) -> bool {
+    AXElement::application(pid).is_some_and(|app| app.set_hidden(hidden).is_ok())
+}
+
 /// Hides an application instance, validated by its exact identity.
 ///
 /// Re-resolves `NSRunningApplication` for the identity's PID, captures the
 /// actual identity from that same object, and refuses the hide on any
 /// mismatch (PID reuse). Runs in its own autorelease pool (called from the
 /// actor's task thread).
+///
+/// `NSRunningApplication.hide()` is a no-op for some applications, so the
+/// accessibility `AXHidden` attribute is used as a fallback.
 #[must_use]
 pub fn hide_app_instance_with_outcome(identity: AppIdentity) -> HideAppOutcome {
     objc::rc::autoreleasepool(|| unsafe {
@@ -891,11 +907,11 @@ pub fn hide_app_instance_with_outcome(identity: AppIdentity) -> HideAppOutcome {
             return HideAppOutcome::Failed;
         }
         let is_hidden: BOOL = msg_send![app, isHidden];
-        if is_hidden == YES {
+        if is_hidden == YES || ax_app_hidden(identity.pid) == Some(true) {
             return HideAppOutcome::AlreadyHidden;
         }
         let result: BOOL = msg_send![app, hide];
-        if result == YES {
+        if result == YES || set_ax_app_hidden(identity.pid, true) {
             HideAppOutcome::HiddenByStache
         } else {
             HideAppOutcome::Failed
@@ -925,17 +941,21 @@ pub fn unhide_app_instance_with_outcome(identity: AppIdentity) -> UnhideAppOutco
         if actual != identity {
             return UnhideAppOutcome::Failed;
         }
-        let is_hidden: BOOL = msg_send![app, isHidden];
-        if is_hidden == YES {
+        let ns_hidden: BOOL = msg_send![app, isHidden];
+        let ax_hidden = ax_app_hidden(identity.pid) == Some(true);
+        if ns_hidden != YES && !ax_hidden {
+            return UnhideAppOutcome::AlreadyShown;
+        }
+        if ns_hidden == YES {
             let result: BOOL = msg_send![app, unhide];
             if result == YES {
-                UnhideAppOutcome::UnhiddenByStache
-            } else {
-                UnhideAppOutcome::Failed
+                return UnhideAppOutcome::UnhiddenByStache;
             }
-        } else {
-            UnhideAppOutcome::AlreadyShown
         }
+        if ax_hidden && set_ax_app_hidden(identity.pid, false) {
+            return UnhideAppOutcome::UnhiddenByStache;
+        }
+        UnhideAppOutcome::Failed
     })
 }
 
@@ -959,7 +979,10 @@ pub fn app_instance_is_hidden(identity: AppIdentity) -> Option<bool> {
             return None; // PID-reuse or process mismatch
         }
         let is_hidden: BOOL = msg_send![app, isHidden];
-        Some(is_hidden == YES)
+        if is_hidden == YES {
+            return Some(true);
+        }
+        Some(ax_app_hidden(identity.pid) == Some(true))
     })
 }
 
