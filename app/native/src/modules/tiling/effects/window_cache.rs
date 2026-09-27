@@ -661,7 +661,9 @@ fn resolve_current_identity(identity: AppIdentity) -> Option<AppIdentity> {
         if app.is_null() {
             return None;
         }
-        AppIdentity::from_ns_running_app(app)
+        // `identity.pid` is authoritative: apps that report NSNotFound for
+        // `processIdentifier` still re-resolve to the same exact identity.
+        AppIdentity::from_ns_running_app_with_pid(app, identity.pid)
     })
 }
 

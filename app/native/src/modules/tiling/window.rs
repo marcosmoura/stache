@@ -13,6 +13,9 @@
 
 use std::collections::HashMap;
 
+use core_foundation::array::CFArrayRef;
+use core_foundation::base::TCFType;
+use core_foundation::string::CFString;
 use objc::runtime::{BOOL, Class, Object, YES};
 use objc::{msg_send, sel, sel_impl};
 
@@ -44,6 +47,55 @@ unsafe fn ns_string_to_rust(ns_string: *mut Object) -> String {
     // SAFETY: The UTF8String method returns a valid null-terminated C string
     // or null (which we checked above).
     unsafe { std::ffi::CStr::from_ptr(utf8) }.to_string_lossy().into_owned()
+}
+
+/// Returns the PIDs and owner names reported by Core Graphics windows.
+///
+/// Some Xcode applications are registered with `NSWorkspace` but report
+/// `NSNotFound` as their process ID. Their windows still expose the real PID
+/// through Core Graphics.
+fn get_window_owners() -> Vec<(i32, String)> {
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGWindowListCopyWindowInfo(option: u32, relative_to_window: u32) -> CFArrayRef;
+    }
+
+    let windows = unsafe { CGWindowListCopyWindowInfo(0, 0) };
+    if windows.is_null() {
+        return Vec::new();
+    }
+
+    let windows = windows.cast_mut().cast::<Object>();
+    let owner_pid_key = CFString::new("kCGWindowOwnerPID");
+    let owner_name_key = CFString::new("kCGWindowOwnerName");
+    let count: usize = unsafe { msg_send![windows, count] };
+    let mut owners = Vec::with_capacity(count);
+
+    for index in 0..count {
+        let window: *mut Object = unsafe { msg_send![windows, objectAtIndex: index] };
+        let pid: i32 = unsafe {
+            let pid_number: *mut Object =
+                msg_send![window, objectForKey: owner_pid_key.as_concrete_TypeRef()];
+            msg_send![pid_number, intValue]
+        };
+        let owner_name: *mut Object =
+            unsafe { msg_send![window, objectForKey: owner_name_key.as_concrete_TypeRef()] };
+        owners.push((pid, unsafe { ns_string_to_rust(owner_name) }));
+    }
+
+    unsafe { CFRelease(windows.cast()) };
+    owners
+}
+
+#[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {
+    fn CFRelease(cf: *const std::ffi::c_void);
+}
+
+fn find_window_owner_pid<T: AsRef<str>>(owners: &[(i32, T)], app_name: &str) -> Option<i32> {
+    owners.iter().find_map(|(pid, owner_name)| {
+        (*pid > 0 && owner_name.as_ref().eq_ignore_ascii_case(app_name)).then_some(*pid)
+    })
 }
 
 // ============================================================================
@@ -101,13 +153,18 @@ pub fn get_running_apps() -> Vec<AppInfo> {
                 continue;
             }
 
-            let pid: i32 = msg_send![app, processIdentifier];
+            let reported_pid: i32 = msg_send![app, processIdentifier];
+            let name = ns_string_to_rust(msg_send![app, localizedName]);
+            let pid = if reported_pid > 0 {
+                reported_pid
+            } else {
+                find_window_owner_pid(&get_window_owners(), &name).unwrap_or(reported_pid)
+            };
             if pid <= 0 {
                 continue;
             }
 
             let bundle_id = ns_string_to_rust(msg_send![app, bundleIdentifier]);
-            let name = ns_string_to_rust(msg_send![app, localizedName]);
             let is_hidden: BOOL = msg_send![app, isHidden];
 
             // Create AX element for this app
@@ -436,6 +493,13 @@ unsafe fn get_focused_window_id_unsafe() -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finds_window_owner_pid_for_registered_app_without_a_process_id() {
+        let owners = [(101, "Finder"), (202, "Device Hub"), (-1, "Device Hub")];
+
+        assert_eq!(find_window_owner_pid(&owners, "Device Hub"), Some(202));
+    }
 
     #[test]
     fn test_get_running_apps_returns_results() {

@@ -43,8 +43,9 @@ use parking_lot::RwLock;
 use crate::modules::tiling::events::EventProcessor;
 use crate::modules::tiling::events::observer::{
     add_observer_for_pid, remove_observer_for_identity, should_observe_app,
+    take_identities_for_dead_processes,
 };
-use crate::modules::tiling::identity::AppIdentity;
+use crate::modules::tiling::identity::{AppIdentity, process_id_for_app};
 use crate::platform::objc::nsstring;
 
 // ============================================================================
@@ -248,6 +249,13 @@ impl AppMonitorAdapter {
             tracing::warn!("Failed to add observer for pid {pid}: {e}");
         }
 
+        // Adopt windows created before the observer was attached.
+        crate::modules::tiling::init::adopt_existing_windows_for_instance(
+            &self.processor,
+            identity,
+            pid,
+        );
+
         self.processor.on_app_launched(identity, pid, bundle_id, name);
     }
 
@@ -263,16 +271,33 @@ impl AppMonitorAdapter {
             return;
         }
 
-        let Some(identity) = identity else {
-            tracing::trace!(pid, "app_monitor: dropping terminate event (no identity)");
-            return;
-        };
         tracing::debug!("App terminated: pid={pid}, bundle={bundle_id:?}, name={name:?}");
 
-        // Remove the AX observer for this app (must happen on main thread)
-        remove_observer_for_identity(&identity);
+        if let Some(identity) = identity {
+            // Remove the AX observer for this app (must happen on main thread)
+            remove_observer_for_identity(&identity);
+            self.processor.on_app_terminated(identity, pid);
+            return;
+        }
 
-        self.processor.on_app_terminated(identity, pid);
+        // Apps that report `NSNotFound` from `processIdentifier` (e.g. Device
+        // Hub) cannot be attributed to an identity here. Prune observers whose
+        // process is gone; the actor removes their windows and recomputes
+        // layouts.
+        let dead = take_identities_for_dead_processes();
+        if dead.is_empty() {
+            tracing::trace!(
+                pid,
+                "app_monitor: no resolvable identity or dead observers to clean up"
+            );
+            return;
+        }
+        for identity in dead {
+            tracing::debug!(
+                "app_monitor: cleaning up terminated instance {identity:?} (bundle={bundle_id:?})"
+            );
+            self.processor.on_app_terminated(identity, identity.pid);
+        }
     }
 }
 
@@ -321,13 +346,13 @@ extern "C" fn handle_app_launch_notification(_self: &Object, _cmd: Sel, notifica
         return;
     }
 
-    let (identity, pid, bundle_id, app_name) = extract_app_info(notification);
-    if identity.is_none() || pid <= 0 {
+    let info = extract_app_info(notification);
+    if info.identity.is_none() || info.pid <= 0 {
         return;
     }
 
     if let Some(adapter) = get_installed_adapter() {
-        adapter.on_app_launched(identity, pid, bundle_id, app_name);
+        adapter.on_app_launched(info.identity, info.pid, info.bundle_id, info.app_name);
     }
 }
 
@@ -341,48 +366,62 @@ extern "C" fn handle_app_terminate_notification(
         return;
     }
 
-    let (identity, pid, bundle_id, app_name) = extract_app_info(notification);
-    if identity.is_none() || pid <= 0 {
-        return;
-    }
+    let info = extract_app_info(notification);
 
     if let Some(adapter) = get_installed_adapter() {
-        adapter.on_app_terminated(identity, pid, bundle_id.as_deref(), app_name.as_deref());
+        adapter.on_app_terminated(
+            info.identity,
+            info.pid,
+            info.bundle_id.as_deref(),
+            info.app_name.as_deref(),
+        );
+    }
+}
+
+/// Application lifecycle data extracted from an `NSWorkspace` notification.
+struct AppNotificationInfo {
+    /// Exact identity, or `None` when the PID is not resolvable (termination).
+    identity: Option<AppIdentity>,
+    /// Resolved PID, or 0 when it cannot be resolved.
+    pid: i32,
+    bundle_id: Option<String>,
+    app_name: Option<String>,
+}
+
+impl AppNotificationInfo {
+    const fn empty() -> Self {
+        Self {
+            identity: None,
+            pid: 0,
+            bundle_id: None,
+            app_name: None,
+        }
     }
 }
 
 /// Extracts app info from an `NSNotification`.
-/// Returns (`identity`, `pid`, `bundle_id`, `app_name`). `identity` is None if
-/// capture fails (fail-closed — the caller drops the event).
-fn extract_app_info(
-    notification: *mut Object,
-) -> (Option<AppIdentity>, i32, Option<String>, Option<String>) {
+///
+/// Identity resolution handles apps that report `NSNotFound` (-1) from
+/// `processIdentifier` (e.g. Device Hub): on launch the real PID is recovered
+/// from the executable path, while on termination the process is already gone
+/// and only the bundle identifier remains.
+fn extract_app_info(notification: *mut Object) -> AppNotificationInfo {
     if notification.is_null() {
-        return (None, 0, None, None);
+        return AppNotificationInfo::empty();
     }
 
     unsafe {
         // Get userInfo dictionary from notification
         let user_info: *mut Object = msg_send![notification, userInfo];
         if user_info.is_null() {
-            return (None, 0, None, None);
+            return AppNotificationInfo::empty();
         }
 
         // Get NSRunningApplication from userInfo
         let app_key = nsstring("NSWorkspaceApplicationKey");
         let running_app: *mut Object = msg_send![user_info, objectForKey: app_key];
         if running_app.is_null() {
-            return (None, 0, None, None);
-        }
-
-        // Capture identity from this exact object BEFORE extracting PID.
-        // Must use the same object — no separate PID rediscovery.
-        let identity = objc::rc::autoreleasepool(|| AppIdentity::from_ns_running_app(running_app));
-
-        // Get the PID
-        let pid: i32 = msg_send![running_app, processIdentifier];
-        if pid <= 0 {
-            return (None, 0, None, None);
+            return AppNotificationInfo::empty();
         }
 
         // Get the bundle identifier
@@ -405,7 +444,21 @@ fn extract_app_info(
             }
         };
 
-        (identity, pid, bundle_id, app_name)
+        // Identity comes from this exact object; PID resolution falls back to
+        // the executable path when `processIdentifier` reports `NSNotFound`.
+        let resolved_pid = objc::rc::autoreleasepool(|| process_id_for_app(running_app));
+        let identity = resolved_pid.and_then(|pid| {
+            objc::rc::autoreleasepool(|| {
+                AppIdentity::from_ns_running_app_with_pid(running_app, pid)
+            })
+        });
+
+        AppNotificationInfo {
+            identity,
+            pid: resolved_pid.unwrap_or(0),
+            bundle_id,
+            app_name,
+        }
     }
 }
 
@@ -477,11 +530,11 @@ mod tests {
 
     #[test]
     fn test_extract_app_info_null_notification() {
-        let (identity, pid, bundle_id, name) = extract_app_info(std::ptr::null_mut());
-        assert!(identity.is_none());
-        assert_eq!(pid, 0);
-        assert!(bundle_id.is_none());
-        assert!(name.is_none());
+        let info = extract_app_info(std::ptr::null_mut());
+        assert!(info.identity.is_none());
+        assert_eq!(info.pid, 0);
+        assert!(info.bundle_id.is_none());
+        assert!(info.app_name.is_none());
     }
 
     #[tokio::test]

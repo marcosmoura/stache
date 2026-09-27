@@ -20,7 +20,7 @@ use core_foundation::string::CFString;
 use parking_lot::Mutex;
 
 use super::types::{WindowEvent, WindowEventType};
-use crate::modules::tiling::identity::AppIdentity;
+use crate::modules::tiling::identity::{AppIdentity, is_process_alive};
 
 // ============================================================================
 // Thread-Safe Wrapper
@@ -262,7 +262,10 @@ pub fn add_observer_for_pid(pid: i32) -> Result<(), String> {
             if app.is_null() {
                 return None;
             }
-            AppIdentity::from_ns_running_app(app)
+            // The PID is authoritative here: it was resolved from window
+            // ownership, so apps that report NSNotFound for `processIdentifier`
+            // still resolve.
+            AppIdentity::from_ns_running_app_with_pid(app, pid)
         }
     });
     let Some(identity) = identity else {
@@ -334,7 +337,7 @@ pub fn add_observer_for_pid(pid: i32) -> Result<(), String> {
             if app.is_null() {
                 return None;
             }
-            AppIdentity::from_ns_running_app(app)
+            AppIdentity::from_ns_running_app_with_pid(app, pid)
         }
     });
     if current_identity != Some(identity) {
@@ -383,6 +386,21 @@ fn take_observer_record_for_identity(
     state.observers.remove(&address)
 }
 
+/// Releases a removed observer's run-loop source and Core Foundation handle.
+fn release_observer_record(record: &ObserverRecord) {
+    let address = record.observer.0 as usize;
+    unsafe {
+        let source = AXObserverGetRunLoopSource(record.observer.0);
+        if !source.is_null() {
+            let run_loop = CFRunLoop::get_main();
+            let mode = core_foundation::runloop::kCFRunLoopDefaultMode;
+            CFRunLoopRemoveSource(run_loop.as_concrete_TypeRef().cast(), source, mode.cast());
+        }
+        CFRelease(record.observer.0.cast());
+    }
+    tracing::trace!(address, "ax_observer: released observer");
+}
+
 /// Removes and releases the observer registered for an exact identity.
 pub fn remove_observer_for_identity(identity: &AppIdentity) {
     let record = {
@@ -394,18 +412,39 @@ pub fn remove_observer_for_identity(identity: &AppIdentity) {
     let Some(record) = record else {
         return;
     };
+    release_observer_record(&record);
+}
 
-    let address = record.observer.0 as usize;
-    unsafe {
-        let source = AXObserverGetRunLoopSource(record.observer.0);
-        if !source.is_null() {
-            let run_loop = CFRunLoop::get_main();
-            let mode = core_foundation::runloop::kCFRunLoopDefaultMode;
-            CFRunLoopRemoveSource(run_loop.as_concrete_TypeRef().cast(), source, mode.cast());
-        }
-        CFRelease(record.observer.0.cast());
+/// Removes and releases observers whose process is no longer alive, returning
+/// their identities.
+///
+/// Application termination notifications carry no usable PID for apps that
+/// report `NSNotFound` from `processIdentifier` (e.g. Device Hub). Pruning by
+/// process liveness still attributes the termination, so those observers and
+/// their tracked windows are cleaned up and layouts recomputed.
+pub fn take_identities_for_dead_processes() -> Vec<AppIdentity> {
+    let (identities, records) = {
+        let mut state_guard = OBSERVER_STATE.lock();
+        let Some(state) = state_guard.as_mut() else {
+            return Vec::new();
+        };
+        let identities: Vec<AppIdentity> = state
+            .identity_to_observer
+            .keys()
+            .filter(|identity| !is_process_alive(identity.pid))
+            .copied()
+            .collect();
+        let records: Vec<ObserverRecord> = identities
+            .iter()
+            .filter_map(|identity| take_observer_record_for_identity(state, identity))
+            .collect();
+        drop(state_guard);
+        (identities, records)
+    };
+    for record in &records {
+        release_observer_record(record);
     }
-    tracing::trace!(address, "ax_observer: removed observer for identity");
+    identities
 }
 
 /// Checks if we should observe an app.

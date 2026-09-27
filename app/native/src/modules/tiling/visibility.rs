@@ -50,6 +50,7 @@ fn restore_one_exact_with<T>(
 /// pool and synchronous call; it is never stored or sent across threads.
 #[must_use]
 fn restore_one_exact(owned: AppIdentity) -> bool {
+    let owned_pid = owned.pid;
     objc::rc::autoreleasepool(|| {
         restore_one_exact_with(
             owned,
@@ -61,7 +62,9 @@ fn restore_one_exact(owned: AppIdentity) -> bool {
                 ];
                 (!app.is_null()).then_some(app)
             },
-            |app| unsafe { AppIdentity::from_ns_running_app(*app) },
+            // `owned_pid` is authoritative: apps that report NSNotFound for
+            // `processIdentifier` still resolve their exact identity.
+            |app| unsafe { AppIdentity::from_ns_running_app_with_pid(*app, owned_pid) },
             |app| unsafe {
                 let hidden: BOOL = msg_send![*app, isHidden];
                 Some(hidden == YES)

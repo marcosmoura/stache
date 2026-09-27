@@ -863,7 +863,9 @@ fn capture_identity_for_pid(pid: i32) -> Option<AppIdentity> {
         if app.is_null() {
             return None;
         }
-        AppIdentity::from_ns_running_app(app)
+        // The PID is authoritative here: it was resolved from window ownership,
+        // so apps that report NSNotFound for `processIdentifier` still resolve.
+        AppIdentity::from_ns_running_app_with_pid(app, pid)
     })
 }
 
@@ -1033,6 +1035,56 @@ fn track_existing_windows(
     tracing::trace!("tiling: sending InitComplete...");
     if let Err(e) = handle.send(StateMessage::InitComplete { subscriber: subscriber.clone() }) {
         tracing::error!("tiling: failed to send InitComplete: {e}");
+    }
+}
+
+/// Adopts the windows an application already has when it launches.
+///
+/// A newly launched app can create its window before Stache attaches the app's
+/// `AXObserver`, so no `AXWindowCreated` notification arrives. Scanning once at
+/// launch closes that gap. Re-adopting an already-tracked window only refreshes
+/// it, so this is safe to call alongside the observer.
+pub fn adopt_existing_windows_for_instance(
+    processor: &EventProcessor,
+    identity: AppIdentity,
+    pid: i32,
+) {
+    use super::actor::WindowCreatedInfo;
+    use super::rules::should_tile_window_with_rules;
+    use super::window::get_all_windows_including_hidden;
+
+    let ignore_rules = &get_config().tiling.ignore;
+    for window in get_all_windows_including_hidden() {
+        if window.pid != pid {
+            continue;
+        }
+        if !should_tile_window_with_rules(
+            &window.bundle_id,
+            &window.app_name,
+            &window.title,
+            ignore_rules,
+        ) {
+            continue;
+        }
+        if crate::modules::tiling::tabs::is_tab_for_identity(window.id, identity) {
+            // Tabs are tracked by the tab registry, not as standalone windows.
+            continue;
+        }
+
+        processor.on_window_created(WindowCreatedInfo {
+            window_id: window.id,
+            pid: window.pid,
+            identity: Some(identity),
+            app_id: window.bundle_id.clone(),
+            app_name: window.app_name.clone(),
+            title: window.title.clone(),
+            frame: window.frame,
+            is_minimized: window.is_minimized,
+            is_fullscreen: window.is_fullscreen,
+            minimum_size: window.minimum_size,
+            tab_group_id: None,
+            is_active_tab: true,
+        });
     }
 }
 

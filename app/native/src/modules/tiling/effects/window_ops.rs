@@ -186,7 +186,9 @@ fn resolve_current_identity(identity: AppIdentity) -> Option<AppIdentity> {
         if app.is_null() {
             return None;
         }
-        AppIdentity::from_ns_running_app(app)
+        // `identity.pid` is authoritative: apps that report NSNotFound for
+        // `processIdentifier` still re-resolve to the same exact identity.
+        AppIdentity::from_ns_running_app_with_pid(app, identity.pid)
     })
 }
 
@@ -755,7 +757,7 @@ fn activate_app(identity: AppIdentity) -> bool {
             return false;
         }
 
-        let Some(actual) = AppIdentity::from_ns_running_app(app) else {
+        let Some(actual) = AppIdentity::from_ns_running_app_with_pid(app, identity.pid) else {
             return false;
         };
         if !identity_matches_for_activation(identity, actual) {
@@ -881,7 +883,7 @@ pub fn hide_app_instance_with_outcome(identity: AppIdentity) -> HideAppOutcome {
         if app.is_null() {
             return HideAppOutcome::Failed;
         }
-        let Some(actual) = AppIdentity::from_ns_running_app(app) else {
+        let Some(actual) = AppIdentity::from_ns_running_app_with_pid(app, identity.pid) else {
             return HideAppOutcome::Failed;
         };
         if actual != identity {
@@ -917,7 +919,7 @@ pub fn unhide_app_instance_with_outcome(identity: AppIdentity) -> UnhideAppOutco
         if app.is_null() {
             return UnhideAppOutcome::Failed;
         }
-        let Some(actual) = AppIdentity::from_ns_running_app(app) else {
+        let Some(actual) = AppIdentity::from_ns_running_app_with_pid(app, identity.pid) else {
             return UnhideAppOutcome::Failed;
         };
         if actual != identity {
@@ -952,7 +954,7 @@ pub fn app_instance_is_hidden(identity: AppIdentity) -> Option<bool> {
         if app.is_null() {
             return None;
         }
-        let actual = AppIdentity::from_ns_running_app(app)?;
+        let actual = AppIdentity::from_ns_running_app_with_pid(app, identity.pid)?;
         if actual != identity {
             return None; // PID-reuse or process mismatch
         }
