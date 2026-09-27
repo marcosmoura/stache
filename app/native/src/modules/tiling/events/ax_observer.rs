@@ -42,7 +42,7 @@ use parking_lot::RwLock;
 use super::types::{WindowEvent, WindowEventType};
 use crate::modules::tiling::actor::WindowCreatedInfo;
 use crate::modules::tiling::events::EventProcessor;
-use crate::modules::tiling::identity::AppIdentity;
+use crate::modules::tiling::identity::{AppIdentity, process_id_for_app};
 use crate::modules::tiling::rules::{is_pip_window, should_tile_window_with_rules};
 use crate::modules::tiling::state::Rect;
 
@@ -734,6 +734,11 @@ fn get_focused_window_for_app(pid: i32) -> Option<u32> {
 }
 
 /// Gets app info (`bundle_id`, name) for a PID.
+///
+/// Apps that report `NSNotFound` from `processIdentifier` (e.g. Device Hub)
+/// cannot be matched directly, so they are re-resolved from their executable
+/// path. Without this, their windows would be tracked with no bundle ID, and
+/// workspace rules could never match them.
 fn get_app_info_for_pid(pid: i32) -> (String, String) {
     use objc::runtime::Object;
     use objc::{class, msg_send, sel, sel_impl};
@@ -750,6 +755,7 @@ fn get_app_info_for_pid(pid: i32) -> (String, String) {
         }
 
         let count: usize = msg_send![apps, count];
+        let mut unresolved: Vec<*mut Object> = Vec::new();
         for i in 0..count {
             let app: *mut Object = msg_send![apps, objectAtIndex: i];
             if app.is_null() {
@@ -758,6 +764,17 @@ fn get_app_info_for_pid(pid: i32) -> (String, String) {
 
             let app_pid: i32 = msg_send![app, processIdentifier];
             if app_pid == pid {
+                let bundle_id = ns_string_to_rust(msg_send![app, bundleIdentifier]);
+                let name = ns_string_to_rust(msg_send![app, localizedName]);
+                return (bundle_id, name);
+            }
+            if app_pid <= 0 {
+                unresolved.push(app);
+            }
+        }
+
+        for app in unresolved {
+            if process_id_for_app(app) == Some(pid) {
                 let bundle_id = ns_string_to_rust(msg_send![app, bundleIdentifier]);
                 let name = ns_string_to_rust(msg_send![app, localizedName]);
                 return (bundle_id, name);
