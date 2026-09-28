@@ -167,20 +167,34 @@ unsafe fn executable_path_of(app: *mut objc::runtime::Object) -> Option<String> 
     }
 }
 
+/// Number of PID entries to read from a `proc_listallpids` result.
+///
+/// `proc_listallpids` returns the number of PIDs written, *not* the number of
+/// bytes. Dividing that by `size_of::<pid_t>()` truncates the scan to a quarter
+/// of the process table and silently drops most processes.
+#[allow(clippy::missing_const_for_fn)] // `usize::min` is not const-stable here
+fn pid_list_count(reported: i32, capacity: usize) -> usize {
+    if reported <= 0 {
+        return 0;
+    }
+    #[allow(clippy::cast_sign_loss)] // guarded by the `reported <= 0` check above
+    let count = reported as usize;
+    count.min(capacity)
+}
+
 /// Finds the live PID whose executable path exactly matches `executable_path`.
 fn pid_for_executable_path(executable_path: &str) -> Option<i32> {
     const PATH_BUFFER_SIZE: usize = 4096;
 
-    let capacity = 4096usize;
+    let capacity = 8192usize;
     let mut pids = vec![0 as libc::pid_t; capacity];
     let buffer_size = i32::try_from(capacity * std::mem::size_of::<libc::pid_t>()).ok()?;
     // SAFETY: `pids` is valid for `buffer_size` bytes.
-    let bytes = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), buffer_size) };
-    if bytes <= 0 {
+    let reported = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), buffer_size) };
+    let count = pid_list_count(reported, capacity);
+    if count == 0 {
         return None;
     }
-    let entry_size = std::mem::size_of::<libc::pid_t>();
-    let count = usize::try_from(bytes).ok()? / entry_size;
     let buffer_len = u32::try_from(PATH_BUFFER_SIZE).ok()?;
     let mut path_buffer = vec![0 as libc::c_char; PATH_BUFFER_SIZE];
 
@@ -298,6 +312,18 @@ mod tests {
     }
 
     #[test]
+    fn pid_list_count_treats_the_result_as_a_pid_count() {
+        // `proc_listallpids` returns the number of PIDs, not bytes. Dividing by
+        // `size_of::<pid_t>()` scans only a quarter of the process table and
+        // silently misses most processes.
+        assert_eq!(pid_list_count(1238, 8192), 1238);
+        assert_eq!(pid_list_count(0, 8192), 0);
+        assert_eq!(pid_list_count(-1, 8192), 0);
+        // A report larger than the buffer is clamped to the buffer's capacity.
+        assert_eq!(pid_list_count(9000, 8192), 8192);
+    }
+
+    #[test]
     fn kernel_scan_resolves_a_live_process_for_a_known_path() {
         // Other test binaries may share this path (nextest runs one process per
         // test), so assert the scan returns *a* live process for the path.
@@ -307,6 +333,37 @@ mod tests {
 
         assert!(is_process_alive(found));
         assert_eq!(kernel_path_of(found).as_deref(), Some(path.as_str()));
+    }
+
+    #[test]
+    fn kernel_scan_covers_the_tail_of_the_process_table() {
+        // Paths from the last quarter of the table are missed entirely by a
+        // truncated scan, so resolving them proves the scan is complete.
+        let capacity = 8192usize;
+        let mut pids = vec![0 as libc::pid_t; capacity];
+        let buffer_size = i32::try_from(capacity * std::mem::size_of::<libc::pid_t>()).unwrap();
+        // SAFETY: `pids` is valid for `buffer_size` bytes.
+        let reported = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), buffer_size) };
+        assert!(reported > 0, "process table is non-empty");
+        // Deliberately independent of `pid_list_count` so the tail is derived
+        // from the true table size even if the production count is truncated.
+        #[allow(clippy::cast_sign_loss)] // guarded by the `reported > 0` check above
+        let total = (reported as usize).min(capacity);
+
+        let tail: Vec<(i32, String)> = pids
+            .iter()
+            .take(total)
+            .skip(total - total / 4)
+            .filter(|pid| **pid > 0)
+            .filter_map(|&pid| kernel_path_of(pid).map(|path| (pid, path)))
+            .take(20)
+            .collect();
+        assert!(!tail.is_empty(), "tail of the process table has readable paths");
+
+        for (_, path) in &tail {
+            let found = pid_for_executable_path(path).expect("tail path resolves");
+            assert_eq!(kernel_path_of(found).as_deref(), Some(path.as_str()));
+        }
     }
 
     #[test]
