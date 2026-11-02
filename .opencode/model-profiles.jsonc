@@ -1,0 +1,52 @@
+// Project profiles for Stache.
+//
+// Every profile inherits the global one (description, color, built-in agents)
+// and only adds the models this project's own agents need. The global agents
+// are inherited per field, so a profile here only names project-only agents.
+{
+  "extendGlobal": true,
+  "profiles": {
+    "openai": {
+      "agents": {
+        "orchestrator": { "model": "openai/gpt-6.1-sol#medium" },
+        "explorer": { "model": "openai/gpt-6-luna#low" },
+        "spec-writer": { "model": "openai/gpt-6.1-sol#medium" },
+      },
+    },
+    "opencode-free": {
+      "agents": {
+        "orchestrator": { "model": "opencode/deepseek-v4.1-flash-free#high" },
+        "explorer": { "model": "opencode/deepseek-v4.1-flash-free#low" },
+        "spec-writer": { "model": "opencode/deepseek-v4.1-flash-free#high" },
+      },
+    },
+    "opencode-go": {
+      "agents": {
+        "orchestrator": { "model": "opencode-go/deepseek-v4.1-flash#high" },
+        "explorer": { "model": "opencode-go/deepseek-v4.1-flash#low" },
+        "spec-writer": { "model": "opencode-go/deepseek-v4.1-flash#high" },
+      },
+    },
+    "anthropic": {
+      "agents": {
+        "orchestrator": { "model": "claude-agent/opus#medium" },
+        "explorer": { "model": "claude-agent/haiku#low" },
+        "spec-writer": { "model": "claude-agent/opus#medium" },
+      },
+    },
+    "mixed-anthropic": {
+      "agents": {
+        "orchestrator": { "model": "claude-agent/opus#medium" },
+        "explorer": { "model": "opencode-go/deepseek-v4.1-flash#low" },
+        "spec-writer": { "model": "claude-agent/opus#medium" },
+      },
+    },
+    "mixed-openai": {
+      "agents": {
+        "orchestrator": { "model": "openai/gpt-6.1-sol#medium" },
+        "explorer": { "model": "opencode-go/deepseek-v4.1-flash#low" },
+        "spec-writer": { "model": "openai/gpt-6.1-sol#medium" },
+      },
+    },
+  },
+}
