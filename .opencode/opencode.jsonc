@@ -6,15 +6,30 @@
   "default_agent": "build",
 
   "agents": {
-    "plan": { "disabled": true },
-    "explore": { "disabled": true },
-    "general": { "disabled": true },
-    "scout": { "disabled": true },
-    "shipper": { "disabled": true },
+    "plan": {
+      "disabled": true,
+      "model": "openai/gpt-6.1-sol#medium",
+    },
+    "explore": {
+      "disabled": true,
+      "model": "opencode-go/deepseek-v4.1-flash#low",
+    },
+    "general": {
+      "disabled": true,
+      "model": "opencode-go/deepseek-v4.1-flash#high",
+    },
+    "scout": {
+      "disabled": true,
+      "model": "opencode-go/deepseek-v4.1-flash#low",
+    },
+    "shipper": {
+      "disabled": true,
+      "model": "opencode-go/deepseek-v4.1-flash#low",
+    },
 
     "orchestrator": {
       "mode": "primary",
-      "model": "claude-agent/opus#medium",
+      "model": "openai/gpt-6.1-sol#medium",
       "color": "#cba6f7",
       "permissions": [
         { "action": "subagent", "resource": "*", "effect": "deny" },
@@ -36,7 +51,7 @@
 
     "spec-writer": {
       "mode": "subagent",
-      "model": "claude-agent/opus#high",
+      "model": "openai/gpt-6.1-sol#medium",
       "permissions": [{ "action": "subagent", "resource": "*", "effect": "deny" }],
     },
 
@@ -48,11 +63,21 @@
 
     "reviewer": {
       "mode": "subagent",
-      "model": "claude-agent/opus#high",
+      "model": "openai/gpt-6.1-sol#high",
       "permissions": [
         { "action": "edit", "resource": "*", "effect": "deny" },
         { "action": "subagent", "resource": "*", "effect": "deny" },
       ],
     },
+    "title": {
+      "model": "opencode-go/deepseek-v4.1-flash#low",
+    },
+    "build": {
+      "model": "opencode-go/deepseek-v4.1-flash#high",
+    },
+    "compaction": {
+      "model": "openai/gpt-6.1-sol#high",
+    },
   },
+  "model": "openai/gpt-6.1-sol",
 }
