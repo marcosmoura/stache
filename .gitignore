@@ -38,3 +38,6 @@ app/native/resources/Frameworks/
 
 # Local deepwork orchestration state
 .slim/deepwork/
+
+# Agent workflow worktrees
+.worktrees/

@@ -20,6 +20,10 @@
   // Status Bar Configuration
   // ---------------------------------------------------------------------------
   "bar": {
+    // Enable or disable the status bar
+    // Default: false
+    "enabled": true,
+
     // Weather widget configuration
     "weather": {
       // Path to an environment file containing API keys.
@@ -46,8 +50,12 @@
   // Wallpaper Configuration
   // ---------------------------------------------------------------------------
   "wallpapers": {
+    // Enable or disable wallpaper management
+    // Default: false
+    "enabled": true,
+
     // Option 1: Directory containing wallpaper images
-    // All supported image files (jpg, jpeg, png, webp, bmp, gif) will be used
+    // All supported image files (jpg, jpeg, png, webp) will be used
     // Supports ~ for home directory expansion
     "path": "~/Pictures/Wallpapers",
 
@@ -226,11 +234,12 @@
     "enabled": false,
 
     // Music app to launch when Apple Music/iTunes is blocked
-    // Options: "tidal" | "spotify" | "none"
+    // Options: "tidal" | "spotify" | "feishin" | "none"
     //   - "tidal": Launch Tidal (/Applications/TIDAL.app)
     //   - "spotify": Launch Spotify (/Applications/Spotify.app)
+    //   - "feishin": Launch Feishin (/Applications/Feishin.app)
     //   - "none": Don't launch any replacement app
-    // Default: "tidal"
+    // Default: "spotify"
     "targetApp": "spotify",
   },
 
@@ -254,21 +263,21 @@
       {
         "name": "main",
         "screen": "main", // "main", "secondary", or screen name
-        "layout": "dwindle", // "dwindle", "master", "monocle", "floating", "split", "split-vertical", "split-horizontal"
+        "layout": "dwindle", // "dwindle", "master", "monocle", "floating", "grid", "split", "split-vertical", "split-horizontal"
       },
       {
         "name": "code",
         "screen": "main",
         "layout": "master",
         // Window matching rules - windows matching these rules go to this workspace
-        "rules": [{ "appId": "com.microsoft.VSCode" }, { "app": "Cursor" }],
+        "rules": [{ "appId": "com.microsoft.VSCode" }, { "appName": "Cursor" }],
       },
     ],
 
     // Applications/windows to ignore (never managed by tiling)
     "ignore": [
       { "appId": "com.apple.finder" }, // Finder
-      { "app": "System Settings" }, // System Settings
+      { "appName": "System Settings" }, // System Settings
       { "title": "Picture in Picture" }, // PiP windows
     ],
 
@@ -276,7 +285,7 @@
     "animations": {
       "enabled": true,
       "duration": 200, // Duration in milliseconds
-      "easing": "easeOutQuad", // "linear", "easeIn", "easeOut", "easeInOut", "easeOutQuad", "spring"
+      "easing": "ease-out", // "linear", "ease-in", "ease-out", "ease-in-out", "ease-out-expo", "spring"
     },
 
     // Gap configuration (spacing between windows and screen edges)
@@ -295,7 +304,7 @@
 
     // Master layout settings
     "master": {
-      "ratio": 0.5, // Master window takes 50% of screen
+      "ratio": 50, // Master window width as a percentage (0-100, default 60)
       "position": "left", // "left", "right", "top", "bottom", "auto"
     },
 
@@ -358,7 +367,7 @@
       },
 
       // Windows that should not have borders (in addition to tiling ignore rules)
-      "ignore": [{ "app": "Arc" }],
+      "ignore": [{ "appName": "Arc" }],
     },
   },
 }

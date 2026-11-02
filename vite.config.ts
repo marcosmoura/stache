@@ -68,7 +68,7 @@ export default defineConfig({
     host: host || false,
     hmr: host ? hmr : undefined,
     watch: {
-      ignored: ['**/app/native/**', '**/coverage/**'],
+      ignored: ['**/app/native/**', '**/coverage/**', '**/.worktrees/**'],
     },
   },
   build: {

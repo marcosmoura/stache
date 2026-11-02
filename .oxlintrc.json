@@ -1,6 +1,13 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "ignorePatterns": ["**/dist/**", "coverage/**", "node_modules/**", "app/native/**", "target/**"],
+  "ignorePatterns": [
+    "**/dist/**",
+    "coverage/**",
+    "node_modules/**",
+    "app/native/**",
+    "target/**",
+    ".worktrees/**"
+  ],
   "plugins": ["eslint", "typescript", "import"],
   "env": {
     "browser": true,

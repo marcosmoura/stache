@@ -1,0 +1,58 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  // Project agents: only `build` and `orchestrator` are primary.
+  // Role prompts live in .agents/roles/; .opencode/agents/*.md are thin wrappers.
+  "default_agent": "build",
+
+  "agents": {
+    "plan": { "disabled": true },
+    "explore": { "disabled": true },
+    "general": { "disabled": true },
+    "scout": { "disabled": true },
+    "shipper": { "disabled": true },
+
+    "orchestrator": {
+      "mode": "primary",
+      "model": "claude-agent/opus#medium",
+      "color": "#cba6f7",
+      "permissions": [
+        { "action": "subagent", "resource": "*", "effect": "deny" },
+        { "action": "subagent", "resource": "explorer", "effect": "allow" },
+        { "action": "subagent", "resource": "spec-writer", "effect": "allow" },
+        { "action": "subagent", "resource": "worker", "effect": "allow" },
+        { "action": "subagent", "resource": "reviewer", "effect": "allow" },
+      ],
+    },
+
+    "explorer": {
+      "mode": "subagent",
+      "model": "opencode-go/deepseek-v4.1-flash#low",
+      "permissions": [
+        { "action": "edit", "resource": "*", "effect": "deny" },
+        { "action": "subagent", "resource": "*", "effect": "deny" },
+      ],
+    },
+
+    "spec-writer": {
+      "mode": "subagent",
+      "model": "claude-agent/opus#high",
+      "permissions": [{ "action": "subagent", "resource": "*", "effect": "deny" }],
+    },
+
+    "worker": {
+      "mode": "subagent",
+      "model": "opencode-go/deepseek-v4.1-flash#high",
+      "permissions": [{ "action": "subagent", "resource": "*", "effect": "deny" }],
+    },
+
+    "reviewer": {
+      "mode": "subagent",
+      "model": "claude-agent/opus#high",
+      "permissions": [
+        { "action": "edit", "resource": "*", "effect": "deny" },
+        { "action": "subagent", "resource": "*", "effect": "deny" },
+      ],
+    },
+  },
+}
