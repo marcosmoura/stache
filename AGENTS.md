@@ -20,14 +20,14 @@ pnpm format                   # Oxfmt + cargo fmt
 
 ## Detailed Documentation
 
-See [docs/agents/](docs/agents/README.md) for comprehensive guides:
+See [_docs/agents/](_docs/agents/README.md) for comprehensive guides:
 
-- [Architecture](docs/agents/architecture.md) — Binary modes, IPC, directory structure
-- [Rust Patterns](docs/agents/rust-patterns.md) — Tauri commands, events, config types
-- [React Patterns](docs/agents/react-patterns.md) — Components, hooks, Linaria styling
-- [Tiling WM](docs/agents/tiling.md) — Layouts, borders, workspace management
-- [Common Tasks](docs/agents/common-tasks.md) — Adding widgets, CLI commands, config options
-- [Gotchas](docs/agents/gotchas.md) — Critical pitfalls to avoid
+- [Architecture](_docs/agents/architecture.md) — Binary modes, IPC, directory structure
+- [Rust Patterns](_docs/agents/rust-patterns.md) — Tauri commands, events, config types
+- [React Patterns](_docs/agents/react-patterns.md) — Components, hooks, Linaria styling
+- [Tiling WM](_docs/agents/tiling.md) — Layouts, borders, workspace management
+- [Common Tasks](_docs/agents/common-tasks.md) — Adding widgets, CLI commands, config options
+- [Gotchas](_docs/agents/gotchas.md) — Critical pitfalls to avoid
 
 ## Superpowers Preferences
 

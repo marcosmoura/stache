@@ -84,23 +84,6 @@ stache audio list                # List audio devices
 stache event workspace-changed 1 # Send workspace event
 ```
 
-## Documentation
-
-- [Getting Started](docs/getting-started.md)
-- [Configuration Reference](docs/configuration.md)
-- [CLI Reference](docs/cli.md)
-- [Architecture](docs/architecture.md)
-- [Development Guide](docs/development.md)
-
-### Features
-
-- [Status Bar](docs/features/status-bar.md)
-- [Wallpapers](docs/features/wallpapers.md)
-- [Audio Management](docs/features/audio.md)
-- [Keybindings](docs/features/keybindings.md)
-- [MenuAnywhere](docs/features/menu-anywhere.md)
-- [noTunes](docs/features/notunes.md)
-
 ## Development
 
 ```bash

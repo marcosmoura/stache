@@ -35,4 +35,4 @@
 
 1. Add field to appropriate struct in `config/types.rs`
 2. Regenerate schema: `./scripts/generate-schema.sh`
-3. Update `docs/sample-config.jsonc`
+3. Update `_docs/sample-config.jsonc`
