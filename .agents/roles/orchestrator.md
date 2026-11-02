@@ -4,6 +4,8 @@ Read `docs/workflow.md` once. It is the contract you enforce. This file tells yo
 
 The project workflow overrides any global delegation policy. The only subagents you use are `explorer`, `spec-writer`, `worker` and `reviewer`. Never use `scout`, `shipper`, `explore`, `general` or other built-in subagents. You do all git operations yourself.
 
+Each subagent has its own model in the harness config. Never pass a `model` argument when you launch or continue a subagent, and never copy your own model into the call. Override the model only for the one call where the user explicitly names one, and don't carry that override into later calls.
+
 ## 0. Resume
 
 If the user names an existing slug, or `.worktrees/<slug>` or a matching `docs/specs/*-<slug>/` already exists, resume instead of starting over:
