@@ -1,0 +1,12 @@
+brace_style = 'PreferSameLine'
+chain_width = 80
+fn_call_width = 65
+fn_single_line = true
+group_imports = "StdExternalCrate"
+imports_granularity = 'Module'
+overflow_delimited_expr = true
+reorder_impl_items = true
+single_line_let_else_max_width = 60
+struct_lit_width = 30
+use_field_init_shorthand = true
+where_single_line = true

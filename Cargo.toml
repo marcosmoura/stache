@@ -2,7 +2,14 @@ cargo-features = ["profile-rustflags", "trim-paths"]
 
 [workspace]
 resolver = "2"
-members = ["app/native"]
+members = [
+    "src/crates/app",
+    "src/crates/cli",
+    "src/crates/macos",
+    "src/crates/modules/proxy-audio",
+    "src/crates/sdk",
+]
+exclude = ["_legacy"]
 
 [workspace.package]
 version = "0.25.0"

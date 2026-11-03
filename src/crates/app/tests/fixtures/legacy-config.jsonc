@@ -1,0 +1,25 @@
+{
+  // Frozen legacy sample used only by the migration test.
+  "execOnStartup": ["open -a Terminal"],
+  "logging": { "level": "debug" },
+  "proxyAudio": {
+    "enabled": true,
+    "input": [{ "name": "AirPods Pro" }],
+    "output": [
+      {
+        "name": "External Speakers",
+        "strategy": "startsWith",
+        "dependsOn": { "name": "MiniFuse", "strategy": "contains" },
+      },
+    ],
+  },
+  "bar": { "enabled": true, "height": 32 },
+  "commandQuit": { "enabled": true },
+  "wallpapers": { "enabled": false },
+  "keybindings": { "Command+Control+R": "stache reload" },
+  "menuAnywhere": { "enabled": false },
+  "notunes": { "enabled": false, "targetApp": "spotify" },
+  "tiling": { "enabled": false },
+  "widgets": { "calendar": true },
+  "futureKey": 1,
+}

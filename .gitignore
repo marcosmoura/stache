@@ -30,11 +30,8 @@ coverage
 test-results
 .vitest-attachments/
 
-# Sidecar binaries and resources (downloaded, not committed)
-app/native/binaries/*
-!app/native/binaries/.gitkeep
-app/native/resources/lib/
-app/native/resources/Frameworks/
+# New Tauri generated schemas
+src/crates/app/gen/
 
 # Local deepwork orchestration state
 .slim/deepwork/

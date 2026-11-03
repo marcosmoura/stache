@@ -1,0 +1,81 @@
+{
+  "$id": "https://raw.githubusercontent.com/marcosmoura/stache/main/schemas/global.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GlobalConfig",
+  "description": "The global configuration shared by every module.\n\nThe registry never hosts this type as a module; it is a catalog entry whose\nfile name is `global.jsonc`. `enabled` exists only to satisfy\n[`ModuleConfig`] and is always `true`.",
+  "type": "object",
+  "properties": {
+    "execOnStartup": {
+      "description": "Commands to execute once per desktop launch.",
+      "$ref": "#/$defs/StartupCommands",
+      "default": []
+    },
+    "logging": {
+      "description": "Logging behavior for the host.",
+      "$ref": "#/$defs/LoggingConfig",
+      "default": {
+        "debug": false,
+        "level": "info"
+      }
+    }
+  },
+  "$defs": {
+    "LogLevel": {
+      "description": "Severity of one log record.",
+      "oneOf": [
+        {
+          "description": "Development detail.",
+          "type": "string",
+          "const": "debug"
+        },
+        {
+          "description": "Normal lifecycle information.",
+          "type": "string",
+          "const": "info"
+        },
+        {
+          "description": "A recoverable problem.",
+          "type": "string",
+          "const": "warn"
+        },
+        {
+          "description": "A failure.",
+          "type": "string",
+          "const": "error"
+        }
+      ]
+    },
+    "LoggingConfig": {
+      "description": "Logging behavior selected by `global.jsonc`.",
+      "type": "object",
+      "properties": {
+        "debug": {
+          "description": "Whether the host includes development-only detail in its records.",
+          "type": "boolean",
+          "default": false
+        },
+        "level": {
+          "description": "Minimum severity the host writes.",
+          "$ref": "#/$defs/LogLevel",
+          "default": "info"
+        }
+      }
+    },
+    "StartupCommands": {
+      "description": "Startup commands, accepted as one string or an ordered list.",
+      "anyOf": [
+        {
+          "description": "One command.",
+          "type": "string"
+        },
+        {
+          "description": "Commands executed sequentially.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      ]
+    }
+  }
+}

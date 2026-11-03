@@ -2,4 +2,9 @@
 **/*.tsx
 **/dist/**/*.css
 **/coverage/**/*.css
-!**/*.styles.ts
+!**/*.styles.tsx
+_legacy/**
+.worktrees/**
+target/**
+src/ui/dist/**
+src/ui/coverage/**

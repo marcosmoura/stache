@@ -1,36 +1,41 @@
 # AGENTS.md
 
-**Stache** is a macOS-only Tauri 2.x desktop app: custom status bar, tiling window manager, wallpapers, audio device switching, keybindings and small system tweaks.
+**Stache Next** is a macOS 26+ Tauri 2 tray-only skeleton. Typed configuration,
+the standalone CLI and the control-socket foundation ship; runtime modules do not.
+New sources live in `src/crates/` and `src/ui/`; root configs/scripts/docs remain at repository root.
+The independent old application lives in `_legacy/`; do not port its behavior without an approved part.
 
 ## Essentials
 
-- **Package manager**: `pnpm`
-- **Platform**: macOS only (Accessibility APIs, `NSDistributedNotificationCenter`)
-- **Rust**: nightly toolchain, Clippy `pedantic` + `nursery`, warnings are errors
-- **UI**: React + TypeScript + Linaria, tests run in a real browser (Vitest + Playwright)
+- Package manager: Bun 1.4.4; pnpm is allowed only inside `_legacy/`.
+- Rust: retained nightly/rustfmt, workspace Clippy pedantic + nursery, warnings as errors.
+- UI: React + TypeScript + Linaria + React Compiler/Vite, React Query and UI-local zustand.
+- Browser tests: Vitest + Playwright WebKit, not Bun's test runner.
 
-## Commands
-
-```bash
-pnpm tauri:dev                # Run the full app with hot reload
-pnpm test                     # All tests (vitest + cargo nextest)
-pnpm lint                     # All linters (tsc, oxlint, stylelint, cargo sort, clippy)
-pnpm format                   # oxfmt + cargo fmt
-./scripts/generate-schema.sh  # Regenerate stache.schema.json after config type changes
+```sh
+bun run tauri:dev
+bun run lint
+bun run format:check
+bun run test
+bun run test:ui:coverage
+bun run generate-schema
+cargo run -q -p stache-app --bin stache -- schema   # one binary, CLI mode
+bun run format # explicit mutation
 ```
 
-## Documentation
-
-Start at [docs/index.md](docs/index.md). It routes you to the one or two docs your task needs. Don't read the whole `docs/` tree.
+Start at [docs/index.md](docs/index.md), then read only task-relevant docs.
+Root checks exclude archive/build/generated/worktree inputs. Never launch legacy automation for a build.
 
 ## Workflow
 
-- Simple task (one obvious change, a few files): work on it directly in the current checkout.
-- Substantial task: use the orchestrator (OpenCode agent `orchestrator`, or `claude --agent orchestrator` / `/orchestrate` in Claude Code). See [docs/workflow.md](docs/workflow.md).
-- This project's subagents are `explorer`, `spec-writer`, `worker` and `reviewer`. The global `scout`, `shipper`, `explore` and `general` agents are disabled here: use `explorer` for scoping, and do git operations yourself.
+Small changes can be done directly. Substantial work uses `orchestrator` (OpenCode),
+`claude --agent orchestrator` or `/orchestrate`; see [docs/workflow.md](docs/workflow.md).
+Project subagents are `explorer`, `spec-writer`, `worker`, `reviewer`; global defaults are disabled.
 
 ## Hard rules
 
-- Never merge a branch whose spec in `docs/specs/` has a part that isn't `status: done`.
-- When you change behavior a doc describes, update that doc in the same change.
-- Never set a git author or identity yourself.
+- Never merge a branch with an unfinished part in `docs/specs/`.
+- Ask approval before implementing each part; planned APIs are not shipped APIs.
+- Update behavior docs in the same change. Preserve archived historical instructions.
+- Never set git identity. Linked-worktree prepare must not change shared hook configuration.
+- Keep legacy/new identities distinct; never terminate a process by shared executable name.

@@ -1,0 +1,3109 @@
+//! The host-owned module registry.
+//!
+//! One registry owns every transition. There are no global registries and no
+//! mutable statics. Each module has its own lock, so independent modules can be
+//! operated on concurrently; the registry-wide map lock is never held while a
+//! module method runs. Multi-module operations (start, shutdown, permission and
+//! service recovery) take a separate lifecycle lock so they cannot interleave.
+//! The only nesting is the consumer's module lock while `service_ready` reads the
+//! provider's published metadata; it never takes the provider's module lock,
+//! calls provider code or joins a worker. Readers never take a module lock, so
+//! `snapshot`, `snapshots` and service readiness cannot wait on module code or a
+//! worker join.
+//!
+//! Each slot publishes its metadata into a separately locked cell at every
+//! transition. The cell may show the last completed state while a transition is
+//! in flight; a stopping module publishes its non-running target before cleanup
+//! begins, so dependents never observe a service as ready during shutdown.
+//!
+//! Lifecycle calls that join workers (`stop`, `shutdown`, disable, pause) run
+//! on the caller's thread. The host must call them off the main thread and
+//! dispatch UI updates instead.
+
+use std::any::Any;
+use std::collections::{HashMap, HashSet};
+use std::fmt;
+use std::hash::{Hash, Hasher};
+use std::marker::PhantomData;
+use std::ops::{Deref, DerefMut};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
+
+use crate::context::ModuleContext;
+use crate::error::{
+    ErrorCategory, ModuleError, ModuleResult, Operation, RegistryError, RegistryResult,
+};
+use crate::events::EventBus;
+use crate::logging::{Logger, ScopedLogger};
+use crate::module::{Module, ModuleConfig, ModuleDescriptor, ModuleId, ServiceId};
+use crate::permissions::{Permission, PermissionProvider, PermissionStatus};
+use crate::status::{
+    ConfigDiagnostic, ModuleFailure, ModuleSnapshot, ModuleStatus, UnavailableReason,
+};
+use crate::threading::{CancellationToken, MainThreadExecutor, WorkerGroup};
+use crate::windows::{SurfaceId, WindowBackend, WindowCapability};
+use crate::{dependencies, lock};
+
+/// A typed reference to a registered module.
+///
+/// The configuration type comes from `Module::Config`, so `reload` cannot be
+/// given a configuration of the wrong type. Handles are plain identifiers; a
+/// stale handle is rejected as [`RegistryError::UnknownModule`].
+pub struct ModuleHandle<C> {
+    id: ModuleId,
+    marker: PhantomData<fn() -> C>,
+}
+
+impl<C> ModuleHandle<C> {
+    /// The module identifier behind this handle.
+    #[must_use]
+    pub const fn id(&self) -> ModuleId { self.id }
+}
+
+impl<C> Copy for ModuleHandle<C> {}
+
+impl<C> Clone for ModuleHandle<C> {
+    fn clone(&self) -> Self { *self }
+}
+
+impl<C> PartialEq for ModuleHandle<C> {
+    fn eq(&self, other: &Self) -> bool { self.id == other.id }
+}
+
+impl<C> Eq for ModuleHandle<C> {}
+
+impl<C> Hash for ModuleHandle<C> {
+    fn hash<H: Hasher>(&self, state: &mut H) { self.id.hash(state); }
+}
+
+impl<C> fmt::Debug for ModuleHandle<C> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ModuleHandle").field("id", &self.id).finish_non_exhaustive()
+    }
+}
+
+/// The result of applying a configuration through [`Registry::reload`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReloadStatus {
+    /// The candidate replaced the accepted configuration at this revision.
+    Applied {
+        /// The committed revision.
+        revision: u64,
+    },
+    /// The candidate matches the accepted configuration; nothing changed.
+    Unchanged,
+}
+
+/// The full result of [`Registry::reload`].
+#[derive(Debug)]
+pub struct ReloadReport {
+    /// What happened to the configuration.
+    pub status: ReloadStatus,
+    /// A start failure after the configuration was accepted.
+    ///
+    /// The configuration remains committed at its revised state; the module
+    /// snapshot records `Failed` with the same error.
+    pub start_error: Option<ModuleError>,
+}
+
+/// Configuration erased once at registration.
+trait ErasedConfig: Send + Sync {
+    fn enabled(&self) -> bool;
+    fn as_any(&self) -> &dyn Any;
+    fn equals(&self, other: &dyn ErasedConfig) -> bool;
+}
+
+struct ConfigBox<C: ModuleConfig>(C);
+
+impl<C: ModuleConfig> ErasedConfig for ConfigBox<C> {
+    fn enabled(&self) -> bool { self.0.enabled() }
+
+    fn as_any(&self) -> &dyn Any { &self.0 }
+
+    fn equals(&self, other: &dyn ErasedConfig) -> bool {
+        other.as_any().downcast_ref::<C>().is_some_and(|candidate| candidate == &self.0)
+    }
+}
+
+/// Module erased once at registration; the only downcast boundary in the SDK.
+trait ErasedModule: Send {
+    fn configure(&mut self, config: &dyn ErasedConfig, ctx: &ModuleContext) -> ModuleResult<()>;
+    fn start(&mut self, ctx: &ModuleContext) -> ModuleResult<()>;
+    fn reconfigure(&mut self, config: &dyn ErasedConfig, ctx: &ModuleContext) -> ModuleResult<()>;
+    fn stop(&mut self, ctx: &ModuleContext) -> ModuleResult<()>;
+}
+
+struct ModuleAdapter<M: Module> {
+    module: M,
+    id: ModuleId,
+}
+
+fn typed_config<C: ModuleConfig>(
+    config: &dyn ErasedConfig,
+    module: ModuleId,
+    operation: Operation,
+) -> ModuleResult<&C> {
+    config.as_any().downcast_ref::<C>().ok_or_else(|| {
+        ModuleError::new(
+            module,
+            operation,
+            ErrorCategory::Lifecycle,
+            "registered configuration type does not match the module",
+        )
+    })
+}
+
+impl<M: Module> ErasedModule for ModuleAdapter<M> {
+    fn configure(&mut self, config: &dyn ErasedConfig, ctx: &ModuleContext) -> ModuleResult<()> {
+        let config = typed_config::<M::Config>(config, self.id, Operation::Configure)?;
+        self.module.configure(config, ctx)
+    }
+
+    fn start(&mut self, ctx: &ModuleContext) -> ModuleResult<()> { self.module.start(ctx) }
+
+    fn reconfigure(&mut self, config: &dyn ErasedConfig, ctx: &ModuleContext) -> ModuleResult<()> {
+        let config = typed_config::<M::Config>(config, self.id, Operation::Reconfigure)?;
+        self.module.reconfigure(config, ctx)
+    }
+
+    fn stop(&mut self, ctx: &ModuleContext) -> ModuleResult<()> { self.module.stop(ctx) }
+}
+
+/// Workers, windows and cancellation owned by one runtime of one module.
+struct Runtime {
+    workers: WorkerGroup,
+    cancellation: CancellationToken,
+    windows: WindowCapability,
+    sequence: u64,
+}
+
+impl Runtime {
+    fn new(
+        id: ModuleId,
+        sequence: u64,
+        surfaces: &'static [SurfaceId],
+        backend: Arc<dyn WindowBackend>,
+    ) -> Self {
+        let workers = WorkerGroup::new(id.as_str());
+        let cancellation = workers.cancellation();
+        let windows = WindowCapability::new(id, surfaces, backend, cancellation.clone());
+        Self {
+            workers,
+            cancellation,
+            windows,
+            sequence,
+        }
+    }
+
+    fn invalidate_windows(&self) { self.windows.invalidate(); }
+
+    fn release_windows(&self) { self.windows.release_owner(); }
+}
+
+struct ModuleSlot {
+    descriptor: ModuleDescriptor,
+    state: Mutex<ModuleState>,
+    /// Metadata published for readers.
+    ///
+    /// This lock never guards module code. Readers and service readiness hold
+    /// it only long enough to clone the current snapshot.
+    published: Mutex<ModuleSnapshot>,
+}
+
+impl ModuleSlot {
+    /// Returns the last published snapshot without touching the module lock.
+    fn published_snapshot(&self) -> ModuleSnapshot { lock(&self.published).clone() }
+
+    /// Publishes the state's metadata. The caller holds the module lock; no
+    /// module or native code runs while the short published lock is held.
+    fn publish(&self, state: &ModuleState) {
+        *lock(&self.published) = state.snapshot(self.descriptor.id);
+    }
+
+    /// Locks the module state and republishes it when the guard drops.
+    fn lock_state(&self) -> SlotState<'_> {
+        SlotState {
+            slot: self,
+            state: lock(&self.state),
+        }
+    }
+}
+
+/// Module state guard that publishes the slot's snapshot on drop.
+///
+/// Operations lock the module state for their whole transition; publishing on
+/// drop keeps the reader-visible cell correct on every early return without a
+/// manual update at each exit. Callers publish explicitly before a blocking
+/// stop or cleanup so dependents stop seeing a running service first.
+struct SlotState<'a> {
+    slot: &'a ModuleSlot,
+    state: MutexGuard<'a, ModuleState>,
+}
+
+impl SlotState<'_> {
+    /// Publishes the current state before a blocking stop or cleanup begins.
+    fn publish(&self) { self.slot.publish(&self.state); }
+}
+
+impl Deref for SlotState<'_> {
+    type Target = ModuleState;
+
+    fn deref(&self) -> &Self::Target { &self.state }
+}
+
+impl DerefMut for SlotState<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.state }
+}
+
+impl Drop for SlotState<'_> {
+    fn drop(&mut self) { self.slot.publish(&self.state); }
+}
+
+/// The initial state computed by a registration entry point.
+struct Registration {
+    config: Option<Box<dyn ErasedConfig>>,
+    enabled: bool,
+    revision: u64,
+    status: ModuleStatus,
+    diagnostic: Option<ConfigDiagnostic>,
+}
+
+impl Registration {
+    fn configured(config: Box<dyn ErasedConfig>, enabled: bool) -> Self {
+        Self {
+            config: Some(config),
+            enabled,
+            revision: 1,
+            status: if enabled {
+                ModuleStatus::Stopped
+            } else {
+                ModuleStatus::Disabled
+            },
+            diagnostic: None,
+        }
+    }
+
+    fn rejected(enabled: bool, diagnostic: ConfigDiagnostic) -> Self {
+        Self {
+            config: None,
+            enabled,
+            revision: 0,
+            status: ModuleStatus::Stopped,
+            diagnostic: Some(diagnostic),
+        }
+    }
+}
+
+struct ModuleState {
+    module: Box<dyn ErasedModule>,
+    config: Option<Box<dyn ErasedConfig>>,
+    enabled: bool,
+    paused: bool,
+    revision: u64,
+    status: ModuleStatus,
+    diagnostic: Option<ConfigDiagnostic>,
+    runtime: Option<Runtime>,
+    needs_stop: bool,
+}
+
+impl ModuleState {
+    fn snapshot(&self, id: ModuleId) -> ModuleSnapshot {
+        ModuleSnapshot {
+            id,
+            status: self.status.clone(),
+            enabled: self.enabled,
+            paused: self.paused,
+            revision: self.revision,
+            diagnostic: self.diagnostic.clone(),
+        }
+    }
+}
+
+/// The host-owned registry of modules.
+///
+/// Registration happens during composition. Runtime operations are safe to call
+/// from several threads; each module serializes its own transitions.
+pub struct Registry {
+    logger: Arc<dyn Logger>,
+    events: Arc<EventBus>,
+    main_thread: Arc<dyn MainThreadExecutor>,
+    permissions: Arc<dyn PermissionProvider>,
+    windows: Arc<dyn WindowBackend>,
+    slots: Mutex<Vec<Arc<ModuleSlot>>>,
+    failed_services: Mutex<HashSet<ServiceId>>,
+    lifecycle: Mutex<()>,
+    shutting_down: AtomicBool,
+    started: AtomicBool,
+    next_sequence: AtomicU64,
+}
+
+impl Registry {
+    /// Creates an empty registry with injected host services.
+    #[must_use]
+    pub fn new(
+        logger: Arc<dyn Logger>,
+        events: Arc<EventBus>,
+        main_thread: Arc<dyn MainThreadExecutor>,
+        permissions: Arc<dyn PermissionProvider>,
+        windows: Arc<dyn WindowBackend>,
+    ) -> Self {
+        Self {
+            logger,
+            events,
+            main_thread,
+            permissions,
+            windows,
+            slots: Mutex::new(Vec::new()),
+            failed_services: Mutex::new(HashSet::new()),
+            lifecycle: Mutex::new(()),
+            shutting_down: AtomicBool::new(false),
+            started: AtomicBool::new(false),
+            next_sequence: AtomicU64::new(0),
+        }
+    }
+
+    /// Registers one module and its initial configuration.
+    ///
+    /// The configuration is validated immediately. An invalid configuration
+    /// registers the module as `Stopped` with a diagnostic; it never becomes
+    /// `Disabled` because of a validation failure. Duplicate module IDs,
+    /// duplicate service providers, self-dependencies and cycles are rejected.
+    ///
+    /// # Errors
+    /// Returns a typed registry error for a duplicate or conflicting declaration.
+    pub fn register<M: Module>(
+        &self,
+        module: M,
+        config: M::Config,
+    ) -> RegistryResult<ModuleHandle<M::Config>> {
+        let enabled = config.enabled();
+        let initial = match config.validate() {
+            Ok(()) => Registration::configured(Box::new(ConfigBox(config)), enabled),
+            Err(error) => Registration::rejected(enabled, ConfigDiagnostic::from_error(&error)),
+        };
+        self.register_module(module, initial)
+    }
+
+    /// Registers a module with no accepted configuration.
+    ///
+    /// The snapshot is `Stopped` with revision `0` and the supplied diagnostic.
+    /// A later valid [`Registry::reload`] commits revision `1`, after which the
+    /// host can start the module normally. Use this when the first
+    /// configuration file exists but cannot be decoded.
+    ///
+    /// # Errors
+    /// Returns a typed registry error for a duplicate or conflicting declaration.
+    pub fn register_rejected<M: Module>(
+        &self,
+        module: M,
+        diagnostic: ConfigDiagnostic,
+    ) -> RegistryResult<ModuleHandle<M::Config>> {
+        self.register_module(module, Registration::rejected(false, diagnostic))
+    }
+
+    fn register_module<M: Module>(
+        &self,
+        module: M,
+        initial: Registration,
+    ) -> RegistryResult<ModuleHandle<M::Config>> {
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Err(RegistryError::ShuttingDown);
+        }
+        let descriptor = module.descriptor();
+        let id = descriptor.id;
+        let mut slots = lock(&self.slots);
+        if slots.iter().any(|slot| slot.descriptor.id == id) {
+            return Err(RegistryError::DuplicateModule { id });
+        }
+        let mut descriptors: Vec<ModuleDescriptor> =
+            slots.iter().map(|slot| slot.descriptor).collect();
+        descriptors.push(descriptor);
+        dependencies::check_registration(&descriptors)?;
+        let state = ModuleState {
+            module: Box::new(ModuleAdapter { module, id }),
+            config: initial.config,
+            enabled: initial.enabled,
+            paused: false,
+            revision: initial.revision,
+            status: initial.status,
+            diagnostic: initial.diagnostic,
+            runtime: None,
+            needs_stop: false,
+        };
+        let published = Mutex::new(state.snapshot(id));
+        slots.push(Arc::new(ModuleSlot {
+            descriptor,
+            state: Mutex::new(state),
+            published,
+        }));
+        Ok(ModuleHandle { id, marker: PhantomData })
+    }
+
+    /// Starts every enabled, non-paused module in dependency order.
+    ///
+    /// Modules blocked by a permission or a missing service are recorded in
+    /// their own status; independent modules still start. A module failure does
+    /// not stop the pass, but the first failure is returned after all modules
+    /// were attempted.
+    ///
+    /// # Errors
+    /// Returns a declaration error before starting anything, or the first module
+    /// failure after attempting every module.
+    pub fn start_all(&self) -> RegistryResult<()> {
+        let _lifecycle = lock(&self.lifecycle);
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Err(RegistryError::ShuttingDown);
+        }
+        let slots = self.slots_snapshot();
+        let descriptors: Vec<ModuleDescriptor> = slots.iter().map(|slot| slot.descriptor).collect();
+        let order = dependencies::order(&descriptors)?;
+        self.started.store(true, Ordering::SeqCst);
+        let mut first_error = None;
+        for id in order {
+            let Some(slot) = slot_in(&slots, id) else {
+                continue;
+            };
+            match self.start_slot(slot) {
+                Ok(()) => {}
+                Err(RegistryError::ShuttingDown) => return Err(RegistryError::ShuttingDown),
+                Err(error) => keep_first(&mut first_error, error),
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    /// Sets the desired enabled flag.
+    ///
+    /// Disabling stops resources and clears no configuration. Enabling clears a
+    /// temporary pause and attempts to start the module when it is not paused.
+    /// Setting the flag it already has is a no-op, except that enabling an
+    /// already-enabled stopped module retries the start.
+    ///
+    /// # Errors
+    /// Returns an unknown-handle, shutdown or module error.
+    pub fn set_enabled<C>(&self, handle: ModuleHandle<C>, enabled: bool) -> RegistryResult<()> {
+        let slot = self.slot(handle)?;
+        let result = self.set_enabled_inner(&slot, enabled);
+        self.reconcile_after(&slot, result)
+    }
+
+    fn set_enabled_inner(&self, slot: &ModuleSlot, enabled: bool) -> RegistryResult<()> {
+        {
+            let mut guard = slot.lock_state();
+            if guard.enabled == enabled {
+                if !enabled || guard.paused {
+                    return Ok(());
+                }
+                drop(guard);
+                return self.start_slot(slot);
+            }
+            guard.enabled = enabled;
+            if !enabled {
+                guard.status = ModuleStatus::Disabled;
+                guard.publish();
+                self.quiesce(slot, &mut guard)?;
+                return Ok(());
+            }
+            guard.paused = false;
+        }
+        self.start_slot(slot)
+    }
+
+    /// Pauses a module without editing its configuration.
+    ///
+    /// A running module is stopped and marked `Paused`. A disabled module keeps
+    /// the pause flag for the next enable. Pausing twice is a no-op.
+    ///
+    /// # Errors
+    /// Returns an unknown-handle or stop error.
+    pub fn pause<C>(&self, handle: ModuleHandle<C>) -> RegistryResult<()> {
+        let slot = self.slot(handle)?;
+        let result = self.pause_inner(&slot);
+        self.reconcile_after(&slot, result)
+    }
+
+    fn pause_inner(&self, slot: &ModuleSlot) -> RegistryResult<()> {
+        let mut guard = slot.lock_state();
+        if guard.paused {
+            return Ok(());
+        }
+        guard.paused = true;
+        if !guard.enabled {
+            return Ok(());
+        }
+        guard.status = ModuleStatus::Paused;
+        guard.publish();
+        self.quiesce(slot, &mut guard)?;
+        Ok(())
+    }
+
+    /// Clears a pause and retries the start.
+    ///
+    /// Resuming a disabled module only clears the flag; it stays disabled.
+    ///
+    /// # Errors
+    /// Returns an unknown-handle or module error.
+    pub fn resume<C>(&self, handle: ModuleHandle<C>) -> RegistryResult<()> {
+        let slot = self.slot(handle)?;
+        let result = self.resume_inner(&slot);
+        self.reconcile_after(&slot, result)
+    }
+
+    fn resume_inner(&self, slot: &ModuleSlot) -> RegistryResult<()> {
+        {
+            let mut guard = slot.lock_state();
+            if !guard.paused {
+                return Ok(());
+            }
+            guard.paused = false;
+            if !guard.enabled {
+                guard.status = ModuleStatus::Disabled;
+                return Ok(());
+            }
+        }
+        self.start_slot(slot)
+    }
+
+    /// Validates and applies a new configuration.
+    ///
+    /// Validation failures are recorded as a diagnostic and leave the status,
+    /// configuration and revision untouched. A running module receives
+    /// `reconfigure`; a stopped, paused or disabled module only updates its
+    /// next-start snapshot. An unchanged configuration is a no-op and reports
+    /// [`ReloadStatus::Unchanged`]. If the new configuration disables the
+    /// module, resources are stopped afterwards.
+    ///
+    /// Once [`Registry::start_all`] has run, an accepted reload that enables a
+    /// stopped, disabled or failed module starts it. Permission and service
+    /// blocks, pause, and already-running resources are left alone. A start
+    /// failure is returned in [`ReloadReport::start_error`] while the accepted
+    /// configuration stays committed.
+    ///
+    /// # Errors
+    /// Returns an unknown-handle, invalid-config or module error.
+    pub fn reload<C: ModuleConfig>(
+        &self,
+        handle: ModuleHandle<C>,
+        config: C,
+    ) -> RegistryResult<ReloadReport> {
+        let slot = self.slot(handle)?;
+        let status = match self.reload_inner(&slot, config) {
+            Ok(status) => status,
+            Err(error) => return self.reconcile_after(&slot, Err(error)),
+        };
+        let start_error = match self.start_after_reload(&slot) {
+            Ok(()) => None,
+            Err(RegistryError::Module(error)) => Some(error),
+            Err(error) => return Err(error),
+        };
+        let reconciled = self.reconcile_after(&slot, Ok(()));
+        if start_error.is_some() {
+            // The caller already receives the start error; a reconciliation
+            // failure must not disappear, so report it through the injected
+            // logger with the reloading module and operation.
+            if let Err(error) = reconciled {
+                ScopedLogger::new(Arc::clone(&self.logger), slot.descriptor.id, Operation::Reload)
+                    .warn(format!("reconciliation after reload failed: {error}"));
+            }
+            Ok(ReloadReport { status, start_error })
+        } else {
+            reconciled.map(|()| ReloadReport { status, start_error: None })
+        }
+    }
+
+    /// Starts a module after an accepted reload once the registry has started.
+    ///
+    /// Paused modules, permission/service blocks and running resources are left
+    /// untouched. Failed modules are retried so a changed configuration can
+    /// recover them.
+    fn start_after_reload(&self, slot: &ModuleSlot) -> RegistryResult<()> {
+        if !self.started.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        let eligible = {
+            let state = lock(&slot.state);
+            state.enabled
+                && !state.paused
+                && state.config.is_some()
+                && matches!(
+                    state.status,
+                    ModuleStatus::Stopped | ModuleStatus::Disabled | ModuleStatus::Failed(_)
+                )
+        };
+        if eligible {
+            self.start_slot(slot)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn reload_inner<C: ModuleConfig>(
+        &self,
+        slot: &ModuleSlot,
+        config: C,
+    ) -> RegistryResult<ReloadStatus> {
+        if let Err(error) = config.validate() {
+            {
+                let mut guard = slot.lock_state();
+                guard.diagnostic = Some(ConfigDiagnostic::from_error(&error));
+            }
+            return Err(RegistryError::InvalidConfig {
+                module: slot.descriptor.id,
+                message: error.message().to_owned(),
+            });
+        }
+        let candidate: Box<dyn ErasedConfig> = Box::new(ConfigBox(config));
+        let enabled = candidate.enabled();
+        let mut guard = slot.lock_state();
+        let state = &mut *guard;
+        state.diagnostic = None;
+        let unchanged =
+            state.config.as_ref().is_some_and(|current| current.equals(candidate.as_ref()));
+        if unchanged && state.enabled == enabled {
+            return Ok(ReloadStatus::Unchanged);
+        }
+        let changed = !unchanged;
+        let previous_status = state.status.clone();
+        let was_running = previous_status == ModuleStatus::Running;
+        if !unchanged {
+            // A disabling reload only stops; it never asks the module to adopt a
+            // configuration it is about to release.
+            if enabled {
+                if was_running {
+                    let ctx = {
+                        let Some(runtime) = state.runtime.as_ref() else {
+                            return Err(RegistryError::Module(ModuleError::new(
+                                slot.descriptor.id,
+                                Operation::Reconfigure,
+                                ErrorCategory::Lifecycle,
+                                "running module has no runtime",
+                            )));
+                        };
+                        self.context(slot, runtime, Operation::Reconfigure)
+                    };
+                    state.module.reconfigure(candidate.as_ref(), &ctx)?;
+                } else if state.needs_stop {
+                    self.quiesce(slot, state)?;
+                }
+            }
+            state.config = Some(candidate);
+            state.revision += 1;
+        }
+        if !state.enabled && enabled {
+            state.paused = false;
+        }
+        state.enabled = enabled;
+        if !enabled {
+            state.status = ModuleStatus::Disabled;
+            slot.publish(state);
+            self.quiesce(slot, state)?;
+        } else if state.paused {
+            state.status = ModuleStatus::Paused;
+        } else if was_running {
+            state.status = ModuleStatus::Running;
+        } else if matches!(
+            previous_status,
+            ModuleStatus::WaitingForPermission(_) | ModuleStatus::Unavailable(_)
+        ) {
+            // A reload stages the configuration but does not clear a prerequisite
+            // block; the matching recovery event still starts the module.
+            state.status = previous_status;
+        } else {
+            state.status = ModuleStatus::Stopped;
+        }
+        Ok(if changed {
+            ReloadStatus::Applied { revision: state.revision }
+        } else {
+            ReloadStatus::Unchanged
+        })
+    }
+
+    /// Returns the current snapshot of one module.
+    ///
+    /// The snapshot is the last published transition metadata; it never waits
+    /// for the module's lock, a lifecycle call or a worker join.
+    ///
+    /// # Errors
+    /// Returns [`RegistryError::UnknownModule`] for a stale handle.
+    pub fn snapshot<C>(&self, handle: ModuleHandle<C>) -> RegistryResult<ModuleSnapshot> {
+        let slot = self.slot(handle)?;
+        Ok(slot.published_snapshot())
+    }
+
+    /// Returns snapshots of every registered module in registration order.
+    ///
+    /// Like [`Registry::snapshot`], this reads only published metadata.
+    #[must_use]
+    pub fn snapshots(&self) -> Vec<ModuleSnapshot> {
+        self.slots_snapshot().iter().map(|slot| slot.published_snapshot()).collect()
+    }
+
+    /// The declared metadata of every registered module, in registration order.
+    ///
+    /// This is the same static data returned by `Module::descriptor`; reading it
+    /// starts nothing and takes no module lock.
+    #[must_use]
+    pub fn descriptors(&self) -> Vec<ModuleDescriptor> {
+        self.slots_snapshot().iter().map(|slot| slot.descriptor).collect()
+    }
+
+    /// Reports that a service stopped working.
+    ///
+    /// Recording the failure is enough: reconciliation stops running dependents
+    /// and marks them `Unavailable`. The provider itself is not changed.
+    ///
+    /// # Errors
+    /// Returns a declaration or stop error.
+    pub fn service_failed(&self, service: ServiceId) -> RegistryResult<()> {
+        let _lifecycle = lock(&self.lifecycle);
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Err(RegistryError::ShuttingDown);
+        }
+        lock(&self.failed_services).insert(service);
+        self.reconcile_locked()
+    }
+
+    /// Reports that a service is available again.
+    ///
+    /// Enabled, non-paused modules waiting on a missing service are retried in
+    /// dependency order.
+    ///
+    /// # Errors
+    /// Returns a declaration or module error.
+    pub fn service_recovered(&self, service: ServiceId) -> RegistryResult<()> {
+        let _lifecycle = lock(&self.lifecycle);
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Err(RegistryError::ShuttingDown);
+        }
+        lock(&self.failed_services).remove(&service);
+        self.reconcile_locked()
+    }
+
+    /// Reconciles service dependents after a provider changes state.
+    fn reconcile(&self) -> RegistryResult<()> {
+        let _lifecycle = lock(&self.lifecycle);
+        self.reconcile_locked()
+    }
+
+    /// The reconciliation pass. The caller holds the lifecycle lock and no
+    /// module lock.
+    fn reconcile_locked(&self) -> RegistryResult<()> {
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        let slots = self.slots_snapshot();
+        let descriptors: Vec<ModuleDescriptor> = slots.iter().map(|slot| slot.descriptor).collect();
+        let order = dependencies::order(&descriptors)?;
+        let mut unavailable: HashSet<ServiceId> = lock(&self.failed_services).clone();
+        for slot in &slots {
+            if lock(&slot.state).status != ModuleStatus::Running {
+                unavailable.extend(slot.descriptor.provides.iter().copied());
+            }
+        }
+        let mut stopped: HashMap<ModuleId, ServiceId> = HashMap::new();
+        for id in &order {
+            let Some(slot) = slot_in(&slots, *id) else {
+                continue;
+            };
+            let missing = slot
+                .descriptor
+                .requires
+                .iter()
+                .copied()
+                .find(|service| unavailable.contains(service));
+            if let Some(service) = missing {
+                stopped.insert(*id, service);
+                unavailable.extend(slot.descriptor.provides.iter().copied());
+            }
+        }
+        let mut first_error = None;
+        for id in order.iter().rev() {
+            let Some(&service) = stopped.get(id) else {
+                continue;
+            };
+            let Some(slot) = slot_in(&slots, *id) else {
+                continue;
+            };
+            let mut guard = slot.lock_state();
+            if guard.status != ModuleStatus::Running {
+                continue;
+            }
+            guard.status = ModuleStatus::Unavailable(UnavailableReason::MissingService(service));
+            guard.publish();
+            if let Err(error) = self.quiesce(slot, &mut guard) {
+                keep_first(&mut first_error, error);
+            }
+        }
+        for id in &order {
+            let Some(slot) = slot_in(&slots, *id) else {
+                continue;
+            };
+            let retry = {
+                let state = lock(&slot.state);
+                state.enabled
+                    && !state.paused
+                    && matches!(
+                        state.status,
+                        ModuleStatus::Unavailable(UnavailableReason::MissingService(_))
+                    )
+            };
+            if !retry {
+                continue;
+            }
+            match self.start_slot(slot) {
+                Ok(()) => {}
+                Err(RegistryError::ShuttingDown) => return Err(RegistryError::ShuttingDown),
+                Err(error) => keep_first(&mut first_error, error),
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    /// Runs reconciliation only when the module can affect dependents.
+    fn reconcile_after<T>(
+        &self,
+        slot: &ModuleSlot,
+        result: RegistryResult<T>,
+    ) -> RegistryResult<T> {
+        if slot.descriptor.provides.is_empty() {
+            return result;
+        }
+        let reconciled = self.reconcile();
+        match result {
+            Ok(value) => reconciled.map(|()| value),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Applies a new permission status.
+    ///
+    /// A grant retries enabled, non-paused modules waiting for that permission.
+    /// A denial or unknown status stops running modules that declare it, in
+    /// reverse dependency order, and marks them waiting. Service dependents of
+    /// affected providers are reconciled afterwards.
+    ///
+    /// # Errors
+    /// Returns a declaration or module error.
+    pub fn on_permission_change(
+        &self,
+        permission: Permission,
+        status: PermissionStatus,
+    ) -> RegistryResult<()> {
+        let _lifecycle = lock(&self.lifecycle);
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Err(RegistryError::ShuttingDown);
+        }
+        let slots = self.slots_snapshot();
+        let descriptors: Vec<ModuleDescriptor> = slots.iter().map(|slot| slot.descriptor).collect();
+        let order = dependencies::order(&descriptors)?;
+        let mut first_error = None;
+        match status {
+            PermissionStatus::Granted => {
+                for id in order {
+                    let Some(slot) = slot_in(&slots, id) else {
+                        continue;
+                    };
+                    let waiting = {
+                        let state = lock(&slot.state);
+                        state.enabled
+                            && !state.paused
+                            && state.status == ModuleStatus::WaitingForPermission(permission)
+                    };
+                    if !waiting {
+                        continue;
+                    }
+                    match self.start_slot(slot) {
+                        Ok(()) => {}
+                        Err(RegistryError::ShuttingDown) => {
+                            return Err(RegistryError::ShuttingDown);
+                        }
+                        Err(error) => keep_first(&mut first_error, error),
+                    }
+                }
+            }
+            PermissionStatus::Denied | PermissionStatus::Unknown => {
+                for id in order.iter().rev() {
+                    let Some(slot) = slot_in(&slots, *id) else {
+                        continue;
+                    };
+                    let mut guard = slot.lock_state();
+                    if !guard.enabled
+                        || guard.paused
+                        || guard.status != ModuleStatus::Running
+                        || !slot.descriptor.permissions.contains(&permission)
+                    {
+                        continue;
+                    }
+                    guard.status = ModuleStatus::WaitingForPermission(permission);
+                    guard.publish();
+                    if let Err(error) = self.quiesce(slot, &mut guard) {
+                        keep_first(&mut first_error, error);
+                    }
+                }
+            }
+        }
+        let reconciled = self.reconcile_locked();
+        first_error.map_or(reconciled, Err)
+    }
+
+    /// Stops every module in reverse start order.
+    ///
+    /// Cancels each runtime before calling `stop`, then joins its workers.
+    /// Repeated calls are no-ops. Once called, the registry refuses new starts
+    /// and registrations.
+    ///
+    /// # Errors
+    /// Returns the first stop failure after attempting every module.
+    pub fn shutdown(&self) -> RegistryResult<()> {
+        let _lifecycle = lock(&self.lifecycle);
+        self.shutting_down.store(true, Ordering::SeqCst);
+        let mut targets: Vec<(u64, Arc<ModuleSlot>)> = Vec::new();
+        for slot in self.slots_snapshot() {
+            let target = {
+                let state = lock(&slot.state);
+                (state.runtime.is_some() || state.needs_stop)
+                    .then(|| state.runtime.as_ref().map_or(0, |runtime| runtime.sequence))
+            };
+            if let Some(sequence) = target {
+                targets.push((sequence, Arc::clone(&slot)));
+            }
+        }
+        targets.sort_by_key(|target| std::cmp::Reverse(target.0));
+        let mut first_error = None;
+        for (_, slot) in targets {
+            let mut guard = slot.lock_state();
+            if guard.runtime.is_none() && !guard.needs_stop {
+                continue;
+            }
+            guard.status = if guard.enabled {
+                ModuleStatus::Stopped
+            } else {
+                ModuleStatus::Disabled
+            };
+            guard.publish();
+            if let Err(error) = self.quiesce(&slot, &mut guard) {
+                keep_first(&mut first_error, error);
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    fn start_slot(&self, slot: &ModuleSlot) -> RegistryResult<()> {
+        let mut guard = slot.lock_state();
+        let state = &mut *guard;
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Err(RegistryError::ShuttingDown);
+        }
+        if state.status == ModuleStatus::Running || !state.enabled || state.paused {
+            return Ok(());
+        }
+        if state.config.is_none() {
+            state.status = ModuleStatus::Stopped;
+            return Ok(());
+        }
+        if state.runtime.is_some() || state.needs_stop {
+            self.quiesce(slot, state)?;
+        }
+        for &executable in slot.descriptor.executables {
+            if !executable_available(executable) {
+                state.status = ModuleStatus::Unavailable(UnavailableReason::MissingExecutable(
+                    executable.to_owned(),
+                ));
+                return Ok(());
+            }
+        }
+        for &permission in slot.descriptor.permissions {
+            if self.permissions.status(permission) != PermissionStatus::Granted {
+                state.status = ModuleStatus::WaitingForPermission(permission);
+                return Ok(());
+            }
+        }
+        for &service in slot.descriptor.requires {
+            if !self.service_ready(service) {
+                state.status =
+                    ModuleStatus::Unavailable(UnavailableReason::MissingService(service));
+                return Ok(());
+            }
+        }
+        let sequence = self.next_sequence.fetch_add(1, Ordering::Relaxed);
+        state.runtime = Some(Runtime::new(
+            slot.descriptor.id,
+            sequence,
+            slot.descriptor.surfaces,
+            Arc::clone(&self.windows),
+        ));
+        state.needs_stop = true;
+        match self.configure_and_start(slot, state) {
+            Ok(()) => {
+                state.status = ModuleStatus::Running;
+                Ok(())
+            }
+            Err(error) => {
+                // Release partial resources now. A cleanup failure leaves
+                // `needs_stop` set, but never masks the configure/start error.
+                let _cleanup = self.quiesce(slot, state);
+                state.status = ModuleStatus::Failed(ModuleFailure::from_error(&error));
+                Err(RegistryError::Module(error))
+            }
+        }
+    }
+
+    fn configure_and_start(&self, slot: &ModuleSlot, state: &mut ModuleState) -> ModuleResult<()> {
+        let ModuleState { module, config, runtime, .. } = state;
+        let Some(config) = config.as_ref() else {
+            return Err(ModuleError::new(
+                slot.descriptor.id,
+                Operation::Configure,
+                ErrorCategory::Lifecycle,
+                "no accepted configuration",
+            ));
+        };
+        let Some(runtime) = runtime.as_ref() else {
+            return Err(ModuleError::new(
+                slot.descriptor.id,
+                Operation::Start,
+                ErrorCategory::Lifecycle,
+                "no runtime was prepared",
+            ));
+        };
+        let configure = self.context(slot, runtime, Operation::Configure);
+        module.configure(config.as_ref(), &configure)?;
+        let start = self.context(slot, runtime, Operation::Start);
+        module.start(&start)
+    }
+
+    /// Stops the module and joins its workers. The caller holds the module lock
+    /// and has already set the non-running target status.
+    fn quiesce(&self, slot: &ModuleSlot, state: &mut ModuleState) -> RegistryResult<()> {
+        if state.runtime.is_none() && !state.needs_stop {
+            return Ok(());
+        }
+        // Publish before cancelling or calling `stop` so a dependent checking
+        // this provider's readiness sees the non-running target immediately.
+        debug_assert_ne!(
+            state.status,
+            ModuleStatus::Running,
+            "a stopping module must publish a non-running status first"
+        );
+        slot.publish(state);
+        let runtime = state.runtime.take().unwrap_or_else(|| {
+            Runtime::new(
+                slot.descriptor.id,
+                0,
+                slot.descriptor.surfaces,
+                Arc::clone(&self.windows),
+            )
+        });
+        runtime.cancellation.cancel();
+        runtime.invalidate_windows();
+        let needs_stop = state.needs_stop;
+        let result = if needs_stop {
+            let ctx = self.context(slot, &runtime, Operation::Stop);
+            state.module.stop(&ctx)
+        } else {
+            Ok(())
+        };
+        // Windows belong to this exact runtime. Invalidate it before owner
+        // cleanup so an obsolete capability cannot open or release a successor
+        // runtime's windows after a restart. Releasing before the worker join
+        // keeps the runtime available for the stop context without widening the
+        // gate.
+        runtime.release_windows();
+        runtime.workers.cancel_and_join();
+        match result {
+            Ok(()) => {
+                state.needs_stop = false;
+                Ok(())
+            }
+            Err(error) => {
+                state.needs_stop = true;
+                state.status = ModuleStatus::Failed(ModuleFailure::from_error(&error));
+                Err(RegistryError::Module(error))
+            }
+        }
+    }
+
+    /// Whether a service is ready.
+    ///
+    /// The caller may already hold the consumer's module lock; this reads only
+    /// the provider's published snapshot, so it never waits for provider module
+    /// code or a worker join.
+    fn service_ready(&self, service: ServiceId) -> bool {
+        if lock(&self.failed_services).contains(&service) {
+            return false;
+        }
+        let provider = self
+            .slots_snapshot()
+            .into_iter()
+            .find(|slot| slot.descriptor.provides.contains(&service));
+        provider.is_some_and(|slot| slot.published_snapshot().status == ModuleStatus::Running)
+    }
+
+    fn context(&self, slot: &ModuleSlot, runtime: &Runtime, operation: Operation) -> ModuleContext {
+        ModuleContext::new(
+            slot.descriptor.id,
+            ScopedLogger::new(Arc::clone(&self.logger), slot.descriptor.id, operation),
+            runtime.workers.handle(),
+            runtime.cancellation.clone(),
+            crate::context::ContextServices {
+                events: Arc::clone(&self.events),
+                main_thread: Arc::clone(&self.main_thread),
+                permissions: Arc::clone(&self.permissions),
+                windows: runtime.windows.clone(),
+            },
+        )
+    }
+
+    fn slot<C>(&self, handle: ModuleHandle<C>) -> RegistryResult<Arc<ModuleSlot>> {
+        self.slots_snapshot()
+            .into_iter()
+            .find(|slot| slot.descriptor.id == handle.id())
+            .ok_or(RegistryError::UnknownModule { id: handle.id() })
+    }
+
+    fn slots_snapshot(&self) -> Vec<Arc<ModuleSlot>> { lock(&self.slots).clone() }
+}
+
+/// Whether a command name resolves to an executable file on the current `PATH`.
+fn executable_available(name: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|directory| {
+        directory
+            .join(name)
+            .metadata()
+            .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+    })
+}
+
+fn slot_in(slots: &[Arc<ModuleSlot>], id: ModuleId) -> Option<&Arc<ModuleSlot>> {
+    slots.iter().find(|slot| slot.descriptor.id == id)
+}
+
+fn keep_first(first: &mut Option<RegistryError>, error: RegistryError) {
+    if first.is_none() {
+        *first = Some(error);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::{Barrier, mpsc};
+    use std::time::Duration;
+
+    use super::*;
+    use crate::error::ConfigError;
+    use crate::logging::LogRecord;
+    use crate::permissions::PermissionError;
+
+    const SERVICE: ServiceId = ServiceId::new("test.service");
+    const SERVICE_B: ServiceId = ServiceId::new("test.service.b");
+    static PROVIDES_SERVICE: [ServiceId; 1] = [SERVICE];
+    static PROVIDES_SERVICE_B: [ServiceId; 1] = [SERVICE_B];
+    static REQUIRES_SERVICE: [ServiceId; 1] = [SERVICE];
+    static REQUIRES_SERVICE_B: [ServiceId; 1] = [SERVICE_B];
+    static ACCESSIBILITY: [Permission; 1] = [Permission::Accessibility];
+
+    /// Ordered event log shared by the fake modules and the test.
+    #[derive(Default)]
+    struct Trace {
+        events: Mutex<Vec<String>>,
+    }
+
+    impl Trace {
+        fn record(&self, event: impl Into<String>) { lock(&self.events).push(event.into()); }
+
+        fn events(&self) -> Vec<String> { lock(&self.events).clone() }
+    }
+
+    #[derive(Default)]
+    struct CapturingLogger {
+        records: Mutex<Vec<LogRecord>>,
+    }
+
+    impl Logger for CapturingLogger {
+        fn log(&self, record: LogRecord) { lock(&self.records).push(record); }
+    }
+
+    impl CapturingLogger {
+        fn records(&self) -> Vec<LogRecord> { lock(&self.records).clone() }
+    }
+
+    struct FakePermissions {
+        statuses: Mutex<HashMap<Permission, PermissionStatus>>,
+    }
+
+    impl FakePermissions {
+        fn new() -> Self {
+            Self {
+                statuses: Mutex::new(HashMap::new()),
+            }
+        }
+
+        fn set(&self, permission: Permission, status: PermissionStatus) {
+            lock(&self.statuses).insert(permission, status);
+        }
+    }
+
+    impl PermissionProvider for FakePermissions {
+        fn status(&self, permission: Permission) -> PermissionStatus {
+            lock(&self.statuses)
+                .get(&permission)
+                .copied()
+                .unwrap_or(PermissionStatus::Granted)
+        }
+
+        fn request(&self, permission: Permission) -> Result<PermissionStatus, PermissionError> {
+            Ok(self.status(permission))
+        }
+    }
+
+    struct InlineExecutor;
+
+    impl MainThreadExecutor for InlineExecutor {
+        fn is_main_thread(&self) -> bool { true }
+
+        fn execute(
+            &self,
+            job: Box<dyn FnOnce() + Send + 'static>,
+        ) -> Result<(), crate::threading::ThreadError> {
+            job();
+            Ok(())
+        }
+    }
+
+    struct Harness {
+        registry: Registry,
+        trace: Arc<Trace>,
+        logger: Arc<CapturingLogger>,
+        permissions: Arc<FakePermissions>,
+    }
+
+    impl Harness {
+        fn new() -> Self { Self::with_windows(Arc::new(crate::windows::UnavailableWindows)) }
+
+        fn with_windows(windows: Arc<dyn crate::windows::WindowBackend>) -> Self {
+            let logger = Arc::new(CapturingLogger::default());
+            let permissions = Arc::new(FakePermissions::new());
+            let logger_sink: Arc<dyn Logger> = logger.clone();
+            let permission_sink: Arc<dyn PermissionProvider> = permissions.clone();
+            let registry = Registry::new(
+                logger_sink,
+                Arc::new(EventBus::new()),
+                Arc::new(InlineExecutor),
+                permission_sink,
+                windows,
+            );
+            Self {
+                registry,
+                trace: Arc::new(Trace::default()),
+                logger,
+                permissions,
+            }
+        }
+
+        fn fake(&self, id: &'static str) -> (FakeModule, Arc<Mutex<FakeState>>) {
+            fake(id, &self.trace)
+        }
+
+        fn gated(
+            &self,
+            id: &'static str,
+            blocked: Blocked,
+        ) -> (
+            FakeModule,
+            Arc<Mutex<FakeState>>,
+            mpsc::Receiver<()>,
+            mpsc::Sender<()>,
+        ) {
+            let (module, state) = self.fake(id);
+            let (gate, entered, release) = Gate::new(blocked);
+            (
+                FakeModule { gate: Some(gate), ..module },
+                state,
+                entered,
+                release,
+            )
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingWindows {
+        released: Mutex<Vec<ModuleId>>,
+    }
+
+    impl crate::windows::WindowBackend for RecordingWindows {
+        fn open(
+            &self,
+            _: ModuleId,
+            _: &crate::windows::WindowRequest,
+        ) -> Result<crate::windows::WindowId, crate::windows::WindowError> {
+            Err(crate::windows::WindowError::Backend("not used".to_owned()))
+        }
+
+        fn focus(&self, _: crate::windows::WindowId) -> Result<(), crate::windows::WindowError> {
+            Ok(())
+        }
+
+        fn close(&self, _: crate::windows::WindowId) {}
+
+        fn release_owner(&self, owner: ModuleId) { lock(&self.released).push(owner); }
+
+        fn close_all(&self) {}
+    }
+
+    #[derive(Default)]
+    struct LeaseBackend {
+        next: Mutex<u64>,
+        entries: Mutex<HashMap<(ModuleId, String), crate::windows::WindowId>>,
+        opened: Mutex<Vec<crate::windows::WindowId>>,
+        closed: Mutex<Vec<crate::windows::WindowId>>,
+        released: Mutex<Vec<ModuleId>>,
+    }
+
+    impl crate::windows::WindowBackend for LeaseBackend {
+        fn open(
+            &self,
+            owner: ModuleId,
+            request: &crate::windows::WindowRequest,
+        ) -> Result<crate::windows::WindowId, crate::windows::WindowError> {
+            let key = (owner, request.key.as_str().to_owned());
+            let existing = lock(&self.entries).get(&key).copied();
+            if let Some(id) = existing {
+                lock(&self.opened).push(id);
+                return Ok(id);
+            }
+            let mut next = lock(&self.next);
+            *next += 1;
+            let id = crate::windows::WindowId::new(*next);
+            drop(next);
+            lock(&self.entries).insert(key, id);
+            lock(&self.opened).push(id);
+            Ok(id)
+        }
+
+        fn focus(&self, _: crate::windows::WindowId) -> Result<(), crate::windows::WindowError> {
+            Ok(())
+        }
+
+        fn close(&self, window: crate::windows::WindowId) {
+            lock(&self.closed).push(window);
+            lock(&self.entries).retain(|_, id| *id != window);
+        }
+
+        fn release_owner(&self, owner: ModuleId) {
+            lock(&self.released).push(owner);
+            lock(&self.entries).retain(|(entry_owner, _), _| *entry_owner != owner);
+        }
+
+        fn close_all(&self) {}
+    }
+
+    static TEST_SURFACES: [crate::windows::SurfaceId; 1] = [crate::windows::SurfaceId::new("test")];
+
+    fn lease_request() -> crate::windows::WindowRequest {
+        crate::windows::WindowRequest::new(
+            crate::windows::WindowKey::new("main").expect("key"),
+            crate::windows::SurfaceId::new("test"),
+            crate::windows::WindowSize::new(800, 600).expect("size"),
+            crate::windows::WindowKind::Standard,
+        )
+    }
+
+    struct TwoLeaseModule {
+        id: ModuleId,
+        configure: Option<crate::windows::OwnedWindow>,
+        start: Option<crate::windows::OwnedWindow>,
+        drops: u32,
+    }
+
+    impl TwoLeaseModule {
+        fn new(id: &'static str) -> Self {
+            Self {
+                id: ModuleId::new(id),
+                configure: None,
+                start: None,
+                drops: 0,
+            }
+        }
+    }
+
+    impl Module for TwoLeaseModule {
+        type Config = FakeConfig;
+
+        fn descriptor(&self) -> ModuleDescriptor {
+            ModuleDescriptor {
+                id: self.id,
+                provides: &[],
+                requires: &[],
+                permissions: &[],
+                executables: &[],
+                surfaces: &TEST_SURFACES,
+            }
+        }
+
+        fn configure(&mut self, _: &FakeConfig, ctx: &ModuleContext) -> ModuleResult<()> {
+            self.configure =
+                Some(ctx.windows().request(&lease_request()).expect("configure window"));
+            Ok(())
+        }
+
+        fn start(&mut self, ctx: &ModuleContext) -> ModuleResult<()> {
+            self.start = Some(ctx.windows().request(&lease_request()).expect("start window"));
+            Ok(())
+        }
+
+        fn reconfigure(&mut self, _: &FakeConfig, _: &ModuleContext) -> ModuleResult<()> {
+            self.drops += 1;
+            match self.drops {
+                1 => drop(self.configure.take()),
+                2 => drop(self.start.take()),
+                _ => {}
+            }
+            Ok(())
+        }
+
+        fn stop(&mut self, _: &ModuleContext) -> ModuleResult<()> { Ok(()) }
+    }
+
+    #[test]
+    fn contexts_for_one_runtime_share_one_window_lease() {
+        let windows = Arc::new(LeaseBackend::default());
+        let harness = Harness::with_windows(windows.clone());
+        let handle = harness
+            .registry
+            .register(TwoLeaseModule::new("leases"), FakeConfig::on(1))
+            .expect("register");
+        harness.registry.start_all().expect("start");
+        assert_eq!(lock(&windows.entries).len(), 1);
+
+        harness.registry.reload(handle, FakeConfig::on(2)).expect("first reconfigure");
+        assert!(
+            lock(&windows.closed).is_empty(),
+            "dropping the configure lease must not close the start lease"
+        );
+
+        harness.registry.reload(handle, FakeConfig::on(3)).expect("second reconfigure");
+        assert_eq!(lock(&windows.closed).len(), 1);
+        harness.registry.shutdown().expect("shutdown");
+    }
+
+    #[derive(Default)]
+    struct LeaseRecord {
+        entries: Vec<(crate::windows::WindowCapability, crate::windows::OwnedWindow)>,
+    }
+
+    struct RetainedLeaseModule {
+        id: ModuleId,
+        record: Arc<Mutex<LeaseRecord>>,
+    }
+
+    impl Module for RetainedLeaseModule {
+        type Config = FakeConfig;
+
+        fn descriptor(&self) -> ModuleDescriptor {
+            ModuleDescriptor {
+                id: self.id,
+                provides: &[],
+                requires: &[],
+                permissions: &[],
+                executables: &[],
+                surfaces: &TEST_SURFACES,
+            }
+        }
+
+        fn configure(&mut self, _: &FakeConfig, _: &ModuleContext) -> ModuleResult<()> { Ok(()) }
+
+        fn start(&mut self, ctx: &ModuleContext) -> ModuleResult<()> {
+            let window = ctx.windows().request(&lease_request()).expect("window");
+            lock(&self.record).entries.push((ctx.windows().clone(), window));
+            Ok(())
+        }
+
+        fn reconfigure(&mut self, _: &FakeConfig, _: &ModuleContext) -> ModuleResult<()> { Ok(()) }
+
+        fn stop(&mut self, _: &ModuleContext) -> ModuleResult<()> { Ok(()) }
+    }
+
+    #[test]
+    fn an_obsolete_capability_cannot_close_or_release_a_restarted_runtime() {
+        let windows = Arc::new(LeaseBackend::default());
+        let harness = Harness::with_windows(windows.clone());
+        let record = Arc::new(Mutex::new(LeaseRecord::default()));
+        let handle = harness
+            .registry
+            .register(
+                RetainedLeaseModule {
+                    id: ModuleId::new("retained"),
+                    record: Arc::clone(&record),
+                },
+                FakeConfig::on(1),
+            )
+            .expect("register");
+        harness.registry.start_all().expect("start");
+        let first_id = {
+            let record = lock(&record);
+            assert_eq!(record.entries.len(), 1);
+            record.entries[0].1.id()
+        };
+
+        harness.registry.pause(handle).expect("pause");
+        harness.registry.resume(handle).expect("resume");
+        let second_id = {
+            let record = lock(&record);
+            assert_eq!(record.entries.len(), 2);
+            record.entries[1].1.id()
+        };
+        assert_ne!(first_id, second_id);
+
+        let (old_capability, old_window) = {
+            let mut record = lock(&record);
+            record.entries.remove(0)
+        };
+        drop(old_window);
+        assert!(
+            lock(&windows.closed).is_empty(),
+            "dropping an obsolete handle closed a successor window"
+        );
+        assert!(lock(&windows.entries).values().any(|id| *id == second_id));
+        assert!(matches!(
+            old_capability.request(&lease_request()),
+            Err(crate::windows::WindowError::OwnerStopped { .. })
+        ));
+        let (_, new_window) = {
+            let mut record = lock(&record);
+            record.entries.remove(0)
+        };
+        drop(new_window);
+        assert_eq!(*lock(&windows.closed), vec![second_id]);
+        harness.registry.shutdown().expect("shutdown");
+    }
+
+    #[test]
+    fn a_failed_start_releases_owned_windows() {
+        let windows = Arc::new(RecordingWindows::default());
+        let harness = Harness::with_windows(windows.clone());
+        let (mut broken, _) = harness.fake("broken");
+        broken.fail.start = true;
+        harness.registry.register(broken, FakeConfig::on(1)).expect("register");
+        harness.registry.start_all().expect_err("start fails");
+        assert_eq!(*lock(&windows.released), vec![ModuleId::new("broken")]);
+    }
+
+    #[test]
+    fn stopping_a_module_releases_owned_windows() {
+        let windows = Arc::new(RecordingWindows::default());
+        let harness = Harness::with_windows(windows.clone());
+        let (module, _) = harness.fake("module");
+        let handle = harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        harness.registry.start_all().expect("start");
+        lock(&windows.released).clear();
+        harness.registry.pause(handle).expect("pause");
+        assert_eq!(*lock(&windows.released), vec![ModuleId::new("module")]);
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct FakeConfig {
+        enabled: bool,
+        value: u32,
+        valid: bool,
+    }
+
+    impl FakeConfig {
+        fn on(value: u32) -> Self {
+            Self {
+                enabled: true,
+                value,
+                valid: true,
+            }
+        }
+
+        fn off(value: u32) -> Self {
+            Self {
+                enabled: false,
+                value,
+                valid: true,
+            }
+        }
+
+        fn invalid() -> Self {
+            Self {
+                enabled: true,
+                value: 0,
+                valid: false,
+            }
+        }
+    }
+
+    impl ModuleConfig for FakeConfig {
+        fn enabled(&self) -> bool { self.enabled }
+
+        fn validate(&self) -> Result<(), ConfigError> {
+            if self.valid {
+                Ok(())
+            } else {
+                Err(ConfigError::new("fake config is invalid"))
+            }
+        }
+    }
+
+    /// Each lifecycle method has an independent failpoint.
+    #[allow(clippy::struct_excessive_bools)]
+    #[derive(Clone, Copy, Default)]
+    struct FailPlan {
+        configure: bool,
+        start: bool,
+        reconfigure: bool,
+        stop: bool,
+    }
+
+    /// A lifecycle call the fake module blocks inside until the test releases it.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Blocked {
+        Configure,
+        Start,
+        Reconfigure,
+        Stop,
+    }
+
+    /// One-shot gate: the first matching operation signals entry and waits.
+    struct Gate {
+        blocked: Blocked,
+        entered: mpsc::Sender<()>,
+        release: Mutex<Option<mpsc::Receiver<()>>>,
+    }
+
+    impl Gate {
+        fn new(blocked: Blocked) -> (Arc<Self>, mpsc::Receiver<()>, mpsc::Sender<()>) {
+            let (entered, entered_rx) = mpsc::channel();
+            let (release, release_rx) = mpsc::channel();
+            (
+                Arc::new(Self {
+                    blocked,
+                    entered,
+                    release: Mutex::new(Some(release_rx)),
+                }),
+                entered_rx,
+                release,
+            )
+        }
+
+        fn pass(&self, operation: Blocked) {
+            if operation != self.blocked {
+                return;
+            }
+            let receiver = {
+                let mut release = lock(&self.release);
+                if release.is_none() {
+                    return;
+                }
+                self.entered.send(()).expect("the test is listening for the gate");
+                release.take().expect("checked above")
+            };
+            receiver.recv().expect("the test releases the gate");
+        }
+    }
+
+    /// Runs a read on another thread and fails if it waits on blocked module code.
+    fn within<T: Send + 'static>(
+        label: &'static str,
+        job: impl FnOnce() -> T + Send + 'static,
+    ) -> T {
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(job());
+        });
+        receiver
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap_or_else(|_| panic!("{label} waited for blocked module code"))
+    }
+
+    fn wait_until_blocked(entered: &mpsc::Receiver<()>) {
+        entered
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the module operation did not start");
+    }
+
+    #[derive(Default)]
+    struct FakeState {
+        starts: u32,
+        stops: u32,
+        held: bool,
+        stopped_while_held: bool,
+        double_start: bool,
+    }
+
+    struct FakeModule {
+        id: ModuleId,
+        provides: &'static [ServiceId],
+        requires: &'static [ServiceId],
+        permissions: &'static [Permission],
+        executables: &'static [&'static str],
+        surfaces: &'static [crate::windows::SurfaceId],
+        fail: FailPlan,
+        gate: Option<Arc<Gate>>,
+        trace: Arc<Trace>,
+        state: Arc<Mutex<FakeState>>,
+    }
+
+    fn fake(id: &'static str, trace: &Arc<Trace>) -> (FakeModule, Arc<Mutex<FakeState>>) {
+        let state = Arc::new(Mutex::new(FakeState::default()));
+        (
+            FakeModule {
+                id: ModuleId::new(id),
+                provides: &[],
+                requires: &[],
+                permissions: &[],
+                executables: &[],
+                surfaces: &[],
+                fail: FailPlan::default(),
+                gate: None,
+                trace: Arc::clone(trace),
+                state: Arc::clone(&state),
+            },
+            state,
+        )
+    }
+
+    impl Module for FakeModule {
+        type Config = FakeConfig;
+
+        fn descriptor(&self) -> ModuleDescriptor {
+            ModuleDescriptor {
+                id: self.id,
+                provides: self.provides,
+                requires: self.requires,
+                permissions: self.permissions,
+                executables: self.executables,
+                surfaces: self.surfaces,
+            }
+        }
+
+        fn configure(&mut self, config: &FakeConfig, ctx: &ModuleContext) -> ModuleResult<()> {
+            if let Some(gate) = &self.gate {
+                gate.pass(Blocked::Configure);
+            }
+            self.trace.record(format!("{}.configure.{}", self.id, config.value));
+            ctx.logger().info(format!("configure {}", config.value));
+            if self.fail.configure {
+                return Err(ModuleError::new(
+                    self.id,
+                    Operation::Configure,
+                    ErrorCategory::Config,
+                    "configure failpoint",
+                ));
+            }
+            Ok(())
+        }
+
+        fn start(&mut self, ctx: &ModuleContext) -> ModuleResult<()> {
+            if let Some(gate) = &self.gate {
+                gate.pass(Blocked::Start);
+            }
+            {
+                let mut state = lock(&self.state);
+                if state.held {
+                    state.double_start = true;
+                }
+                state.starts += 1;
+                state.held = true;
+            }
+            self.trace.record(format!("{}.start", self.id));
+            ctx.logger().info("start");
+            if self.fail.start {
+                return Err(ModuleError::new(
+                    self.id,
+                    Operation::Start,
+                    ErrorCategory::Platform,
+                    "start failpoint",
+                ));
+            }
+            Ok(())
+        }
+
+        fn reconfigure(&mut self, config: &FakeConfig, ctx: &ModuleContext) -> ModuleResult<()> {
+            if let Some(gate) = &self.gate {
+                gate.pass(Blocked::Reconfigure);
+            }
+            self.trace.record(format!("{}.reconfigure.{}", self.id, config.value));
+            ctx.logger().info(format!("reconfigure {}", config.value));
+            if self.fail.reconfigure {
+                return Err(ModuleError::new(
+                    self.id,
+                    Operation::Reconfigure,
+                    ErrorCategory::Lifecycle,
+                    "reconfigure failpoint",
+                ));
+            }
+            Ok(())
+        }
+
+        fn stop(&mut self, ctx: &ModuleContext) -> ModuleResult<()> {
+            if let Some(gate) = &self.gate {
+                gate.pass(Blocked::Stop);
+            }
+            {
+                let mut state = lock(&self.state);
+                state.stops += 1;
+                state.stopped_while_held = state.held;
+                state.held = false;
+            }
+            self.trace.record(format!("{}.stop", self.id));
+            ctx.logger().info("stop");
+            if self.fail.stop {
+                return Err(ModuleError::new(
+                    self.id,
+                    Operation::Stop,
+                    ErrorCategory::Platform,
+                    "stop failpoint",
+                ));
+            }
+            Ok(())
+        }
+    }
+
+    /// A module whose worker ignores cancellation, so stopping blocks in the join.
+    struct JoinModule {
+        id: ModuleId,
+        started: mpsc::Sender<()>,
+        stopped: mpsc::Sender<()>,
+        release: Option<mpsc::Receiver<()>>,
+    }
+
+    impl Module for JoinModule {
+        type Config = FakeConfig;
+
+        fn descriptor(&self) -> ModuleDescriptor {
+            ModuleDescriptor {
+                id: self.id,
+                provides: &[],
+                requires: &[],
+                permissions: &[],
+                executables: &[],
+                surfaces: &[],
+            }
+        }
+
+        fn configure(&mut self, _: &FakeConfig, _: &ModuleContext) -> ModuleResult<()> { Ok(()) }
+
+        fn start(&mut self, ctx: &ModuleContext) -> ModuleResult<()> {
+            let release = self.release.take().expect("the module starts once");
+            let started = self.started.clone();
+            ctx.spawn_worker("ignores-cancel", move |_| {
+                let _ = started.send(());
+                let _ = release.recv();
+            })
+        }
+
+        fn reconfigure(&mut self, _: &FakeConfig, _: &ModuleContext) -> ModuleResult<()> { Ok(()) }
+
+        fn stop(&mut self, _: &ModuleContext) -> ModuleResult<()> {
+            let _ = self.stopped.send(());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn duplicate_module_ids_are_rejected() {
+        let harness = Harness::new();
+        let (first, _) = harness.fake("duplicate");
+        let (second, _) = harness.fake("duplicate");
+        harness.registry.register(first, FakeConfig::on(1)).expect("first registration");
+        let error = harness.registry.register(second, FakeConfig::on(1)).expect_err("duplicate id");
+        assert!(matches!(
+            error,
+            RegistryError::DuplicateModule { id } if id == ModuleId::new("duplicate")
+        ));
+    }
+
+    #[test]
+    fn duplicate_service_providers_are_rejected_at_registration() {
+        let harness = Harness::new();
+        let (first, _) = harness.fake("first");
+        let (mut second, _) = harness.fake("second");
+        let mut first = first;
+        first.provides = &PROVIDES_SERVICE;
+        second.provides = &PROVIDES_SERVICE;
+        harness.registry.register(first, FakeConfig::on(1)).expect("first registration");
+        let error = harness
+            .registry
+            .register(second, FakeConfig::on(1))
+            .expect_err("duplicate provider");
+        assert!(matches!(error, RegistryError::DuplicateProvider { .. }));
+    }
+
+    #[test]
+    fn cyclic_declarations_are_rejected_before_startup() {
+        let harness = Harness::new();
+        let (mut alpha, _) = harness.fake("alpha");
+        alpha.provides = &PROVIDES_SERVICE;
+        alpha.requires = &REQUIRES_SERVICE_B;
+        let (mut beta, _) = harness.fake("beta");
+        beta.provides = &PROVIDES_SERVICE_B;
+        beta.requires = &REQUIRES_SERVICE;
+        harness.registry.register(alpha, FakeConfig::on(1)).expect("alpha");
+        let error = harness.registry.register(beta, FakeConfig::on(1)).expect_err("cycle");
+        assert!(matches!(error, RegistryError::CyclicDependency { .. }));
+    }
+
+    #[test]
+    fn missing_services_fail_before_any_module_starts() {
+        let harness = Harness::new();
+        let (mut consumer, consumer_state) = harness.fake("consumer");
+        consumer.requires = &REQUIRES_SERVICE;
+        let (solo, solo_state) = harness.fake("solo");
+        harness.registry.register(consumer, FakeConfig::on(1)).expect("consumer");
+        harness.registry.register(solo, FakeConfig::on(1)).expect("solo");
+        let error = harness.registry.start_all().expect_err("missing provider");
+        assert!(matches!(error, RegistryError::MissingProvider { .. }));
+        assert_eq!(lock(&consumer_state).starts, 0);
+        assert_eq!(lock(&solo_state).starts, 0);
+        assert_eq!(harness.trace.events(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn starts_in_dependency_order_and_shuts_down_in_reverse() {
+        let harness = Harness::new();
+        let (mut consumer, consumer_state) = harness.fake("consumer");
+        consumer.requires = &REQUIRES_SERVICE;
+        let (mut provider, provider_state) = harness.fake("provider");
+        provider.provides = &PROVIDES_SERVICE;
+        // Register the consumer first to prove ordering is not registration order.
+        harness.registry.register(consumer, FakeConfig::on(1)).expect("consumer");
+        harness.registry.register(provider, FakeConfig::on(1)).expect("provider");
+        harness.registry.start_all().expect("start");
+        assert_eq!(harness.trace.events(), vec![
+            "provider.configure.1",
+            "provider.start",
+            "consumer.configure.1",
+            "consumer.start",
+        ]);
+        harness.registry.shutdown().expect("shutdown");
+        assert_eq!(harness.trace.events().split_off(4), vec![
+            "consumer.stop",
+            "provider.stop"
+        ]);
+        assert_eq!(lock(&provider_state).starts, 1);
+        assert_eq!(lock(&consumer_state).starts, 1);
+    }
+
+    #[test]
+    fn a_second_start_all_does_not_duplicate_resources() {
+        let harness = Harness::new();
+        let (module, state) = harness.fake("solo");
+        harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        harness.registry.start_all().expect("first start");
+        harness.registry.start_all().expect("second start");
+        assert_eq!(lock(&state).starts, 1);
+    }
+
+    #[test]
+    fn disabling_stops_resources_and_prevents_starting() {
+        let harness = Harness::new();
+        let (module, state) = harness.fake("solo");
+        let handle = harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        harness.registry.start_all().expect("start");
+        harness.registry.set_enabled(handle, false).expect("disable");
+        let snapshot = harness.registry.snapshot(handle).expect("snapshot");
+        assert_eq!(snapshot.status, ModuleStatus::Disabled);
+        assert!(!snapshot.enabled);
+        assert_eq!(lock(&state).stops, 1);
+        harness.registry.start_all().expect("start disabled");
+        assert_eq!(lock(&state).starts, 1);
+    }
+
+    #[test]
+    fn pause_stops_and_resume_restarts() {
+        let harness = Harness::new();
+        let (module, state) = harness.fake("solo");
+        let handle = harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        harness.registry.start_all().expect("start");
+        harness.registry.pause(handle).expect("pause");
+        assert_eq!(
+            harness.registry.snapshot(handle).expect("snapshot").status,
+            ModuleStatus::Paused
+        );
+        assert_eq!(lock(&state).stops, 1);
+        harness.registry.resume(handle).expect("resume");
+        assert_eq!(
+            harness.registry.snapshot(handle).expect("snapshot").status,
+            ModuleStatus::Running
+        );
+        assert_eq!(lock(&state).starts, 2);
+    }
+
+    #[test]
+    fn a_grant_after_disable_does_not_start_the_module() {
+        let harness = Harness::new();
+        let (mut module, state) = harness.fake("gated");
+        module.permissions = &ACCESSIBILITY;
+        let handle = harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        harness.permissions.set(Permission::Accessibility, PermissionStatus::Denied);
+        harness.registry.start_all().expect("start");
+        assert_eq!(
+            harness.registry.snapshot(handle).expect("snapshot").status,
+            ModuleStatus::WaitingForPermission(Permission::Accessibility)
+        );
+        harness.registry.set_enabled(handle, false).expect("disable");
+        harness.permissions.set(Permission::Accessibility, PermissionStatus::Granted);
+        harness
+            .registry
+            .on_permission_change(Permission::Accessibility, PermissionStatus::Granted)
+            .expect("grant");
+        assert_eq!(
+            harness.registry.snapshot(handle).expect("snapshot").status,
+            ModuleStatus::Disabled
+        );
+        assert_eq!(lock(&state).starts, 0);
+        harness.registry.set_enabled(handle, true).expect("enable");
+        assert_eq!(lock(&state).starts, 1);
+    }
+
+    #[test]
+    fn permission_revocation_stops_only_the_dependent() {
+        let harness = Harness::new();
+        let (mut gated, gated_state) = harness.fake("gated");
+        gated.permissions = &ACCESSIBILITY;
+        let (free, free_state) = harness.fake("free");
+        let gated_handle = harness.registry.register(gated, FakeConfig::on(1)).expect("gated");
+        let free_handle = harness.registry.register(free, FakeConfig::on(1)).expect("free");
+        harness.registry.start_all().expect("start");
+        assert_eq!(lock(&gated_state).starts, 1);
+        assert_eq!(lock(&free_state).starts, 1);
+        harness
+            .registry
+            .on_permission_change(Permission::Accessibility, PermissionStatus::Denied)
+            .expect("revoke");
+        assert_eq!(
+            harness.registry.snapshot(gated_handle).expect("gated snapshot").status,
+            ModuleStatus::WaitingForPermission(Permission::Accessibility)
+        );
+        assert_eq!(lock(&gated_state).stops, 1);
+        assert_eq!(
+            harness.registry.snapshot(free_handle).expect("free snapshot").status,
+            ModuleStatus::Running
+        );
+        assert_eq!(lock(&free_state).stops, 0);
+    }
+
+    #[test]
+    fn a_paused_reload_only_updates_the_next_start_snapshot() {
+        let harness = Harness::new();
+        let (module, state) = harness.fake("solo");
+        let handle = harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        harness.registry.start_all().expect("start");
+        harness.registry.pause(handle).expect("pause");
+        harness.registry.reload(handle, FakeConfig::on(2)).expect("reload");
+        let snapshot = harness.registry.snapshot(handle).expect("snapshot");
+        assert_eq!(snapshot.status, ModuleStatus::Paused);
+        assert_eq!(snapshot.revision, 2);
+        assert!(!harness.trace.events().iter().any(|event| event.contains("reconfigure")));
+        harness.registry.resume(handle).expect("resume");
+        assert_eq!(lock(&state).starts, 2);
+        assert_eq!(harness.trace.events().split_off(3), vec![
+            "solo.configure.2",
+            "solo.start"
+        ]);
+    }
+
+    #[test]
+    fn a_rejected_reconfigure_keeps_running_and_the_last_revision() {
+        let harness = Harness::new();
+        let (module, state) = harness.fake("solo");
+        let handle = harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        harness.registry.start_all().expect("start");
+        let error = harness.registry.reload(handle, FakeConfig::invalid()).expect_err("invalid");
+        assert!(matches!(error, RegistryError::InvalidConfig { .. }));
+        let snapshot = harness.registry.snapshot(handle).expect("snapshot");
+        assert_eq!(snapshot.status, ModuleStatus::Running);
+        assert_eq!(snapshot.revision, 1);
+        assert_eq!(
+            snapshot.diagnostic.expect("diagnostic").message,
+            "fake config is invalid"
+        );
+        assert_eq!(lock(&state).stops, 0);
+    }
+
+    #[test]
+    fn a_failed_reconfigure_keeps_the_previous_configuration() {
+        let harness = Harness::new();
+        let (mut module, _) = harness.fake("solo");
+        module.fail.reconfigure = true;
+        let handle = harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        harness.registry.start_all().expect("start");
+        let error = harness.registry.reload(handle, FakeConfig::on(2)).expect_err("reconfigure");
+        assert!(matches!(error, RegistryError::Module(_)));
+        let snapshot = harness.registry.snapshot(handle).expect("snapshot");
+        assert_eq!(snapshot.status, ModuleStatus::Running);
+        assert_eq!(snapshot.revision, 1);
+        // Reloading the still-active configuration is recognised as unchanged.
+        harness.registry.reload(handle, FakeConfig::on(1)).expect("unchanged reload");
+        assert_eq!(harness.registry.snapshot(handle).expect("snapshot").revision, 1);
+    }
+
+    #[test]
+    fn an_invalid_initial_config_is_stopped_with_a_diagnostic() {
+        let harness = Harness::new();
+        let (module, _) = harness.fake("solo");
+        let handle = harness
+            .registry
+            .register(module, FakeConfig {
+                enabled: false,
+                ..FakeConfig::invalid()
+            })
+            .expect("register");
+        let snapshot = harness.registry.snapshot(handle).expect("snapshot");
+        assert_eq!(snapshot.status, ModuleStatus::Stopped);
+        assert!(!snapshot.enabled);
+        assert_eq!(snapshot.revision, 0);
+        assert!(snapshot.diagnostic.is_some());
+    }
+
+    #[test]
+    fn stop_after_a_partial_start_is_safe_and_idempotent() {
+        let harness = Harness::new();
+        let (mut module, state) = harness.fake("partial");
+        module.fail.start = true;
+        harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        harness.registry.start_all().expect_err("start fails");
+        assert!(
+            !lock(&state).held,
+            "a failed start must release partial resources"
+        );
+        assert_eq!(lock(&state).stops, 1);
+        assert!(lock(&state).stopped_while_held);
+        harness.registry.shutdown().expect("shutdown");
+        assert_eq!(lock(&state).stops, 1, "shutdown must not stop again");
+        harness.registry.shutdown().expect("second shutdown");
+        assert_eq!(lock(&state).stops, 1);
+    }
+
+    #[test]
+    fn a_failed_start_does_not_block_an_independent_module() {
+        let harness = Harness::new();
+        let (mut broken, broken_state) = harness.fake("broken");
+        broken.fail.start = true;
+        let (healthy, healthy_state) = harness.fake("healthy");
+        harness.registry.register(broken, FakeConfig::on(1)).expect("broken");
+        harness.registry.register(healthy, FakeConfig::on(1)).expect("healthy");
+        harness.registry.start_all().expect_err("broken fails");
+        assert_eq!(lock(&broken_state).starts, 1);
+        assert_eq!(lock(&healthy_state).starts, 1);
+        assert_eq!(
+            harness.registry.snapshots()[1].status,
+            ModuleStatus::Running,
+            "the healthy module started"
+        );
+    }
+
+    #[test]
+    fn a_configure_failure_is_reported_with_its_operation() {
+        let harness = Harness::new();
+        let (mut module, state) = harness.fake("solo");
+        module.fail.configure = true;
+        let handle = harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        harness.registry.start_all().expect_err("configure fails");
+        match harness.registry.snapshot(handle).expect("snapshot").status {
+            ModuleStatus::Failed(failure) => {
+                assert_eq!(failure.operation, Operation::Configure);
+                assert_eq!(failure.category, ErrorCategory::Config);
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+        assert_eq!(lock(&state).starts, 0);
+        assert_eq!(
+            lock(&state).stops,
+            1,
+            "configure failure still releases resources"
+        );
+    }
+
+    #[test]
+    fn an_unchanged_reload_does_not_call_the_module() {
+        let harness = Harness::new();
+        let (module, _) = harness.fake("solo");
+        let handle = harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        harness.registry.start_all().expect("start");
+        assert_eq!(
+            harness.registry.reload(handle, FakeConfig::on(1)).expect("unchanged").status,
+            ReloadStatus::Unchanged
+        );
+        assert!(!harness.trace.events().iter().any(|event| event.contains("reconfigure")));
+        assert_eq!(harness.registry.snapshot(handle).expect("snapshot").revision, 1);
+    }
+
+    #[test]
+    fn reloading_before_start_stages_and_after_start_applies_the_enable() {
+        let harness = Harness::new();
+        let (module, state) = harness.fake("solo");
+        let handle = harness.registry.register(module, FakeConfig::off(1)).expect("register");
+        harness.registry.reload(handle, FakeConfig::on(2)).expect("stage");
+        let staged = harness.registry.snapshot(handle).expect("snapshot");
+        assert_eq!(staged.status, ModuleStatus::Stopped);
+        assert!(staged.enabled);
+        assert_eq!(staged.revision, 2);
+        assert_eq!(lock(&state).starts, 0);
+
+        harness.registry.start_all().expect("start");
+        assert_eq!(lock(&state).starts, 1);
+
+        harness.registry.reload(handle, FakeConfig::off(3)).expect("disable");
+        assert_eq!(
+            harness.registry.snapshot(handle).expect("snapshot").status,
+            ModuleStatus::Disabled
+        );
+        harness.registry.reload(handle, FakeConfig::on(4)).expect("enable");
+        let enabled = harness.registry.snapshot(handle).expect("snapshot");
+        assert_eq!(enabled.status, ModuleStatus::Running);
+        assert_eq!(enabled.revision, 4);
+        assert_eq!(lock(&state).starts, 2);
+    }
+
+    #[test]
+    fn reloading_with_a_disabled_config_stops_a_running_module() {
+        let harness = Harness::new();
+        let (module, state) = harness.fake("solo");
+        let handle = harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        harness.registry.start_all().expect("start");
+        harness.registry.reload(handle, FakeConfig::off(2)).expect("reload");
+        let snapshot = harness.registry.snapshot(handle).expect("snapshot");
+        assert_eq!(snapshot.status, ModuleStatus::Disabled);
+        assert_eq!(snapshot.revision, 2);
+        assert_eq!(lock(&state).stops, 1);
+    }
+
+    #[test]
+    fn a_service_failure_stops_dependents_and_recovery_restarts_them() {
+        let harness = Harness::new();
+        let (mut provider, provider_state) = harness.fake("provider");
+        provider.provides = &PROVIDES_SERVICE;
+        let (mut consumer, consumer_state) = harness.fake("consumer");
+        consumer.requires = &REQUIRES_SERVICE;
+        let provider_handle =
+            harness.registry.register(provider, FakeConfig::on(1)).expect("provider");
+        let consumer_handle =
+            harness.registry.register(consumer, FakeConfig::on(1)).expect("consumer");
+        harness.registry.start_all().expect("start");
+        harness.registry.service_failed(SERVICE).expect("failure");
+        assert_eq!(
+            harness.registry.snapshot(consumer_handle).expect("consumer").status,
+            ModuleStatus::Unavailable(UnavailableReason::MissingService(SERVICE))
+        );
+        assert_eq!(lock(&consumer_state).stops, 1);
+        assert_eq!(
+            harness.registry.snapshot(provider_handle).expect("provider").status,
+            ModuleStatus::Running
+        );
+        assert_eq!(lock(&provider_state).stops, 0);
+        harness.registry.service_recovered(SERVICE).expect("recovery");
+        assert_eq!(
+            harness.registry.snapshot(consumer_handle).expect("consumer").status,
+            ModuleStatus::Running
+        );
+        assert_eq!(lock(&consumer_state).starts, 2);
+    }
+
+    #[test]
+    fn snapshots_list_modules_in_registration_order() {
+        let harness = Harness::new();
+        let (first, _) = harness.fake("first");
+        let (second, _) = harness.fake("second");
+        harness.registry.register(first, FakeConfig::on(1)).expect("first");
+        harness.registry.register(second, FakeConfig::on(1)).expect("second");
+        let snapshots = harness.registry.snapshots();
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0].id, ModuleId::new("first"));
+        assert_eq!(snapshots[1].id, ModuleId::new("second"));
+        assert_eq!(snapshots[0].revision, 1);
+        assert_eq!(snapshots[1].revision, 1);
+    }
+
+    #[test]
+    fn unknown_handles_are_rejected() {
+        let harness = Harness::new();
+        let handle: ModuleHandle<FakeConfig> = ModuleHandle {
+            id: ModuleId::new("missing"),
+            marker: PhantomData,
+        };
+        assert!(matches!(
+            harness.registry.snapshot(handle),
+            Err(RegistryError::UnknownModule { .. })
+        ));
+        assert!(matches!(
+            harness.registry.set_enabled(handle, true),
+            Err(RegistryError::UnknownModule { .. })
+        ));
+    }
+
+    #[test]
+    fn shutdown_is_idempotent() {
+        let harness = Harness::new();
+        let (module, state) = harness.fake("solo");
+        harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        harness.registry.start_all().expect("start");
+        harness.registry.shutdown().expect("shutdown");
+        assert_eq!(lock(&state).stops, 1);
+        harness.registry.shutdown().expect("second shutdown");
+        assert_eq!(lock(&state).stops, 1);
+    }
+
+    #[test]
+    fn logs_carry_module_and_operation_and_two_registries_stay_separate() {
+        let first = Harness::new();
+        let second = Harness::new();
+        let (alpha, _) = first.fake("alpha");
+        let (beta, _) = second.fake("beta");
+        first.registry.register(alpha, FakeConfig::on(1)).expect("alpha");
+        second.registry.register(beta, FakeConfig::on(1)).expect("beta");
+        first.registry.start_all().expect("first start");
+        second.registry.start_all().expect("second start");
+        let first_records = first.logger.records();
+        let second_records = second.logger.records();
+        assert!(!first_records.is_empty());
+        assert!(first_records.iter().all(|record| record.module == ModuleId::new("alpha")));
+        assert!(first_records.iter().any(|record| record.operation == Operation::Start));
+        assert!(second_records.iter().all(|record| record.module == ModuleId::new("beta")));
+        assert!(second_records.iter().any(|record| record.operation == Operation::Start));
+    }
+
+    #[test]
+    fn a_missing_executable_reports_an_actionable_unavailable_reason() {
+        let harness = Harness::new();
+        let (mut module, state) = harness.fake("needs-tool");
+        module.executables = &["stache-missing-binary-fixture"];
+        let handle = harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        harness.registry.start_all().expect("start pass");
+        assert_eq!(
+            harness.registry.snapshot(handle).expect("snapshot").status,
+            ModuleStatus::Unavailable(UnavailableReason::MissingExecutable(
+                "stache-missing-binary-fixture".to_owned()
+            ))
+        );
+        assert_eq!(lock(&state).starts, 0);
+    }
+
+    #[test]
+    fn a_reload_does_not_clear_a_permission_block() {
+        let harness = Harness::new();
+        let (mut module, state) = harness.fake("gated");
+        module.permissions = &ACCESSIBILITY;
+        let handle = harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        harness.permissions.set(Permission::Accessibility, PermissionStatus::Denied);
+        harness.registry.start_all().expect("start");
+        harness.registry.reload(handle, FakeConfig::on(2)).expect("reload");
+        assert_eq!(
+            harness.registry.snapshot(handle).expect("snapshot").status,
+            ModuleStatus::WaitingForPermission(Permission::Accessibility)
+        );
+        harness.permissions.set(Permission::Accessibility, PermissionStatus::Granted);
+        harness
+            .registry
+            .on_permission_change(Permission::Accessibility, PermissionStatus::Granted)
+            .expect("grant");
+        assert_eq!(lock(&state).starts, 1);
+    }
+
+    #[test]
+    fn concurrent_toggles_stay_serialized_and_never_double_start() {
+        let harness = Harness::new();
+        let (module, state) = harness.fake("racy");
+        let handle = harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        let registry = Arc::new(harness.registry);
+        let mut threads = Vec::new();
+        for worker in 0..4_u32 {
+            let registry = Arc::clone(&registry);
+            threads.push(std::thread::spawn(move || {
+                for round in 0..50_u32 {
+                    let enabled = (worker + round) % 2 == 0;
+                    registry.set_enabled(handle, enabled).expect("toggle");
+                    if round % 10 == 0 {
+                        registry.reload(handle, FakeConfig::on(round + 1)).expect("reload");
+                    }
+                }
+            }));
+        }
+        for thread in threads {
+            thread.join().expect("worker");
+        }
+        let snapshot = registry.snapshot(handle).expect("snapshot");
+        let state = lock(&state);
+        assert!(
+            !state.double_start,
+            "a second start ran without an intervening stop"
+        );
+        match snapshot.status {
+            ModuleStatus::Running => assert_eq!(state.starts, state.stops + 1),
+            ModuleStatus::Disabled | ModuleStatus::Stopped => {
+                assert_eq!(state.starts, state.stops);
+            }
+            other => panic!("unexpected final status {other:?}"),
+        }
+    }
+
+    /// A module is either running with one outstanding start or fully stopped.
+    fn assert_balanced(label: &str, status: &ModuleStatus, starts: u32, stops: u32) {
+        match status {
+            ModuleStatus::Running => assert_eq!(
+                starts,
+                stops + 1,
+                "{label} is running with {starts} starts and {stops} stops"
+            ),
+            ModuleStatus::Disabled
+            | ModuleStatus::Stopped
+            | ModuleStatus::Paused
+            | ModuleStatus::WaitingForPermission(_)
+            | ModuleStatus::Unavailable(_) => assert_eq!(
+                starts, stops,
+                "{label} is {status:?} with {starts} starts and {stops} stops"
+            ),
+            ModuleStatus::Failed(_) => panic!("{label} failed: {status:?}"),
+        }
+    }
+
+    #[test]
+    fn a_provider_toggle_racing_a_consumer_toggle_never_double_starts() {
+        let harness = Harness::new();
+        let (mut provider, provider_state) = harness.fake("provider");
+        provider.provides = &PROVIDES_SERVICE;
+        let (mut consumer, consumer_state) = harness.fake("consumer");
+        consumer.requires = &REQUIRES_SERVICE;
+        let provider_handle =
+            harness.registry.register(provider, FakeConfig::on(1)).expect("provider");
+        let consumer_handle =
+            harness.registry.register(consumer, FakeConfig::on(1)).expect("consumer");
+        harness.registry.start_all().expect("start");
+        let registry = Arc::new(harness.registry);
+        let barrier = Arc::new(Barrier::new(2));
+
+        let provider_thread = {
+            let registry = Arc::clone(&registry);
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                for round in 0..100_u32 {
+                    registry.set_enabled(provider_handle, round % 2 == 0).expect("provider toggle");
+                }
+            })
+        };
+        let consumer_thread = {
+            let registry = Arc::clone(&registry);
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                for round in 0..100_u32 {
+                    registry.set_enabled(consumer_handle, round % 2 == 0).expect("consumer toggle");
+                }
+            })
+        };
+        for thread in [provider_thread, consumer_thread] {
+            thread.join().expect("worker");
+        }
+
+        let provider_snapshot = registry.snapshot(provider_handle).expect("provider snapshot");
+        let consumer_snapshot = registry.snapshot(consumer_handle).expect("consumer snapshot");
+        let provider_state = lock(&provider_state);
+        let consumer_state = lock(&consumer_state);
+        assert!(!provider_state.double_start, "the provider started twice");
+        assert!(!consumer_state.double_start, "the consumer started twice");
+        assert_balanced(
+            "provider",
+            &provider_snapshot.status,
+            provider_state.starts,
+            provider_state.stops,
+        );
+        assert_balanced(
+            "consumer",
+            &consumer_snapshot.status,
+            consumer_state.starts,
+            consumer_state.stops,
+        );
+    }
+
+    #[test]
+    fn shutdown_racing_set_enabled_leaves_no_running_module() {
+        let harness = Harness::new();
+        let (module, state) = harness.fake("racy-shutdown");
+        let handle = harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        harness.registry.start_all().expect("start");
+        let registry = Arc::new(harness.registry);
+        let barrier = Arc::new(Barrier::new(2));
+
+        let shutdown_thread = {
+            let registry = Arc::clone(&registry);
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                registry.shutdown().expect("shutdown");
+            })
+        };
+        let toggle_thread = {
+            let registry = Arc::clone(&registry);
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                for round in 0..100_u32 {
+                    match registry.set_enabled(handle, round % 2 == 0) {
+                        Ok(()) | Err(RegistryError::ShuttingDown) => {}
+                        Err(error) => panic!("unexpected toggle error: {error}"),
+                    }
+                }
+            })
+        };
+        for thread in [shutdown_thread, toggle_thread] {
+            thread.join().expect("worker");
+        }
+
+        let snapshot = registry.snapshot(handle).expect("snapshot");
+        assert_ne!(
+            snapshot.status,
+            ModuleStatus::Running,
+            "a module survived shutdown"
+        );
+        let state = lock(&state);
+        assert!(!state.double_start, "the module started twice");
+        assert_eq!(
+            state.starts, state.stops,
+            "shutdown must stop every started module"
+        );
+    }
+
+    #[test]
+    fn a_valid_reload_recovers_from_an_invalid_initial_config() {
+        let harness = Harness::new();
+        let (module, state) = harness.fake("solo");
+        let handle = harness.registry.register(module, FakeConfig::invalid()).expect("register");
+        let broken = harness.registry.snapshot(handle).expect("snapshot");
+        assert_eq!(broken.revision, 0);
+        assert!(broken.diagnostic.is_some());
+        assert_eq!(
+            harness.registry.reload(handle, FakeConfig::on(3)).expect("reload").status,
+            ReloadStatus::Applied { revision: 1 }
+        );
+        let repaired = harness.registry.snapshot(handle).expect("snapshot");
+        assert_eq!(repaired.revision, 1);
+        assert!(repaired.diagnostic.is_none());
+        assert_eq!(repaired.status, ModuleStatus::Stopped);
+        harness.registry.set_enabled(handle, true).expect("enable");
+        assert_eq!(lock(&state).starts, 1);
+    }
+
+    #[test]
+    fn disabling_a_provider_stops_and_restarts_its_consumer() {
+        let harness = Harness::new();
+        let (mut provider, provider_state) = harness.fake("provider");
+        provider.provides = &PROVIDES_SERVICE;
+        let (mut consumer, consumer_state) = harness.fake("consumer");
+        consumer.requires = &REQUIRES_SERVICE;
+        let (independent, independent_state) = harness.fake("independent");
+        let provider_handle =
+            harness.registry.register(provider, FakeConfig::on(1)).expect("provider");
+        let consumer_handle =
+            harness.registry.register(consumer, FakeConfig::on(1)).expect("consumer");
+        let independent_handle =
+            harness.registry.register(independent, FakeConfig::on(1)).expect("independent");
+        harness.registry.start_all().expect("start");
+        harness.registry.set_enabled(provider_handle, false).expect("disable provider");
+        assert_eq!(
+            harness.registry.snapshot(consumer_handle).expect("consumer").status,
+            ModuleStatus::Unavailable(UnavailableReason::MissingService(SERVICE))
+        );
+        assert_eq!(lock(&consumer_state).stops, 1);
+        assert_eq!(lock(&provider_state).stops, 1);
+        assert_eq!(
+            harness.registry.snapshot(independent_handle).expect("independent").status,
+            ModuleStatus::Running
+        );
+        assert_eq!(lock(&independent_state).stops, 0);
+        harness.registry.set_enabled(provider_handle, true).expect("enable provider");
+        assert_eq!(
+            harness.registry.snapshot(consumer_handle).expect("consumer").status,
+            ModuleStatus::Running
+        );
+        assert_eq!(lock(&consumer_state).starts, 2);
+    }
+
+    #[test]
+    fn pausing_a_provider_stops_and_resumes_its_consumer() {
+        let harness = Harness::new();
+        let (mut provider, _) = harness.fake("provider");
+        provider.provides = &PROVIDES_SERVICE;
+        let (mut consumer, consumer_state) = harness.fake("consumer");
+        consumer.requires = &REQUIRES_SERVICE;
+        let provider_handle =
+            harness.registry.register(provider, FakeConfig::on(1)).expect("provider");
+        let consumer_handle =
+            harness.registry.register(consumer, FakeConfig::on(1)).expect("consumer");
+        harness.registry.start_all().expect("start");
+        harness.registry.pause(provider_handle).expect("pause provider");
+        assert_eq!(
+            harness.registry.snapshot(consumer_handle).expect("consumer").status,
+            ModuleStatus::Unavailable(UnavailableReason::MissingService(SERVICE))
+        );
+        assert_eq!(lock(&consumer_state).stops, 1);
+        harness.registry.resume(provider_handle).expect("resume provider");
+        assert_eq!(
+            harness.registry.snapshot(consumer_handle).expect("consumer").status,
+            ModuleStatus::Running
+        );
+        assert_eq!(lock(&consumer_state).starts, 2);
+    }
+
+    #[test]
+    fn a_transitive_dependent_chain_cascades_both_ways() {
+        let harness = Harness::new();
+        let (mut alpha, alpha_state) = harness.fake("alpha");
+        alpha.provides = &PROVIDES_SERVICE;
+        let (mut beta, beta_state) = harness.fake("beta");
+        beta.provides = &PROVIDES_SERVICE_B;
+        beta.requires = &REQUIRES_SERVICE;
+        let (mut gamma, gamma_state) = harness.fake("gamma");
+        gamma.requires = &REQUIRES_SERVICE_B;
+        let alpha_handle = harness.registry.register(alpha, FakeConfig::on(1)).expect("alpha");
+        let beta_handle = harness.registry.register(beta, FakeConfig::on(1)).expect("beta");
+        let gamma_handle = harness.registry.register(gamma, FakeConfig::on(1)).expect("gamma");
+        harness.registry.start_all().expect("start");
+        harness.registry.set_enabled(alpha_handle, false).expect("disable alpha");
+        assert_eq!(
+            harness.registry.snapshot(beta_handle).expect("beta").status,
+            ModuleStatus::Unavailable(UnavailableReason::MissingService(SERVICE))
+        );
+        assert_eq!(
+            harness.registry.snapshot(gamma_handle).expect("gamma").status,
+            ModuleStatus::Unavailable(UnavailableReason::MissingService(SERVICE_B))
+        );
+        assert_eq!(lock(&beta_state).stops, 1);
+        assert_eq!(lock(&gamma_state).stops, 1);
+        harness.registry.set_enabled(alpha_handle, true).expect("enable alpha");
+        assert_eq!(
+            harness.registry.snapshot(beta_handle).expect("beta").status,
+            ModuleStatus::Running
+        );
+        assert_eq!(
+            harness.registry.snapshot(gamma_handle).expect("gamma").status,
+            ModuleStatus::Running
+        );
+        assert_eq!(lock(&beta_state).starts, 2);
+        assert_eq!(lock(&gamma_state).starts, 2);
+        assert_eq!(lock(&alpha_state).starts, 2);
+    }
+
+    #[test]
+    fn recovery_does_not_start_disabled_or_paused_consumers() {
+        let harness = Harness::new();
+        let (mut provider, _) = harness.fake("provider");
+        provider.provides = &PROVIDES_SERVICE;
+        let (mut running, running_state) = harness.fake("running");
+        running.requires = &REQUIRES_SERVICE;
+        let (mut disabled, disabled_state) = harness.fake("disabled");
+        disabled.requires = &REQUIRES_SERVICE;
+        let (mut paused, paused_state) = harness.fake("paused");
+        paused.requires = &REQUIRES_SERVICE;
+        let provider_handle =
+            harness.registry.register(provider, FakeConfig::on(1)).expect("provider");
+        let running_handle =
+            harness.registry.register(running, FakeConfig::on(1)).expect("running");
+        let disabled_handle =
+            harness.registry.register(disabled, FakeConfig::on(1)).expect("disabled");
+        let paused_handle = harness.registry.register(paused, FakeConfig::on(1)).expect("paused");
+        harness.registry.start_all().expect("start");
+        harness.registry.set_enabled(disabled_handle, false).expect("disable consumer");
+        harness.registry.pause(paused_handle).expect("pause consumer");
+        harness.registry.set_enabled(provider_handle, false).expect("disable provider");
+        harness.registry.set_enabled(provider_handle, true).expect("enable provider");
+        assert_eq!(
+            harness.registry.snapshot(running_handle).expect("running").status,
+            ModuleStatus::Running
+        );
+        assert_eq!(lock(&running_state).starts, 2);
+        assert_eq!(
+            harness.registry.snapshot(disabled_handle).expect("disabled").status,
+            ModuleStatus::Disabled
+        );
+        assert_eq!(lock(&disabled_state).starts, 1);
+        assert_eq!(
+            harness.registry.snapshot(paused_handle).expect("paused").status,
+            ModuleStatus::Paused
+        );
+        assert_eq!(lock(&paused_state).starts, 1);
+    }
+
+    #[test]
+    fn permission_revocation_of_a_provider_stops_its_consumer() {
+        let harness = Harness::new();
+        let (mut provider, _) = harness.fake("provider");
+        provider.provides = &PROVIDES_SERVICE;
+        provider.permissions = &ACCESSIBILITY;
+        let (mut consumer, consumer_state) = harness.fake("consumer");
+        consumer.requires = &REQUIRES_SERVICE;
+        let provider_handle =
+            harness.registry.register(provider, FakeConfig::on(1)).expect("provider");
+        let consumer_handle =
+            harness.registry.register(consumer, FakeConfig::on(1)).expect("consumer");
+        harness.registry.start_all().expect("start");
+        harness
+            .registry
+            .on_permission_change(Permission::Accessibility, PermissionStatus::Denied)
+            .expect("revoke");
+        assert_eq!(
+            harness.registry.snapshot(provider_handle).expect("provider").status,
+            ModuleStatus::WaitingForPermission(Permission::Accessibility)
+        );
+        assert_eq!(
+            harness.registry.snapshot(consumer_handle).expect("consumer").status,
+            ModuleStatus::Unavailable(UnavailableReason::MissingService(SERVICE))
+        );
+        assert_eq!(lock(&consumer_state).stops, 1);
+    }
+
+    #[test]
+    fn a_cleanup_stop_failure_does_not_mask_the_start_error() {
+        let harness = Harness::new();
+        let (mut module, state) = harness.fake("stuck");
+        module.fail.start = true;
+        module.fail.stop = true;
+        let handle = harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        let error = harness.registry.start_all().expect_err("start fails");
+        match error {
+            RegistryError::Module(module_error) => {
+                assert_eq!(module_error.operation(), Operation::Start);
+            }
+            other => panic!("expected a module error, got {other}"),
+        }
+        match harness.registry.snapshot(handle).expect("snapshot").status {
+            ModuleStatus::Failed(failure) => assert_eq!(failure.operation, Operation::Start),
+            other => panic!("expected Failed, got {other:?}"),
+        }
+        assert_eq!(lock(&state).stops, 1);
+    }
+
+    #[test]
+    fn a_reload_that_disables_a_provider_stops_it_without_reconfiguring() {
+        let harness = Harness::new();
+        let (mut provider, provider_state) = harness.fake("provider");
+        provider.provides = &PROVIDES_SERVICE;
+        let (mut consumer, consumer_state) = harness.fake("consumer");
+        consumer.requires = &REQUIRES_SERVICE;
+        let provider_handle =
+            harness.registry.register(provider, FakeConfig::on(1)).expect("provider");
+        let consumer_handle =
+            harness.registry.register(consumer, FakeConfig::on(1)).expect("consumer");
+        harness.registry.start_all().expect("start");
+        harness
+            .registry
+            .reload(provider_handle, FakeConfig::off(2))
+            .expect("disable reload");
+        assert_eq!(
+            harness.registry.snapshot(provider_handle).expect("provider").status,
+            ModuleStatus::Disabled
+        );
+        assert_eq!(
+            harness.registry.snapshot(consumer_handle).expect("consumer").status,
+            ModuleStatus::Unavailable(UnavailableReason::MissingService(SERVICE))
+        );
+        assert_eq!(lock(&provider_state).stops, 1);
+        assert_eq!(lock(&consumer_state).stops, 1);
+        assert!(
+            !harness.trace.events().iter().any(|event| event == "provider.reconfigure.2"),
+            "a disabling reload must stop, not reconfigure"
+        );
+    }
+
+    #[test]
+    fn status_reads_do_not_wait_for_a_blocked_configure() {
+        let harness = Harness::new();
+        let (module, _state, entered, release) = harness.gated("solo", Blocked::Configure);
+        let handle = harness.registry.register(module, FakeConfig::off(0)).expect("register");
+        let registry = Arc::new(harness.registry);
+
+        let starter = {
+            let registry = Arc::clone(&registry);
+            std::thread::spawn(move || {
+                registry.set_enabled(handle, true).expect("enable");
+            })
+        };
+        wait_until_blocked(&entered);
+
+        let snapshot = {
+            let registry = Arc::clone(&registry);
+            within("snapshot", move || registry.snapshot(handle).expect("snapshot"))
+        };
+        assert_eq!(
+            snapshot.status,
+            ModuleStatus::Disabled,
+            "the published status is the last completed one"
+        );
+        assert!(
+            snapshot.enabled,
+            "the desired flag is published before configure runs"
+        );
+        assert_eq!(snapshot.revision, 1);
+
+        let listed = {
+            let registry = Arc::clone(&registry);
+            within("snapshots", move || registry.snapshots())
+        };
+        assert_eq!(listed[0].status, ModuleStatus::Disabled);
+        assert!(listed[0].enabled);
+        assert_eq!(listed[0].revision, 1);
+
+        release.send(()).expect("release configure");
+        starter.join().expect("start thread");
+        assert_eq!(
+            registry.snapshot(handle).expect("snapshot").status,
+            ModuleStatus::Running
+        );
+    }
+
+    #[test]
+    fn status_reads_do_not_wait_for_a_blocked_start() {
+        let harness = Harness::new();
+        let (module, _state, entered, release) = harness.gated("solo", Blocked::Start);
+        let handle = harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        let registry = Arc::new(harness.registry);
+
+        let starter = {
+            let registry = Arc::clone(&registry);
+            std::thread::spawn(move || {
+                registry.start_all().expect("start");
+            })
+        };
+        wait_until_blocked(&entered);
+
+        let snapshot = {
+            let registry = Arc::clone(&registry);
+            within("snapshot", move || registry.snapshot(handle).expect("snapshot"))
+        };
+        assert_eq!(snapshot.status, ModuleStatus::Stopped);
+        assert!(snapshot.enabled);
+
+        let listed = {
+            let registry = Arc::clone(&registry);
+            within("snapshots", move || registry.snapshots())
+        };
+        assert_eq!(listed[0].status, ModuleStatus::Stopped);
+        assert!(listed[0].enabled);
+
+        release.send(()).expect("release start");
+        starter.join().expect("start thread");
+        assert_eq!(
+            registry.snapshot(handle).expect("snapshot").status,
+            ModuleStatus::Running
+        );
+    }
+
+    #[test]
+    fn status_reads_do_not_wait_for_a_blocked_stop_and_readiness_drops_first() {
+        let harness = Harness::new();
+        let (mut provider, provider_state, entered, release) =
+            harness.gated("provider", Blocked::Stop);
+        provider.provides = &PROVIDES_SERVICE;
+        let (mut consumer, consumer_state) = harness.fake("consumer");
+        consumer.requires = &REQUIRES_SERVICE;
+        let provider_handle =
+            harness.registry.register(provider, FakeConfig::on(1)).expect("provider");
+        let consumer_handle =
+            harness.registry.register(consumer, FakeConfig::off(1)).expect("consumer");
+        harness.registry.start_all().expect("start");
+        let registry = Arc::new(harness.registry);
+
+        let stopper = {
+            let registry = Arc::clone(&registry);
+            std::thread::spawn(move || {
+                registry.set_enabled(provider_handle, false).expect("disable");
+            })
+        };
+        wait_until_blocked(&entered);
+
+        let snapshot = {
+            let registry = Arc::clone(&registry);
+            within("snapshot", move || {
+                registry.snapshot(provider_handle).expect("snapshot")
+            })
+        };
+        assert_eq!(
+            snapshot.status,
+            ModuleStatus::Disabled,
+            "the non-running target is published before `stop` runs"
+        );
+        assert!(!snapshot.enabled);
+        assert_eq!(lock(&provider_state).stops, 0);
+
+        let listed = {
+            let registry = Arc::clone(&registry);
+            within("snapshots", move || registry.snapshots())
+        };
+        assert_eq!(listed[0].status, ModuleStatus::Disabled);
+
+        within("dependent start", {
+            let registry = Arc::clone(&registry);
+            move || registry.set_enabled(consumer_handle, true).expect("consumer start")
+        });
+        let consumer_snapshot = {
+            let registry = Arc::clone(&registry);
+            within("consumer snapshot", move || {
+                registry.snapshot(consumer_handle).expect("consumer snapshot")
+            })
+        };
+        assert_eq!(
+            consumer_snapshot.status,
+            ModuleStatus::Unavailable(UnavailableReason::MissingService(SERVICE))
+        );
+        assert_eq!(
+            lock(&consumer_state).starts,
+            0,
+            "the consumer never starts against a stopping provider"
+        );
+
+        release.send(()).expect("release stop");
+        stopper.join().expect("stop thread");
+        assert_eq!(lock(&provider_state).stops, 1);
+
+        registry.set_enabled(provider_handle, true).expect("provider recovery");
+        assert_eq!(
+            registry.snapshot(consumer_handle).expect("consumer").status,
+            ModuleStatus::Running
+        );
+        assert_eq!(lock(&consumer_state).starts, 1);
+    }
+
+    #[test]
+    fn status_reads_do_not_wait_for_a_blocked_reconfigure_and_revision_publishes_after() {
+        let harness = Harness::new();
+        let (module, _state, entered, release) = harness.gated("solo", Blocked::Reconfigure);
+        let handle = harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        harness.registry.start_all().expect("start");
+        let registry = Arc::new(harness.registry);
+
+        let reloader = {
+            let registry = Arc::clone(&registry);
+            std::thread::spawn(move || {
+                registry.reload(handle, FakeConfig::on(2)).expect("reload");
+            })
+        };
+        wait_until_blocked(&entered);
+
+        let snapshot = {
+            let registry = Arc::clone(&registry);
+            within("snapshot", move || registry.snapshot(handle).expect("snapshot"))
+        };
+        assert_eq!(snapshot.status, ModuleStatus::Running);
+        assert_eq!(
+            snapshot.revision, 1,
+            "the old revision stays visible during reconfigure"
+        );
+
+        let listed = {
+            let registry = Arc::clone(&registry);
+            within("snapshots", move || registry.snapshots())
+        };
+        assert_eq!(listed[0].status, ModuleStatus::Running);
+        assert_eq!(listed[0].revision, 1);
+
+        release.send(()).expect("release reconfigure");
+        reloader.join().expect("reload thread");
+        let updated = registry.snapshot(handle).expect("snapshot");
+        assert_eq!(updated.status, ModuleStatus::Running);
+        assert_eq!(updated.revision, 2);
+        assert!(updated.diagnostic.is_none());
+    }
+
+    #[test]
+    fn snapshots_publish_config_diagnostics_and_recover_after_a_valid_reload() {
+        let harness = Harness::new();
+        let (module, _) = harness.fake("solo");
+        let handle = harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        harness.registry.start_all().expect("start");
+
+        harness.registry.reload(handle, FakeConfig::invalid()).expect_err("invalid");
+        let rejected = harness.registry.snapshots().remove(0);
+        assert_eq!(rejected.status, ModuleStatus::Running);
+        assert_eq!(rejected.revision, 1);
+        assert_eq!(
+            rejected.diagnostic.expect("diagnostic").message,
+            "fake config is invalid"
+        );
+
+        harness.registry.reload(handle, FakeConfig::on(2)).expect("valid");
+        let accepted = harness.registry.snapshots().remove(0);
+        assert_eq!(accepted.status, ModuleStatus::Running);
+        assert_eq!(accepted.revision, 2);
+        assert!(accepted.diagnostic.is_none());
+    }
+
+    #[test]
+    fn shutdown_publishes_non_running_state_before_stopping_the_module() {
+        let harness = Harness::new();
+        let (module, _state, entered, release) = harness.gated("solo", Blocked::Stop);
+        let handle = harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        harness.registry.start_all().expect("start");
+        let registry = Arc::new(harness.registry);
+
+        let stopper = {
+            let registry = Arc::clone(&registry);
+            std::thread::spawn(move || {
+                registry.shutdown().expect("shutdown");
+            })
+        };
+        wait_until_blocked(&entered);
+
+        let snapshot = {
+            let registry = Arc::clone(&registry);
+            within("snapshot", move || registry.snapshot(handle).expect("snapshot"))
+        };
+        assert_eq!(snapshot.status, ModuleStatus::Stopped);
+        assert!(snapshot.enabled);
+
+        release.send(()).expect("release stop");
+        stopper.join().expect("shutdown thread");
+        assert_eq!(
+            registry.snapshot(handle).expect("snapshot").status,
+            ModuleStatus::Stopped
+        );
+    }
+
+    #[test]
+    fn status_reads_do_not_wait_for_a_worker_join() {
+        let harness = Harness::new();
+        let (started, started_rx) = mpsc::channel();
+        let (stop_returned, stop_returned_rx) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel();
+        let module = JoinModule {
+            id: ModuleId::new("join"),
+            started,
+            stopped: stop_returned,
+            release: Some(release_rx),
+        };
+        let handle = harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        harness.registry.start_all().expect("start");
+        started_rx.recv_timeout(Duration::from_secs(5)).expect("worker started");
+        let registry = Arc::new(harness.registry);
+
+        let disable_thread = {
+            let registry = Arc::clone(&registry);
+            std::thread::spawn(move || {
+                registry.set_enabled(handle, false).expect("disable");
+            })
+        };
+        stop_returned_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("stop returned before the join");
+
+        let snapshot = {
+            let registry = Arc::clone(&registry);
+            within("snapshot", move || registry.snapshot(handle).expect("snapshot"))
+        };
+        assert_eq!(snapshot.status, ModuleStatus::Disabled);
+        let listed = {
+            let registry = Arc::clone(&registry);
+            within("snapshots", move || registry.snapshots())
+        };
+        assert_eq!(listed[0].status, ModuleStatus::Disabled);
+
+        release.send(()).expect("release worker");
+        disable_thread.join().expect("stop thread");
+    }
+}

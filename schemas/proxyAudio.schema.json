@@ -1,0 +1,100 @@
+{
+  "$id": "https://raw.githubusercontent.com/marcosmoura/stache/main/schemas/proxyAudio.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProxyAudioConfig",
+  "description": "Automatic audio-device selection.",
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "description": "Whether the module should run.",
+      "type": "boolean",
+      "default": false
+    },
+    "input": {
+      "description": "Ordered input devices; the first eligible entry wins.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/AudioDevicePriority"
+      }
+    },
+    "output": {
+      "description": "Ordered output devices; the first eligible entry wins.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/AudioDevicePriority"
+      }
+    }
+  },
+  "$defs": {
+    "AudioDeviceDependency": {
+      "description": "A device that must be present for a priority entry to be considered.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "The name or pattern of the required device.",
+          "type": "string",
+          "default": ""
+        },
+        "strategy": {
+          "description": "How the required device name is matched.",
+          "$ref": "#/$defs/MatchStrategy",
+          "default": "exact"
+        }
+      }
+    },
+    "AudioDevicePriority": {
+      "description": "One entry in an input or output priority list.",
+      "type": "object",
+      "properties": {
+        "dependsOn": {
+          "description": "A device that must be connected before this entry is eligible.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AudioDeviceDependency"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "description": "The device name or pattern to match.",
+          "type": "string",
+          "default": ""
+        },
+        "strategy": {
+          "description": "How the device name is matched.",
+          "$ref": "#/$defs/MatchStrategy",
+          "default": "exact"
+        }
+      }
+    },
+    "MatchStrategy": {
+      "description": "Strategy used to match a device name.",
+      "oneOf": [
+        {
+          "description": "Case-insensitive exact match. This is the default.",
+          "type": "string",
+          "const": "exact"
+        },
+        {
+          "description": "Case-insensitive containment.",
+          "type": "string",
+          "const": "contains"
+        },
+        {
+          "description": "Case-insensitive prefix match.",
+          "type": "string",
+          "const": "startsWith"
+        },
+        {
+          "description": "Case-sensitive regular expression.",
+          "type": "string",
+          "const": "regex"
+        }
+      ]
+    }
+  }
+}

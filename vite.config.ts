@@ -1,5 +1,4 @@
 /// <reference types="vitest/config" />
-
 import path from 'node:path';
 
 import babel from '@rolldown/plugin-babel';
@@ -8,150 +7,53 @@ import { playwright } from '@vitest/browser-playwright';
 import wyw from '@wyw-in-js/vite';
 import { defineConfig } from 'vite';
 
-const host = process.env.TAURI_DEV_HOST;
-
-const UI_DIR = './app/ui';
-const SAFARI_VERSION = 18;
-const BROWSER_TARGET = `safari${SAFARI_VERSION}`;
-const BROWSER_TARGET_LIST = [BROWSER_TARGET];
-
-const hmr = {
-  host,
-  protocol: 'ws',
-  port: 1421,
-};
-
 export default defineConfig({
-  root: UI_DIR,
+  root: path.resolve(import.meta.dirname, 'src/ui'),
   envDir: import.meta.dirname,
-  envPrefix: ['VITE_', 'API_'],
   plugins: [
     wyw({
-      include: [`${UI_DIR}/**/*.styles.ts`],
-      importOverrides: {
-        './app/ui/design-system/index.ts': { unknown: 'allow' },
-        './app/ui/design-system/colors.ts': { unknown: 'allow' },
-        './app/ui/design-system/motion.ts': { unknown: 'allow' },
-        './app/ui/utils/media-query.ts': { unknown: 'allow' },
-        './app/ui/renderer/widgets/components/Calendar/Calendar.constants.ts': { unknown: 'allow' },
-      },
+      include: [path.resolve(import.meta.dirname, 'src/ui/src/**/*.styles.tsx')],
     }),
     react(),
     babel({ presets: [reactCompilerPreset()] }),
   ],
-  resolve: {
-    alias: {
-      '@': path.resolve(import.meta.dirname, UI_DIR),
-    },
-    conditions: ['module', 'production'],
-  },
-  optimizeDeps: {
-    include: [
-      '@hugeicons/core-free-icons',
-      '@hugeicons/react',
-      '@icons-pack/react-simple-icons',
-      '@tanstack/react-query',
-      '@tauri-apps/api/webviewWindow',
-      '@tauri-store/zustand',
-      'react-dom',
-      'react',
-      'usehooks-ts',
-      'vitest-browser-react',
-      'zustand',
-      'zustand/middleware/immer',
-    ],
-  },
   clearScreen: false,
   server: {
     port: 1420,
     strictPort: true,
-    host: host || false,
-    hmr: host ? hmr : undefined,
-    watch: {
-      ignored: ['**/app/native/**', '**/coverage/**', '**/.worktrees/**'],
-    },
   },
   build: {
-    target: BROWSER_TARGET_LIST,
-    cssTarget: BROWSER_TARGET,
-    minify: 'oxc',
+    target: 'safari26',
+    cssTarget: 'safari26',
     cssMinify: 'lightningcss',
-    assetsInlineLimit: 4096,
-    sourcemap: false,
-    modulePreload: { polyfill: false },
-    reportCompressedSize: true,
-    chunkSizeWarningLimit: 300,
-    outDir: path.resolve(import.meta.dirname, `${UI_DIR}/dist`),
-    rolldownOptions: {
-      output: {
-        codeSplitting: {
-          groups: [
-            {
-              name: 'react',
-              test: /[\\/]node_modules[\\/](react|react-dom)[\\/]/,
-            },
-            {
-              name: 'vendor',
-              test(id: string): boolean {
-                if (!id.includes('node_modules')) {
-                  return false;
-                }
-
-                if (/@hugeicons|@icons-pack|hugeicons|simple-icons/.test(id)) {
-                  return false;
-                }
-
-                if (/[\\/](react|react-dom)[\\/]/.test(id)) {
-                  return false;
-                }
-
-                return true;
-              },
-            },
-          ],
-        },
-      },
-    },
-  },
-  css: {
-    transformer: 'lightningcss',
-    lightningcss: {
-      targets: {
-        safari: SAFARI_VERSION,
-      },
-    },
+    outDir: 'dist',
   },
   test: {
     css: true,
-    root: path.resolve(import.meta.dirname, UI_DIR),
+    root: path.resolve(import.meta.dirname, 'src/ui'),
     setupFiles: ['./tests/setup.ts'],
-    include: ['./**/*.test.{ts,tsx}'],
-    isolate: true,
+    include: ['./src/**/*.test.{ts,tsx}'],
+    exclude: ['**/_legacy/**', '**/.worktrees/**', '**/dist/**', '**/node_modules/**'],
     coverage: {
       provider: 'istanbul',
       reporter: ['text', 'json', 'html'],
-      include: ['./**/*.{ts,tsx}'],
+      include: ['./src/**/*.{ts,tsx}'],
       exclude: [
         './**/*.test.{ts,tsx}',
-        './**/*.styles.ts',
-        './**/*.state.ts',
+        './**/*.styles.tsx',
         './main.tsx',
         './tests/**',
         './vite-env.d.ts',
+        '**/_legacy/**',
+        '**/dist/**',
       ],
-      thresholds: {
-        lines: 80,
-        functions: 80,
-        branches: 65,
-        statements: 80,
-      },
+      thresholds: { lines: 80, functions: 80, branches: 65, statements: 80 },
     },
     browser: {
-      provider: playwright(),
       enabled: true,
+      provider: playwright(),
       headless: true,
       instances: [{ browser: 'webkit' }],
-      viewport: { width: 800, height: 600 },
       screenshotFailures: true,
       screenshotDirectory: 'test-results/screenshots',
     },

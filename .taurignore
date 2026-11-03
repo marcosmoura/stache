@@ -1,0 +1,7 @@
+/_legacy/
+/.worktrees/
+/node_modules/
+/target/
+/src/ui/dist/
+/src/ui/coverage/
+/src/crates/app/gen/

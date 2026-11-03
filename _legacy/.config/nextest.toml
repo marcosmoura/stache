@@ -1,0 +1,14 @@
+# Nextest configuration for Stache
+# https://nexte.st/docs/configuration/
+
+[store]
+dir = "target/nextest"
+
+# Default profile settings
+[profile.default]
+# Fail fast on first failure for quicker feedback
+fail-fast = true
+
+# CI profile with stricter settings
+[profile.ci]
+fail-fast = false

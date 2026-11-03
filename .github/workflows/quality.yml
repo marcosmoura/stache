@@ -11,71 +11,35 @@ concurrency:
 
 jobs:
   quality:
-    name: Quality (macOS)
-    runs-on: macos-latest
+    name: Foundation (macOS 26)
+    runs-on: macos-26
+    env:
+      HUSKY: '0'
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
         with:
-          version: 11.22.0
-
-      - name: Setup Node
-        uses: actions/setup-node@v5
+          bun-version: 1.4.4
+      - uses: actions/setup-node@v5
         with:
           node-version: 26
-          cache: pnpm
-
-      - name: Setup Rust (reads rust-toolchain.toml)
+      - name: Retained nightly toolchain
         run: rustup show
-
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install Rust tools
-        uses: taiki-e/install-action@v2
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-audit,cargo-nextest
-
-      - name: Install frontend dependencies
-        run: pnpm install --frozen-lockfile --ignore-scripts
-
-      - name: Install Playwright WebKit (for browser tests)
-        run: pnpm exec playwright install webkit
-
-      - name: Lint (UI)
+          tool: cargo-sort,cargo-nextest,cargo-audit
+      - run: bun install --frozen-lockfile
+      - run: node_modules/.bin/playwright install webkit
+      - name: Generated artifacts drift
+        run: bun run check:generated
+      - run: bun run lint
+      - run: bun run format:check
+      - run: bun run test
+      - run: bun run test:ui:coverage
+      - name: Audit new locks only
         run: |
-          pnpm tsc --noEmit
-          pnpm exec oxlint app/ui
-          pnpm exec stylelint --formatter verbose --allow-empty-input './app/ui/**/*.(styles.ts|css)'
-
-      - name: Format check (UI)
-        run: pnpm exec oxfmt --check
-
-      - name: Lint (Native)
-        run: cargo clippy --workspace --all -- -D warnings
-
-      - name: Format check (Native)
-        run: cargo fmt --all -- --check
-
-      - name: Test (UI)
-        run: pnpm test:ui
-
-      - name: Test (Native)
-        run: pnpm test:native
-
-      - name: Coverage (UI)
-        run: pnpm test:ui:coverage
-
-      - name: Security audit
-        run: |
-          pnpm audit --prod
+          bun audit
           cargo audit --target-os macos
-
-      - name: Build (frontend)
-        run: pnpm build
-
-      - name: Build (native)
-        run: cargo build --workspace
+      - run: bun run build
+      - run: bun run tauri:build

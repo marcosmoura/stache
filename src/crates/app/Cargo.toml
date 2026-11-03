@@ -1,0 +1,58 @@
+[package]
+name = "stache-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Stache Next tray-only desktop foundation"
+readme = "../../../README.md"
+keywords = ["stache", "tauri", "macos"]
+categories = ["gui"]
+default-run = "stache"
+
+[[bin]]
+name = "stache"
+path = "src/main.rs"
+
+[[bin]]
+name = "stache-smoke"
+path = "src/bin/smoke.rs"
+required-features = ["smoke"]
+
+[[bin]]
+name = "generate-schema"
+path = "src/bin/generate-schema.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "generate-bindings"
+path = "src/bin/generate-bindings.rs"
+required-features = ["dev-tools"]
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+dev-tools = []
+smoke = ["custom-protocol", "stache-macos/test"]
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+signal-hook = "0.3.18"
+specta = { version = "=2.0.0-rc.25", features = ["derive"] }
+specta-typescript = "0.0.12"
+stache-cli = { path = "../cli" }
+stache-macos = { path = "../macos" }
+stache-proxy-audio = { path = "../modules/proxy-audio" }
+stache-sdk = { path = "../sdk" }
+tauri = { version = "=2.12.4", default-features = false, features = ["specta", "tray-icon", "wry"] }
+tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
+tempfile = "3.27.0"
+
+[build-dependencies]
+tauri-build = { version = "=2.7.3", features = [] }
+
+[dev-dependencies]
+schemars = "1.2.3"
+serde_json = "1.0.154"
+
+[lints]
+workspace = true

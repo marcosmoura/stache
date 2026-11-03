@@ -1,0 +1,5 @@
+**/*.ts
+**/*.tsx
+**/dist/**/*.css
+**/coverage/**/*.css
+!**/*.styles.ts

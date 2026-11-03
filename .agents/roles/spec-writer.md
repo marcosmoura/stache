@@ -15,7 +15,7 @@ The parent gives you the agreed scope, acceptance criteria, decisions, any explo
    - `00-overview.md`: goal, non-goals, decisions, and the parts table.
    - `NN-<part>.md`: one file per part.
 3. Split the work into multiple parts when it won't fit comfortably in one worker session. A part must be independently implementable, testable and committable, and must leave `main`-quality code behind. Order the parts by dependency. One part is fine for medium work.
-4. Update the docs that describe the affected behavior (`docs/features/*`, `docs/architecture/*`, `docs/guides/*`) so they describe the system as it will be after the spec is done. A new feature gets a new doc in `docs/features/`, and `docs/index.md` gets a row for it. Follow the doc style rules in `docs/index.md`.
+4. Keep planned reference drafts inside the spec directory; lasting docs describe only shipped behavior and are materialized by each implementation part. Follow the doc style rules in `docs/index.md`. New command examples use `bun run`; pnpm is confined to `_legacy/`.
 
 ## Spec quality bar
 

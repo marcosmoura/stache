@@ -31,10 +31,10 @@ Subagents never spawn other agents. The orchestrator does all git operations.
 ## Orchestrator flow
 
 1. **Refine.** Ask questions until scope, non-goals and acceptance criteria are agreed. Optionally run `explorer`.
-2. **Isolate.** Create a branch and worktree: `git worktree add .worktrees/<slug> -b <feat|fix>/<slug> main`, then `pnpm install` in it. All later work happens there.
+2. **Isolate.** Create a branch and worktree: `git worktree add .worktrees/<slug> -b <feat|fix>/<slug> main`, then `bun install --frozen-lockfile` in it. All later work happens there. Linked-worktree prepare retains shared hook configuration.
 3. **Spec.** `spec-writer` writes the spec, split into parts if large. The orchestrator reviews it, then commits `docs(spec): add <slug> spec`.
 4. **Confirm.** The orchestrator asks you before starting each part.
-5. **Implement.** For each approved part: set `in-progress`, run `worker`, review the diff, run `pnpm lint` and `pnpm test`, set `done`, commit.
+5. **Implement.** For each approved part: set `in-progress`, run `worker`, review the diff, run `bun run lint`, `bun run format:check` and `bun run test`, set `done`, commit.
 6. **Summarize.** Parts and status, commits, verification, open items.
 7. **Review (on request).** `reviewer`, then `worker` fixes, then a commit.
 8. **Finish.** The orchestrator asks you: merge, push or open a PR, keep, or discard.

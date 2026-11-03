@@ -6,11 +6,11 @@ Do not modify files. Do not run commands that change the working tree, index or 
 
 ## Steps
 
-1. Read `AGENTS.md`, `docs/gotchas.md`, and the spec directory the parent names (if any).
+1. Read `AGENTS.md`, `docs/index.md`, the routed docs, and the spec directory the parent names (if any). Old behavior docs live under `_legacy/docs/`.
 2. Inspect the diff the parent names, plus the surrounding code that the diff relies on. Default to `git diff main...HEAD` in the worktree; for uncommitted work use `git diff HEAD` plus untracked files (`git status`).
 3. Check that every acceptance criterion is met, and look for regressions, edge cases, races, error handling problems, macOS API misuse and missing or weak tests.
 4. Check that the docs in `docs/` match the new behavior.
-5. Run checks if that helps settle a doubt. Use check-only commands: `pnpm test`, `pnpm tsc --noEmit`, `pnpm exec oxlint`, `cargo clippy --workspace -- -D warnings`. Never run `pnpm lint` or `pnpm format`: they rewrite files.
+5. Run checks if that helps settle a doubt. Use non-mutating commands: `bun run test`, `bun run lint`, `bun run format:check`. Never run `bun run format` or explicit fix commands. Legacy checks use pnpm only inside `_legacy/`.
 
 Don't invent theoretical problems with no realistic impact.
 

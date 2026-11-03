@@ -1,12 +1,14 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "ignorePatterns": [
+    "**/bindings.gen.ts",
+    "**/coverage/**",
     "**/dist/**",
-    "coverage/**",
+    ".worktrees/**",
+    "_legacy/**",
     "node_modules/**",
-    "app/native/**",
-    "target/**",
-    ".worktrees/**"
+    "src/crates/app/gen/**",
+    "target/**"
   ],
   "plugins": ["eslint", "typescript", "import"],
   "env": {

@@ -41,7 +41,7 @@ export default {
   },
   overrides: [
     {
-      files: ['**/*.styles.ts'],
+      files: ['**/*.styles.tsx'],
       customSyntax: 'postcss-styled-syntax',
     },
   ],

@@ -1,108 +1,43 @@
-<!-- markdownlint-disable MD013 MD029 MD033 MD041 MD024 -->
-<p align="center">
-  <img src="app/native/icons/icon.png" alt="Stache Logo" width="320" height="320">
-</p>
+# Stache Next
 
-<h1 align="center">Stache</h1>
+Read when building the macOS 26+ tray-only foundation.
 
-<p align="center">
-  <strong>A macOS desktop enhancement suite built with Tauri 2.x, featuring a custom status bar, dynamic wallpapers, audio automation, and more.</strong>
-</p>
+The new app has a tray icon and Quit action, with zero webviews. No desktop tools, configuration,
+IPC or CLI commands ship yet. The React shell is available only through Vite/browser tests.
+The SDK, native adapter and CLI crates in `src/crates/` reserve boundaries, not future APIs.
+The frontend lives at `src/ui/`, with colocated components/tests/styles under `src/ui/src/shell/`.
 
-<p align="center">
-  <img src="https://img.shields.io/badge/platform-macOS-blue?style=flat-square" alt="Platform">
-  <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
-  <img src="https://img.shields.io/badge/tauri-2.x-purple?style=flat-square" alt="Tauri">
-</p>
+## Build
 
-## Features
+Install Bun **1.4.4**, Node **26** (local tool CLIs), Xcode command-line tools and the Rust toolchain
+in `rust-toolchain.toml`. Install `cargo-sort` and `cargo-nextest` for quality gates.
 
-| Feature              | Description                                                                     |
-| -------------------- | ------------------------------------------------------------------------------- |
-| **Status Bar**       | Custom menubar with workspaces, media, weather, CPU, battery, and clock widgets |
-| **Wallpapers**       | Dynamic wallpaper rotation with blur and rounded corners effects                |
-| **Audio Management** | Automatic audio device switching based on priority rules                        |
-| **Keybindings**      | Global keyboard shortcuts for commands and automation                           |
-| **MenuAnywhere**     | Summon any app's menu at your cursor position                                   |
-| **noTunes**          | Prevent Apple Music from auto-launching                                         |
-| **Hold-to-Quit**     | Require holding Cmd+Q to quit applications                                      |
-| **Keep Awake**       | Prevent system sleep from the status bar                                        |
-
-## Requirements
-
-- macOS 10.15 (Catalina) or later
-
-## Installation
-
-Download the latest release from the [Releases](https://github.com/marcosmoura/stache/releases) page, or build from source:
-
-```bash
-git clone https://github.com/marcosmoura/stache.git
-cd stache
-pnpm install
-pnpm release
+```sh
+bun install --frozen-lockfile
+node_modules/.bin/playwright install webkit
+bun run lint
+bun run format:check
+bun run test
+bun run test:ui:coverage
+bun run build
+bun run tauri:build
 ```
 
-## Quick Start
+The bundle is `target/release/bundle/macos/Stache Next.app`. It uses
+`com.marcosmoura.stache.next`; it does not install over or terminate Stache. It requires no
+media-control resources or device permissions. Bundles use ad-hoc signing by default; distribution
+signing/notarization is a separate prerequisite, not configured here. Local ad-hoc signing is explicit
+in the bundle configuration.
 
-1. Create a configuration file at `~/.config/stache/config.jsonc`:
+`bun run tauri:dev` runs the tray host and Vite; `bun run dev` serves the browser shell alone.
+`bun run format` is the explicit formatting operation. Lint, checks and hooks never fix source.
 
-```jsonc
-{
-  "$schema": "https://raw.githubusercontent.com/marcosmoura/stache/main/stache.schema.json",
+## Documentation
 
-  "wallpapers": {
-    "path": "~/Pictures/Wallpapers",
-    "interval": 1800,
-    "mode": "random",
-  },
+- [Docs index](docs/index.md), [architecture](docs/architecture/overview.md),
+  [validation](docs/guides/testing.md), [agent workflow](docs/workflow.md).
+- [Legacy build instructions](_legacy/README.md). The old application, identity and pnpm workspace
+  are retained independently in `_legacy/`; root tools exclude it.
+- [Foundation plan](docs/specs/2026-11-02-foundation/00-overview.md). Later parts are not shipped.
 
-  "keybindings": {
-    "Command+Control+R": "stache reload",
-    "Command+Control+W": "stache wallpaper set --random",
-  },
-
-  "notunes": {
-    "enabled": true,
-    "targetApp": "spotify",
-  },
-}
-```
-
-2. Launch Stache from Applications or run `stache` in the terminal
-
-3. Grant Accessibility permissions when prompted
-
-## CLI
-
-Stache includes a CLI for automation and integration:
-
-```bash
-stache reload                    # Reload configuration
-stache wallpaper set --random    # Set random wallpaper
-stache audio list                # List audio devices
-stache event workspace-changed 1 # Send workspace event
-```
-
-## Development
-
-```bash
-# Install dependencies
-pnpm install
-
-# Development mode with hot reload
-pnpm tauri:dev
-
-# Run tests
-pnpm test
-
-# Lint and format
-pnpm lint && pnpm format
-
-# Build for production
-pnpm tauri:build
-```
-
-## License
-
-MIT
+Never run legacy and new device-changing listeners together when future modules are introduced.

@@ -1,0 +1,27 @@
+[package]
+name = "stache-macos"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Stache native adapter foundation"
+readme = "../../../README.md"
+keywords = ["stache", "macos"]
+categories = ["os::macos-apis"]
+
+[features]
+test = []
+
+[dependencies]
+block2 = "0.6.2"
+core-foundation = "0.10"
+core-graphics = { version = "0.25.0", default-features = false }
+objc2 = "0.6.5"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "std"] }
+objc2-core-audio = { version = "0.3.2", default-features = false, features = ["AudioHardware", "std"] }
+objc2-core-audio-types = { version = "0.3.2", default-features = false, features = ["CoreAudioBaseTypes", "std"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSNotification", "NSObject", "NSOperation", "NSString", "block2", "std"] }
+stache-sdk = { path = "../sdk" }
+
+[lints]
+workspace = true

@@ -1,0 +1,203 @@
+// Zed project settings.
+//
+// Formatting and linting run through the Oxc extension, which starts the
+// project-local `oxlint` / `oxfmt` binaries via `--lsp`. Stylelint uses the
+// repository config, including its `*.styles.tsx` override.
+//
+// Rust formats through `rustfmt` directly. The rustup shim resolves the
+// toolchain from `rust-toolchain.toml`, so nightly options in `rustfmt.toml`
+// apply, and the formatter runs from the worktree root.
+{
+  "languages": {
+    "CSS": {
+      "format_on_save": "on",
+      "formatter": [
+        {
+          "language_server": {
+            "name": "oxfmt"
+          }
+        },
+        {
+          "code_action": "source.fixAll.stylelint"
+        }
+      ],
+      "prettier": {
+        "allowed": false
+      }
+    },
+    "HTML": {
+      "format_on_save": "on",
+      "formatter": [
+        {
+          "language_server": {
+            "name": "oxfmt"
+          }
+        }
+      ],
+      "prettier": {
+        "allowed": false
+      }
+    },
+    "JavaScript": {
+      "format_on_save": "on",
+      "formatter": [
+        {
+          "language_server": {
+            "name": "oxfmt"
+          }
+        },
+        {
+          "code_action": "source.fixAll.oxc"
+        }
+      ],
+      "prettier": {
+        "allowed": false
+      }
+    },
+    "JSON": {
+      "format_on_save": "on",
+      "formatter": [
+        {
+          "language_server": {
+            "name": "oxfmt"
+          }
+        }
+      ],
+      "prettier": {
+        "allowed": false
+      }
+    },
+    "JSONC": {
+      "format_on_save": "on",
+      "formatter": [
+        {
+          "language_server": {
+            "name": "oxfmt"
+          }
+        }
+      ],
+      "prettier": {
+        "allowed": false
+      }
+    },
+    "JSX": {
+      "format_on_save": "on",
+      "formatter": [
+        {
+          "language_server": {
+            "name": "oxfmt"
+          }
+        },
+        {
+          "code_action": "source.fixAll.oxc"
+        }
+      ],
+      "prettier": {
+        "allowed": false
+      }
+    },
+    "Markdown": {
+      "format_on_save": "on",
+      "formatter": [
+        {
+          "language_server": {
+            "name": "oxfmt"
+          }
+        }
+      ],
+      "prettier": {
+        "allowed": false
+      }
+    },
+    "Rust": {
+      "format_on_save": "on",
+      "formatter": {
+        "external": {
+          "arguments": ["--edition", "2024", "--emit", "stdout"],
+          "command": "rustfmt"
+        }
+      },
+      "tab_size": 4
+    },
+    "TOML": {
+      "format_on_save": "off",
+      "tab_size": 4
+    },
+    "TSX": {
+      "format_on_save": "on",
+      "formatter": [
+        {
+          "language_server": {
+            "name": "oxfmt"
+          }
+        },
+        {
+          "code_action": "source.fixAll.oxc"
+        },
+        {
+          "code_action": "source.fixAll.stylelint"
+        }
+      ],
+      "prettier": {
+        "allowed": false
+      }
+    },
+    "TypeScript": {
+      "format_on_save": "on",
+      "formatter": [
+        {
+          "language_server": {
+            "name": "oxfmt"
+          }
+        },
+        {
+          "code_action": "source.fixAll.oxc"
+        }
+      ],
+      "prettier": {
+        "allowed": false
+      }
+    },
+    "YAML": {
+      "format_on_save": "on",
+      "formatter": [
+        {
+          "language_server": {
+            "name": "oxfmt"
+          }
+        }
+      ],
+      "prettier": {
+        "allowed": false
+      }
+    }
+  },
+  "lsp": {
+    "oxfmt": {
+      "initialization_options": {
+        "settings": {
+          "fmt.configPath": null,
+          "run": "onSave"
+        }
+      }
+    },
+    "oxlint": {
+      "initialization_options": {
+        "settings": {
+          "configPath": null,
+          "disableNestedConfig": false,
+          "fixKind": "safe_fix",
+          "run": "onType",
+          "unusedDisableDirectives": "deny"
+        }
+      }
+    },
+    "stylelint-lsp": {
+      "settings": {
+        "stylelint": {
+          "validate": ["css", "typescript", "typescriptreact"]
+        }
+      }
+    }
+  }
+}

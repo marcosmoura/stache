@@ -1,0 +1,882 @@
+{
+  "startedAt": "2026-11-03T02:35:11.032Z",
+  "finishedAt": "2026-11-03T02:37:40.419Z",
+  "durationMs": 149387,
+  "status": "completed",
+  "failure": null,
+  "commandLine": [
+    "/Users/marcosmoura/.bun/bin/bun",
+    "/Users/marcosmoura/Projects/stache/.worktrees/foundation/scripts/measure-foundation.ts"
+  ],
+  "targets": {
+    "next": {
+      "kind": "next",
+      "bundlePath": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app",
+      "bundleIdentifier": "com.marcosmoura.stache.next",
+      "executablePath": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache",
+      "build": {
+        "executablePath": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache",
+        "bundlePath": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app",
+        "sizeBytes": 4913552,
+        "modifiedAt": "2026-11-03T02:32:59.535Z",
+        "pathIncludesReleaseDirectory": true
+      }
+    },
+    "legacy": null
+  },
+  "environment": {
+    "machine": {
+      "model": "MacBookPro18,3",
+      "chip": "Apple M1 Pro",
+      "memoryBytes": 34359738368
+    },
+    "os": {
+      "productVersion": "27.0",
+      "buildVersion": "26A428"
+    },
+    "toolchain": {
+      "rustc": "rustc 1.100.0-nightly (34baba539 2026-08-16)",
+      "cargo": "cargo 1.100.0-nightly (8a0d8afba 2026-08-15)"
+    },
+    "repository": {
+      "root": "/Users/marcosmoura/Projects/stache/.worktrees/foundation",
+      "commit": "1a91331bdb3e68f7393325585059406d190fd8c4",
+      "branch": "feat/foundation",
+      "dirty": true
+    },
+    "power": {
+      "source": "Battery Power",
+      "batteryPercent": 25,
+      "raw": "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=23003235)\t25%; discharging; 1:00 remaining present: true"
+    },
+    "displays": [
+      {
+        "gpu": "Apple M1 Pro",
+        "name": "Color LCD",
+        "resolution": "1920 x 1200 @ 120.00Hz",
+        "main": true,
+        "mirroring": false,
+        "online": true
+      }
+    ],
+    "audio": {
+      "devices": [
+        {
+          "name": "MacBook Pro Microphone",
+          "manufacturer": "Apple Inc.",
+          "transport": "coreaudio_device_type_builtin",
+          "inputChannels": 1,
+          "outputChannels": null,
+          "hdmi": false,
+          "builtIn": true,
+          "airPlay": false,
+          "defaultInput": true,
+          "defaultOutput": false
+        },
+        {
+          "name": "MacBook Pro Speakers",
+          "manufacturer": "Apple Inc.",
+          "transport": "coreaudio_device_type_builtin",
+          "inputChannels": null,
+          "outputChannels": 2,
+          "hdmi": false,
+          "builtIn": true,
+          "airPlay": false,
+          "defaultInput": false,
+          "defaultOutput": true
+        },
+        {
+          "name": "External Speakers",
+          "manufacturer": "Brian Kendall",
+          "transport": "coreaudio_device_type_virtual",
+          "inputChannels": null,
+          "outputChannels": 2,
+          "hdmi": false,
+          "builtIn": false,
+          "airPlay": false,
+          "defaultInput": false,
+          "defaultOutput": false
+        }
+      ],
+      "defaultInput": "MacBook Pro Microphone",
+      "defaultOutput": "MacBook Pro Speakers"
+    }
+  },
+  "audioAtEnd": {
+    "devices": [
+      {
+        "name": "MacBook Pro Microphone",
+        "manufacturer": "Apple Inc.",
+        "transport": "coreaudio_device_type_builtin",
+        "inputChannels": 1,
+        "outputChannels": null,
+        "hdmi": false,
+        "builtIn": true,
+        "airPlay": false,
+        "defaultInput": true,
+        "defaultOutput": false
+      },
+      {
+        "name": "MacBook Pro Speakers",
+        "manufacturer": "Apple Inc.",
+        "transport": "coreaudio_device_type_builtin",
+        "inputChannels": null,
+        "outputChannels": 2,
+        "hdmi": false,
+        "builtIn": true,
+        "airPlay": false,
+        "defaultInput": false,
+        "defaultOutput": true
+      },
+      {
+        "name": "External Speakers",
+        "manufacturer": "Brian Kendall",
+        "transport": "coreaudio_device_type_virtual",
+        "inputChannels": null,
+        "outputChannels": 2,
+        "hdmi": false,
+        "builtIn": false,
+        "airPlay": false,
+        "defaultInput": false,
+        "defaultOutput": false
+      }
+    ],
+    "defaultInput": "MacBook Pro Microphone",
+    "defaultOutput": "MacBook Pro Speakers"
+  },
+  "scenarios": [
+    {
+      "id": "next-disabled",
+      "label": "Stache Next - proxyAudio disabled",
+      "target": {
+        "kind": "next",
+        "bundlePath": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app",
+        "bundleIdentifier": "com.marcosmoura.stache.next",
+        "executablePath": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache",
+        "build": {
+          "executablePath": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache",
+          "bundlePath": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app",
+          "sizeBytes": 4913552,
+          "modifiedAt": "2026-11-03T02:32:59.535Z",
+          "pathIncludesReleaseDirectory": true
+        }
+      },
+      "configFiles": [
+        {
+          "path": "/private/var/folders/__/2mbmhrk92q75446h4ln2lymr0000gn/T/opencode/1Yz7/config/stache/global.jsonc",
+          "content": "{\n  \"logging\": {\n    \"level\": \"info\",\n    \"debug\": false\n  },\n  \"execOnStartup\": []\n}\n"
+        },
+        {
+          "path": "/private/var/folders/__/2mbmhrk92q75446h4ln2lymr0000gn/T/opencode/1Yz7/config/stache/proxyAudio.jsonc",
+          "content": "{\n  \"enabled\": false,\n  \"input\": [],\n  \"output\": []\n}\n"
+        }
+      ],
+      "launches": [
+        {
+          "index": 0,
+          "cold": true,
+          "externalReadyMs": 220.004958,
+          "internalTrayReadyMs": 146,
+          "instrumentedWebviews": 0,
+          "readySource": "core.status over the control socket",
+          "stderrTail": ["stache: info host.start: startup: tray ready after 146 ms, webviews=0"]
+        },
+        {
+          "index": 1,
+          "cold": false,
+          "externalReadyMs": 205.66945799999985,
+          "internalTrayReadyMs": 134,
+          "instrumentedWebviews": 0,
+          "readySource": "core.status over the control socket",
+          "stderrTail": ["stache: info host.start: startup: tray ready after 134 ms, webviews=0"]
+        },
+        {
+          "index": 2,
+          "cold": false,
+          "externalReadyMs": 204.47141699999975,
+          "internalTrayReadyMs": 135,
+          "instrumentedWebviews": 0,
+          "readySource": "core.status over the control socket",
+          "stderrTail": ["stache: info host.start: startup: tray ready after 135 ms, webviews=0"]
+        },
+        {
+          "index": 3,
+          "cold": false,
+          "externalReadyMs": 195.18412499999977,
+          "internalTrayReadyMs": 127,
+          "instrumentedWebviews": 0,
+          "readySource": "core.status over the control socket",
+          "stderrTail": ["stache: info host.start: startup: tray ready after 127 ms, webviews=0"]
+        },
+        {
+          "index": 4,
+          "cold": false,
+          "externalReadyMs": 188.2516660000001,
+          "internalTrayReadyMs": 122,
+          "instrumentedWebviews": 0,
+          "readySource": "core.status over the control socket",
+          "stderrTail": ["stache: info host.start: startup: tray ready after 122 ms, webviews=0"]
+        }
+      ],
+      "idle": {
+        "durationSeconds": 60,
+        "sampleIntervalMs": 5000,
+        "windowSeconds": 60.002,
+        "host": {
+          "pid": 74049,
+          "ppid": 73951,
+          "executable": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache",
+          "role": "host",
+          "cpuPercent": 0.1333288890370321,
+          "rssFinalKiB": 77440,
+          "rssPeakKiB": 77568,
+          "presentInAllSnapshots": true,
+          "exitedDuringSampling": false
+        },
+        "processes": [
+          {
+            "pid": 74049,
+            "ppid": 73951,
+            "executable": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache",
+            "role": "host",
+            "cpuPercent": 0.1333288890370321,
+            "rssFinalKiB": 77440,
+            "rssPeakKiB": 77568,
+            "presentInAllSnapshots": true,
+            "exitedDuringSampling": false
+          }
+        ],
+        "treeCpuPercent": 0.1333288890370321,
+        "treeRssFinalKiB": 77440,
+        "treeRssPeakKiB": 77568,
+        "unattributableWebKit": [
+          {
+            "pid": 19112,
+            "ppid": 1,
+            "executable": "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.GPU.xpc/Contents/MacOS/com.apple.WebKit.GPU",
+            "rssKiB": 27440
+          },
+          {
+            "pid": 19113,
+            "ppid": 1,
+            "executable": "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent",
+            "rssKiB": 95248
+          },
+          {
+            "pid": 19114,
+            "ppid": 1,
+            "executable": "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.Networking.xpc/Contents/MacOS/com.apple.WebKit.Networking",
+            "rssKiB": 11296
+          },
+          {
+            "pid": 19115,
+            "ppid": 1,
+            "executable": "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent",
+            "rssKiB": 13712
+          },
+          {
+            "pid": 73935,
+            "ppid": 1,
+            "executable": "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent",
+            "rssKiB": 70528
+          },
+          {
+            "pid": 87612,
+            "ppid": 1,
+            "executable": "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.GPU.xpc/Contents/MacOS/com.apple.WebKit.GPU",
+            "rssKiB": 29456
+          },
+          {
+            "pid": 87615,
+            "ppid": 1,
+            "executable": "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.Networking.xpc/Contents/MacOS/com.apple.WebKit.Networking",
+            "rssKiB": 22368
+          }
+        ],
+        "treeSnapshots": [
+          {
+            "takenAt": "2026-11-03T02:35:25.236Z",
+            "processes": [
+              {
+                "pid": 74049,
+                "ppid": 73951,
+                "rssKiB": 77568,
+                "cpuTimeSeconds": 0.11,
+                "executable": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache"
+              }
+            ]
+          },
+          {
+            "takenAt": "2026-11-03T02:35:30.304Z",
+            "processes": [
+              {
+                "pid": 74049,
+                "ppid": 73951,
+                "rssKiB": 77520,
+                "cpuTimeSeconds": 0.12,
+                "executable": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache"
+              }
+            ]
+          },
+          {
+            "takenAt": "2026-11-03T02:35:35.387Z",
+            "processes": [
+              {
+                "pid": 74049,
+                "ppid": 73951,
+                "rssKiB": 77424,
+                "cpuTimeSeconds": 0.13,
+                "executable": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache"
+              }
+            ]
+          },
+          {
+            "takenAt": "2026-11-03T02:35:40.476Z",
+            "processes": [
+              {
+                "pid": 74049,
+                "ppid": 73951,
+                "rssKiB": 77424,
+                "cpuTimeSeconds": 0.14,
+                "executable": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache"
+              }
+            ]
+          },
+          {
+            "takenAt": "2026-11-03T02:35:45.553Z",
+            "processes": [
+              {
+                "pid": 74049,
+                "ppid": 73951,
+                "rssKiB": 77424,
+                "cpuTimeSeconds": 0.14,
+                "executable": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache"
+              }
+            ]
+          },
+          {
+            "takenAt": "2026-11-03T02:35:50.635Z",
+            "processes": [
+              {
+                "pid": 74049,
+                "ppid": 73951,
+                "rssKiB": 77440,
+                "cpuTimeSeconds": 0.15,
+                "executable": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache"
+              }
+            ]
+          },
+          {
+            "takenAt": "2026-11-03T02:35:55.714Z",
+            "processes": [
+              {
+                "pid": 74049,
+                "ppid": 73951,
+                "rssKiB": 77440,
+                "cpuTimeSeconds": 0.16,
+                "executable": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache"
+              }
+            ]
+          },
+          {
+            "takenAt": "2026-11-03T02:36:00.792Z",
+            "processes": [
+              {
+                "pid": 74049,
+                "ppid": 73951,
+                "rssKiB": 77440,
+                "cpuTimeSeconds": 0.16,
+                "executable": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache"
+              }
+            ]
+          },
+          {
+            "takenAt": "2026-11-03T02:36:05.868Z",
+            "processes": [
+              {
+                "pid": 74049,
+                "ppid": 73951,
+                "rssKiB": 77440,
+                "cpuTimeSeconds": 0.17,
+                "executable": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache"
+              }
+            ]
+          },
+          {
+            "takenAt": "2026-11-03T02:36:10.959Z",
+            "processes": [
+              {
+                "pid": 74049,
+                "ppid": 73951,
+                "rssKiB": 77440,
+                "cpuTimeSeconds": 0.17,
+                "executable": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache"
+              }
+            ]
+          },
+          {
+            "takenAt": "2026-11-03T02:36:16.043Z",
+            "processes": [
+              {
+                "pid": 74049,
+                "ppid": 73951,
+                "rssKiB": 77440,
+                "cpuTimeSeconds": 0.18,
+                "executable": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache"
+              }
+            ]
+          },
+          {
+            "takenAt": "2026-11-03T02:36:21.128Z",
+            "processes": [
+              {
+                "pid": 74049,
+                "ppid": 73951,
+                "rssKiB": 77440,
+                "cpuTimeSeconds": 0.19,
+                "executable": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache"
+              }
+            ]
+          },
+          {
+            "takenAt": "2026-11-03T02:36:25.238Z",
+            "processes": [
+              {
+                "pid": 74049,
+                "ppid": 73951,
+                "rssKiB": 77440,
+                "cpuTimeSeconds": 0.19,
+                "executable": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache"
+              }
+            ]
+          }
+        ],
+        "notes": ["RSS is the sum of resident sizes; shared pages are counted once per process."]
+      },
+      "complete": true,
+      "annotations": [
+        "5 timed launches; idle sample uses the last launch after 10 s warmup.",
+        "No window is requested; the host aborts setup if any webview exists."
+      ]
+    },
+    {
+      "id": "next-enabled",
+      "label": "Stache Next - proxyAudio enabled with inert priorities",
+      "target": {
+        "kind": "next",
+        "bundlePath": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app",
+        "bundleIdentifier": "com.marcosmoura.stache.next",
+        "executablePath": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache",
+        "build": {
+          "executablePath": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache",
+          "bundlePath": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app",
+          "sizeBytes": 4913552,
+          "modifiedAt": "2026-11-03T02:32:59.535Z",
+          "pathIncludesReleaseDirectory": true
+        }
+      },
+      "configFiles": [
+        {
+          "path": "/private/var/folders/__/2mbmhrk92q75446h4ln2lymr0000gn/T/opencode/9eOP/config/stache/global.jsonc",
+          "content": "{\n  \"logging\": {\n    \"level\": \"info\",\n    \"debug\": false\n  },\n  \"execOnStartup\": []\n}\n"
+        },
+        {
+          "path": "/private/var/folders/__/2mbmhrk92q75446h4ln2lymr0000gn/T/opencode/9eOP/config/stache/proxyAudio.jsonc",
+          "content": "{\n  \"enabled\": true,\n  \"input\": [\n    {\n      \"name\": \"MacBook Pro Microphone\",\n      \"strategy\": \"exact\"\n    }\n  ],\n  \"output\": [\n    {\n      \"name\": \"MacBook Pro Speakers\",\n      \"strategy\": \"exact\"\n    }\n  ]\n}\n"
+        }
+      ],
+      "launches": [
+        {
+          "index": 0,
+          "cold": true,
+          "externalReadyMs": 270.5875410000008,
+          "internalTrayReadyMs": 139,
+          "instrumentedWebviews": 0,
+          "readySource": "core.status over the control socket",
+          "stderrTail": ["stache: info host.start: startup: tray ready after 139 ms, webviews=0"]
+        },
+        {
+          "index": 1,
+          "cold": false,
+          "externalReadyMs": 262.1477079999895,
+          "internalTrayReadyMs": 133,
+          "instrumentedWebviews": 0,
+          "readySource": "core.status over the control socket",
+          "stderrTail": ["stache: info host.start: startup: tray ready after 133 ms, webviews=0"]
+        },
+        {
+          "index": 2,
+          "cold": false,
+          "externalReadyMs": 267.3522079999966,
+          "internalTrayReadyMs": 137,
+          "instrumentedWebviews": 0,
+          "readySource": "core.status over the control socket",
+          "stderrTail": ["stache: info host.start: startup: tray ready after 137 ms, webviews=0"]
+        },
+        {
+          "index": 3,
+          "cold": false,
+          "externalReadyMs": 263.3159580000065,
+          "internalTrayReadyMs": 127,
+          "instrumentedWebviews": 0,
+          "readySource": "core.status over the control socket",
+          "stderrTail": ["stache: info host.start: startup: tray ready after 127 ms, webviews=0"]
+        },
+        {
+          "index": 4,
+          "cold": false,
+          "externalReadyMs": 244.3830420000013,
+          "internalTrayReadyMs": 118,
+          "instrumentedWebviews": 0,
+          "readySource": "core.status over the control socket",
+          "stderrTail": ["stache: info host.start: startup: tray ready after 118 ms, webviews=0"]
+        }
+      ],
+      "idle": {
+        "durationSeconds": 60,
+        "sampleIntervalMs": 5000,
+        "windowSeconds": 60.002,
+        "host": {
+          "pid": 74360,
+          "ppid": 73951,
+          "executable": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache",
+          "role": "host",
+          "cpuPercent": 0.11666277790740309,
+          "rssFinalKiB": 78336,
+          "rssPeakKiB": 78416,
+          "presentInAllSnapshots": true,
+          "exitedDuringSampling": false
+        },
+        "processes": [
+          {
+            "pid": 74360,
+            "ppid": 73951,
+            "executable": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache",
+            "role": "host",
+            "cpuPercent": 0.11666277790740309,
+            "rssFinalKiB": 78336,
+            "rssPeakKiB": 78416,
+            "presentInAllSnapshots": true,
+            "exitedDuringSampling": false
+          }
+        ],
+        "treeCpuPercent": 0.11666277790740309,
+        "treeRssFinalKiB": 78336,
+        "treeRssPeakKiB": 78416,
+        "unattributableWebKit": [
+          {
+            "pid": 19112,
+            "ppid": 1,
+            "executable": "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.GPU.xpc/Contents/MacOS/com.apple.WebKit.GPU",
+            "rssKiB": 27488
+          },
+          {
+            "pid": 19113,
+            "ppid": 1,
+            "executable": "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent",
+            "rssKiB": 95584
+          },
+          {
+            "pid": 19114,
+            "ppid": 1,
+            "executable": "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.Networking.xpc/Contents/MacOS/com.apple.WebKit.Networking",
+            "rssKiB": 11296
+          },
+          {
+            "pid": 19115,
+            "ppid": 1,
+            "executable": "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent",
+            "rssKiB": 13712
+          },
+          {
+            "pid": 73935,
+            "ppid": 1,
+            "executable": "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent",
+            "rssKiB": 74528
+          },
+          {
+            "pid": 87612,
+            "ppid": 1,
+            "executable": "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.GPU.xpc/Contents/MacOS/com.apple.WebKit.GPU",
+            "rssKiB": 30080
+          },
+          {
+            "pid": 87615,
+            "ppid": 1,
+            "executable": "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.Networking.xpc/Contents/MacOS/com.apple.WebKit.Networking",
+            "rssKiB": 22368
+          }
+        ],
+        "treeSnapshots": [
+          {
+            "takenAt": "2026-11-03T02:36:39.662Z",
+            "processes": [
+              {
+                "pid": 74360,
+                "ppid": 73951,
+                "rssKiB": 78416,
+                "cpuTimeSeconds": 0.13,
+                "executable": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache"
+              }
+            ]
+          },
+          {
+            "takenAt": "2026-11-03T02:36:44.725Z",
+            "processes": [
+              {
+                "pid": 74360,
+                "ppid": 73951,
+                "rssKiB": 78416,
+                "cpuTimeSeconds": 0.13,
+                "executable": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache"
+              }
+            ]
+          },
+          {
+            "takenAt": "2026-11-03T02:36:49.807Z",
+            "processes": [
+              {
+                "pid": 74360,
+                "ppid": 73951,
+                "rssKiB": 78320,
+                "cpuTimeSeconds": 0.14,
+                "executable": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache"
+              }
+            ]
+          },
+          {
+            "takenAt": "2026-11-03T02:36:54.890Z",
+            "processes": [
+              {
+                "pid": 74360,
+                "ppid": 73951,
+                "rssKiB": 78320,
+                "cpuTimeSeconds": 0.15,
+                "executable": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache"
+              }
+            ]
+          },
+          {
+            "takenAt": "2026-11-03T02:36:59.962Z",
+            "processes": [
+              {
+                "pid": 74360,
+                "ppid": 73951,
+                "rssKiB": 78320,
+                "cpuTimeSeconds": 0.15,
+                "executable": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache"
+              }
+            ]
+          },
+          {
+            "takenAt": "2026-11-03T02:37:05.053Z",
+            "processes": [
+              {
+                "pid": 74360,
+                "ppid": 73951,
+                "rssKiB": 78336,
+                "cpuTimeSeconds": 0.16,
+                "executable": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache"
+              }
+            ]
+          },
+          {
+            "takenAt": "2026-11-03T02:37:10.140Z",
+            "processes": [
+              {
+                "pid": 74360,
+                "ppid": 73951,
+                "rssKiB": 78336,
+                "cpuTimeSeconds": 0.16,
+                "executable": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache"
+              }
+            ]
+          },
+          {
+            "takenAt": "2026-11-03T02:37:15.223Z",
+            "processes": [
+              {
+                "pid": 74360,
+                "ppid": 73951,
+                "rssKiB": 78336,
+                "cpuTimeSeconds": 0.17,
+                "executable": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache"
+              }
+            ]
+          },
+          {
+            "takenAt": "2026-11-03T02:37:20.312Z",
+            "processes": [
+              {
+                "pid": 74360,
+                "ppid": 73951,
+                "rssKiB": 78336,
+                "cpuTimeSeconds": 0.18,
+                "executable": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache"
+              }
+            ]
+          },
+          {
+            "takenAt": "2026-11-03T02:37:25.386Z",
+            "processes": [
+              {
+                "pid": 74360,
+                "ppid": 73951,
+                "rssKiB": 78336,
+                "cpuTimeSeconds": 0.18,
+                "executable": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache"
+              }
+            ]
+          },
+          {
+            "takenAt": "2026-11-03T02:37:30.478Z",
+            "processes": [
+              {
+                "pid": 74360,
+                "ppid": 73951,
+                "rssKiB": 78336,
+                "cpuTimeSeconds": 0.19,
+                "executable": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache"
+              }
+            ]
+          },
+          {
+            "takenAt": "2026-11-03T02:37:35.560Z",
+            "processes": [
+              {
+                "pid": 74360,
+                "ppid": 73951,
+                "rssKiB": 78336,
+                "cpuTimeSeconds": 0.2,
+                "executable": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache"
+              }
+            ]
+          },
+          {
+            "takenAt": "2026-11-03T02:37:39.664Z",
+            "processes": [
+              {
+                "pid": 74360,
+                "ppid": 73951,
+                "rssKiB": 78336,
+                "cpuTimeSeconds": 0.2,
+                "executable": "/Users/marcosmoura/Projects/stache/.worktrees/foundation/target/release/bundle/macos/Stache Next.app/Contents/MacOS/stache"
+              }
+            ]
+          }
+        ],
+        "notes": ["RSS is the sum of resident sizes; shared pages are counted once per process."]
+      },
+      "complete": true,
+      "annotations": [
+        "5 timed launches; idle sample uses the last launch after 10 s warmup.",
+        "No window is requested; the host aborts setup if any webview exists."
+      ]
+    }
+  ],
+  "safety": {
+    "guardChecks": [
+      "no other Stache Next process (legacy Stache is not guarded without --legacy-app) at 2026-11-03T02:35:11.662Z",
+      "no other Stache Next process (legacy Stache is not guarded without --legacy-app) at 2026-11-03T02:35:11.964Z",
+      "no other Stache Next process (legacy Stache is not guarded without --legacy-app) at 2026-11-03T02:35:12.755Z",
+      "no other Stache Next process (legacy Stache is not guarded without --legacy-app) at 2026-11-03T02:35:13.464Z",
+      "no other Stache Next process (legacy Stache is not guarded without --legacy-app) at 2026-11-03T02:35:14.181Z",
+      "no other Stache Next process (legacy Stache is not guarded without --legacy-app) at 2026-11-03T02:35:14.885Z",
+      "no other Stache Next process (legacy Stache is not guarded without --legacy-app) at 2026-11-03T02:36:26.053Z",
+      "no other Stache Next process (legacy Stache is not guarded without --legacy-app) at 2026-11-03T02:36:26.849Z",
+      "no other Stache Next process (legacy Stache is not guarded without --legacy-app) at 2026-11-03T02:36:27.631Z",
+      "no other Stache Next process (legacy Stache is not guarded without --legacy-app) at 2026-11-03T02:36:28.419Z",
+      "no other Stache Next process (legacy Stache is not guarded without --legacy-app) at 2026-11-03T02:36:29.201Z"
+    ],
+    "tempRoots": [
+      "/private/var/folders/__/2mbmhrk92q75446h4ln2lymr0000gn/T/opencode/1Yz7",
+      "/private/var/folders/__/2mbmhrk92q75446h4ln2lymr0000gn/T/opencode/9eOP"
+    ],
+    "tempRootsRemoved": true,
+    "audioDefaultsAtStart": {
+      "input": "MacBook Pro Microphone",
+      "output": "MacBook Pro Speakers"
+    },
+    "audioDefaultsAtEnd": {
+      "input": "MacBook Pro Microphone",
+      "output": "MacBook Pro Speakers"
+    },
+    "audioRestore": null,
+    "signals": [
+      {
+        "at": "2026-11-03T02:35:12.246Z",
+        "pid": 74001,
+        "signal": "SIGTERM",
+        "reason": "stop measured process tree"
+      },
+      {
+        "at": "2026-11-03T02:35:13.023Z",
+        "pid": 74010,
+        "signal": "SIGTERM",
+        "reason": "stop measured process tree"
+      },
+      {
+        "at": "2026-11-03T02:35:13.729Z",
+        "pid": 74026,
+        "signal": "SIGTERM",
+        "reason": "stop measured process tree"
+      },
+      {
+        "at": "2026-11-03T02:35:14.437Z",
+        "pid": 74039,
+        "signal": "SIGTERM",
+        "reason": "stop measured process tree"
+      },
+      {
+        "at": "2026-11-03T02:36:25.493Z",
+        "pid": 74049,
+        "signal": "SIGTERM",
+        "reason": "stop measured process tree"
+      },
+      {
+        "at": "2026-11-03T02:36:26.385Z",
+        "pid": 74317,
+        "signal": "SIGTERM",
+        "reason": "stop measured process tree"
+      },
+      {
+        "at": "2026-11-03T02:36:27.171Z",
+        "pid": 74330,
+        "signal": "SIGTERM",
+        "reason": "stop measured process tree"
+      },
+      {
+        "at": "2026-11-03T02:36:27.958Z",
+        "pid": 74338,
+        "signal": "SIGTERM",
+        "reason": "stop measured process tree"
+      },
+      {
+        "at": "2026-11-03T02:36:28.742Z",
+        "pid": 74346,
+        "signal": "SIGTERM",
+        "reason": "stop measured process tree"
+      },
+      {
+        "at": "2026-11-03T02:37:39.927Z",
+        "pid": 74360,
+        "signal": "SIGTERM",
+        "reason": "stop measured process tree"
+      }
+    ],
+    "notes": [
+      "A legacy Stache was running and was not measured (pid 19110 Stache (/Applications/Stache.app/Contents/MacOS/stache)); it does not block a run without --legacy-app, and its proxyAudio must stay disabled so only one device-changing watcher runs."
+    ]
+  },
+  "limitations": [
+    "OS page cache is not flushed: \"cold\" means the first launch in a scenario with an empty isolated app cache, not necessarily the first launch after the build.",
+    "Process-tree attribution follows parent PIDs. Helpers reparented to launchd are listed as observed WebKit processes outside the tree and excluded from tree totals.",
+    "Legacy has no tray-created acknowledgement; its readiness is the setup-complete log line emitted after tray, bar and widget creation.",
+    "RSS sums resident sizes per process, so shared pages are counted more than once.",
+    "`ps` cumulative CPU time has 10 ms resolution; helper processes that start and exit inside one sampling interval may not be captured.",
+    "The measured machine is shared: unrelated system activity can add CPU noise.",
+    "Two measurement tool instances are not mutually excluded; run one at a time.",
+    "Process identity is matched by Launch Services bundle identifier, the measured executable path, and the Stache Next/Stache .app paths. A bare release binary at a different path is not detected by the guard.",
+    "A running legacy Stache is recorded in the safety notes but does not block a run without --legacy-app; keep its proxyAudio disabled while measuring."
+  ]
+}

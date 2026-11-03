@@ -4,7 +4,7 @@
     "target": "ES2023",
     "lib": ["ES2023"],
     "module": "ESNext",
-    "types": [],
+    "types": ["node"],
     "skipLibCheck": true,
 
     /* Bundler mode */
@@ -22,5 +22,6 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": ["vite.config.ts", "lint-staged.config.ts", "stylelint.config.mjs"]
+  "include": ["vite.config.ts", "lint-staged.config.ts", "stylelint.config.mjs", "scripts/**/*.ts"],
+  "exclude": ["_legacy", ".worktrees", "target", "node_modules"]
 }

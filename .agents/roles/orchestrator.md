@@ -29,7 +29,7 @@ Pick a short kebab-case `<slug>` and a type (`feat` or `fix`, matching conventio
 
 ```bash
 git worktree add .worktrees/<slug> -b <type>/<slug> main
-cd .worktrees/<slug> && pnpm install
+cd .worktrees/<slug> && bun install --frozen-lockfile
 ```
 
 Every later step, including subagent work, happens inside `.worktrees/<slug>`. Give subagents the absolute worktree path and tell them to stay inside it.
@@ -48,7 +48,7 @@ Show the user the part list (one line each), then ask: "Start on part 01?" (or t
 
 1. Set the part's `status: in-progress` in its frontmatter and in the overview table.
 2. Run `worker` with the spec part path, the worktree path, the decisions already made, and the validation commands.
-3. Review the result yourself: read `git diff`, compare it against the part's acceptance criteria, check for regressions and missing tests, and run `pnpm lint` and `pnpm test` in the worktree. If something is wrong, start a new `worker` session with the diff, the failing checks and what is still missing.
+3. Review the result yourself: read `git diff`, compare it against the part's acceptance criteria, check for regressions and missing tests, and run `bun run lint`, `bun run format:check` and `bun run test` in the worktree. If something is wrong, start a new `worker` session with the diff, the failing checks and what is still missing.
 4. Once the part passes, set `status: done` (part file and overview) and commit with a conventional message, for example `feat(tiling): <part summary>`.
 5. Ask the user whether to continue with the next part. A part may be resumed in a later session: read the overview to see where things stand.
 

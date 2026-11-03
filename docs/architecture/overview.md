@@ -1,133 +1,99 @@
-# Architecture overview
+# Skeleton architecture
 
-Read when you are new to the repo, or before changing the entry point, startup or
-shutdown order, module lifecycle, or the thread layout.
+Read when changing the shipped foundation boundaries.
 
-## One binary, two modes
+- `src/crates/app`: the only desktop binary (`stache`), Tauri composition root, native tray,
+  configuration-backed enable/pause actions, permission policy, shutdown coordinator, test-window
+  backend, configuration catalog in `catalog.rs`, contributed CLI commands in `commands.rs`, and the
+  developer-only `generate-schema`/`generate-bindings` binaries. The same `stache` binary selects
+  desktop or CLI before any Tauri startup.
+- `src/crates/sdk`: owned module SDK — registry, lifecycle, threading, typed events/errors,
+  injected logging, permissions and window capabilities, file-backed configuration (catalog, store,
+  watcher, comment-preserving edits, schemas), identity paths/instance lock and the socket
+  protocol/router/client/server; no Tauri dependency. See [sdk.md](sdk.md), [config.md](config.md)
+  and [ipc.md](ipc.md).
+- `src/crates/macos`: safe Accessibility trust, application-activation, main-thread, `CoreAudio`
+  and display adapters. It is the only crate containing project-authored unsafe code; public
+  functions are safe.
+- `src/crates/modules/proxy-audio`: the proxyAudio pilot — authoritative configuration, priority
+  policy, `CoreAudio` watcher, `audio list` command and read-only `proxyAudio.list` handler. See
+  [proxy-audio.md](../features/proxy-audio.md).
+- `src/crates/cli`: built-in `config`/`cache`/`reload`/`schema`/`completions` implementation and
+  command composition; it imports the SDK, never the app or a module crate.
+- `src/ui/src/shell/components/Shell`: development/test-only React surface with colocated test,
+  Linaria `.styles.tsx` file and index export. React Compiler/Vite process the frontend.
+- `src/ui/src/sdk`: generated command/event bindings plus the React Query status feed, client wrappers and tokens used by the test window.
+- `src/ui/main.tsx` bootstraps the app exported by `src/ui/index.tsx`; `main.css` owns global CSS.
+- `src/ui/tests` contains setup/support only; real tests are colocated under `src/ui/src`.
+- `_legacy`: independent Cargo/pnpm application, excluded from root workspace and quality tools.
 
-`app/native/src/main.rs` picks the mode before anything else runs:
+## Desktop host
 
-- **Desktop** when there are no arguments after stripping `--config`, when the first
-  argument is `--desktop`, or when the executable path contains `.app/Contents/MacOS`
-  (`is_running_from_app_bundle`).
-- **CLI** otherwise: `stache_lib::cli::run()` → `Cli::execute`.
+The desktop path claims the Next identity instance lock, then creates the tray on the AppKit main
+thread before any slow service. A background host thread owns one registry, configuration store and
+watcher, permission policy, socket server and module control handles; tray/Tauri callbacks enqueue
+commands and never wait for module code, a worker join or the socket. Status is published to the tray
+and as the `status-changed` event; `host_status` reads that snapshot without taking module locks.
+After creating the tray the host writes one info record, `startup: tray ready after N ms,
+webviews=N`, which the release measurement reads; see
+[performance.md](../guides/performance.md).
 
-`--config <path>`, `-c <path>` and `--config=<path>` are extracted by
-`extract_config_path` and applied with `config::set_custom_config_path`. Desktop mode
-exits 1 when that file is missing; the CLI returns `StacheError::ConfigError`.
-`lib.rs::run()` is the desktop entry, the library crate is `stache_lib`, the binary is
-`stache`. The crate compiles only on macOS (`compile_error!` in `main.rs`).
+`ModuleFactories::production()` registers the proxyAudio pilot over one `CoreAudio` backend. Its
+factory also contributes the read-only `proxyAudio.list` handler to the same socket router, so the
+CLI and socket enumerate through the same listing service. Registration creates no listener; the
+module starts only from an accepted `enabled: true` configuration. See
+[proxy-audio.md](../features/proxy-audio.md).
 
-## Desktop startup order
+Tray **Enable** is a config-backed edit: plan, validate, prepare and sync the replacement, recheck
+for an external change immediately before the atomic rename, then apply once. A missing target is
+committed with a no-clobber rename and a symlink is refused. **Pause/Resume** are session-only. An
+invalid file is never overwritten and its diagnostic is displayed separately from runtime state.
+Failed and unavailable modules expose a **Retry** action; waiting modules expose the explicit
+permission request. Permissions poll every second while a module waits and back off otherwise; a
+schedule change wakes the pending wait, and at most one periodic tick is queued. Only enabled
+declared requirements may prompt, at most once per session unless the user explicitly retries.
+macOS application activation is observed through `NSApplicationDidBecomeActiveNotification` in
+`stache-macos`, not Tauri's loop `Resumed` event. `MainThreadMarker` enforces main-thread
+registration; the non-`Send` guard lives as a local around the Tauri event loop and removes its
+observer on drop. The pilot declares none, so normal operation never prompts for Accessibility.
 
-`lib.rs::run`:
+Launch creates no webview and no Dock icon. The explicit **Open Test Window** action opens the app
+URL with `?surface=test` as `stache-test-<n>`, reuses it for the same owner/key and closes it on
+request; stop releases module windows. `src/crates/app/tauri.conf.json` has no fixed windows and
+lists only the least-privilege `test-window` capability. The app crate defines the
+`custom-protocol` feature that `bun run tauri:build` enables; without it, Tauri stays in dev mode and a
+packaged window has no embedded document. Generate/schema binaries require `dev-tools` and are not
+packaged. See [ui.md](ui.md).
 
-1. `logging::init()`, then `config::init()`.
-2. `is_accessibility_granted()` — checks once, caches in a `OnceLock`, prompts if missing.
-3. `wallpaper::setup()` — builds the global wallpaper manager from config (loads the file
-   list) without setting a wallpaper or starting the timer.
-4. Tauri builder: plugins `single-instance`, `zustand`, `shell`, the hotkey plugin;
-   `KeepAwakeController` as managed state; every command in `generate_handler!`.
-5. `.setup`: register configured hotkeys, set activation policy `Prohibited` (no Dock
-   icon), build the `LifecycleRegistry` and register the six toggleable modules, then
-   `load_base_modules` and `lazy_load_modules`.
-6. `app_shutdown::install_signal_handler`, then `app.run`; its `RunEvent::Exit` handler
-   calls `establish_exit_precedence()` and `cleanup_once()`.
+Quit, SIGINT/SIGTERM/SIGHUP and Tauri's exit event converge on one idempotent off-main teardown:
+stop accepting IPC/config work, cancel monitors, cancel and reap the owned startup job, stop the
+registry in reverse order, release windows, tray and socket, then let Tauri exit. The signal thread
+is closed and joined by that teardown, on the host worker rather than the main thread. Only an
+explicit quit request starts that teardown: Tauri's last-window `ExitRequested` (`code: None`, from
+`tauri-runtime-wry`'s `Destroyed` handler) just drops the window registry entry, while the
+`Some(code)` form from `app.exit` prevents that exit and requests the shutdown.
+`execOnStartup` runs once on its own owned thread after first setup, never for CLI, reload or a
+second launch; a long-lived command cannot delay readiness or shutdown. See [ipc.md](ipc.md) and
+[config.md](config.md).
 
-`load_base_modules` is blocking and ordered: config watcher → IPC socket server → tray →
-bar → widgets. Bar and widgets must exist before the frontend can load.
+## Identity
 
-`lazy_load_modules` spawns one task on `tauri::async_runtime` that runs the
-`execOnStartup` commands, initializes wallpaper, audio, notunes, command-quit and
-menu-anywhere in parallel (`tokio::join!` over `spawn_blocking`), then starts tiling
-through `platform::thread::dispatch_on_main_sync` (its AppKit/AX stages need the main
-thread), then appends the tray Modules submenu so the initial check states are accurate.
+New bundle: **Stache Next**, `com.marcosmoura.stache.next`, macOS 26 minimum. Old bundle remains
+**Stache**, `com.marcosmoura.stache`. Both executables are called `stache`; build/dev never use
+`killall`. Root build output and legacy build output live in separate `target/` directories.
+The CLI resolves cache and runtime directories for the new identity only; the desktop host uses
+them for the single-instance lock, socket server and published status. The runtime lock is
+`runtime/instance.lock`, a private `0600` regular file held for the process lifetime. See
+[ipc.md](ipc.md#identity-paths).
 
-## Shutdown
+## Planned work
 
-`app_shutdown.rs` owns the single cleanup routine. `cleanup_once` runs at most once and
-in this order:
+Part 05 ships its native integration and the typed React client/router: static status surfaces,
+capabilities, tray, permission policy, shutdown, test-window backend, generated bindings and the
+browser suites. [ui.md](ui.md) records the contract. Remaining manual coverage is a real tray click
+and SIGINT delivery; the opt-in harness covers SIGTERM and the WebKit surface. The proxyAudio
+runtime ships in [Foundation part 06](../specs/2026-11-02-foundation/06-proxy-audio.md); only its
+comparative measurements and manual hardware checks remain open.
 
-1. restore applications hidden by Stache (`tiling::restore_stache_hidden_apps`) and
-   `hotkey::shutdown`
-2. `tiling::shutdown`
-3. `platform::ipc_socket::stop_server`
-
-The first SIGINT/SIGTERM/SIGHUP schedules an orderly exit; the second calls
-`std::process::exit(1)`. `exit` and `restart` both go through a CAS arbiter
-(`TERMINAL_REQUEST`) so Exit beats Restart and at most one terminal action commits.
-`RunEvent::Exit` sets `NATURAL_EXIT`, which suppresses any queued action.
-
-## Threads
-
-| Where                          | What                                                                                                             |
-| ------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
-| main thread                    | Tauri event loop, all AppKit/AX work                                                                             |
-| `ipc-server`                   | Unix socket server started by `ipc_socket::init`                                                                 |
-| config watcher                 | `std::thread::spawn` in `config/watcher.rs`                                                                      |
-| `stache-<name>`                | `platform::thread::spawn_named_thread`: `media`, `lock-watcher`, `screen-watcher`, `notunes-init`, `tray-toggle` |
-| `tauri::async_runtime` (tokio) | tiling `StateActor` loop, `EffectSubscriber`, background startup                                                 |
-| plain std threads              | tiling animation worker, border animation runner, screen and mouse monitors                                      |
-
-Anything touching AppKit, the Accessibility API or an `NSWindow` from a background thread
-must go through `platform::thread::dispatch_on_main_sync` (runs inline when already on the
-main thread) or `dispatch_on_main` (fire and forget).
-
-## Module lifecycle
-
-- Contract: `modules/services/lifecycle.rs` — `LifecycleModule` (`name`, `id`, `start`,
-  `pause`, `resume`, `status`) and `ModuleStatus` with four states: `ConfiguredOff`,
-  `Running`, `Paused`, `Unavailable(reason)`.
-- Registry: `modules/lifecycle_registry.rs`, filled once in `.setup`, never mutated.
-- Registered ids: `wallpapers`, `commandQuit`, `notunes`, `proxyAudio`, `menuAnywhere`,
-  `tiling`.
-- Registration starts nothing. Startup calls each module's own `init()`; the registry only
-  reports status and performs pause/resume for the tray.
-- The tray (`modules/tray/mod.rs`) creates one check item per module in
-  `install_modules_submenu` and drives pause/resume itself.
-  `LifecycleRegistry::toggle` enforces the same rules but is currently only exercised by
-  its unit tests.
-- `services/traits.rs` (`Module`, `BackgroundService`, `ModuleError`) is legacy and has no
-  implementors.
-
-## Directory map
-
-`app/native/src/`:
-
-- `cli/` — clap tree (`commands/mod.rs`), one handler per domain, table/JSON output
-  (`output.rs`).
-- `config/` — `StacheConfig` and domain types (`types/`), loader (`mod.rs`), `.env`
-  parsing (`env.rs`), template (`template.rs`), file watcher (`watcher.rs`).
-- `modules/` — one directory per feature, plus `lifecycle_registry.rs`, `tray/`,
-  `widgets/`.
-- `platform/` — macOS layer: `ipc.rs`, `ipc_socket.rs`, `thread.rs`, `objc.rs`, `path.rs`,
-  `accessibility.rs`, `window.rs`, `display.rs`, `command.rs`.
-- `services/` — legacy traits only.
-- root files: `main.rs`, `lib.rs`, `app_shutdown.rs`, `events.rs`, `error.rs`, `cache.rs`,
-  `constants.rs`, `logging.rs`, `schema.rs`.
-
-`app/ui/`:
-
-- `components/` — shared primitives (Button, Icon, Stack, Surface, ScrollingLabel,
-  QueryErrorFallback).
-- `design-system/` — `colors` (Catppuccin Mocha) and `motion` tokens.
-- `hooks/` — Tauri/React Query hooks and cross-window sync.
-- `renderer/` — window roots; `Renderer.tsx` dispatches on the window label to `bar/` or
-  `widgets/`.
-- `stores/` — data hooks per feature (Battery, Weather).
-- `tests/` — Vitest setup and helpers.
-- `types/` — `tauri-events.ts` event constants.
-- `utils/` — store factory, event emit helper, query defaults, `resolveModule`.
-- `main.tsx`, `main.css`, `index.html` — entry files.
-
-## Build and sidecar notes
-
-- `app/native/build.rs` links the private `SkyLight` framework and `CoreLocation`.
-- `scripts/prepare-sidecar.sh` (run by `pnpm prepare`) copies the Homebrew `media-control`
-  binary to `app/native/binaries/media-control-<host-triple>` and its support files to
-  `app/native/resources/lib|Frameworks`. `modules/bar/components/media.rs` spawns that
-  sidecar through the shell plugin; without it the media widget has no data.
-- `app/native/tauri.conf.json` declares the two windows (`bar`, `widgets`: hidden,
-  transparent, non-focusable, all workspaces), the CSP allowlist (Open-Meteo, Visual
-  Crossing, ipapi, ipinfo) and macOS 14.0 as the minimum.
-- `beforeBuildCommand` runs `./scripts/generate-schema.sh && pnpm format && pnpm build`.
+`stache-sdk`, `stache-cli`, `stache-proxy-audio` and `stache-app` forbid unsafe code;
+`stache-macos` documents every unsafe block.

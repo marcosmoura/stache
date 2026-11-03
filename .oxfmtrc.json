@@ -2,13 +2,15 @@
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
   "ignorePatterns": [
     "**/*.toml",
+    "**/bindings.gen.ts",
+    "**/coverage/**",
     "**/dist/**",
-    "coverage/**",
+    ".worktrees/**",
+    "_legacy/**",
+    "bun.lock",
     "node_modules/**",
-    "app/native/**",
-    "pnpm-lock.yaml",
-    "target/**",
-    ".worktrees/**"
+    "src/crates/app/gen/**",
+    "target/**"
   ],
   "printWidth": 100,
   "semi": true,
@@ -27,7 +29,7 @@
         ]
       },
       {
-        "groupName": "internal",
+        "groupName": "project-alias",
         "elementNamePattern": ["@/**"]
       }
     ],
@@ -35,7 +37,7 @@
       ["type-builtin", "value-builtin"],
       "react",
       ["type-external", "value-external"],
-      ["type-internal", "value-internal", "internal"],
+      ["type-internal", "value-internal", "project-alias"],
       ["type-parent", "value-parent"],
       ["type-sibling", "value-sibling", "type-index", "value-index"],
       "unknown"

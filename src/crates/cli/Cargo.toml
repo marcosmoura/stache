@@ -1,0 +1,24 @@
+[package]
+name = "stache-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Stache CLI foundation"
+readme = "../../../README.md"
+keywords = ["stache", "cli"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+clap = { version = "4.6.7", features = ["derive"] }
+clap_complete = "4.6.9"
+serde_json = "1.0.154"
+stache-sdk = { path = "../sdk" }
+tempfile = "3.27.0"
+
+[dev-dependencies]
+schemars = "1.2.3"
+serde = { version = "1.0.229", features = ["derive"] }
+
+[lints]
+workspace = true

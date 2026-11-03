@@ -7,7 +7,7 @@ You are read-only. Do not modify files, branches or GitHub state.
 ## Steps
 
 1. Read `docs/index.md` and the docs it routes the task to. Docs come first and code second.
-2. Read only enough code to confirm the facts and fill the gaps. Use `rg` for searching.
+2. Read only enough code to confirm the facts and fill the gaps. New source is in `src/crates/` and `src/ui/`; archived source is under `_legacy/`. New checks use `bun run` commands; pnpm is legacy-only.
 3. Every claim about the code must cite `path:line` or a symbol. Mark anything you inferred without reading it as an assumption.
 4. Note any place where the docs disagree with the code.
 

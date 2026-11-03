@@ -1,92 +1,202 @@
-# IPC and frontend contracts
+# Control socket and CLI
 
-Read when you add or debug a CLI command, the CLI ↔ app channel, a Tauri command, or a
-Tauri event.
+Read when changing the standalone commands, socket transport, identity paths or
+the single-binary mode selection.
 
-## Two channels, different jobs
+The `stache` binary is both the desktop host and the command line. Mode
+selection runs before any Tauri initialization: commands never start the tray,
+a webview, the socket server or a module. The desktop host starts the socket
+after registry startup and stops accepting new work before shutdown.
 
-| Channel                           | Carries                            | Code                     |
-| --------------------------------- | ---------------------------------- | ------------------------ |
-| Unix domain socket                | state queries and control commands | `platform/ipc_socket.rs` |
-| `NSDistributedNotificationCenter` | benign UI refresh events only      | `platform/ipc.rs`        |
+## Mode selection
 
-Control commands were moved off distributed notifications because any process in the user
-session can observe or spoof them. The socket is `0600` and only reachable by the user who
-owns the cache directory.
+The app validates every invocation with the CLI's composed clap tree before
+selecting a mode, including bundled executables and `--desktop`:
 
-## Socket protocol
+- no command (including config-only invocations), or `--desktop` → desktop;
+- executable path containing `.app/Contents/MacOS` → desktop, regardless of
+  arguments;
+- anything else → CLI.
 
-- Path: `<cache dir>/stache.sock`, i.e.
-  `~/Library/Caches/com.marcosmoura.stache/stache.sock` (`ipc_socket::get_socket_path`,
-  `cache::get_cache_dir`).
-- One JSON object per line. `IpcMessage` is untagged, so a request is either `IpcQuery` or
-  `IpcCommand`; both are tagged by `type` in camelCase, for example
-  `{"type":"tilingFocusWorkspace","workspace":"coding"}`.
-- Response: `IpcResponse`, either `{"data": …}` or `{"error": "…"}`.
-- Server limits (`ipc_socket.rs`): 8 concurrent connections, 5 s read/write timeouts,
-  64 KiB maximum request line. The client retries 3× but only on `AppNotRunning`.
-- Queries: `screens`, `workspaces`, `windows`, `apps`, `ping`, `v2State`, `v2Screens`,
-  `v2Workspaces`, `v2Windows`, `v2Enabled`.
-- Commands: `reload`, `tilingPause`, `tilingResume`, `tilingFocusWorkspace`,
-  `tilingSetLayout`, `tilingWindowFocus`, `tilingWindowSwap`, `tilingWindowResize`,
-  `tilingWindowToggleFloating`, `tilingWindowPreset`, `tilingWindowSendToWorkspace`,
-  `tilingWindowSendToScreen`, `tilingWorkspaceBalance`, `tilingWorkspaceSendToScreen`.
+Valid bundled commands retain desktop precedence; malformed arguments exit 2
+and help/version exit without starting it. Use a standalone binary for CLI work.
+The desktop callback receives the resolved `ConfigPaths`; the host resolves its
+own cache/runtime identity paths and instance lock before starting Tauri.
 
-Routing is in `lib.rs::load_base_modules`: the socket `init` handler sends
-`IpcMessage::Query` to `tiling::init::handle_ipc_query` and `IpcMessage::Command` to
-`modules/bar/ipc_listener.rs::handle_command`.
+## Composition
 
-## Who actually uses the socket
+`stache-cli` depends on `stache-sdk` only. The application injects two things:
 
-Only tiling commands and `stache reload` (`cli/commands/tiling.rs`,
-`cli/commands/mod.rs`). Wallpaper, audio, cache, config and schema commands run entirely
-inside the CLI process; they never talk to the app.
+- a `ConfigCatalog`, so `config` and `schema` describe exactly the types the
+  host registers;
+- a `CommandCatalog` of contributed commands, so module CLIs are added by the
+  composition root and the CLI never imports a module.
 
-The CLI never launches the app. With no app running, tiling queries print
-`Stache app is not running.` and still exit 0, while tiling control commands fail with
-`StacheError::IpcError` and exit 1.
+```rust
+catalog.add(CliContribution::new(|| clap::Command::new("audio")
+    .subcommand(clap::Command::new("list")), AudioCommands))?;
+```
 
-`stache reload` and a config-file change both end in `app_shutdown::restart`; debug builds
-only log. See [config.md](config.md).
+A `CliContribution` pairs a command builder with a `CliExecutor`. Building runs
+through a closure because clap commands are consumed when assembled. Executors
+receive the parsed `ArgMatches`, the terminal flag and injected stdout/stderr;
+they decide whether to work locally or call the running host. Contributed names
+may not duplicate each other or the built-ins (`cache`, `completions`, `config`,
+`reload`, `schema`). `completions` is generated from the composed tree, so it
+exposes exactly the commands that exist.
 
-## Distributed notifications
+Built-ins are `config init|path|migrate`, `cache clear|path`, `reload`,
+`schema [id]` and `completions --shell|-s`. The proxyAudio pilot contributes
+`audio list`; see [proxy-audio.md](../features/proxy-audio.md).
 
-Prefix `com.marcosmoura.stache.` (`platform/ipc::NOTIFICATION_PREFIX`). The app observes
-only `window-focus-changed` and `workspace-changed` (`observed_notification_names`) and
-re-emits them as the `stache://spaces/*` events. `send_notification` is the supported API
-for external tooling that wants to nudge the UI. Never put a control operation on this
-channel.
+## Desktop lifecycle
 
-## Tauri commands
+The desktop claims the Next identity's `runtime/instance.lock` before creating
+the tray; a second launch exits successfully without a registry, watcher,
+listener, webview or `execOnStartup`. After the tray exists, the background host
+starts modules and then `IpcServer` with `ConfigCore` over the one
+`ConfigStore`. The server is owned by the host, not by a Tauri plugin.
 
-- Declared with `#[tauri::command]` next to the feature code — mostly
-  `modules/bar/components/*.rs` and `modules/bar/window.rs`.
-- Registered in `lib.rs` inside `tauri::generate_handler![…]`. A command that is not
-  registered is invisible to `invoke` and fails silently on the TS side.
-- Return `Result<T, StacheError>`; `StacheError` serializes as
-  `{"kind": "…", "message": "…"}` (`error.rs`).
-- Payload and result structs use `#[serde(rename_all = "camelCase")]`, so TypeScript sees
-  camelCase fields even when Rust uses snake_case.
+Shutdown is one idempotent coordinator shared by tray Quit, SIGINT/SIGTERM/SIGHUP
+and Tauri's exit event. It runs off the main thread: stop accepting IPC and
+configuration work, cancel the watcher, permission poller and owned startup job,
+reap that job's direct child, shut the registry down in reverse start order,
+release owned windows/tray and the socket, close and join the signal thread, then
+let Tauri exit on the main thread. A non-zero host exit code reaches the CLI as a
+failure instead of being reported as success. Repeated requests are no-ops. Module
+socket handlers are contributed by their factories and registered on the same
+`Router` before the server starts; there is no second server.
 
-## Events
+## Wire protocol
 
-- Naming: `stache://<module>/<event-name>`, kebab-case event name.
-- Rust source of truth: `app/native/src/events.rs`, one `pub mod` per module. Its tests
-  assert every constant has the `stache://` prefix and matches the naming convention.
-- TS mirror: `app/ui/types/tauri-events.ts`, re-exported from `app/ui/types/index.ts` as
-  `MediaEvents`, `TilingEvents`, `WidgetsEvents`, `MenubarEvents`, `KeepAwakeEvents`,
-  `SpacesEvents`, `CmdQEvents`, `AppEvents`. The strings must match byte for byte.
-- Emit with `app_handle.emit(events::<module>::NAME, payload)`. Payloads built with
-  `serde_json::json!` use camelCase keys (`windowId`, `previousWorkspace`).
-- Consume with `useTauriEvent(name, callback)` for one-off listeners, or with
-  `useTauri`/`useTauriSuspense` and an `eventName` option to keep a React Query cache in
-  sync (see [../guides/react.md](../guides/react.md)).
-- Window to window: `emitTauriEvent({ eventName, target, payload })` emits to another
-  window label; the widget toggle uses it to reach the `widgets` window.
+One newline-delimited JSON request per Unix connection, one response back:
 
-## Cache
+```json
+{"module":"proxyAudio","method":"list","params":{"kind":"output"}}
+{"status":"ok","data":[]}
+{"status":"error","error":{"kind":"disabled","message":"proxyAudio is disabled"}}
+```
 
-`cache.rs` is not IPC but it shares the directory: `get_cache_dir()` returns
-`~/Library/Caches/com.marcosmoura.stache` (fallback `/tmp/…`) and `clear_cache` calls
-`remove_dir_all` on it. `stache cache clear` therefore deletes the live socket file of a
-running app.
+`status` is `ok` or `error`; error kinds are `malformedRequest`, `invalidParams`,
+`unknownModule`, `unknownMethod`, `disabled`, `unavailable` and `handler`.
+Adapters deserialize `params` exactly once with `decode_params` and serialize
+typed responses once with `encode_response`; there is no hand-built JSON and no
+`{}` fallback. An unknown module, unknown method or malformed body is reported
+as a typed error and the server keeps serving.
+
+`proxyAudio.list` is read-only. `kind` is `all` (the default when params are
+omitted or `null`), `input` or `output`; the response is the same
+`AudioDeviceInfo` shape as `stache audio list --json`. The handler shares the
+listing service with the command and never starts a listener.
+
+`core` is reserved. `core.reload` rereads every file and returns per-file
+`applied { revision }`, `unchanged` or `rejected` outcomes with diagnostics;
+`core.status` returns the configuration directory, each file's state
+(`missing`, `valid`, `invalid`), whether its current bytes were accepted for a
+loaded global or bound module, diagnostics and warnings. Held diagnostics are
+independent of disk validity; `config path` sends host diagnostics to stderr.
+`ConfigCore` implements both over the
+existing `ConfigStore`; the store still owns last-good state, so one rejected
+file never blocks the others. The desktop `core.reload` wrapper asks the host
+worker to publish the resulting module status once, so a CLI reload updates the
+tray and test window without a restart.
+
+## Client behavior
+
+`IpcClient` sets a five-second total response deadline and write timeout. A
+response requires a newline and may contain at most 1 MiB before it. It retries only
+`NotRunning` (absent socket or refused connect, before any bytes are sent): three
+attempts, 100 ms apart. Once connected, broken pipes and resets are I/O errors,
+never retries: the peer may already have executed the action. Timeouts, invalid
+responses and structured remote errors are not retried either. Requests
+are serialized with serde; a serialization failure is a typed client error.
+`config path` uses a single-attempt client so it stays instant while offline.
+
+`reload` is silent on success (exit 0). Rejected files print
+`stache: {diagnostic}` on stderr and exit 1; no running host prints
+`stache: IPC error: Failed to send reload command to Stache app: Stache app is not running`
+and exits 1. Application errors use `stache: {error}` on stderr. Clap usage
+errors exit 2 and success exits 0. `reload` never launches or restarts the app.
+
+## Endpoint safety
+
+The server owns the runtime directory and its socket:
+
+- the runtime directory is created `0700`; an existing directory must be a real
+  directory, owned by the resolved user, and is re-tightened to `0700`;
+- the socket is created `0600`, must be a socket, and must be owned by the same
+  user; validation precedes chmod, and symlinks/regular files are not unlinked;
+- a private `0600` regular `server.lock` is opened without following symlinks
+  and locked across the server lifetime. Directory and lock identities are
+  rechecked after locking, serializing cooperating stale-probe/unlink/bind calls;
+- an existing socket is probed. A successful connect means another server is
+  live and the endpoint is left alone. `ConnectionRefused`/`NotFound` means it
+  is stale and may be removed; other probe errors are reported, not guessed;
+- shutdown removes only the socket inode the server created (device and inode
+  are captured after bind), so a foreign endpoint is preserved.
+
+The accept loop is non-blocking and shares a stop flag with a slot gate. At most
+8 connections are served at once; excess connections wait in the kernel backlog.
+Each connection has a five-second total read deadline and write timeout, and a
+request may not exceed 64 KiB before its newline. Over-long, empty, incomplete
+and timed-out requests are closed or answered with a typed error; none panic.
+Finished handlers publish their thread ID to a bounded completion channel before
+releasing capacity. Reaping joins only those IDs, never an arbitrary active
+handler; retained handles remain within the connection limit.
+A drop guard releases capacity even on panic; handler panics become wire errors.
+Stop updates its predicate under the same mutex used by waiting acquisitions.
+Shutdown joins the accept/connection threads; handlers must themselves terminate.
+Zero connection/request bounds clamp to one; zero timeout is rejected before
+endpoint creation. Failed socket-mode or timeout setup closes that connection.
+These checks protect against foreign users and cooperating startup races, not
+arbitrary malicious same-UID path mutation between filesystem checks and use.
+
+## Identity paths
+
+`AppPaths` is shared by client and server and derived from an injected
+`AppEnvironment`:
+
+- cache: `~/Library/Caches/com.marcosmoura.stache.next`;
+- runtime: `$TMPDIR/com.marcosmoura.stache.next`, never beneath the cache;
+- socket: `runtime/ipc`, rejected above 103 bytes because that is the
+  macOS `sun_path` limit;
+- instance: `runtime/instance.lock`, a private `0600` regular file locked
+  exclusively for the desktop process lifetime.
+
+Missing `HOME` or `TMPDIR` fails with a typed error rather than falling back to
+a shared directory. Relative anchors are refused; existing directory anchors
+are canonicalized before overlap checks (including parent symlinks and `..`).
+Expected ownership is the process effective UID via safe rustix, never HOME
+metadata. The resolved temporary root must be owned by that UID. Tests pass temp
+roots and never touch the real home, cache, runtime or legacy identity.
+
+## Cache command
+
+`cache path` prints the bare path. `cache clear` refuses a symlinked,
+non-directory or foreign-owned cache path, counts bytes without following
+symlinks (links and sockets contribute none), then removes the directory tree.
+The two legacy messages are preserved byte-for-byte; byte formatting matches
+`0 bytes`, `1.00 KB`, `1.50 MB`, `1.00 GB`. Clearing can never reach the
+runtime directory, the configuration directory or the legacy
+`com.marcosmoura.stache` cache.
+
+## Audio command
+
+`audio list [-j|--json] [-i|--input] [-o|--output]` runs locally in the CLI
+process. It enumerates through `CoreAudio`, never connects to the socket, never
+starts the desktop and never registers a change listener. Neither flag, or both,
+selects every device; results are sorted by name. JSON preserves the legacy
+`name` / `type` / `input` / `output` keys and is styled only on a terminal. See
+[proxy-audio.md](../features/proxy-audio.md).
+
+Contributed executors receive the same `ansi` flag as built-ins
+(`CliExecutor::execute`), so a contributed command follows one terminal policy.
+
+## Output
+
+`schema` prints deterministic pretty JSON. ANSI styling is added only when
+stdout is a terminal; piped output, including redirected schema files, contains
+no escape sequences. The styling pass inserts escapes only, so stripping them
+restores the exact serde output. Serialization failures are reported as
+application errors rather than replaced by a placeholder. `audio list --json`
+uses the same injected styling function for the same policy.

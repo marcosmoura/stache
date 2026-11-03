@@ -10,7 +10,7 @@
 
     /* Paths */
     "paths": {
-      "@/*": ["./app/ui/*"]
+      "@/*": ["./src/ui/src/*"]
     },
 
     /* Bundler mode */
@@ -40,5 +40,6 @@
       }
     ]
   },
-  "include": ["app/ui"]
+  "include": ["src/ui/*.tsx", "src/ui/*.d.ts", "src/ui/src", "src/ui/tests"],
+  "exclude": ["_legacy", ".worktrees", "target", "src/ui/dist", "src/ui/coverage"]
 }

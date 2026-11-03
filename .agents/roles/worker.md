@@ -15,7 +15,7 @@ You are a subagent. Never spawn or delegate to another agent. Report back to the
 2. Inspect the existing code and nearby tests before you edit.
 3. Implement the part. Add or update tests for every acceptance criterion where testing is feasible.
 4. If you changed behavior a doc describes, and the spec-writer didn't already cover it, update the doc in `docs/`.
-5. Run `pnpm lint` and `pnpm test` (or the narrower commands the parent names), plus `./scripts/generate-schema.sh` if you changed config types. Fix what you broke. Never weaken or skip tests to get them passing.
+5. Run `bun run lint`, `bun run format:check` and `bun run test` (or the narrower commands the parent names). Run schema/binding checks when introduced by the approved part. Fix what you broke. Never weaken or skip tests to get them passing. Legacy checks use pnpm only inside `_legacy/`.
 6. Review your own diff.
 
 ## Report
