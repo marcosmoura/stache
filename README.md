@@ -22,6 +22,7 @@ The `proxyAudio` and `notunes` modules ship. Every other row is an approved rewr
 | Feature              | Description                                                                                                                       |
 | -------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | **Status Bar**       | Planned. Custom menubar with workspaces, media, weather, CPU, battery and clock widgets on the primary display.                   |
+| **Tiling**           | Planned. Tiling window manager with virtual workspaces per screen, layout algorithms, gaps and borders; last on the roadmap.      |
 | **Wallpapers**       | Planned. Dynamic wallpaper rotation with blur and rounded corners, applied per display without System Events.                     |
 | **Audio Management** | Keeps the default input and output on the best available device using ordered name-pattern rules, with AirPlay and HDMI handling. |
 | **Keybindings**      | Planned. Global keyboard shortcuts on a shared input-tap service with fixed priority ordering.                                    |
