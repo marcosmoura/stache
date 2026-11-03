@@ -18,6 +18,7 @@ Read when navigating the shipped foundation, explicitly planned rewrites or the 
 | Planned rewrite order               | [roadmap](roadmap.md)                                                           |
 | noTunes (shipped)                   | [feature](features/notunes.md), [spec](specs/2026-11-03-notunes/00-overview.md) |
 | Old application/features            | [legacy docs](../_legacy/docs/index.md), [legacy build](../_legacy/README.md)   |
+| Tray menu and actions (shipped)     | [features/tray.md](features/tray.md)                                            |
 
 ## Doc style
 

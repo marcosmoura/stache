@@ -34,6 +34,20 @@ than introduce parallel plumbing or dependencies on unmerged module branches.
 Preserve existing CLI commands/output contracts. No Settings UI is planned here;
 widgets are permanently removed, not deferred. No legacy runtime is ported implicitly.
 
+## Tray: no Reload item
+
+The shipped tray ([feature](features/tray.md)) deliberately does not port the legacy
+release-only **Reload Stache** item. Configuration now reloads per module through the
+watcher and `stache reload` exists on the CLI, so restarting the whole application for a
+configuration change is no longer part of the model. Enable, Pause/Resume, Retry, the
+permission request, the test window and Quit cover the shipped actions, and the menu is
+rebuilt from a status snapshot on the main thread rather than mutated in place.
+
+The user asked for a release-only Reload item to be preserved anyway. It is a planned
+follow-up, not shipped behavior: it needs the coordinated restart path from the
+[teardown spec](specs/2026-11-03-teardown/00-overview.md), must stay release-only and
+main-thread-bound, and must not reintroduce whole-app restart as the config-change path.
+
 ## Separate foundation follow-up
 
 The known Cmd-Q/logout coordinated-teardown gap needs its own scoped follow-up.
