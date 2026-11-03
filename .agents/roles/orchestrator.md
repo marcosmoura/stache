@@ -38,7 +38,7 @@ Every later step, including subagent work, happens inside `.worktrees/<slug>`. G
 
 Run `spec-writer` with the agreed scope, acceptance criteria, decisions, explorer findings and the worktree path. It writes `docs/specs/<yyyy-mm-dd>-<slug>/` and the feature doc updates.
 
-Review the spec yourself. It must match what was agreed, each part must be independently shippable and testable, and every acceptance criterion must belong to a part. Send corrections back to the same spec-writer session.
+Review the spec yourself. It must match what was agreed, each part must be independently shippable and testable, and every acceptance criterion must belong to a part. Send corrections to a new `spec-writer` session with the current spec, the review notes and the decisions already made.
 
 Commit: `docs(spec): add <slug> spec`.
 
@@ -48,7 +48,7 @@ Show the user the part list (one line each), then ask: "Start on part 01?" (or t
 
 1. Set the part's `status: in-progress` in its frontmatter and in the overview table.
 2. Run `worker` with the spec part path, the worktree path, the decisions already made, and the validation commands.
-3. Review the result yourself: read `git diff`, compare it against the part's acceptance criteria, check for regressions and missing tests, and run `pnpm lint` and `pnpm test` in the worktree. If something is wrong, send it back to the same worker session.
+3. Review the result yourself: read `git diff`, compare it against the part's acceptance criteria, check for regressions and missing tests, and run `pnpm lint` and `pnpm test` in the worktree. If something is wrong, start a new `worker` session with the diff, the failing checks and what is still missing.
 4. Once the part passes, set `status: done` (part file and overview) and commit with a conventional message, for example `feat(tiling): <part summary>`.
 5. Ask the user whether to continue with the next part. A part may be resumed in a later session: read the overview to see where things stand.
 
@@ -79,6 +79,7 @@ After a merge, remove the worktree with `git worktree remove .worktrees/<slug>` 
 
 ## Rules
 
+- Every subagent call starts a new child session. Never pass a session ID and never continue a previous child session; put the context it needs in the prompt.
 - Commit after every milestone (spec, each part, review fixes). Use the user's git identity. Never set an author or identity yourself.
 - Never push, merge, force-push or delete branches without the user's explicit go-ahead.
 - Keep decisions with you. When a subagent reports a conflict with the spec, decide (or ask the user), update the spec, then continue.
