@@ -44,9 +44,10 @@ permission request, the test window and Quit cover the shipped actions, and the 
 rebuilt from a status snapshot on the main thread rather than mutated in place.
 
 The user asked for a release-only Reload item to be preserved anyway. It is a planned
-follow-up, not shipped behavior: it needs the coordinated restart path from the
-[teardown spec](specs/2026-11-03-teardown/00-overview.md), must stay release-only and
-main-thread-bound, and must not reintroduce whole-app restart as the config-change path.
+follow-up, not shipped behavior: it needs the coordinated restart path from the planned
+teardown spec on `feat/teardown` (not merged, so it is not linked from here), must stay
+release-only and main-thread-bound, and must not reintroduce whole-app restart as the
+config-change path.
 
 ## Separate foundation follow-up
 
