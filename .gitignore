@@ -38,3 +38,6 @@ src/crates/app/gen/
 
 # Agent workflow worktrees
 .worktrees/
+
+# Local, machine-specific agent model profiles
+.opencode/model-profiles.jsonc
