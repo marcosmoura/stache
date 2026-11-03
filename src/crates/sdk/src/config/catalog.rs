@@ -38,6 +38,7 @@ struct ConfigKind {
     decode: fn(Value) -> Result<DecodedConfig, DecodeFailure>,
     validate: fn(&dyn Any) -> Result<(), ConfigError>,
     schema: fn() -> Schema,
+    legacy: fn(&mut Value) -> Vec<String>,
 }
 
 /// A typed decode failure with an optional field path.
@@ -117,8 +118,20 @@ impl ConfigCatalog {
             decode: decode_value::<C>,
             validate: validate_value::<C>,
             schema: || schemars::schema_for!(C),
+            legacy: C::migrate_legacy_section,
         });
         Ok(())
+    }
+
+    /// Rewrites a legacy section through the registered type's migration hook.
+    ///
+    /// Returns the type's migration warnings; an empty list when the identifier
+    /// is not registered, in which case the value is left untouched.
+    pub fn rewrite_legacy(&self, id: ModuleId, section: &mut Value) -> Vec<String> {
+        let Some(kind) = self.kinds.get(&id) else {
+            return Vec::new();
+        };
+        (kind.legacy)(section)
     }
 
     /// Identifiers in file order: `global` first, then module IDs.
@@ -300,6 +313,54 @@ mod tests {
         fn enabled(&self) -> bool { self.enabled }
 
         fn validate(&self) -> Result<(), ConfigError> { Ok(()) }
+    }
+
+    /// A type that still accepts a legacy spelling during migration only.
+    #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+    #[serde(default, rename_all = "camelCase")]
+    struct LegacySample {
+        /// The replacement target.
+        target: Option<String>,
+    }
+
+    impl ModuleConfig for LegacySample {
+        fn enabled(&self) -> bool { true }
+
+        fn validate(&self) -> Result<(), ConfigError> { Ok(()) }
+
+        fn migrate_legacy_section(section: &mut Value) -> Vec<String> {
+            let Some(object) = section.as_object_mut() else {
+                return Vec::new();
+            };
+            if object.get("targetApp").and_then(Value::as_str) == Some("old") {
+                object.insert(
+                    "target".to_owned(),
+                    Value::String("com.example.player".to_owned()),
+                );
+                object.remove("targetApp");
+                return vec!["legacy rewrote its target".to_owned()];
+            }
+            Vec::new()
+        }
+    }
+
+    #[test]
+    fn a_registered_type_rewrites_its_legacy_section() {
+        let mut catalog = ConfigCatalog::new();
+        catalog.register::<LegacySample>(ModuleId::new("legacy")).expect("legacy");
+        let mut section = serde_json::json!({ "targetApp": "old" });
+        assert_eq!(catalog.rewrite_legacy(ModuleId::new("legacy"), &mut section), [
+            "legacy rewrote its target"
+        ]);
+        assert_eq!(section, serde_json::json!({ "target": "com.example.player" }));
+
+        let mut untouched = serde_json::json!({ "targetApp": "old" });
+        assert!(catalog.rewrite_legacy(ModuleId::new("absent"), &mut untouched).is_empty());
+        assert_eq!(untouched, serde_json::json!({ "targetApp": "old" }));
+
+        let mut nothing = serde_json::json!({ "enabled": true });
+        assert!(catalog.rewrite_legacy(ModuleId::new("legacy"), &mut nothing).is_empty());
+        assert_eq!(nothing, serde_json::json!({ "enabled": true }));
     }
 
     #[test]

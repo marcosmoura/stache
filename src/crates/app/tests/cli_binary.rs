@@ -132,6 +132,18 @@ fn schema_is_piped_as_plain_json() {
     let output = workspace.run(&["schema", "proxyAudio"]);
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(stdout(&output).contains("dependsOn"));
+
+    let output = workspace.run(&["schema", "notunes"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = stdout(&output);
+    let value: serde_json::Value = serde_json::from_str(&body).expect("notunes schema JSON");
+    let target = &value["properties"]["targetApp"];
+    let types = target["type"].as_array().expect("targetApp has explicit types");
+    assert!(types.iter().any(|kind| kind == "string"), "{types:?}");
+    assert!(value.get("$defs").is_none(), "{body}");
+    for preset in ["tidal", "spotify", "feishin", "none"] {
+        assert!(!body.contains(preset), "{preset}: {body}");
+    }
 }
 
 #[test]
@@ -281,6 +293,7 @@ fn config_path_uses_the_explicit_directory() {
     let body = stdout(&output);
     assert!(body.starts_with(&format!("{}\n", directory.display())), "{body}");
     assert!(body.contains("  global.jsonc\n"), "{body}");
+    assert!(body.contains("  notunes.jsonc\n"), "{body}");
     assert!(body.contains("  proxyAudio.jsonc\n"), "{body}");
     assert_no_desktop(&workspace);
 }
@@ -293,6 +306,9 @@ fn config_init_writes_the_registered_templates() {
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(directory.join("global.jsonc").exists());
     assert!(directory.join("proxyAudio.jsonc").exists());
+    let notunes = std::fs::read_to_string(directory.join("notunes.jsonc")).expect("notunes");
+    assert!(notunes.contains("\"enabled\": false"), "{notunes}");
+    assert!(!notunes.contains("targetApp"), "{notunes}");
     assert_no_desktop(&workspace);
 }
 

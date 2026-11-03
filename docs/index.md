@@ -1,21 +1,23 @@
 # Stache Next docs
 
-Read when navigating the shipped foundation or its archived predecessor.
+Read when navigating the shipped foundation, explicitly planned rewrites or the archived predecessor.
 
-| Task                                | Read                                                                          |
-| ----------------------------------- | ----------------------------------------------------------------------------- |
-| New tree and boundaries             | [architecture/overview.md](architecture/overview.md)                          |
-| Module SDK, lifecycle and threads   | [architecture/sdk.md](architecture/sdk.md)                                    |
-| Socket control and CLI              | [architecture/ipc.md](architecture/ipc.md)                                    |
-| Typed config, reload, schemas, CLI  | [architecture/config.md](architecture/config.md)                              |
-| Typed UI SDK, bindings, test window | [architecture/ui.md](architecture/ui.md)                                      |
-| Audio device switching (proxyAudio) | [features/proxy-audio.md](features/proxy-audio.md)                            |
-| Adding a module                     | [guides/new-module.md](guides/new-module.md)                                  |
-| Build, checks, hooks, coverage      | [guides/testing.md](guides/testing.md)                                        |
-| Measure release startup and idle    | [guides/performance.md](guides/performance.md)                                |
-| Specs, worktrees and agents         | [workflow.md](workflow.md), [specs/README.md](specs/README.md)                |
-| Foundation spec and acceptance      | [spec](specs/2026-11-02-foundation/00-overview.md)                            |
-| Old application/features            | [legacy docs](../_legacy/docs/index.md), [legacy build](../_legacy/README.md) |
+| Task                                | Read                                                                            |
+| ----------------------------------- | ------------------------------------------------------------------------------- |
+| New tree and boundaries             | [architecture/overview.md](architecture/overview.md)                            |
+| Module SDK, lifecycle and threads   | [architecture/sdk.md](architecture/sdk.md)                                      |
+| Socket control and CLI              | [architecture/ipc.md](architecture/ipc.md)                                      |
+| Typed config, reload, schemas, CLI  | [architecture/config.md](architecture/config.md)                                |
+| Typed UI SDK, bindings, test window | [architecture/ui.md](architecture/ui.md)                                        |
+| Audio device switching (proxyAudio) | [features/proxy-audio.md](features/proxy-audio.md)                              |
+| Adding a module                     | [guides/new-module.md](guides/new-module.md)                                    |
+| Build, checks, hooks, coverage      | [guides/testing.md](guides/testing.md)                                          |
+| Measure release startup and idle    | [guides/performance.md](guides/performance.md)                                  |
+| Specs, worktrees and agents         | [workflow.md](workflow.md), [specs/README.md](specs/README.md)                  |
+| Foundation spec and acceptance      | [spec](specs/2026-11-02-foundation/00-overview.md)                              |
+| Planned rewrite order               | [roadmap](roadmap.md)                                                           |
+| noTunes (shipped)                   | [feature](features/notunes.md), [spec](specs/2026-11-03-notunes/00-overview.md) |
+| Old application/features            | [legacy docs](../_legacy/docs/index.md), [legacy build](../_legacy/README.md)   |
 
 ## Doc style
 

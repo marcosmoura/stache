@@ -1,0 +1,21 @@
+{
+  "$id": "https://raw.githubusercontent.com/marcosmoura/stache/main/schemas/notunes.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NoTunesConfig",
+  "description": "Automatic Apple Music and iTunes blocking.",
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "description": "Whether the blocker should run.",
+      "type": "boolean",
+      "default": false
+    },
+    "targetApp": {
+      "description": "The replacement opened after a blocked application: an absolute `.app`\npath or a bundle identifier. Omitting it blocks without launching\nanything.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

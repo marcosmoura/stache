@@ -20,11 +20,18 @@ Each file is its own catalog document, named after the exact identifier:
 ```text
 ~/.config/stache/
   global.jsonc       GlobalConfig
+  notunes.jsonc      NoTunesConfig
   proxyAudio.jsonc   ProxyAudioConfig
 ```
 
 The loader reads only `global.jsonc` and registered IDs. Legacy
 `config.jsonc`/`config.json` locations are read only by `config migrate`.
+
+`notunes.jsonc` is registered for configuration, schema, template and migration,
+and backs the shipped blocker runtime: enabling it installs application
+observation and terminates Apple Music/iTunes. Catalog support alone starts no
+module, creates no webview and installs no native observation; see
+[notunes.md](../features/notunes.md).
 
 ## Parsing
 
@@ -128,7 +135,7 @@ unchanged save is still a no-op instead of re-decoding forever.
 stache config init [-f] [-p DIR] [--stdout]
 stache config path
 stache config migrate [--from FILE] [-f]
-stache schema [global|proxyAudio]
+stache schema [global|notunes|proxyAudio]
 ```
 
 The commands run from the single `stache` binary. From a checkout use
@@ -166,7 +173,7 @@ styles keys, strings, numbers and literals only when stdout is a terminal; see
 [ipc.md](ipc.md#output).
 
 `schema` defaults to the global schema; `schema proxyAudio` prints the pilot
-schema. Unknown IDs fail.
+schema and `schema notunes` the blocker configuration. Unknown IDs fail.
 
 ## Migration
 
@@ -179,13 +186,24 @@ priority file. The source is never modified: if it is also a planned
 destination, migration refuses even with `--force`.
 
 `execOnStartup` and a `logging` section are converted into `global.jsonc`.
-`proxyAudio` is decoded and validated by the catalog's authoritative type.
-`bar`, `commandQuit`, `wallpapers`, `keybindings`, `menuAnywhere`, `notunes`
-and `tiling` are copied verbatim as same-ID `.jsonc` files; the loader does not
-register or activate them. Legacy `widgets` are dropped with a warning, and
-unknown keys warn. Missing global/pilot sections are emitted as the same
-commented templates as `config init`; absent unported sections create no file.
-Collision and `--force` rules match `init`. Every conversion, copy, drop and
+Every registered module section is decoded and validated by the catalog's
+authoritative type: `proxyAudio` and `notunes` today. A type may also translate
+legacy spellings first through `ModuleConfig::migrate_legacy_section`, which
+migration calls before decoding and writing; that hook is the only place a
+configuration type knows about values the running configuration rejects.
+`notunes` uses it to turn the legacy `targetApp` preset names into a bundle
+identifier and to drop an explicit block-only value. A legacy section that was
+enabled and had no `targetApp` used to mean Spotify; the migrated file now blocks
+without launching anything, and the hook returns a migration warning that names
+that change. `bar`, `commandQuit`,
+`wallpapers`, `keybindings`, `menuAnywhere` and `tiling` are copied verbatim as
+same-ID `.jsonc` files; the loader does not register or activate them. Legacy
+`widgets` are dropped with a warning. Unknown root keys warn, and unknown keys
+inside a registered module section are reported while the section is still
+validated and copied into its `.jsonc` file, where the typed configuration
+ignores them. A missing registered module section is emitted as the same
+commented template as `config init`; absent unported sections create no file.
+Collision and `--force` rules match `init`. Every validation, copy, drop and
 warning is printed.
 
 This is a breaking layout change: the new loader never reads the legacy single
@@ -201,11 +219,11 @@ bun run generate-schema
 bun run generate-schema -- --check
 ```
 
-The `generate-schema` binary writes `schemas/global.schema.json` and
-`schemas/proxyAudio.schema.json` deterministically; `--check` writes nothing
-and exits non-zero on missing or stale files. Templates are generated from the
-serialized `Default` plus schema descriptions, so there is no second
-hand-maintained file.
+The `generate-schema` binary writes `schemas/global.schema.json`,
+`schemas/notunes.schema.json` and `schemas/proxyAudio.schema.json`
+deterministically; `--check` writes nothing and exits non-zero on missing or
+stale files. Templates are generated from the serialized `Default` plus schema
+descriptions, so there is no second hand-maintained file.
 
 Tests use temporary directories and injected `ConfigEnvironment` values; no
 test reads the real home or changes an environment variable.

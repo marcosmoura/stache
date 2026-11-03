@@ -1,0 +1,24 @@
+[package]
+name = "stache-notunes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Stache noTunes configuration and blocker runtime"
+readme = "../../../../README.md"
+keywords = ["stache", "notunes", "configuration"]
+categories = ["config"]
+
+[dependencies]
+schemars = "1.2.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+specta = { version = "=2.0.0-rc.25", features = ["derive"] }
+stache-macos = { path = "../../macos" }
+stache-sdk = { path = "../../sdk" }
+
+[dev-dependencies]
+stache-macos = { path = "../../macos", features = ["testing"] }
+
+[lints]
+workspace = true

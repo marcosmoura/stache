@@ -221,6 +221,33 @@ export type ModuleStatusView = {
 	diagnostic: string | null,
 };
 
+/**  Automatic Apple Music and iTunes blocking. */
+export type NoTunesConfig = NoTunesConfig_Serialize | NoTunesConfig_Deserialize;
+
+/**  Automatic Apple Music and iTunes blocking. */
+export type NoTunesConfig_Deserialize = {
+	/**  Whether the blocker should run. */
+	enabled?: boolean,
+	/**
+	 *  The replacement opened after a blocked application: an absolute `.app`
+	 *  path or a bundle identifier. Omitting it blocks without launching
+	 *  anything.
+	 */
+	targetApp?: string | null,
+};
+
+/**  Automatic Apple Music and iTunes blocking. */
+export type NoTunesConfig_Serialize = {
+	/**  Whether the blocker should run. */
+	enabled: boolean,
+	/**
+	 *  The replacement opened after a blocked application: an absolute `.app`
+	 *  path or a bundle identifier. Omitting it blocks without launching
+	 *  anything.
+	 */
+	targetApp?: string | null,
+};
+
 /**  Automatic audio-device selection. */
 export type ProxyAudioConfig = ProxyAudioConfig_Serialize | ProxyAudioConfig_Deserialize;
 

@@ -66,6 +66,19 @@ pub trait ModuleConfig: Clone + Send + Sync + PartialEq + 'static {
     /// # Errors
     /// Returns the reason the configuration cannot be applied.
     fn validate(&self) -> Result<(), ConfigError>;
+
+    /// Rewrites a legacy section before `config migrate` validates and writes it.
+    ///
+    /// Migration is the only place a configuration type may know about spellings
+    /// the running configuration no longer accepts. The default leaves the
+    /// section untouched, so a type without legacy spellings needs no override.
+    ///
+    /// Returned notes are shown to the user as migration warnings, for a rewrite
+    /// that changes behavior in a way the new file cannot express.
+    fn migrate_legacy_section(section: &mut serde_json::Value) -> Vec<String> {
+        let _ = section;
+        Vec::new()
+    }
 }
 
 /// The static facts a module publishes before it is started.

@@ -3,6 +3,7 @@
 //! The host and the local config commands share this catalog so schema,
 //! template, migration and runtime can never disagree about a type.
 
+use stache_notunes::NoTunesConfig;
 use stache_proxy_audio::ProxyAudioConfig;
 use stache_sdk::{CatalogError, ConfigCatalog, GlobalConfig};
 
@@ -14,6 +15,7 @@ use stache_sdk::{CatalogError, ConfigCatalog, GlobalConfig};
 pub fn catalog() -> Result<ConfigCatalog, CatalogError> {
     let mut catalog = ConfigCatalog::new();
     catalog.register::<GlobalConfig>(GlobalConfig::ID)?;
+    catalog.register::<NoTunesConfig>(NoTunesConfig::ID)?;
     catalog.register::<ProxyAudioConfig>(ProxyAudioConfig::ID)?;
     Ok(catalog)
 }

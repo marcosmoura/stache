@@ -13,11 +13,13 @@ use serde::{Deserialize, Serialize};
 use stache_app::bindings::{HostStatus, ModuleState};
 use stache_app::host::{
     HostDriver, HostHandle, HostServices, HostSettings, HostUi, ModuleFactories, ModuleFactory,
-    new_host, register_module,
+    NoTunesFactory, new_host, register_module,
 };
 use stache_app::permissions::PermissionPoll;
 use stache_app::startup::CommandRunner;
+use stache_app::tray::{TrayItem, TrayRow};
 use stache_app::windows::{NativeWindowSpec, NativeWindows, WindowHost};
+use stache_macos::{ApplicationControl, FakeApplicationBackend, ManualExecutor};
 use stache_sdk::ipc::IpcClient;
 use stache_sdk::{
     AppEnvironment, AppPaths, ConfigCatalog, ConfigError, ConfigPaths, DiscardLogger, EventBus,
@@ -371,6 +373,16 @@ impl Harness {
     }
 
     fn start(&mut self, fixture: &Fixture, permission: bool, gate: Option<Arc<Gate>>) {
+        self.start_with(fixture, permission, gate, None);
+    }
+
+    fn start_with(
+        &mut self,
+        fixture: &Fixture,
+        permission: bool,
+        gate: Option<Arc<Gate>>,
+        no_tunes: Option<ApplicationControl>,
+    ) {
         let driver = self.driver.take().expect("driver");
         let permissions: Arc<dyn PermissionProvider> = self.permissions.clone();
         let commands: Arc<dyn CommandRunner> = self.commands.clone();
@@ -388,15 +400,19 @@ impl Harness {
                 backoff_max: Duration::from_millis(5),
             },
         };
+        let mut factories = ModuleFactories::new().with(TestFactory {
+            counters: Arc::clone(&self.counters),
+            permission,
+            gate,
+        });
+        if let Some(control) = no_tunes {
+            factories = factories.with(NoTunesFactory::new(control));
+        }
         let settings = HostSettings {
             app: fixture.app.clone(),
             config: fixture.paths.clone(),
             catalog: fixture.catalog.clone(),
-            factories: ModuleFactories::new().with(TestFactory {
-                counters: Arc::clone(&self.counters),
-                permission,
-                gate,
-            }),
+            factories,
         };
         driver.start(settings, services, self.world.clone()).expect("start host");
     }
@@ -413,6 +429,20 @@ fn wait_for(handle: &HostHandle, label: &str, predicate: impl Fn(&HostStatus) ->
             return;
         }
         assert!(Instant::now() < deadline, "timed out waiting for {label}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn wait_for_publish(world: &FakeWorld, count: usize) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if world.statuses.lock().expect("statuses").len() >= count {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {count} published statuses"
+        );
         std::thread::sleep(Duration::from_millis(5));
     }
 }
@@ -952,4 +982,304 @@ fn queued_main_thread_work_is_drained_after_shutdown_without_waiting_on_it() {
     assert!(host.closed.lock().expect("closed").is_empty());
     assert_eq!(queued.drain(), 1);
     assert_eq!(host.closed.lock().expect("closed").len(), 1);
+}
+
+/// A host harness whose production-composed blocker runs over fake native
+/// services: no workspace observation, termination or launch ever reaches
+/// `AppKit`.
+struct NotunesHarness {
+    harness: Harness,
+    backend: Arc<FakeApplicationBackend>,
+    windows: Arc<RecordingWindows>,
+    executor: Arc<ManualExecutor>,
+}
+
+impl NotunesHarness {
+    fn new(permissions: Arc<FakePermissions>) -> Self {
+        let backend = Arc::new(FakeApplicationBackend::new());
+        let windows = Arc::new(RecordingWindows::default());
+        let executor = Arc::new(ManualExecutor::new(true));
+        let harness = Harness::new(
+            permissions,
+            executor.clone(),
+            Arc::new(FakeCommands::default()),
+            windows.clone(),
+        );
+        Self {
+            harness,
+            backend,
+            windows,
+            executor,
+        }
+    }
+
+    fn start(&mut self, fixture: &Fixture) {
+        let control = ApplicationControl::new(self.executor.clone(), self.backend.clone());
+        self.harness.start_with(fixture, false, None, Some(control));
+    }
+
+    fn state(&self) -> Option<ModuleState> {
+        self.harness
+            .handle
+            .status()
+            .modules
+            .into_iter()
+            .find(|module| module.id == "notunes")
+            .map(|module| module.state)
+    }
+}
+
+fn tray_row<'a>(rows: &'a [TrayRow], id: &str) -> &'a TrayItem {
+    rows.iter()
+        .find_map(|row| match row {
+            TrayRow::Item(item) if item.id == id => Some(item),
+            TrayRow::Item(_) | TrayRow::Separator => None,
+        })
+        .unwrap_or_else(|| panic!("no tray row `{id}`"))
+}
+
+#[test]
+fn notunes_start_publishes_generic_status_and_tray_rows_without_opening_anything() {
+    let fixture = fixture();
+    fixture.write("notunes.jsonc", "{ \"enabled\": true }\n");
+    let mut notunes = NotunesHarness::new(FakePermissions::new(PermissionStatus::Granted));
+    let music = notunes.backend.add_running("com.apple.Music");
+    notunes.start(&fixture);
+    notunes.harness.wait_ready();
+    wait_for(&notunes.harness.handle, "notunes running", |status| {
+        status
+            .modules
+            .iter()
+            .any(|module| module.id == "notunes" && module.state == ModuleState::Running)
+    });
+
+    let status = notunes.harness.handle.status();
+    let notunes_view = status
+        .modules
+        .iter()
+        .find(|module| module.id == "notunes")
+        .expect("generic status lists the blocker");
+    assert!(notunes_view.enabled);
+    assert!(notunes_view.diagnostic.is_none());
+    assert!(
+        status.modules.iter().any(|module| module.id == "testModule"),
+        "the blocker shares the generic status snapshot with every module"
+    );
+    assert!(status.error.is_none(), "{:?}", status.error);
+
+    let rows = stache_app::tray::rows(&status);
+    assert_eq!(tray_row(&rows, "enable:notunes").checked, Some(true));
+    assert_eq!(tray_row(&rows, "state:notunes").label, "  notunes: running");
+    assert_eq!(tray_row(&rows, "pause:notunes").label, "Pause notunes");
+    let first = rows
+        .iter()
+        .position(|row| matches!(row, TrayRow::Item(item) if item.id == "state:testModule"))
+        .expect("test module rows");
+    let blocker = rows
+        .iter()
+        .position(|row| matches!(row, TrayRow::Item(item) if item.id == "state:notunes"))
+        .expect("blocker rows");
+    assert!(first < blocker, "tray rows keep registration order");
+
+    assert_eq!(
+        notunes.backend.termination_requests(),
+        vec![music],
+        "the initial sweep force-terminates the already-running player"
+    );
+    assert_eq!(
+        notunes.backend.list_requests(),
+        vec!["com.apple.Music".to_owned(), "com.apple.iTunes".to_owned()],
+        "the sweep classifies both exact bundle identifiers"
+    );
+    assert!(
+        notunes.backend.open_requests().is_empty(),
+        "the initial sweep never launches a replacement"
+    );
+    assert_eq!(
+        notunes.windows.opened.load(Ordering::SeqCst),
+        0,
+        "enabling the blocker creates no window or webview"
+    );
+
+    notunes.harness.handle.request_shutdown();
+    assert!(notunes.harness.wait_exit());
+}
+
+#[test]
+fn an_invalid_notunes_file_is_diagnosed_and_recovers_after_a_valid_rewrite() {
+    let fixture = fixture();
+    fixture.write("notunes.jsonc", "{ \"targetApp\": \"winamp\" }\n");
+    let mut notunes = NotunesHarness::new(FakePermissions::new(PermissionStatus::Granted));
+    notunes.start(&fixture);
+    notunes.harness.wait_ready();
+
+    let status = notunes.harness.handle.status();
+    let view = status
+        .config
+        .iter()
+        .find(|file| file.file == "notunes.jsonc")
+        .expect("generic config diagnostics list the file");
+    assert_eq!(
+        view.state,
+        stache_app::bindings::ConfigFileState::Invalid,
+        "{view:?}"
+    );
+    assert!(
+        view.diagnostic
+            .as_deref()
+            .is_some_and(|diagnostic| diagnostic.contains("targetApp")),
+        "{view:?}"
+    );
+    let module = status
+        .modules
+        .iter()
+        .find(|module| module.id == "notunes")
+        .expect("blocker snapshot");
+    assert_eq!(
+        module.state,
+        ModuleState::Stopped,
+        "a rejected file registers without starting the module"
+    );
+    assert!(
+        module.diagnostic.is_some(),
+        "the rejection stays on the module snapshot"
+    );
+    assert!(status.error.is_none(), "{:?}", status.error);
+    assert_eq!(
+        notunes.backend.observations(),
+        0,
+        "a rejected configuration installs no observer"
+    );
+
+    fixture.write(
+        "notunes.jsonc",
+        "{ \"enabled\": true, \"targetApp\": \"com.example.player\" }\n",
+    );
+    wait_for(&notunes.harness.handle, "recovered blocker", |status| {
+        status
+            .modules
+            .iter()
+            .any(|module| module.id == "notunes" && module.state == ModuleState::Running)
+    });
+    let status = notunes.harness.handle.status();
+    let view = status
+        .config
+        .iter()
+        .find(|file| file.file == "notunes.jsonc")
+        .expect("config entry");
+    assert_eq!(view.state, stache_app::bindings::ConfigFileState::Valid);
+    let module = status
+        .modules
+        .iter()
+        .find(|module| module.id == "notunes")
+        .expect("blocker snapshot");
+    assert!(
+        module.diagnostic.is_none(),
+        "an accepted reload clears the rejection"
+    );
+    assert!(status.error.is_none(), "{:?}", status.error);
+    assert_eq!(notunes.backend.observations(), 1);
+
+    notunes.harness.handle.request_shutdown();
+    assert!(notunes.harness.wait_exit());
+}
+
+#[test]
+fn notunes_follows_enable_pause_resume_disable_and_releases_observation() {
+    let fixture = fixture();
+    fixture.write("notunes.jsonc", "{ \"enabled\": false }\n");
+    let mut notunes = NotunesHarness::new(FakePermissions::new(PermissionStatus::Granted));
+    notunes.start(&fixture);
+    notunes.harness.wait_ready();
+    assert_eq!(notunes.state(), Some(ModuleState::Disabled));
+    assert_eq!(
+        notunes.backend.observations(),
+        0,
+        "a disabled blocker holds no observation"
+    );
+
+    notunes.harness.handle.set_enabled("notunes", true);
+    wait_for(&notunes.harness.handle, "enabled blocker", |status| {
+        status
+            .modules
+            .iter()
+            .any(|module| module.id == "notunes" && module.state == ModuleState::Running)
+    });
+    assert_eq!(notunes.backend.observations(), 1);
+
+    notunes.harness.handle.pause("notunes");
+    wait_for(&notunes.harness.handle, "paused blocker", |status| {
+        status
+            .modules
+            .iter()
+            .any(|module| module.id == "notunes" && module.state == ModuleState::Paused)
+    });
+    assert_eq!(notunes.backend.observations(), 0, "pause removes the observer");
+
+    notunes.harness.handle.resume("notunes");
+    wait_for(&notunes.harness.handle, "resumed blocker", |status| {
+        status
+            .modules
+            .iter()
+            .any(|module| module.id == "notunes" && module.state == ModuleState::Running)
+    });
+    assert_eq!(notunes.backend.observations(), 1);
+
+    notunes.harness.handle.set_enabled("notunes", false);
+    wait_for(&notunes.harness.handle, "disabled blocker", |status| {
+        status
+            .modules
+            .iter()
+            .any(|module| module.id == "notunes" && module.state == ModuleState::Disabled)
+    });
+    assert_eq!(notunes.backend.observations(), 0, "disable removes the observer");
+
+    notunes.harness.handle.request_shutdown();
+    assert!(notunes.harness.wait_exit());
+    assert_eq!(
+        notunes.backend.observations(),
+        0,
+        "shutdown leaves no live observer"
+    );
+}
+
+#[test]
+fn a_denied_permission_neither_blocks_notunes_nor_prompts() {
+    let fixture = fixture();
+    fixture.write("notunes.jsonc", "{ \"enabled\": true }\n");
+    let permissions = FakePermissions::new(PermissionStatus::Denied);
+    let mut notunes = NotunesHarness::new(permissions.clone());
+    notunes.start(&fixture);
+    notunes.harness.wait_ready();
+    wait_for(&notunes.harness.handle, "notunes running", |status| {
+        status
+            .modules
+            .iter()
+            .any(|module| module.id == "notunes" && module.state == ModuleState::Running)
+    });
+
+    notunes.harness.handle.refresh_permissions();
+    notunes.harness.handle.request_permission();
+    // Both commands publish even when nothing changed, so the recorded status
+    // count is the deterministic "they were processed" signal; a trivially true
+    // predicate on the running module would not prove the refresh ran.
+    let published = notunes.harness.world.statuses.lock().expect("statuses").len();
+    wait_for_publish(&notunes.harness.world, published + 2);
+    assert_eq!(
+        permissions.requests.load(Ordering::SeqCst),
+        0,
+        "the blocker declares no permission, so nothing may prompt"
+    );
+    let status = notunes.harness.handle.status();
+    assert!(
+        !status
+            .modules
+            .iter()
+            .any(|module| module.state == ModuleState::WaitingForPermission),
+        "no module waits for a permission nobody declared"
+    );
+    assert!(status.error.is_none(), "{:?}", status.error);
+
+    notunes.harness.handle.request_shutdown();
+    assert!(notunes.harness.wait_exit());
 }

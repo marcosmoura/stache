@@ -9,6 +9,7 @@
     "_legacy/**",
     "bun.lock",
     "node_modules/**",
+    "schemas/**",
     "src/crates/app/gen/**",
     "target/**"
   ],

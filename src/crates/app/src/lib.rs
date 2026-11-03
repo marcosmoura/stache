@@ -204,6 +204,9 @@ fn run_with(
                 main_thread: Arc::clone(&main_thread),
                 signals: Arc::clone(&signals),
             });
+            // The production factories take the last executor clone: modules
+            // dispatch native work through it and never retain a second one.
+            let factories = ModuleFactories::production(Arc::clone(&main_thread));
             let services = HostServices {
                 logger: Arc::clone(&logger),
                 log_filter: filter,
@@ -218,7 +221,7 @@ fn run_with(
                 app: app_paths,
                 config: config_paths,
                 catalog,
-                factories: ModuleFactories::production(),
+                factories,
             };
             if let Err(error) = start_host(driver, settings, services, ui) {
                 setup_gate.record_exit(1);

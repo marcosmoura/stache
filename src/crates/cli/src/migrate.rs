@@ -1,9 +1,9 @@
 //! `config migrate`: convert the legacy single file into the new files.
 //!
 //! The legacy application is never imported. This module reads JSON values,
-//! converts the sections the new catalog owns through its authoritative types,
-//! and copies unported sections verbatim into same-ID files that the loader
-//! does not register.
+//! converts every section the catalog owns through its authoritative type, and
+//! copies the remaining unported sections verbatim into same-ID files that the
+//! loader does not register.
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -18,13 +18,12 @@ use stache_sdk::{ConfigCatalog, GlobalConfig, LoggingConfig, ModuleId, StartupCo
 
 use crate::{MigrateArgs, fail, write_atomic};
 
-const UNPORTED: [&str; 7] = [
+const UNPORTED: [&str; 6] = [
     "bar",
     "commandQuit",
     "wallpapers",
     "keybindings",
     "menuAnywhere",
-    "notunes",
     "tiling",
 ];
 
@@ -175,6 +174,30 @@ fn plan(
     let mut files = BTreeMap::new();
     let mut reports = Vec::new();
     for (key, value) in root {
+        if let Some(id) = registered_module(catalog, key) {
+            // A legacy section may use spellings the running configuration no
+            // longer accepts; the registered type translates them before the
+            // section is validated or written.
+            let mut value = value.clone();
+            for note in catalog.rewrite_legacy(id, &mut value) {
+                reports.push(format!("warning: {note}"));
+            }
+            let warnings =
+                catalog.inspect(id, source, &value.to_string()).map_err(|diagnostic| {
+                    MigrateError::Field {
+                        field: id.as_str(),
+                        message: diagnostic.to_string(),
+                    }
+                })?;
+            for warning in warnings {
+                reports.push(format!(
+                    "warning: unknown {key} key `{warning}` is preserved in {key}.jsonc and ignored by the typed configuration"
+                ));
+            }
+            files.insert(format!("{key}.jsonc"), prettify(&value)?);
+            reports.push(format!("validated {key} -> {key}.jsonc"));
+            continue;
+        }
         match key.as_str() {
             "execOnStartup" => {
                 global_present = true;
@@ -190,22 +213,6 @@ fn plan(
                 let logging = convert_logging(value, &mut reports)?;
                 global.logging = logging;
                 reports.push("converted logging -> global.jsonc".to_owned());
-            }
-            "proxyAudio" => {
-                let id = ModuleId::new("proxyAudio");
-                if !catalog.contains(id) {
-                    return Err(MigrateError::Catalog(
-                        "proxyAudio is not registered in the configuration catalog".to_owned(),
-                    ));
-                }
-                catalog.inspect(id, source, &value.to_string()).map_err(|diagnostic| {
-                    MigrateError::Field {
-                        field: "proxyAudio",
-                        message: diagnostic.to_string(),
-                    }
-                })?;
-                files.insert("proxyAudio.jsonc".to_owned(), prettify(value)?);
-                reports.push("validated proxyAudio -> proxyAudio.jsonc".to_owned());
             }
             "widgets" => reports.push("warning: dropped widgets (not ported)".to_owned()),
             known if UNPORTED.contains(&known) => {
@@ -229,15 +236,27 @@ fn plan(
         })?
     };
     files.insert("global.jsonc".to_owned(), global_contents);
-    if !files.contains_key("proxyAudio.jsonc") {
-        let template = catalog.template(ModuleId::new("proxyAudio")).ok_or_else(|| {
-            MigrateError::Catalog(
-                "proxyAudio is not registered in the configuration catalog".to_owned(),
-            )
+    for id in catalog.ids() {
+        if id == GlobalConfig::ID {
+            continue;
+        }
+        let name = catalog.file_name(id).ok_or_else(|| {
+            MigrateError::Catalog(format!("{id} is not registered in the configuration catalog"))
         })?;
-        files.insert("proxyAudio.jsonc".to_owned(), template);
+        if files.contains_key(&name) {
+            continue;
+        }
+        let template = catalog.template(id).ok_or_else(|| {
+            MigrateError::Catalog(format!("{id} is not registered in the configuration catalog"))
+        })?;
+        files.insert(name, template);
     }
     Ok(MigrationPlan { files, reports })
+}
+
+/// The registered module whose exact identifier matches a legacy section.
+fn registered_module(catalog: &ConfigCatalog, key: &str) -> Option<ModuleId> {
+    catalog.ids().find(|id| *id != GlobalConfig::ID && id.as_str() == key)
 }
 
 fn convert_logging(
@@ -382,6 +401,96 @@ mod tests {
         fn validate(&self) -> Result<(), ConfigError> { Ok(()) }
     }
 
+    /// A pilot whose replacement target still accepts a legacy spelling.
+    #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize, JsonSchema)]
+    #[serde(default, rename_all = "camelCase")]
+    struct LegacyTarget {
+        enabled: bool,
+        target_app: Option<String>,
+    }
+
+    impl ModuleConfig for LegacyTarget {
+        fn enabled(&self) -> bool { self.enabled }
+
+        fn validate(&self) -> Result<(), ConfigError> { Ok(()) }
+
+        fn migrate_legacy_section(section: &mut Value) -> Vec<String> {
+            let Some(object) = section.as_object_mut() else {
+                return Vec::new();
+            };
+            let Some(spelling) = object.get("targetApp").and_then(Value::as_str).map(str::to_owned)
+            else {
+                let relied_on_default = !object.contains_key("targetApp")
+                    && object.get("enabled").and_then(Value::as_bool) == Some(true);
+                return if relied_on_default {
+                    vec!["notunes blocks without a replacement".to_owned()]
+                } else {
+                    Vec::new()
+                };
+            };
+            match spelling.as_str() {
+                "spotify" => {
+                    object.insert(
+                        "targetApp".to_owned(),
+                        Value::String("com.spotify.client".to_owned()),
+                    );
+                }
+                "none" => {
+                    object.remove("targetApp");
+                }
+                _ => {}
+            }
+            Vec::new()
+        }
+    }
+
+    #[test]
+    fn a_legacy_spelling_is_translated_before_validation_and_writing() {
+        let mut catalog = ConfigCatalog::new();
+        catalog.register::<GlobalConfig>(GlobalConfig::ID).expect("global");
+        catalog.register::<LegacyTarget>(ModuleId::new("notunes")).expect("notunes");
+
+        let spotify_plan = plan(
+            &parse(r#"{ "notunes": { "enabled": true, "targetApp": "spotify" } }"#),
+            Path::new("config.jsonc"),
+            &catalog,
+        )
+        .expect("plan");
+        assert!(
+            spotify_plan.reports.contains(&"validated notunes -> notunes.jsonc".to_owned()),
+            "{:?}",
+            spotify_plan.reports
+        );
+        assert!(spotify_plan.files["notunes.jsonc"].contains("\"com.spotify.client\""));
+        assert!(!spotify_plan.files["notunes.jsonc"].contains("\"spotify\""));
+
+        let block_only = plan(
+            &parse(r#"{ "notunes": { "enabled": true, "targetApp": "none" } }"#),
+            Path::new("config.jsonc"),
+            &catalog,
+        )
+        .expect("plan");
+        assert!(
+            !block_only.files["notunes.jsonc"].contains("targetApp"),
+            "an explicit block-only value becomes an absent key: {}",
+            block_only.files["notunes.jsonc"]
+        );
+
+        let implicit = plan(
+            &parse(r#"{ "notunes": { "enabled": true } }"#),
+            Path::new("config.jsonc"),
+            &catalog,
+        )
+        .expect("plan");
+        assert!(
+            implicit
+                .reports
+                .contains(&"warning: notunes blocks without a replacement".to_owned()),
+            "a legacy section that relied on the removed default is reported: {:?}",
+            implicit.reports
+        );
+    }
+
     pub(super) fn catalog() -> ConfigCatalog {
         let mut catalog = ConfigCatalog::new();
         catalog.register::<GlobalConfig>(GlobalConfig::ID).expect("global");
@@ -463,6 +572,63 @@ mod tests {
         )
         .expect_err("invalid pilot");
         assert!(error.to_string().contains("cannot convert proxyAudio"));
+    }
+
+    #[test]
+    fn registered_modules_are_validated_generically() {
+        let mut catalog = catalog();
+        catalog.register::<Pilot>(ModuleId::new("notunes")).expect("notunes");
+        let plan = plan(
+            &parse(r#"{ "notunes": { "enabled": true } }"#),
+            Path::new("config.jsonc"),
+            &catalog,
+        )
+        .expect("plan");
+        assert!(plan.reports.contains(&"validated notunes -> notunes.jsonc".to_owned()));
+        assert!(!plan.reports.iter().any(|report| report == "copied notunes -> notunes.jsonc"));
+        assert!(plan.files.contains_key("notunes.jsonc"));
+    }
+
+    #[test]
+    fn registered_module_unknown_keys_warn_before_validation() {
+        let mut catalog = catalog();
+        catalog.register::<Pilot>(ModuleId::new("notunes")).expect("notunes");
+        let plan = plan(
+            &parse(r#"{ "notunes": { "enabled": true, "legacy": 1 } }"#),
+            Path::new("config.jsonc"),
+            &catalog,
+        )
+        .expect("plan");
+        assert_eq!(plan.reports, vec![
+            "warning: unknown notunes key `legacy` is preserved in notunes.jsonc and ignored by the typed configuration",
+            "validated notunes -> notunes.jsonc",
+        ]);
+        assert!(plan.files["notunes.jsonc"].contains("\"legacy\": 1"));
+    }
+
+    #[test]
+    fn an_invalid_registered_module_is_rejected_generically() {
+        let mut catalog = catalog();
+        catalog.register::<Pilot>(ModuleId::new("notunes")).expect("notunes");
+        let error = plan(
+            &parse(r#"{ "notunes": { "enabled": "yes" } }"#),
+            Path::new("config.jsonc"),
+            &catalog,
+        )
+        .expect_err("invalid module");
+        assert!(error.to_string().contains("cannot convert notunes"), "{error}");
+    }
+
+    #[test]
+    fn absent_registered_modules_receive_their_templates() {
+        let mut catalog = catalog();
+        catalog.register::<Pilot>(ModuleId::new("notunes")).expect("notunes");
+        let plan = plan(&parse("{}"), Path::new("config.jsonc"), &catalog).expect("plan");
+        assert_eq!(
+            plan.files["notunes.jsonc"],
+            catalog.template(ModuleId::new("notunes")).expect("notunes template")
+        );
+        assert_eq!(plan.files.len(), 3);
     }
 }
 

@@ -289,9 +289,9 @@ with a native watcher, a CLI command and a socket method:
   read-only `list` method.
 - `src/crates/app/src/host.rs` has one `ModuleFactory` that registers the module
   and returns its `ipc_handlers()`, both over one shared backend;
-  `ModuleFactories::production()` is the composition root used by `run_with`.
-  `src/crates/app/src/bindings.rs` exports the listing DTOs, not a Tauri
-  command, because the pilot has no UI.
+  `ModuleFactories::production(main_thread)` is the composition root used by
+  `run_with`. `src/crates/app/src/bindings.rs` exports the listing DTOs, not a
+  Tauri command, because the pilot has no UI.
 
 Read [features/proxy-audio.md](../features/proxy-audio.md) for the selection
 rules and invariants. The same split applies to a new module: policy and tests in

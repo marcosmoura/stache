@@ -21,7 +21,9 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use serde::de::DeserializeOwned;
+use stache_macos::ApplicationControl;
 use stache_macos::audio::{AudioBackend, CoreAudioBackend};
+use stache_notunes::{NoTunesConfig, NoTunesModule};
 use stache_proxy_audio::{AudioIpc, ProxyAudioConfig, ProxyAudioModule};
 use stache_sdk::ipc::{
     ConfigCore, CoreHandler, CoreReload, CoreStatus, HandlerResult, IpcHandler, IpcServer, Router,
@@ -222,6 +224,29 @@ impl ModuleFactory for ProxyAudioFactory {
     }
 }
 
+/// Registers the noTunes blocker over one safe application control.
+pub struct NoTunesFactory {
+    control: ApplicationControl,
+}
+
+impl NoTunesFactory {
+    /// Creates a factory over one application control.
+    #[must_use]
+    pub const fn new(control: ApplicationControl) -> Self { Self { control } }
+}
+
+impl ModuleFactory for NoTunesFactory {
+    fn id(&self) -> ModuleId { NoTunesConfig::ID }
+
+    fn register(
+        &self,
+        registry: &Registry,
+        store: &ConfigStore,
+    ) -> Result<Arc<dyn ModuleControl>, HostError> {
+        register_module(registry, store, NoTunesModule::new(self.control.clone()))
+    }
+}
+
 /// The factories the composition root registers.
 #[derive(Default)]
 pub struct ModuleFactories {
@@ -233,14 +258,18 @@ impl ModuleFactories {
     #[must_use]
     pub const fn new() -> Self { Self { entries: Vec::new() } }
 
-    /// Creates the production list: the proxyAudio pilot over `CoreAudio`.
+    /// Creates the production list: the proxyAudio pilot and the noTunes blocker.
     ///
-    /// Registration only creates the module and its read-only handler; it does
-    /// not start a listener. Starting depends on the accepted configuration.
+    /// Registration only creates the modules and the pilot's read-only handler;
+    /// it starts no listener and installs no application observer. Starting
+    /// depends on the accepted configuration. Both factories share the host's
+    /// main-thread executor; neither module keeps a second clone of it.
     #[must_use]
-    pub fn production() -> Self {
+    pub fn production(main_thread: Arc<dyn MainThreadExecutor>) -> Self {
         let backend: Arc<dyn AudioBackend> = Arc::new(CoreAudioBackend);
-        Self::new().with(ProxyAudioFactory::new(backend))
+        Self::new()
+            .with(ProxyAudioFactory::new(backend))
+            .with(NoTunesFactory::new(ApplicationControl::system(main_thread)))
     }
 
     /// Adds one factory.
@@ -1156,7 +1185,7 @@ mod tests {
     }
 
     #[test]
-    fn production_factories_register_the_audio_pilot_and_its_list_handler() {
+    fn production_factories_register_the_audio_pilot_and_the_notunes_blocker() {
         let root = tempfile::tempdir().expect("root");
         let registry = Arc::new(Registry::new(
             Arc::new(DiscardLogger),
@@ -1171,27 +1200,41 @@ mod tests {
             ConfigPaths::new(root.path().join("config")),
             Arc::new(LogFilter::default()),
         );
-        let factories = ModuleFactories::production();
-        assert_eq!(factories.entries().len(), 1);
-        let factory = &factories.entries()[0];
-        assert_eq!(factory.id(), stache_proxy_audio::ProxyAudioConfig::ID);
-
-        let control = factory.register(&registry, &store).expect("register the pilot");
-        assert_eq!(control.id(), stache_proxy_audio::ProxyAudioConfig::ID);
-        let snapshot = registry
-            .snapshots()
-            .into_iter()
-            .find(|snapshot| snapshot.id == control.id())
-            .expect("pilot snapshot");
+        let factories = ModuleFactories::production(Arc::new(NoMainThread));
+        let ids: Vec<ModuleId> = factories.entries().iter().map(|factory| factory.id()).collect();
         assert_eq!(
-            snapshot.status,
-            ModuleStatus::Disabled,
-            "registration must not start a listener"
+            ids,
+            [
+                stache_proxy_audio::ProxyAudioConfig::ID,
+                stache_notunes::NoTunesConfig::ID,
+            ],
+            "production registers the audio pilot first and the blocker second"
         );
 
-        let handlers = factory.ipc_handlers();
+        for factory in factories.entries() {
+            let id = factory.id();
+            let control = factory.register(&registry, &store).expect("register");
+            assert_eq!(control.id(), id);
+            let snapshot = registry
+                .snapshots()
+                .into_iter()
+                .find(|snapshot| snapshot.id == id)
+                .expect("snapshot");
+            assert_eq!(
+                snapshot.status,
+                ModuleStatus::Disabled,
+                "registration must not start `{id}`"
+            );
+        }
+
+        let audio = &factories.entries()[0];
+        let handlers = audio.ipc_handlers();
         assert_eq!(handlers.len(), 1);
         assert_eq!(handlers[0].0, "proxyAudio");
+        assert!(
+            factories.entries()[1].ipc_handlers().is_empty(),
+            "the blocker contributes no command or socket handler"
+        );
     }
 
     #[test]

@@ -41,6 +41,7 @@ specta = { version = "=2.0.0-rc.25", features = ["derive"] }
 specta-typescript = "0.0.12"
 stache-cli = { path = "../cli" }
 stache-macos = { path = "../macos" }
+stache-notunes = { path = "../modules/notunes" }
 stache-proxy-audio = { path = "../modules/proxy-audio" }
 stache-sdk = { path = "../sdk" }
 tauri = { version = "=2.12.4", default-features = false, features = ["specta", "tray-icon", "wry"] }
@@ -53,6 +54,7 @@ tauri-build = { version = "=2.7.3", features = [] }
 [dev-dependencies]
 schemars = "1.2.3"
 serde_json = "1.0.154"
+stache-macos = { path = "../macos", features = ["testing"] }
 
 [lints]
 workspace = true

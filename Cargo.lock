@@ -3210,6 +3210,7 @@ dependencies = [
  "specta-typescript",
  "stache-cli",
  "stache-macos",
+ "stache-notunes",
  "stache-proxy-audio",
  "stache-sdk",
  "tauri",
@@ -3243,6 +3244,18 @@ dependencies = [
  "objc2-core-audio",
  "objc2-core-audio-types",
  "objc2-foundation",
+ "stache-sdk",
+]
+
+[[package]]
+name = "stache-notunes"
+version = "0.25.0"
+dependencies = [
+ "schemars 1.2.3",
+ "serde",
+ "serde_json",
+ "specta",
+ "stache-macos",
  "stache-sdk",
 ]
 

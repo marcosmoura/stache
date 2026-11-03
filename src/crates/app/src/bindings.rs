@@ -10,6 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
+use stache_notunes::NoTunesConfig;
 use stache_proxy_audio::{AudioDeviceInfo, AudioListKind, AudioListParams, ProxyAudioConfig};
 use stache_sdk::{GlobalConfig, IDENTITY, ModuleSnapshot, ModuleStatus, UnavailableReason};
 use tauri_specta::{Builder, collect_commands, collect_events};
@@ -224,15 +225,16 @@ pub fn config_file_view(
 /// Builds the typed command and event collection mounted by the desktop host.
 ///
 /// The config types are exported explicitly; they are the authoritative catalog
-/// types used by `global.jsonc` and `proxyAudio.jsonc`. The pilot's read-only
-/// listing DTOs are exported without a Tauri command: the pilot has no UI and
-/// its socket method is not a webview surface.
+/// types used by `global.jsonc`, `proxyAudio.jsonc` and `notunes.jsonc`. The
+/// pilot's read-only listing DTOs are exported without a Tauri command: the pilot
+/// has no UI and its socket method is not a webview surface.
 #[must_use]
 pub fn builder() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new()
         .commands(collect_commands![app_info, host_status])
         .events(collect_events![StatusChanged])
         .typ::<GlobalConfig>()
+        .typ::<NoTunesConfig>()
         .typ::<ProxyAudioConfig>()
         .typ::<AudioDeviceInfo>()
         .typ::<AudioListKind>()

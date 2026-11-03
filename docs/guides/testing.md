@@ -33,7 +33,12 @@ listener and never starts the desktop. Tests use its fake backend for goldens
 and run the real binary only through that read-only path. Never enable
 `proxyAudio` for a test, a smoke run or a CLI check.
 
-`cargo doc -p stache-sdk -p stache-macos -p stache-proxy-audio -p stache-cli --no-deps`
+No automated check may force-terminate Apple Music/iTunes or open a replacement
+player. The noTunes opt-in check runs only with approval for that run, from an
+isolated temporary config/identity with any legacy noTunes disabled; see
+[notunes.md](../features/notunes.md).
+
+`cargo doc -p stache-sdk -p stache-macos -p stache-proxy-audio -p stache-notunes -p stache-cli --no-deps`
 builds their public docs; pass `RUSTDOCFLAGS='-D warnings'` in validation.
 Socket tests use temp directories and temp sockets only; no test reads or writes
 the real cache, runtime, configuration or legacy identity.
@@ -43,7 +48,9 @@ the real cache, runtime, configuration or legacy identity.
 - `lint:ui`: strict typecheck of frontend, prepare script and root configs, then oxlint/stylelint.
   `lint:native`: cargo-sort check and Clippy with warnings as errors. Neither fixes source.
 - `format:check`: pinned oxfmt and rustfmt checks, including active specs. `format` explicitly rewrites.
-  Root oxfmt disables nested configs so legacy config cannot override archive exclusions.
+  Root oxfmt disables nested configs so legacy config cannot override archive exclusions. Generated
+  artifacts (`schemas/**`, `src/crates/app/gen/**`, `src/ui/src/sdk/bindings.gen.ts`) are excluded:
+  their bytes belong to the generators, so `check:generated`, not the formatter, is their gate.
 - `test` runs `test:ui` and `test:native`. Bun runs commands; Vitest runs TS tests.
 - `test:ui`: real Playwright WebKit through Vitest. Suites live under `src/ui/src` next to components;
   `src/ui/tests` holds setup/support only. SDK wrapper and status-feed suites mock the generated Tauri
@@ -53,15 +60,18 @@ the real cache, runtime, configuration or legacy identity.
 - `test:native`: cargo-nextest across only the root workspace with
   `--features stache-app/dev-tools`; checks desktop identity/window policy, the SDK lifecycle, config
   and window suites, app host races/permissions/shutdown, the proxyAudio policy and fake-backend
-  lifecycle, the macOS audio listener-rollback tests and the macOS adapter unit tests. Native tests
+  lifecycle, the noTunes blocker sweep/launch/reconfigure/stop policy, the macOS audio
+  listener-rollback tests and the macOS adapter unit tests. Native tests
   never prompt for Accessibility and never change the system default audio device; the real
   main-thread/window smoke test is the opt-in `stache-smoke` harness described below.
   Generator binaries require `dev-tools` and are excluded from the release bundle.
-- `cargo nextest run -p stache-sdk -p stache-cli -p stache-proxy-audio -p stache-macos` runs the
-  config/audio foundation. The proxyAudio lifecycle suite uses a fake backend for every listener,
-  worker-spawn, set-default and stop-race failpoint; no test starts a real listener.
-  `cargo doc -p stache-sdk -p stache-macos -p stache-proxy-audio -p stache-cli --no-deps` builds
-  their public docs.
+- `cargo nextest run -p stache-sdk -p stache-cli -p stache-proxy-audio -p stache-notunes -p stache-macos`
+  runs the config/audio/blocker foundation. The proxyAudio lifecycle suite uses a fake backend for
+  every listener, worker-spawn, set-default and stop-race failpoint; no test starts a real listener.
+  The noTunes suite uses `FakeApplicationBackend` and `ManualExecutor` for every observation, sweep,
+  launch, open and stop failpoint; no test observes, terminates or launches a real application.
+  `cargo doc -p stache-sdk -p stache-macos -p stache-proxy-audio -p stache-notunes -p stache-cli --no-deps`
+  builds their public docs.
 - `generate-schema` writes the committed `schemas/*.schema.json` from the registered types.
   `generate-schema -- --check` writes nothing and fails on missing or stale files; config templates are
   generated from `Default` and schemars descriptions, never from a hand-written copy.
@@ -156,8 +166,8 @@ the deliberate failure probe below, not the normal run.
 `smoke` implies `custom-protocol`, so the harness loads the embedded production
 assets rather than a dev server. It proves zero webviews, `run_on_main` on the
 AppKit main thread, the activation observer delivering on main and removing itself
-on drop, the React `TestWindow` DOM reporting `Host ready` and both config
-files, generated `host_status`/`app_info` IPC inside WebKit, a pre-start
+on drop, the React `TestWindow` DOM reporting `Host ready` and every registered
+config file, generated `host_status`/`app_info` IPC inside WebKit, a pre-start
 `proxyAudio.jsonc` loaded as a valid disabled config, a real socket reload
 accepted from a changed valid config that stays disabled, the resulting
 `statusChanged` update advancing the exact revision in both the React DOM and the

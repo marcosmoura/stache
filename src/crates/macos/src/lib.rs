@@ -7,12 +7,23 @@
 
 pub mod accessibility;
 pub mod activation;
+pub mod applications;
 pub mod audio;
 pub mod display;
 pub mod main_thread;
 
 pub use accessibility::{AccessibilityPermission, is_trusted, request_trust};
 pub use activation::ActivationObserver;
+#[cfg(any(test, feature = "testing"))]
+pub use applications::testing::{
+    FakeAppKey, FakeApplicationBackend, FakeBarrier, FakeLaunch, ManualExecutor,
+};
+pub use applications::{
+    ACKNOWLEDGEMENT_BUDGET, AcceptedActionToken, ApplicationBackend, ApplicationControl,
+    ApplicationError, ApplicationId, ApplicationObservation, BackendHandle, CANCELLATION_QUANTUM,
+    IssuancePermit, NativeOpenCompletion, OpenCompletion, OpenCompletionContext, OpenRequest,
+    SystemApplicationBackend, TerminateOutcome,
+};
 pub use audio::{
     AudioBackend, AudioChangeSubscription, AudioDevice, AudioDeviceId, AudioDirection, AudioError,
     AudioWakeup, CoreAudioBackend,

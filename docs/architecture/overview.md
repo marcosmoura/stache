@@ -12,12 +12,16 @@ Read when changing the shipped foundation boundaries.
   watcher, comment-preserving edits, schemas), identity paths/instance lock and the socket
   protocol/router/client/server; no Tauri dependency. See [sdk.md](sdk.md), [config.md](config.md)
   and [ipc.md](ipc.md).
-- `src/crates/macos`: safe Accessibility trust, application-activation, main-thread, `CoreAudio`
-  and display adapters. It is the only crate containing project-authored unsafe code; public
-  functions are safe.
+- `src/crates/macos`: safe Accessibility trust, application-activation, main-thread, `CoreAudio`,
+  display and application-observation/control adapters. It is the only crate containing
+  project-authored unsafe code; public functions are safe.
 - `src/crates/modules/proxy-audio`: the proxyAudio pilot — authoritative configuration, priority
   policy, `CoreAudio` watcher, `audio list` command and read-only `proxyAudio.list` handler. See
   [proxy-audio.md](../features/proxy-audio.md).
+- `src/crates/modules/notunes`: the noTunes blocker — authoritative `notunes.jsonc`
+  configuration, an optional user-chosen replacement target (path or bundle
+  identifier) and the launch policy that terminates Apple Music/iTunes through the
+  safe application boundary. See [notunes.md](../features/notunes.md).
 - `src/crates/cli`: built-in `config`/`cache`/`reload`/`schema`/`completions` implementation and
   command composition; it imports the SDK, never the app or a module crate.
 - `src/ui/src/shell/components/Shell`: development/test-only React surface with colocated test,
@@ -38,11 +42,13 @@ After creating the tray the host writes one info record, `startup: tray ready af
 webviews=N`, which the release measurement reads; see
 [performance.md](../guides/performance.md).
 
-`ModuleFactories::production()` registers the proxyAudio pilot over one `CoreAudio` backend. Its
-factory also contributes the read-only `proxyAudio.list` handler to the same socket router, so the
-CLI and socket enumerate through the same listing service. Registration creates no listener; the
-module starts only from an accepted `enabled: true` configuration. See
-[proxy-audio.md](../features/proxy-audio.md).
+`ModuleFactories::production(main_thread)` registers the proxyAudio pilot over one `CoreAudio`
+backend and the noTunes blocker over one `stache_macos::ApplicationControl` built from the same
+host main-thread executor. The pilot's factory also contributes the read-only `proxyAudio.list`
+handler to the same socket router, so the CLI and socket enumerate through the same listing
+service; the blocker contributes no command or socket handler. Registration creates no listener
+and installs no observer; each module starts only from an accepted `enabled: true` configuration.
+See [proxy-audio.md](../features/proxy-audio.md) and [notunes.md](../features/notunes.md).
 
 Tray **Enable** is a config-backed edit: plan, validate, prepare and sync the replacement, recheck
 for an external change immediately before the atomic rename, then apply once. A missing target is
@@ -95,5 +101,5 @@ and SIGINT delivery; the opt-in harness covers SIGTERM and the WebKit surface. T
 runtime ships in [Foundation part 06](../specs/2026-11-02-foundation/06-proxy-audio.md); only its
 comparative measurements and manual hardware checks remain open.
 
-`stache-sdk`, `stache-cli`, `stache-proxy-audio` and `stache-app` forbid unsafe code;
-`stache-macos` documents every unsafe block.
+`stache-sdk`, `stache-cli`, `stache-proxy-audio`, `stache-notunes` and `stache-app` forbid unsafe
+code; `stache-macos` documents every unsafe block.
