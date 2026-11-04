@@ -21,6 +21,7 @@ use crate::ipc::protocol::{Request, Response, WireErrorKind};
 use crate::ipc::router::Router;
 use crate::lock;
 use crate::paths::{AppPathError, AppPaths};
+use crate::shutdown::{ShutdownWait, wait_for_finish};
 
 /// Maximum concurrent connections served at once.
 pub const MAX_CONNECTIONS: usize = 8;
@@ -168,11 +169,24 @@ impl From<AppPathError> for ServerError {
     fn from(error: AppPathError) -> Self { Self::Path(error) }
 }
 
+/// The acknowledgement of one bounded socket shutdown.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SocketShutdown {
+    /// The accept thread and every handler finished, and the owned inode is gone.
+    Acknowledged,
+    /// The bound expired with the accept thread or a handler still running.
+    Unacknowledged,
+    /// The owned socket inode could not be removed.
+    RemovalFailed(String),
+}
+
 /// A listening control server. Dropping it stops the accept loop and removes
 /// the owned endpoint.
 pub struct IpcServer {
     endpoint: Endpoint,
     gate: Arc<Gate>,
+    /// Retained so stage-1 teardown can stop dispatch without the accept loop.
+    router: Arc<Router>,
     worker: Option<JoinHandle<()>>,
     lock_file: Option<fs::File>,
 }
@@ -220,19 +234,21 @@ impl IpcServer {
         })?;
         let gate = Arc::new(Gate::new(config.max_connections));
         let worker_gate = Arc::clone(&gate);
+        let worker_router = Arc::clone(&router);
         let worker = match thread::Builder::new()
             .name("stache-ipc".to_owned())
-            .spawn(move || serve(listener, router, config, worker_gate))
+            .spawn(move || serve(listener, worker_router, config, worker_gate))
         {
             Ok(worker) => worker,
             Err(error) => {
-                endpoint.remove();
+                let _ = endpoint.remove();
                 return Err(ServerError::Thread { error });
             }
         };
         Ok(Self {
             endpoint,
             gate,
+            router,
             worker: Some(worker),
             lock_file: Some(lock_file),
         })
@@ -242,13 +258,53 @@ impl IpcServer {
     #[must_use]
     pub fn socket_path(&self) -> &Path { &self.endpoint.path }
 
-    /// Stops accepting, joins the accept thread and removes the owned endpoint.
-    pub fn shutdown(&mut self) {
-        if let Some(worker) = self.worker.take() {
-            self.gate.stop();
+    /// Stops accepting connections and dispatch without joining anything.
+    ///
+    /// Takes no lock and joins no thread: an already-accepted connection may
+    /// finish, and a request that was already read is answered with the
+    /// `unavailable` wire kind.
+    pub fn stop_accepting(&self) {
+        self.gate.stop();
+        self.router.stop();
+    }
+
+    /// Stops accepting, waits for the accept thread and every handler permit
+    /// within the teardown bound, then removes the owned endpoint.
+    ///
+    /// One bound covers both facts: the accept thread finished and no handler
+    /// still holds a gate permit. On expiry the thread is detached instead of
+    /// joined. Endpoint removal never depends on that bound, so a connection
+    /// holding its handler cannot delay it; a real removal failure is reported
+    /// instead of being dropped.
+    pub fn shutdown_bounded(mut self, wait: &dyn ShutdownWait) -> SocketShutdown {
+        self.stop_accepting();
+        let worker = self.worker.take();
+        let gate = Arc::clone(&self.gate);
+        let finished = wait_for_finish(wait, &|| {
+            worker.as_ref().is_none_or(JoinHandle::is_finished) && gate.is_idle()
+        });
+        if finished && let Some(worker) = worker {
             let _ = worker.join();
         }
-        self.endpoint.remove();
+        let removal = self.endpoint.remove();
+        self.lock_file.take();
+        match removal {
+            Err(error) => SocketShutdown::RemovalFailed(error),
+            Ok(()) if finished => SocketShutdown::Acknowledged,
+            Ok(()) => SocketShutdown::Unacknowledged,
+        }
+    }
+
+    /// Stops accepting, joins the accept thread and removes the owned endpoint.
+    ///
+    /// This is the unbounded legacy path; teardown uses
+    /// [`IpcServer::shutdown_bounded`]. Repeated calls are no-ops.
+    pub fn shutdown(&mut self) {
+        self.stop_accepting();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+        let _ = self.endpoint.remove();
         self.lock_file.take();
     }
 }
@@ -306,24 +362,30 @@ impl Endpoint {
     }
 
     /// Removes the path only if it is still the socket this process created.
-    fn remove(&self) {
+    ///
+    /// A missing path and a foreign inode are success: the owned endpoint is
+    /// gone either way. A real removal error is reported.
+    fn remove(&self) -> Result<(), String> {
         if !self.owned.swap(false, Ordering::SeqCst) {
-            return;
+            return Ok(());
         }
-        let Ok(metadata) = fs::symlink_metadata(&self.path) else {
-            return;
+        let metadata = match fs::symlink_metadata(&self.path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.to_string()),
         };
         if metadata.file_type().is_socket()
             && metadata.dev() == self.device
             && metadata.ino() == self.inode
         {
-            let _ = fs::remove_file(&self.path);
+            return fs::remove_file(&self.path).map_err(|error| error.to_string());
         }
+        Ok(())
     }
 }
 
 impl Drop for Endpoint {
-    fn drop(&mut self) { self.remove(); }
+    fn drop(&mut self) { let _ = self.remove(); }
 }
 
 fn lock_runtime(directory: &Path, owner: u32) -> Result<fs::File, ServerError> {
@@ -526,6 +588,7 @@ fn remove_stale_endpoint(path: &Path, owner: u32) -> Result<(), ServerError> {
 }
 
 struct Gate {
+    limit: usize,
     stopped: AtomicBool,
     available: Mutex<usize>,
     wake: Condvar,
@@ -536,6 +599,7 @@ struct Gate {
 impl Gate {
     const fn new(limit: usize) -> Self {
         Self {
+            limit,
             stopped: AtomicBool::new(false),
             available: Mutex::new(limit),
             wake: Condvar::new(),
@@ -543,6 +607,9 @@ impl Gate {
             retained_handles: std::sync::atomic::AtomicUsize::new(0),
         }
     }
+
+    /// Whether no connection currently holds a permit.
+    fn is_idle(&self) -> bool { *lock(&self.available) >= self.limit }
 
     fn acquire(&self) -> bool {
         let mut available = lock(&self.available);
@@ -646,9 +713,10 @@ fn serve(listener: UnixListener, router: Arc<Router>, config: ServerConfig, gate
             gate.retained_handles.fetch_max(workers.len(), Ordering::SeqCst);
         }
     }
-    for worker in workers.into_values() {
-        let _ = worker.join();
-    }
+    // Connection workers are detached, never joined: a handler that ignores
+    // cancellation must not hold shutdown. Each keeps its permit, so the gate
+    // still bounds how many can run while they finish.
+    drop(workers);
 }
 
 fn handle_connection(mut stream: UnixStream, router: &Router, config: &ServerConfig) {
@@ -1065,6 +1133,52 @@ mod tests {
         Arc::new(router)
     }
 
+    /// A handler that signals entry and then blocks until the test releases it.
+    struct Holds {
+        entered: std::sync::mpsc::SyncSender<()>,
+        release: Mutex<std::sync::mpsc::Receiver<()>>,
+    }
+
+    impl IpcHandler for Holds {
+        fn handle(&self, method: &str, _: serde_json::Value) -> HandlerResult<serde_json::Value> {
+            if method == "hold" {
+                self.entered.send(()).expect("entered");
+                lock(&self.release).recv_timeout(Duration::from_secs(5)).expect("release");
+            }
+            Ok(json!(method))
+        }
+    }
+
+    /// Waits until the accept loop has retained `expected` connection workers.
+    fn wait_for_workers(server: &IpcServer, expected: usize) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while server.gate.retained_handles.load(Ordering::SeqCst) < expected {
+            assert!(
+                Instant::now() < deadline,
+                "the server never accepted the connection"
+            );
+            thread::yield_now();
+        }
+    }
+
+    /// Waits until the endpoint no longer accepts new connections.
+    fn wait_for_refusal(socket: &Path) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match UnixStream::connect(socket) {
+                Err(_) => return,
+                Ok(stream) => {
+                    drop(stream);
+                    assert!(
+                        Instant::now() < deadline,
+                        "the endpoint still accepts connections"
+                    );
+                    thread::yield_now();
+                }
+            }
+        }
+    }
+
     fn root() -> tempfile::TempDir { tempfile::tempdir().expect("temp dir") }
 
     fn paths(root: &Path) -> AppPaths {
@@ -1390,5 +1504,218 @@ mod tests {
             requests.fetch_add(1, Ordering::SeqCst);
         }
         assert_eq!(requests.load(Ordering::SeqCst), 5);
+    }
+
+    #[test]
+    fn stopping_dispatch_refuses_late_work_and_finishes_an_accepted_connection() {
+        let root = root();
+        let paths = paths(root.path());
+        let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+        let mut builder = Router::new(Arc::new(NoCore));
+        builder
+            .register(
+                "holds",
+                Arc::new(Holds {
+                    entered: entered_tx,
+                    release: Mutex::new(release_rx),
+                }),
+            )
+            .expect("register");
+        let server = IpcServer::start_with(&paths, Arc::new(builder), ServerConfig {
+            max_connections: 4,
+            ..ServerConfig::default()
+        })
+        .expect("server");
+        let socket = server.socket_path().to_path_buf();
+
+        let accepted = {
+            let socket = socket.clone();
+            thread::spawn(move || {
+                exchange(&socket, r#"{"module":"holds","method":"hold","params":null}"#)
+            })
+        };
+        entered_rx.recv_timeout(Duration::from_secs(5)).expect("handler entered");
+
+        // Accepted before the latch, but its newline arrives afterwards, so it
+        // is read and routed while dispatch is already stopped.
+        let mut late = connect(&socket);
+        late.write_all(br#"{"module":"holds","method":"late","params":null}"#)
+            .expect("partial write");
+        wait_for_workers(&server, 2);
+
+        server.stop_accepting();
+
+        release_tx.send(()).expect("release the held handler");
+        let response = accepted.join().expect("accepted connection");
+        assert!(response.contains("\"status\":\"ok\""), "{response}");
+
+        writeln!(late).expect("finish the request");
+        let mut refusal = String::new();
+        BufReader::new(late).read_line(&mut refusal).expect("refusal");
+        assert!(refusal.contains("\"kind\":\"unavailable\""), "{refusal}");
+        assert!(refusal.contains("shutting down"), "{refusal}");
+
+        wait_for_refusal(&socket);
+    }
+
+    #[test]
+    fn bounded_shutdown_reports_the_accept_thread_and_removes_the_endpoint() {
+        let root = root();
+        let paths = paths(root.path());
+        let server = IpcServer::start(&paths, router()).expect("server");
+        let socket = server.socket_path().to_path_buf();
+        let wait = crate::shutdown::testing::FakeShutdownWait::with_budget(Duration::from_secs(2));
+        assert_eq!(server.shutdown_bounded(&wait), SocketShutdown::Acknowledged);
+        assert!(!socket.exists(), "the owned endpoint must be removed");
+    }
+
+    #[test]
+    fn a_hung_accept_thread_is_abandoned_and_the_endpoint_is_still_removed() {
+        let root = root();
+        let paths = paths(root.path());
+        let mut server = IpcServer::start(&paths, router()).expect("server");
+        let socket = server.socket_path().to_path_buf();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let real = server.worker.replace(thread::spawn(move || {
+            let _ = released.recv();
+        }));
+
+        let wait = crate::shutdown::testing::FakeShutdownWait::with_budget(Duration::from_secs(2));
+        wait.expire_now();
+        assert_eq!(
+            server.shutdown_bounded(&wait),
+            SocketShutdown::Unacknowledged,
+            "a hung accept thread is detached"
+        );
+        assert!(!socket.exists(), "the owned endpoint must still be removed");
+
+        drop(release);
+        real.expect("the real accept thread").join().expect("accept thread stops");
+    }
+
+    #[test]
+    fn a_failed_owned_inode_removal_is_reported() {
+        let root = root();
+        let paths = paths(root.path());
+        let server = IpcServer::start(&paths, router()).expect("server");
+        let socket = server.socket_path().to_path_buf();
+        let directory = paths.runtime_directory().to_path_buf();
+        // The socket is owned, but its directory refuses the unlink.
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o500))
+            .expect("restrict the runtime directory");
+        let wait = crate::shutdown::testing::FakeShutdownWait::with_budget(Duration::from_secs(2));
+        let result = server.shutdown_bounded(&wait);
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
+            .expect("restore the runtime directory");
+        assert!(matches!(result, SocketShutdown::RemovalFailed(_)), "{result:?}");
+        assert!(
+            socket.exists(),
+            "a failed removal leaves the inode for the next start"
+        );
+        fs::remove_file(&socket).expect("clean up the endpoint");
+    }
+
+    #[test]
+    fn a_foreign_inode_at_the_owned_path_is_a_successful_removal() {
+        let root = root();
+        let paths = paths(root.path());
+        let server = IpcServer::start(&paths, router()).expect("server");
+        let socket = server.socket_path().to_path_buf();
+        fs::remove_file(&socket).expect("unlink owned");
+        let foreign = UnixListener::bind(&socket).expect("foreign bind");
+        let wait = crate::shutdown::testing::FakeShutdownWait::with_budget(Duration::from_secs(2));
+        assert_eq!(server.shutdown_bounded(&wait), SocketShutdown::Acknowledged);
+        assert!(socket.exists(), "a foreign endpoint must not be removed");
+        drop(foreign);
+        let _ = fs::remove_file(&socket);
+    }
+
+    #[test]
+    fn a_hung_handler_makes_the_bounded_shutdown_unacknowledged() {
+        let root = root();
+        let paths = paths(root.path());
+        let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+        let mut builder = Router::new(Arc::new(NoCore));
+        builder
+            .register(
+                "holds",
+                Arc::new(Holds {
+                    entered: entered_tx,
+                    release: Mutex::new(release_rx),
+                }),
+            )
+            .expect("register");
+        let server = IpcServer::start_with(&paths, Arc::new(builder), ServerConfig::default())
+            .expect("server");
+        let socket = server.socket_path().to_path_buf();
+
+        let client = {
+            let socket = socket.clone();
+            thread::spawn(move || {
+                exchange(&socket, r#"{"module":"holds","method":"hold","params":null}"#)
+            })
+        };
+        entered_rx.recv_timeout(Duration::from_secs(5)).expect("handler entered");
+
+        let wait = crate::shutdown::testing::FakeShutdownWait::with_budget(Duration::from_secs(2));
+        wait.expire_now();
+        assert_eq!(
+            server.shutdown_bounded(&wait),
+            SocketShutdown::Unacknowledged,
+            "a held permit outlives the bound"
+        );
+        assert!(!socket.exists(), "the owned endpoint is still removed");
+
+        release_tx.send(()).expect("release the held handler");
+        let response = client.join().expect("client");
+        assert!(response.contains("\"status\":\"ok\""), "{response}");
+    }
+
+    #[test]
+    fn a_held_connection_does_not_delay_endpoint_removal() {
+        let root = root();
+        let paths = paths(root.path());
+        let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+        let mut builder = Router::new(Arc::new(NoCore));
+        builder
+            .register(
+                "holds",
+                Arc::new(Holds {
+                    entered: entered_tx,
+                    release: Mutex::new(release_rx),
+                }),
+            )
+            .expect("register");
+        let server = IpcServer::start_with(&paths, Arc::new(builder), ServerConfig::default())
+            .expect("server");
+        let socket = server.socket_path().to_path_buf();
+        let foreign = paths.runtime_directory().join("foreign");
+        fs::write(&foreign, "keep").expect("foreign inode");
+
+        let client = {
+            let socket = socket.clone();
+            thread::spawn(move || {
+                exchange(&socket, r#"{"module":"holds","method":"hold","params":null}"#)
+            })
+        };
+        entered_rx.recv_timeout(Duration::from_secs(5)).expect("handler entered");
+
+        let wait = crate::shutdown::testing::FakeShutdownWait::with_budget(Duration::from_secs(2));
+        wait.expire_now();
+        server.shutdown_bounded(&wait);
+
+        assert!(
+            !socket.exists(),
+            "the owned endpoint must be removed while a handler is held"
+        );
+        assert!(foreign.exists(), "a foreign inode must survive");
+        assert_eq!(fs::read_to_string(&foreign).expect("foreign contents"), "keep");
+
+        release_tx.send(()).expect("release the held handler");
+        let response = client.join().expect("client");
+        assert!(response.contains("\"status\":\"ok\""), "{response}");
     }
 }

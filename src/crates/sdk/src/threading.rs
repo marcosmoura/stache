@@ -12,6 +12,7 @@ use std::time::Duration;
 use std::{fmt, io};
 
 use crate::lock;
+use crate::shutdown::{ShutdownWait, wait_for_finish};
 
 /// A one-shot cancellation flag that can be cloned cheaply and waited on.
 ///
@@ -174,6 +175,33 @@ impl WorkerGroup {
         for handle in handles {
             let _ = handle.join();
         }
+    }
+
+    /// Cancels the token, then joins every worker within the teardown bound.
+    ///
+    /// Each worker is awaited with [`wait_for_finish`], bounded by
+    /// `min(now + OWNER_WAIT_BUDGET, deadline())`. Returns `true` when every
+    /// worker finished inside the bound. On `false` the unfinished handles are
+    /// dropped, so those workers are detached instead of joined: a detached
+    /// worker keeps what it owns and must be inert by its own cancellation
+    /// contract.
+    pub fn cancel_and_join_bounded(self, wait: &dyn ShutdownWait) -> bool {
+        let handles = {
+            let mut threads = lock(&self.inner.threads);
+            threads.stopped = true;
+            std::mem::take(&mut threads.handles)
+        };
+        self.inner.cancellation.cancel();
+        let mut all_finished = true;
+        for handle in handles {
+            if wait_for_finish(wait, &|| handle.is_finished()) {
+                let _ = handle.join();
+            } else {
+                // Dropping the handle detaches the worker; never join it.
+                all_finished = false;
+            }
+        }
+        all_finished
     }
 }
 
@@ -387,6 +415,47 @@ mod tests {
         assert!(!executor.is_main_thread());
         executor.drain();
         assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn bounded_cancel_joins_a_worker_that_exits() {
+        let group = WorkerGroup::new("test");
+        let (ready_tx, ready_rx) = mpsc::channel();
+        group
+            .spawn("quick", move |token| {
+                let _ = ready_tx.send(());
+                let _ = token.wait(Duration::from_secs(60));
+            })
+            .expect("spawn");
+        ready_rx.recv_timeout(Duration::from_secs(5)).expect("worker started");
+        let wait = crate::shutdown::testing::FakeShutdownWait::with_budget(Duration::from_secs(2));
+        assert!(group.cancel_and_join_bounded(&wait));
+        assert!(!wait.overslept());
+    }
+
+    #[test]
+    fn bounded_cancel_detaches_a_worker_that_ignores_cancellation() {
+        let group = WorkerGroup::new("test");
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel::<()>();
+        let exited = Arc::new(AtomicBool::new(false));
+        let exited_in_worker = Arc::clone(&exited);
+        group
+            .spawn("stubborn", move |_| {
+                let _ = ready_tx.send(());
+                let _ = release_rx.recv();
+                exited_in_worker.store(true, Ordering::SeqCst);
+            })
+            .expect("spawn");
+        ready_rx.recv_timeout(Duration::from_secs(5)).expect("worker started");
+        let wait = crate::shutdown::testing::FakeShutdownWait::with_budget(Duration::from_secs(2));
+        wait.expire_now();
+        assert!(!group.cancel_and_join_bounded(&wait));
+        assert!(
+            !exited.load(Ordering::SeqCst),
+            "a detached worker must not be joined"
+        );
+        release.send(()).expect("release worker");
     }
 
     #[test]

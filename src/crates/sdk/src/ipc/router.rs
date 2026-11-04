@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -207,12 +208,31 @@ impl std::error::Error for RouterError {}
 pub struct Router {
     core: Arc<dyn CoreHandler>,
     modules: BTreeMap<String, Arc<dyn IpcHandler>>,
+    stopped: AtomicBool,
 }
 
 impl Router {
     /// Creates a router with the host's core service.
     #[must_use]
-    pub const fn new(core: Arc<dyn CoreHandler>) -> Self { Self { core, modules: BTreeMap::new() } }
+    pub const fn new(core: Arc<dyn CoreHandler>) -> Self {
+        Self {
+            core,
+            modules: BTreeMap::new(),
+            stopped: AtomicBool::new(false),
+        }
+    }
+
+    /// Refuses further dispatch. Repeated calls are no-ops.
+    ///
+    /// Takes no lock and joins nothing, so teardown can stop dispatch before
+    /// any wait. A request that was already read when this runs is answered
+    /// with the `unavailable` wire kind; a handler already running finishes
+    /// normally.
+    pub fn stop(&self) { self.stopped.store(true, Ordering::SeqCst); }
+
+    /// Whether dispatch has been stopped.
+    #[must_use]
+    pub fn is_stopped(&self) -> bool { self.stopped.load(Ordering::SeqCst) }
 
     /// Registers one module handler.
     ///
@@ -241,6 +261,10 @@ impl Router {
     /// Routes one request. Unknown names and methods never panic.
     #[must_use]
     pub fn route(&self, request: Request) -> Response {
+        if self.stopped.load(Ordering::SeqCst) {
+            let refusal = HandlerError::unavailable("shutting down");
+            return Response::failure(refusal.kind.into(), refusal.message);
+        }
         if request.module == CORE_MODULE {
             return self.route_core(&request.method);
         }
@@ -470,6 +494,26 @@ mod tests {
             response,
             Response::Error { error } if error.kind == WireErrorKind::UnknownMethod
         ));
+    }
+
+    #[test]
+    fn a_request_already_read_is_refused_with_the_unavailable_kind_after_stop() {
+        let router = router();
+        // Read first, as the server does, then dispatch stops before routing.
+        let request: Request = serde_json::from_slice(
+            br#"{"module":"demo","method":"echo","params":{"text":"late"}}"#,
+        )
+        .expect("request read");
+        router.stop();
+        assert!(router.is_stopped());
+        let response = router.route(request);
+        assert!(
+            matches!(response, Response::Error { ref error } if error.kind == WireErrorKind::Unavailable),
+            "{response:?}"
+        );
+        let wire = serde_json::to_value(&response).expect("wire");
+        assert_eq!(wire["error"]["kind"], "unavailable", "{wire}");
+        assert_eq!(wire["error"]["message"], "shutting down", "{wire}");
     }
 
     #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]

@@ -57,15 +57,30 @@ listener, webview or `execOnStartup`. After the tray exists, the background host
 starts modules and then `IpcServer` with `ConfigCore` over the one
 `ConfigStore`. The server is owned by the host, not by a Tauri plugin.
 
-Shutdown is one idempotent coordinator shared by tray Quit, SIGINT/SIGTERM/SIGHUP
-and Tauri's exit event. It runs off the main thread: stop accepting IPC and
-configuration work, cancel the watcher, permission poller and owned startup job,
-reap that job's direct child, shut the registry down in reverse start order,
-release owned windows/tray and the socket, close and join the signal thread, then
-let Tauri exit on the main thread. A non-zero host exit code reaches the CLI as a
-failure instead of being reported as success. Repeated requests are no-ops. Module
-socket handlers are contributed by their factories and registered on the same
-`Router` before the server starts; there is no second server.
+Shutdown is one idempotent coordinator shared by tray Quit, SIGINT/SIGTERM/SIGHUP,
+Tauri's exit event and AppKit's terminate decision. Requests only record a deadline;
+the dedicated coordinator thread owns the single outcome and terminal action and runs
+the ordered stages itself off the main thread: invalidate IPC and configuration work,
+reap the watcher, permission poller and owned startup job while observing the host
+worker in the same stage budget, stop the registry in reverse start order one module at
+a time, then release the socket and the registered native owners. Each wait is capped at
+`min(2 s, remaining)`, so a hung owner is named unacknowledged and abandoned instead of
+joined. Socket acknowledgement requires both the accept thread and every handler gate
+permit to finish under one bound; acceptance stops without joining the accept thread and
+the owned endpoint is removed after that bound, so a connection holding its handler cannot
+delay it. A failed removal of the owned inode is reported as `failed socket` instead of
+being dropped, while an already-missing endpoint or a foreign inode at that path counts as
+success. A request read after invalidation gets the typed `unavailable` error while an
+in-flight handler finishes unharmed. The tray item, the activation observer and the tracked
+windows are released by their own acknowledged main-thread hops, separate from the final
+exit; a single stalled main hop names every remaining main-thread owner without another
+wait. `Clean` is reported only when every owner answered successfully. The total is five
+seconds from the first request; a later request shortens it to 250 ms from itself. A
+non-zero intended host code reaches the CLI as a failure instead of being reported as
+success, and exactly one outcome record is attempted. Repeated requests never start a
+second run. Module socket handlers are contributed by their factories and registered on
+the same `Router` before the server starts; there is no second server. Real Cmd-Q is verified
+on this route; logout, restart and shutdown use it too but have not been verified end to end.
 
 ## Wire protocol
 
@@ -133,7 +148,9 @@ The server owns the runtime directory and its socket:
   live and the endpoint is left alone. `ConnectionRefused`/`NotFound` means it
   is stale and may be removed; other probe errors are reported, not guessed;
 - shutdown removes only the socket inode the server created (device and inode
-  are captured after bind), so a foreign endpoint is preserved.
+  are captured after bind), so a foreign endpoint is preserved. A missing or
+  foreign inode is a successful removal; a real removal error on the owned inode
+  is reported as a failed `socket` acknowledgement instead of being dropped.
 
 The accept loop is non-blocking and shares a stop flag with a slot gate. At most
 8 connections are served at once; excess connections wait in the kernel backlog.
@@ -145,7 +162,10 @@ releasing capacity. Reaping joins only those IDs, never an arbitrary active
 handler; retained handles remain within the connection limit.
 A drop guard releases capacity even on panic; handler panics become wire errors.
 Stop updates its predicate under the same mutex used by waiting acquisitions.
-Shutdown joins the accept/connection threads; handlers must themselves terminate.
+Bounded shutdown joins the accept thread only when it and every handler permit
+finished inside the bound; otherwise it detaches them and still removes the owned
+endpoint. The unbounded drop path joins the accept thread; handlers must terminate
+themselves within their read and write timeouts.
 Zero connection/request bounds clamp to one; zero timeout is rejected before
 endpoint creation. Failed socket-mode or timeout setup closes that connection.
 These checks protect against foreign users and cooperating startup races, not

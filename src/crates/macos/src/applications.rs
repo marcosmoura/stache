@@ -984,6 +984,23 @@ impl ApplicationObservation {
     #[must_use]
     pub fn is_active(&self) -> bool { self.state.is_published(self.generation) }
 
+    /// Logically invalidates this generation for stage-1 teardown.
+    ///
+    /// This is the registry teardown path, not a cleanup path: it never takes
+    /// the commit gate, never calls the native backend and never waits, so it
+    /// returns while a stalled native send holds the gate and while a start or
+    /// stop holds a slot lock. The generation is inert immediately: callbacks
+    /// and queries observe an inactive generation, a later
+    /// [`ApplicationObservation::accept`] returns a stale token, and queued
+    /// native work refuses to issue.
+    ///
+    /// It is idempotent and safe from any thread, including after
+    /// [`ApplicationObservation::stop`]. Already-issued native work still
+    /// finishes inert; invalidation neither retries nor cancels it.
+    /// [`ApplicationObservation::stop`] remains the method that also performs
+    /// the acknowledged native removal.
+    pub fn invalidate(&self) { self.state.invalidate(self.generation); }
+
     /// Running instances whose bundle identifier matches exactly.
     ///
     /// # Errors

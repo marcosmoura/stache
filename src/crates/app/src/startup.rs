@@ -18,6 +18,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use stache_sdk::CancellationToken;
+use stache_sdk::shutdown::{ShutdownWait, wait_for_finish};
 
 /// Executes the configured startup commands.
 ///
@@ -57,6 +58,9 @@ impl StartupJob {
         Ok(Self { cancel, thread: Some(thread) })
     }
 
+    /// Cancels the job without joining it or waiting for its child.
+    pub fn cancel(&self) { self.cancel.cancel(); }
+
     /// Cancels the job, kills its directly owned child, and joins the thread.
     ///
     /// Call off the main thread.
@@ -64,6 +68,23 @@ impl StartupJob {
         self.cancel.cancel();
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
+        }
+    }
+
+    /// Cancels the job and waits for its thread within the teardown bound.
+    ///
+    /// Returns `true` when the thread finished inside the bound. On `false` the
+    /// handle is dropped, detaching the thread instead of joining it.
+    pub fn stop_bounded(mut self, wait: &dyn ShutdownWait) -> bool {
+        self.cancel.cancel();
+        let Some(thread) = self.thread.take() else {
+            return true;
+        };
+        if wait_for_finish(wait, &|| thread.is_finished()) {
+            let _ = thread.join();
+            true
+        } else {
+            false
         }
     }
 }
@@ -328,6 +349,40 @@ mod tests {
             started.elapsed() < Duration::from_secs(10),
             "the sleep was not interrupted"
         );
+    }
+
+    #[test]
+    fn cancellation_leaves_an_unrelated_process_running() {
+        let runner = ProcessCommands;
+        let cancel = CancellationToken::new();
+        let root = tempfile::tempdir().expect("temp dir");
+        let marker = root.path().join("started");
+        let mut unrelated = Command::new("/bin/sleep").arg("30").spawn().expect("unrelated child");
+        let worker = std::thread::spawn({
+            let cancel = cancel.clone();
+            move || {
+                runner.run(
+                    &[format!(
+                        "/bin/sh -c 'touch {}; exec /bin/sleep 60'",
+                        marker.display()
+                    )],
+                    &cancel,
+                )
+            }
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !root.path().join("started").exists() {
+            assert!(std::time::Instant::now() < deadline, "child did not start");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        cancel.cancel();
+        assert!(worker.join().expect("startup worker").is_ok());
+        assert!(
+            unrelated.try_wait().expect("unrelated child").is_none(),
+            "the job kills only the child it spawned"
+        );
+        let _ = unrelated.kill();
+        let _ = unrelated.wait();
     }
 
     #[test]

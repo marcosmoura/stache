@@ -13,15 +13,16 @@ use std::time::{Duration, Instant};
 
 use stache_macos::{
     ApplicationBackend, ApplicationControl, ApplicationObservation, FakeAppKey,
-    FakeApplicationBackend, ManualExecutor,
+    FakeApplicationBackend, ManualExecutor, TerminateOutcome,
 };
 use stache_sdk::{
-    CancellationToken, Logger, MainThreadExecutor, ModuleHandle, ModuleStatus, Operation,
-    Permission, PermissionStatus, Registry, RegistryError, ReloadStatus, ScopedLogger,
+    CancellationToken, Logger, MainThreadExecutor, ModuleHandle, ModuleInvalidation, ModuleStatus,
+    Operation, Permission, PermissionStatus, Registry, RegistryError, ReloadStatus, ScopedLogger,
 };
 
 use super::*;
 use crate::policy::{Inbox, PolicySnapshot, PolicyWorker, WorkerSetup, WorkerState};
+use crate::runtime::wire_invalidation;
 use crate::test_support::{CaptureLogger, registry};
 
 const WAIT: Duration = Duration::from_secs(5);
@@ -1637,4 +1638,67 @@ fn a_completed_install_with_a_lost_acknowledgement_is_retried_after_delayed_clea
         harness.backend.termination_requests().contains(&later)
     });
     harness.registry.shutdown().expect("shutdown");
+}
+
+/// One live observation over the fake backend and executor.
+fn installed_observation() -> (Arc<FakeApplicationBackend>, Arc<ApplicationObservation>) {
+    let executor = Arc::new(ManualExecutor::new(true));
+    let backend = Arc::new(FakeApplicationBackend::new());
+    let control = ApplicationControl::with_acknowledgement_budget(
+        Arc::clone(&executor) as Arc<dyn MainThreadExecutor>,
+        Arc::clone(&backend) as Arc<dyn ApplicationBackend>,
+        Duration::from_millis(50),
+    );
+    let observation =
+        Arc::new(control.install(&CancellationToken::new(), |_| {}).expect("install"));
+    (backend, observation)
+}
+
+#[test]
+fn a_wired_invalidation_handle_makes_native_issuance_inert() {
+    let (backend, observation) = installed_observation();
+    let _ = backend.add_running(MUSIC_BUNDLE_ID);
+    let application = observation.running_applications(MUSIC_BUNDLE_ID).expect("snapshot")[0];
+    let accepted = observation.accept().expect("accept");
+    let invalidation = ModuleInvalidation::new();
+    wire_invalidation(&invalidation, &observation);
+    assert!(observation.is_active());
+
+    invalidation.invalidate();
+
+    assert!(
+        !observation.is_active(),
+        "the registered listener must invalidate the generation"
+    );
+    assert_eq!(
+        observation.terminate(accepted, application).expect("query"),
+        TerminateOutcome::Stale,
+        "an invalidated generation must refuse native issuance"
+    );
+    assert!(backend.termination_requests().is_empty());
+    observation.stop().expect("cleanup");
+}
+
+#[test]
+fn a_listener_registered_after_invalidation_invalidates_immediately() {
+    let (backend, observation) = installed_observation();
+    let _ = backend.add_running(MUSIC_BUNDLE_ID);
+    let application = observation.running_applications(MUSIC_BUNDLE_ID).expect("snapshot")[0];
+    let accepted = observation.accept().expect("accept");
+    let invalidation = ModuleInvalidation::new();
+    invalidation.invalidate();
+
+    wire_invalidation(&invalidation, &observation);
+
+    assert!(
+        !observation.is_active(),
+        "a start racing teardown must be inert before it can issue"
+    );
+    assert_eq!(
+        observation.terminate(accepted, application).expect("query"),
+        TerminateOutcome::Stale,
+        "an invalidated generation must refuse native issuance"
+    );
+    assert!(backend.termination_requests().is_empty());
+    observation.stop().expect("cleanup");
 }

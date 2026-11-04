@@ -21,6 +21,7 @@ pub mod startup;
 pub mod tray;
 pub mod windows;
 
+use std::cell::RefCell;
 use std::ffi::OsString;
 use std::io::{IsTerminal, Write};
 use std::path::Path;
@@ -31,7 +32,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use stache_cli::CliEnvironment;
-use stache_macos::{AccessibilityPermission, ActivationObserver, MainThread};
+use stache_macos::{AccessibilityPermission, ActivationObserver, MainThread, TerminateObservation};
 use stache_sdk::{
     AppEnvironment, AppPaths, ConfigPaths, EventBus, InstanceError, InstanceLock, LogFilter,
     LogLevel, LogRecord, Logger, MainThreadExecutor, ModuleId, Operation,
@@ -46,18 +47,32 @@ use crate::host::{
 };
 use crate::logging::StderrLogger;
 use crate::permissions::PermissionPoll;
-use crate::shutdown::{ExitAction, ExitGate, SignalBridge, exit_request_action};
+use crate::shutdown::{
+    BoundedRecordChannel, ExitAction, ExitGate, InstanceClaim, InstanceOwner, MainHopOwner,
+    NativeSlot, SignalBridge, StderrRecordSink, SystemClock, SystemExit, Teardown, TerminalAction,
+    TerminalDriver, TerminalProgress, exit_request_action, report_terminate_install_failure,
+};
 use crate::startup::ProcessCommands;
-use crate::windows::{NativeWindows, TauriWindowHost};
+use crate::windows::{NativeWindows, TauriWindowHost, WindowsOwner};
+
+thread_local! {
+    /// The `!Send` activation guard. It is installed and removed on main only.
+    static ACTIVATION: RefCell<Option<ActivationObserver>> = const { RefCell::new(None) };
+}
+
+/// Takes and drops the activation guard on the calling (main) thread.
+fn take_activation() {
+    ACTIVATION.with(|guard| {
+        guard.borrow_mut().take();
+    });
+}
 
 #[derive(Clone)]
 struct WindowsState(Arc<NativeWindows>);
 
 struct AppUi {
     app: tauri::AppHandle,
-    gate: ExitGate,
     main_thread: Arc<dyn MainThreadExecutor>,
-    signals: Arc<Mutex<Option<SignalBridge>>>,
 }
 
 impl HostUi for AppUi {
@@ -69,30 +84,103 @@ impl HostUi for AppUi {
             let _ = tray::update(&app, &snapshot);
         }));
     }
+}
 
-    fn exit(&self, code: i32) {
+/// Runs the one terminal action chosen by the coordinator.
+///
+/// The reply path never calls `app.exit`: once `AppKit` has a pending
+/// `applicationShouldTerminate:`, only a single `true` reply may finish it.
+/// Every closure shares the coordinator's [`TerminalProgress`] claim, so a
+/// closure that loses it does nothing at all.
+struct DesktopTerminal {
+    app: tauri::AppHandle,
+    gate: ExitGate,
+    main_thread: Arc<dyn MainThreadExecutor>,
+    signals: Arc<Mutex<Option<SignalBridge>>>,
+}
+
+impl DesktopTerminal {
+    fn stop_signals(&self) {
         let bridge =
             { self.signals.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() };
         if let Some(bridge) = bridge {
             bridge.stop();
         }
-        self.gate.record_exit(code);
-        let app = self.app.clone();
-        let fallback = self.app.clone();
-        if self
-            .main_thread
-            .execute(Box::new(move || {
-                app.remove_tray_by_id(tray::TRAY_ID);
-                app.exit(code);
-            }))
-            .is_err()
-        {
-            fallback.exit(code);
-        }
     }
 }
 
+impl TerminalDriver for DesktopTerminal {
+    fn dispatch(&self, action: TerminalAction) -> TerminalProgress {
+        let progress = TerminalProgress::new();
+        match action {
+            TerminalAction::Reply => {
+                let claimed = progress.clone();
+                let delivered = progress.clone();
+                let _ = self.main_thread.execute(Box::new(move || {
+                    if !claimed.claim(Instant::now()) {
+                        return;
+                    }
+                    let _ = stache_macos::reply_to_terminate();
+                    delivered.mark_delivered();
+                }));
+            }
+            TerminalAction::Exit(code) => {
+                let claimed = progress.clone();
+                let delivered = progress.clone();
+                let app = self.app.clone();
+                let fallback = self.app.clone();
+                if self
+                    .main_thread
+                    .execute(Box::new(move || {
+                        if !claimed.claim(Instant::now()) {
+                            return;
+                        }
+                        // Tray removal is its own acknowledged owner hop, so
+                        // exit stands alone here.
+                        app.exit(code);
+                        delivered.mark_delivered();
+                    }))
+                    .is_err()
+                    && progress.claim(Instant::now())
+                {
+                    fallback.exit(code);
+                    progress.mark_delivered();
+                }
+            }
+            TerminalAction::Restart => {
+                let claimed = progress.clone();
+                let delivered = progress.clone();
+                let app = self.app.clone();
+                let _ = self.main_thread.execute(Box::new(move || {
+                    if !claimed.claim(Instant::now()) {
+                        return;
+                    }
+                    app.request_restart();
+                    delivered.mark_delivered();
+                }));
+            }
+        }
+        progress
+    }
+
+    fn open_gate(&self, code: i32) { self.gate.record_exit(code); }
+
+    fn close_signals(&self) { self.stop_signals(); }
+}
+
 /// A hook run inside setup after the tray, stack and window bookkeeping exist.
+///
+/// The smoke build also receives the coordinator so its scenarios can register
+/// an owner before the first request; the production type has no such parameter.
+#[cfg(feature = "smoke")]
+type SetupHook = Box<
+    dyn FnOnce(&tauri::AppHandle, &HostHandle, &Arc<NativeWindows>, &ExitGate, &Teardown)
+        + Send
+        + 'static,
+>;
+
+/// A hook run inside setup after the tray, stack and window bookkeeping exist.
+#[cfg(not(feature = "smoke"))]
 type SetupHook = Box<
     dyn FnOnce(&tauri::AppHandle, &HostHandle, &Arc<NativeWindows>, &ExitGate) + Send + 'static,
 >;
@@ -122,7 +210,7 @@ pub fn run_smoke(config_paths: ConfigPaths) -> Result<(), String> {
     let hook_gate = Arc::clone(&final_gate);
     let result = run_with(
         config_paths,
-        Some(Box::new(move |app, host, windows, gate| {
+        Some(Box::new(move |app, host, windows, gate, _teardown| {
             *hook_gate.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
                 Some(gate.clone());
             smoke::start(smoke::SmokeContext {
@@ -143,6 +231,99 @@ pub fn run_smoke(config_paths: ConfigPaths) -> Result<(), String> {
     match result {
         Ok(()) if completed.load(Ordering::SeqCst) && host_finished => Ok(()),
         Ok(()) => Err("smoke exited before checks and host shutdown completed".to_owned()),
+        Err(error) => Err(error),
+    }
+}
+
+/// Runs the opt-in terminate observation proof.
+///
+/// The shipped desktop path installs the observation and starts the coordinator
+/// before the run loop, so this scenario exercises exactly that path: it only
+/// schedules a real `terminate:` and inspects the running coordination. A
+/// successful run ends inside `AppKit` and never returns.
+///
+/// `hang` registers the temporary hanging owner in the HUD slot before the
+/// scheduled terminate fires. A successful run ends inside `AppKit`.
+///
+/// # Errors
+/// Never returns `Ok`; a return means setup failed or the run loop stopped
+/// without completing termination.
+#[cfg(feature = "smoke")]
+pub fn run_smoke_terminate(config_paths: ConfigPaths, hang: bool) -> Result<(), String> {
+    match run_with(
+        config_paths,
+        Some(Box::new(move |app, host, _, _, teardown| {
+            if hang {
+                smoke::register_hanging_owner(teardown);
+            }
+            smoke::start_terminate(app, host);
+        })),
+        Instant::now(),
+    ) {
+        Ok(()) => smoke::fail("the terminate proof left the run loop without terminating"),
+        Err(error) => smoke::fail(&format!("desktop setup failed: {error}")),
+    }
+}
+
+/// Runs the external-quit hold scenario.
+///
+/// `hang` registers the hanging owner; otherwise the normal teardown owners are
+/// the only participants. The scenario opens the explicit test window and waits
+/// 120 s for an external quit before it reports `smoke: FAIL`.
+///
+/// # Errors
+/// Never returns `Ok`; a return means the run loop stopped before a quit.
+#[cfg(feature = "smoke")]
+pub fn run_smoke_hold(config_paths: ConfigPaths, hang: bool) -> Result<(), String> {
+    match run_with(
+        config_paths,
+        Some(Box::new(move |app, host, windows, _, teardown| {
+            if hang {
+                smoke::register_hanging_owner(teardown);
+            }
+            smoke::start_hold(app, host, windows);
+        })),
+        Instant::now(),
+    ) {
+        Ok(()) => smoke::fail("the hold scenario left the run loop without an external quit"),
+        Err(error) => smoke::fail(&format!("desktop setup failed: {error}")),
+    }
+}
+
+/// Runs the coordinated relaunch scenario.
+///
+/// The first process writes a marker under its own runtime root and requests a
+/// restart through the shipped host path. A process that finds the marker is the
+/// successor: it must reach readiness on the held lock, print its line, then
+/// request an ordinary shutdown. The verdict is the parent's reading of the log:
+/// the restart path replaces the first process and `run_return` does not return.
+///
+/// # Errors
+/// Returns a setup failure, or `Ok` after the successor shut down. A first
+/// process that returns before the restart is an error.
+#[cfg(feature = "smoke")]
+pub fn run_smoke_relaunch(config_paths: ConfigPaths) -> Result<(), String> {
+    let environment = AppEnvironment::from_env();
+    let app_paths = AppPaths::resolve(&environment).map_err(|error| error.to_string())?;
+    let marker = smoke::relaunch_marker(&app_paths);
+    let successor = marker.is_file();
+    let ran = Arc::new(AtomicBool::new(false));
+    let hook_ran = Arc::clone(&ran);
+    let result = run_with(
+        config_paths,
+        Some(Box::new(move |_app, host, _, _, _teardown| {
+            hook_ran.store(true, Ordering::SeqCst);
+            if successor {
+                smoke::start_relaunch_successor(host);
+            } else {
+                smoke::start_relaunch_first(marker, host);
+            }
+        })),
+        Instant::now(),
+    );
+    match result {
+        Ok(()) if successor && ran.load(Ordering::SeqCst) => Ok(()),
+        Ok(()) => Err("the relaunch process exited before its scenario completed".to_owned()),
         Err(error) => Err(error),
     }
 }
@@ -169,13 +350,30 @@ fn run_with(
     let main_thread: Arc<dyn MainThreadExecutor> = Arc::new(MainThread);
     let signal_logger = Arc::clone(&logger);
     let setup_logger = Arc::clone(&logger);
-    let (host, driver) = new_host();
+    let install_logger = Arc::clone(&logger);
+    // The claim is shareable so a coordinated restart can release it before
+    // Tauri relaunches the next process.
+    let instance = InstanceClaim::new(instance);
+    let teardown = Teardown::new(
+        Arc::new(SystemClock),
+        Arc::new(BoundedRecordChannel::new(Arc::new(StderrRecordSink))),
+        Arc::new(instance.clone()),
+        Arc::clone(&logger),
+    );
+    let (host, driver) = new_host(Arc::clone(&teardown));
     let setup_host = host.clone();
     let setup_gate = gate.clone();
     let outcome_gate = gate.clone();
+    let terminal_gate = gate.clone();
+    let terminal_main_thread = Arc::clone(&main_thread);
+    let owner_main_thread = Arc::clone(&main_thread);
+    let signals = Arc::new(Mutex::new(None::<SignalBridge>));
+    let setup_signals = Arc::clone(&signals);
+    let exit_teardown = Arc::clone(&teardown);
+    let setup_teardown = Arc::clone(&teardown);
 
     let app = tauri::Builder::default()
-        .manage(HostState(host))
+        .manage(HostState(host.clone()))
         .invoke_handler(invoke)
         .setup(move |app| {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
@@ -197,12 +395,9 @@ fn run_with(
                 window_host,
                 Arc::clone(&logger),
             ));
-            let signals = Arc::new(Mutex::new(None::<SignalBridge>));
             let ui = Arc::new(AppUi {
                 app: app.handle().clone(),
-                gate: gate.clone(),
                 main_thread: Arc::clone(&main_thread),
-                signals: Arc::clone(&signals),
             });
             // The production factories take the last executor clone: modules
             // dispatch native work through it and never retain a second one.
@@ -228,11 +423,17 @@ fn run_with(
                 return Err(error);
             }
             app.manage(WindowsState(window_backend.clone()));
+            // Windows only exist once this backend does, so a run that started
+            // before this registration has none to acknowledge.
+            setup_teardown.register_owner(
+                NativeSlot::Windows,
+                Arc::new(WindowsOwner::new(window_backend.clone())),
+            );
             app.manage(gate.clone());
             let hook_host = setup_host.clone();
             match SignalBridge::install(move || setup_host.request_shutdown()) {
                 Ok(bridge) => {
-                    *signals.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+                    *setup_signals.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
                         Some(bridge);
                 }
                 Err(error) => signal_logger.log(stache_sdk::LogRecord {
@@ -243,6 +444,9 @@ fn run_with(
                 }),
             }
             if let Some(hook) = hook {
+                #[cfg(feature = "smoke")]
+                hook(app.handle(), &hook_host, &window_backend, &gate, &setup_teardown);
+                #[cfg(not(feature = "smoke"))]
                 hook(app.handle(), &hook_host, &window_backend, &gate);
             }
             Ok(())
@@ -250,9 +454,54 @@ fn run_with(
         .build(context())
         .map_err(|error| error.to_string())?;
 
+    teardown.install_exit(Arc::new(SystemExit));
+    teardown.install_terminal(Arc::new(DesktopTerminal {
+        app: app.handle().clone(),
+        gate: terminal_gate,
+        main_thread: terminal_main_thread,
+        signals: Arc::clone(&signals),
+    }));
+    // The activation guard stays on main: the cell is set here, and only a
+    // main-thread closure takes and drops it. Installing it before the
+    // coordinator starts means no request can race its registration.
     let activation_host = app.state::<HostState>().0.clone();
     let activation = ActivationObserver::install(move || activation_host.refresh_permissions())
         .ok_or_else(|| "activation observer requires the main thread".to_owned())?;
+    ACTIVATION.with(|guard| *guard.borrow_mut() = Some(activation));
+    teardown.register_owner(
+        NativeSlot::ApplicationObservers,
+        Arc::new(MainHopOwner::new(
+            "activation",
+            Arc::clone(&owner_main_thread),
+            || {
+                take_activation();
+                Ok(())
+            },
+        )),
+    );
+    let tray_app = app.handle().clone();
+    teardown.register_owner(
+        NativeSlot::Tray,
+        Arc::new(MainHopOwner::new("tray", owner_main_thread, move || {
+            // Missing means the tray was already removed or never created.
+            let _ = tray_app.remove_tray_by_id(tray::TRAY_ID);
+            Ok(())
+        })),
+    );
+    // The coordinator exists before the observation and before `run_return`,
+    // so no request can arrive without a driver already waiting for it.
+    teardown
+        .start()
+        .map_err(|error| format!("cannot start the teardown coordinator: {error}"))?;
+    if let Err(error) = TerminateObservation::install({
+        let teardown = Arc::clone(&teardown);
+        move || match teardown.begin_terminate() {
+            crate::shutdown::TeardownAnswer::Later => stache_macos::TerminateAnswer::Later,
+            crate::shutdown::TeardownAnswer::Now => stache_macos::TerminateAnswer::Now,
+        }
+    }) {
+        report_terminate_install_failure(&host, install_logger.as_ref(), &error.to_string());
+    }
     let code = app.run_return(move |app, event| match event {
         RunEvent::ExitRequested { code, api, .. } => {
             let gate = app.state::<ExitGate>();
@@ -261,7 +510,7 @@ fn run_with(
                 ExitAction::PreventOnly => api.prevent_exit(),
                 ExitAction::PreventAndShutdown => {
                     api.prevent_exit();
-                    app.state::<HostState>().0.request_shutdown();
+                    app.state::<HostState>().0.request_shutdown_with_code(code);
                 }
             }
         }
@@ -270,11 +519,18 @@ fn run_with(
             event: tauri::WindowEvent::Destroyed,
             ..
         } => app.state::<WindowsState>().0.window_closed(&label),
+        // An unobserved terminate path never reaches the coordinator; the one
+        // bypass record keeps that gap visible instead of silent.
+        RunEvent::Exit => {
+            exit_teardown.note_unrecorded_exit();
+        }
         _ => {}
     });
     let intended = outcome_gate.exit_code();
-    drop(activation);
-    drop(instance);
+    // The same cell the activation owner clears; a normal return after the
+    // terminal action leaves nothing to remove.
+    take_activation();
+    instance.release();
     finish_result(code, intended)
 }
 
@@ -450,6 +706,7 @@ mod tests {
     fn a_non_zero_host_exit_is_a_cli_failure() {
         assert!(finish_result(0, None).is_ok());
         assert!(finish_result(0, Some(1)).is_err());
+        assert!(finish_result(0, Some(7)).is_err());
         assert!(finish_result(1, None).is_err());
         assert!(finish_result(2, Some(0)).is_err());
         assert!(finish_result(0, Some(0)).is_ok());

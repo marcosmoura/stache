@@ -4,9 +4,9 @@ branch: feat/teardown
 
 # Coordinated application teardown
 
-Read when closing the Cmd-Q/logout teardown gap recorded in the
-[roadmap](../../roadmap.md). **PLANNED, NOT SHIPPED.** Every part is `draft`; every
-type or function this spec introduces is a planned name, not a shipped API.
+Read when changing how the desktop process stops. Every part is `done`. Logout, restart
+and shutdown remain unverified by the owner's decision; see
+[Part 04](04-verification-gates.md#gate-evidence).
 Base: `main` at `ad34b46`.
 
 ## Goal
@@ -180,10 +180,10 @@ fails its gate and requires re-planning with the owner; other routes cannot subs
 
 | Part                               | Summary                                                       | Status |
 | ---------------------------------- | ------------------------------------------------------------- | ------ |
-| [01](01-terminate-observation.md)  | Terminate observation, one coordinator, budget, typed outcome | draft  |
-| [02](02-bounded-teardown.md)       | Ordered stages, per-hop budgets, abandonment, exit gate       | draft  |
-| [03](03-owner-acknowledgements.md) | Real acknowledgements for today's owners; future contract     | draft  |
-| [04](04-verification-gates.md)     | Real-thread scenarios, harness policy, per-run manual gates   | draft  |
+| [01](01-terminate-observation.md)  | Terminate observation, one coordinator, budget, typed outcome | done   |
+| [02](02-bounded-teardown.md)       | Ordered stages, per-hop budgets, abandonment, exit gate       | done   |
+| [03](03-owner-acknowledgements.md) | Real acknowledgements for today's owners; future contract     | done   |
+| [04](04-verification-gates.md)     | Real-thread scenarios, harness policy, per-run manual gates   | done   |
 
 Parts run in order. Each must independently build, pass `bun run lint`,
 `bun run format:check` and `bun run test`, and commit cleanly. After Part 01 the existing

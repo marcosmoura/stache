@@ -20,6 +20,7 @@
 //! select or change the user's audio devices. Both the pre-start file and the
 //! reloaded file keep `enabled: false`; only another valid field changes.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -35,10 +36,44 @@ use tauri::{AppHandle, Manager};
 
 use crate::bindings::{ConfigFileState, ModuleState};
 use crate::host::HostHandle;
+use crate::shutdown::{NativeOwner, NativeSlot, OwnerAnswer, Teardown};
 use crate::windows::NativeWindows;
 
 /// Environment variable used by the first process to spawn the second launch.
 pub const SECOND_ENV: &str = "STACHE_SMOKE_SECOND";
+
+/// Environment variable that selects the opt-in terminate observation proof.
+pub const TERMINATE_ENV: &str = "STACHE_SMOKE_TERMINATE";
+
+/// [`TERMINATE_ENV`] value that also registers a hanging HUD owner.
+pub const TERMINATE_HANG: &str = "hang";
+
+/// Environment variable that selects the external-quit hold scenario.
+pub const HOLD_ENV: &str = "STACHE_SMOKE_HOLD";
+
+/// [`HOLD_ENV`] value that keeps the normal (non-hanging) teardown.
+pub const HOLD_CLEAN: &str = "clean";
+
+/// Environment variable that selects the coordinated relaunch scenario.
+pub const RELAUNCH_ENV: &str = "STACHE_SMOKE_RELAUNCH";
+
+/// How long one terminate proof step may take before the run fails.
+const TERMINATE_STEP_BOUND: Duration = Duration::from_secs(5);
+
+/// How long termination may take after the reply before the run fails.
+const TERMINATE_EXIT_BOUND: Duration = Duration::from_secs(5);
+
+/// How long the hold scenario waits for the host before it fails.
+const HOLD_READY_BOUND: Duration = Duration::from_secs(30);
+
+/// How long the hold scenario waits for an external quit before it fails.
+const HOLD_BOUND: Duration = Duration::from_secs(120);
+
+/// How long the relaunch scenario waits for host readiness before it fails.
+const RELAUNCH_READY_BOUND: Duration = Duration::from_secs(30);
+
+/// How long a relaunch process waits for its own coordinated exit.
+const RELAUNCH_EXIT_BOUND: Duration = Duration::from_secs(30);
 
 const PROXY_AUDIO: &str = "proxyAudio";
 
@@ -92,6 +127,189 @@ pub fn start(context: SmokeContext) {
     let _ = thread::Builder::new()
         .name("stache-smoke".to_owned())
         .spawn(move || run_checks(&context));
+}
+
+/// Schedules the terminate request and starts the proof on a worker thread.
+///
+/// Called from Tauri's setup hook on the main thread, during the first run-loop
+/// iteration. The observation and the coordinator are already installed and
+/// running from the shipped desktop path; this scenario never installs its own,
+/// so it exercises the production route, including its single automatic reply.
+pub fn start_terminate(app: &AppHandle, host: &HostHandle) {
+    // Fire `terminate:` from a run-loop timer, like a menu action, so neither
+    // the main queue nor tao's callback is on the stack when AppKit starts
+    // waiting for the reply.
+    if let Err(error) = stache_macos::terminate_after(Duration::from_millis(500)) {
+        fail(&format!("cannot schedule the terminate request: {error}"));
+    }
+    let app = app.clone();
+    let host = host.clone();
+    if let Err(error) = thread::Builder::new()
+        .name("stache-smoke-terminate".to_owned())
+        .spawn(move || run_terminate_checks(&app, &host))
+    {
+        fail(&format!("cannot start the terminate proof: {error}"));
+    }
+}
+
+/// A native owner that never answers, for the harness hang scenarios.
+struct HangingOwner;
+
+impl NativeOwner for HangingOwner {
+    fn name(&self) -> &'static str { "smoke-hang" }
+
+    fn on_main(&self) -> bool { false }
+
+    fn release(&self) -> OwnerAnswer {
+        pass("hanging owner entered");
+        OwnerAnswer::new()
+    }
+}
+
+/// Registers the smoke-only hanging owner in the HUD slot.
+///
+/// The harness passes its coordinator through the setup hook so the owner is
+/// registered before the first request; it owns no real resource.
+pub(crate) fn register_hanging_owner(teardown: &Teardown) {
+    teardown.register_owner(NativeSlot::Hud, Arc::new(HangingOwner));
+}
+
+/// Opens the test window and waits for an external quit, or fails after 120 s.
+///
+/// The caller registers the hanging owner when the run wants the hung variant.
+/// The window is the same explicit test window the smoke checks use, so a
+/// person can bring it frontmost and press Cmd-Q once or twice.
+pub(crate) fn start_hold(app: &AppHandle, host: &HostHandle, windows: &Arc<NativeWindows>) {
+    let app = app.clone();
+    let host = host.clone();
+    let windows = Arc::clone(windows);
+    if let Err(error) = thread::Builder::new()
+        .name("stache-smoke-hold".to_owned())
+        .spawn(move || run_hold(&app, &host, &windows))
+    {
+        fail(&format!("cannot start the hold scenario: {error}"));
+    }
+}
+
+fn run_hold(app: &AppHandle, host: &HostHandle, windows: &NativeWindows) {
+    wait_host_ready(host, HOLD_READY_BOUND, "the hold scenario");
+    let id = windows
+        .open_test_window()
+        .unwrap_or_else(|error| fail(&format!("test window request failed: {error}")));
+    let label = format!("stache-test-{}", id.get());
+    wait_for_window(app, &label, true);
+    pass(&format!("test window {label} visible"));
+    pass("holding for an external quit");
+    if !host.wait_until_teardown_requested(HOLD_BOUND) {
+        fail("no external quit arrived within 120 s");
+    }
+}
+
+/// The relaunch marker: under this process's own runtime root only.
+pub(crate) fn relaunch_marker(paths: &AppPaths) -> PathBuf {
+    paths.runtime_directory().join("smoke-relaunch.marker")
+}
+
+/// The first relaunch process: write the marker, say so, then restart.
+pub(crate) fn start_relaunch_first(marker: PathBuf, host: &HostHandle) {
+    let host = host.clone();
+    if let Err(error) =
+        thread::Builder::new().name("stache-smoke-relaunch".to_owned()).spawn(move || {
+            wait_host_ready(&host, RELAUNCH_READY_BOUND, "the first relaunch process");
+            if let Err(error) = std::fs::write(&marker, b"relaunch\n") {
+                fail(&format!("cannot write the relaunch marker: {error}"));
+            }
+            pass("first process ready; requesting a coordinated restart");
+            host.request_restart();
+            thread::sleep(RELAUNCH_EXIT_BOUND);
+            fail("the coordinated restart did not replace the first process");
+        })
+    {
+        fail(&format!("cannot start the relaunch scenario: {error}"));
+    }
+}
+
+/// The successor: reach readiness on the held lock, then exit on its own.
+pub(crate) fn start_relaunch_successor(host: &HostHandle) {
+    let host = host.clone();
+    if let Err(error) =
+        thread::Builder::new().name("stache-smoke-successor".to_owned()).spawn(move || {
+            wait_host_ready(&host, RELAUNCH_READY_BOUND, "the relaunched successor");
+            pass("relaunched successor reached readiness");
+            host.request_shutdown();
+            thread::sleep(RELAUNCH_EXIT_BOUND);
+            fail("the relaunched successor did not shut down after readiness");
+        })
+    {
+        fail(&format!("cannot start the successor scenario: {error}"));
+    }
+}
+
+fn wait_host_ready(host: &HostHandle, bound: Duration, label: &str) {
+    let deadline = Instant::now() + bound;
+    while !host.status().ready {
+        if Instant::now() >= deadline {
+            fail(&format!("host did not become ready for {label}"));
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+/// Proves that a real `terminate:` reaches the shipped coordinator and that two
+/// main-thread routes still run while `AppKit` waits for its reply.
+///
+/// Every wait is bounded, and any missing step prints `smoke: FAIL:` and exits
+/// non-zero. The coordinator replies `true` by itself; nothing here calls
+/// [`stache_macos::reply_to_terminate`]. A successful run ends inside `AppKit`,
+/// so this function does not return.
+fn run_terminate_checks(app: &AppHandle, host: &HostHandle) {
+    if !host.wait_until_teardown_requested(TERMINATE_STEP_BOUND) {
+        fail("the added applicationShouldTerminate: did not reach the teardown coordinator");
+    }
+    if host.teardown_outcome().is_some() {
+        fail("teardown finished before the terminate request could be observed");
+    }
+    pass("applicationShouldTerminate: reached the shipped teardown coordinator");
+
+    // Both proofs run while the reply is still pending: AppKit is inside its
+    // modal panel run loop, and these jobs only run if that loop services the
+    // main queue and tao's common-mode sources.
+    let (sender, receiver) = std::sync::mpsc::channel();
+    if run_on_main(Box::new(move || {
+        let _ = sender.send(());
+    }))
+    .is_err()
+    {
+        fail("cannot enqueue the main-queue proof job");
+    }
+    match receiver.recv_timeout(TERMINATE_STEP_BOUND) {
+        Ok(()) => pass("a main-queue job ran while the terminate reply was pending"),
+        Err(error) => fail(&format!(
+            "the main queue did not run while the reply was pending: {error}"
+        )),
+    }
+
+    let (sender, receiver) = std::sync::mpsc::channel();
+    if app
+        .run_on_main_thread(move || {
+            let _ = sender.send(());
+        })
+        .is_err()
+    {
+        fail("cannot post the tao proxy proof event");
+    }
+    match receiver.recv_timeout(TERMINATE_STEP_BOUND) {
+        Ok(()) => pass("a tao proxy event ran while the terminate reply was pending"),
+        Err(error) => fail(&format!(
+            "the tao proxy did not run while the reply was pending: {error}"
+        )),
+    }
+
+    // The coordinator dispatches the single reply on main as soon as the host
+    // acknowledges or its total deadline expires.
+    pass("the coordinated teardown owns the reply; waiting for termination");
+    thread::sleep(TERMINATE_EXIT_BOUND + TERMINATE_STEP_BOUND);
+    fail("the coordinated teardown did not terminate after the reply");
 }
 
 /// Claims the instance lock and reports whether another process owns it.
@@ -486,7 +704,7 @@ fn pass(message: &str) {
     println!("smoke: ok: {message}");
 }
 
-fn fail(message: &str) -> ! {
+pub(crate) fn fail(message: &str) -> ! {
     eprintln!("smoke: FAIL: {message}");
     process::exit(1);
 }

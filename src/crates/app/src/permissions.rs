@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use stache_sdk::shutdown::{ShutdownWait, wait_for_finish};
 use stache_sdk::{Permission, PermissionProvider, PermissionStatus};
 
 /// Why a fresh permission check was requested.
@@ -273,16 +274,38 @@ impl PermissionTicker {
         self.shared.signal.notify_all();
     }
 
-    /// Cancels and joins the ticker thread. Call off the main thread.
-    pub fn stop(mut self) {
+    /// Cancels the ticker without joining it.
+    pub fn cancel(&self) {
         {
             let mut state =
                 self.shared.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             state.stopped = true;
         }
         self.shared.signal.notify_all();
-        if let Some(thread) = self.thread.take() {
+    }
+
+    /// Cancels and joins the ticker thread. Call off the main thread.
+    pub fn stop(self) {
+        self.cancel();
+        if let Some(thread) = self.thread {
             let _ = thread.join();
+        }
+    }
+
+    /// Cancels the ticker and waits for its thread within the teardown bound.
+    ///
+    /// Returns `true` when the thread finished inside the bound. On `false` the
+    /// handle is dropped, detaching the thread instead of joining it.
+    pub fn stop_bounded(mut self, wait: &dyn ShutdownWait) -> bool {
+        self.cancel();
+        let Some(thread) = self.thread.take() else {
+            return true;
+        };
+        if wait_for_finish(wait, &|| thread.is_finished()) {
+            let _ = thread.join();
+            true
+        } else {
+            false
         }
     }
 }

@@ -11,6 +11,7 @@ pub mod applications;
 pub mod audio;
 pub mod display;
 pub mod main_thread;
+pub mod termination;
 
 pub use accessibility::{AccessibilityPermission, is_trusted, request_trust};
 pub use activation::ActivationObserver;
@@ -30,3 +31,6 @@ pub use audio::{
 };
 pub use display::is_screen_mirroring_active;
 pub use main_thread::{MainThread, is_main_thread, run_on_main};
+#[cfg(feature = "test")]
+pub use termination::terminate_after;
+pub use termination::{TerminateAnswer, TerminateError, TerminateObservation, reply_to_terminate};

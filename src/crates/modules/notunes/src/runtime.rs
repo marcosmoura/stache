@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use stache_macos::{ApplicationControl, ApplicationError, ApplicationObservation};
 use stache_sdk::{
     CancellationToken, ErrorCategory, Module, ModuleContext, ModuleDescriptor, ModuleError,
-    ModuleResult, Operation, ScopedLogger,
+    ModuleInvalidation, ModuleResult, Operation, ScopedLogger,
 };
 
 use crate::config::NoTunesConfig;
@@ -224,6 +224,10 @@ impl Module for NoTunesModule {
         self.next_generation = self.next_generation.saturating_add(1);
         let generation = self.next_generation;
         let observation = Arc::new(observation);
+        // Register before the first acceptance: a listener registered after the
+        // registry already invalidated this module runs immediately, so a start
+        // racing teardown is inert before it can issue anything.
+        wire_invalidation(ctx.invalidation(), &observation);
         let snapshot = Arc::new(Mutex::new(PolicySnapshot { config, token: None }));
         let active = Arc::new(AtomicBool::new(true));
         self.runtime = Some(Runtime {
@@ -431,6 +435,21 @@ fn cleanup_suffix(cleanup: &Result<(), ApplicationError>) -> String {
         Ok(()) => String::new(),
         Err(error) => format!("; observation cleanup also failed: {error}"),
     }
+}
+
+/// Connects the registry's stage-1 invalidation to one observation generation.
+///
+/// The listener only invalidates logically; it removes nothing. A listener
+/// registered after the handle was already invalidated runs immediately, so a
+/// start that races teardown cannot issue native work. Listeners run at most
+/// once and the handle belongs to this module slot, so there is nothing to
+/// unregister.
+pub fn wire_invalidation(
+    invalidation: &ModuleInvalidation,
+    observation: &Arc<ApplicationObservation>,
+) {
+    let observation = Arc::clone(observation);
+    invalidation.on_invalidate(Arc::new(move || observation.invalidate()));
 }
 
 fn module_error(

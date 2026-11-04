@@ -37,6 +37,35 @@ fn main() -> ExitCode {
         eprintln!("stache: {error}");
         return ExitCode::FAILURE;
     }
+    if std::env::var_os(stache_app::smoke::RELAUNCH_ENV).is_some() {
+        return match stache_app::run_smoke_relaunch(config) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("stache: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if let Some(value) = std::env::var_os(stache_app::smoke::HOLD_ENV) {
+        let hang = value.to_str() != Some(stache_app::smoke::HOLD_CLEAN);
+        return match stache_app::run_smoke_hold(config, hang) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("stache: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if let Some(value) = std::env::var_os(stache_app::smoke::TERMINATE_ENV) {
+        let hang = value.to_str() == Some(stache_app::smoke::TERMINATE_HANG);
+        return match stache_app::run_smoke_terminate(config, hang) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("stache: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     match stache_app::run_smoke(config) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {

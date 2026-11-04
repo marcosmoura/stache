@@ -24,7 +24,7 @@ Read when navigating the shipped foundation, explicitly planned rewrites or the 
 | MenuAnywhere (planned)              | [feature](features/menu-anywhere.md), [spec](specs/2026-11-03-menu-anywhere/00-overview.md) |
 | Bar (planned)                       | [feature](features/bar.md), [spec](specs/2026-11-03-bar/00-overview.md)                     |
 | Tiling (planned)                    | [feature](features/tiling.md), [spec](specs/2026-11-03-tiling/00-overview.md)               |
-| Coordinated teardown (planned)      | [spec](specs/2026-11-03-teardown/00-overview.md)                                            |
+| Coordinated teardown                | [spec](specs/2026-11-03-teardown/00-overview.md)                                            |
 | Release/packaging (planned)         | [spec](specs/2026-11-03-release/00-overview.md)                                             |
 | Old application/features            | [legacy docs](../_legacy/docs/index.md), [legacy build](../_legacy/README.md)               |
 | Tray menu and actions (shipped)     | [features/tray.md](features/tray.md)                                                        |

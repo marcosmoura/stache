@@ -60,24 +60,60 @@ schedule change wakes the pending wait, and at most one periodic tick is queued.
 declared requirements may prompt, at most once per session unless the user explicitly retries.
 macOS application activation is observed through `NSApplicationDidBecomeActiveNotification` in
 `stache-macos`, not Tauri's loop `Resumed` event. `MainThreadMarker` enforces main-thread
-registration; the non-`Send` guard lives as a local around the Tauri event loop and removes its
-observer on drop. The pilot declares none, so normal operation never prompts for Accessibility.
+registration; the non-`Send` guard is held in a main-thread cell that only a main-thread closure
+takes and drops, removing its observer. The pilot declares none, so normal operation never prompts
+for Accessibility.
 
 Launch creates no webview and no Dock icon. The explicit **Open Test Window** action opens the app
 URL with `?surface=test` as `stache-test-<n>`, reuses it for the same owner/key and closes it on
-request; stop releases module windows. `src/crates/app/tauri.conf.json` has no fixed windows and
-lists only the least-privilege `test-window` capability. The app crate defines the
+request; stop releases module windows, and each window counts as released only after its
+`Destroyed` event or a native "already gone" answer. `src/crates/app/tauri.conf.json` has no fixed
+windows and lists only the least-privilege `test-window` capability. The app crate defines the
 `custom-protocol` feature that `bun run tauri:build` enables; without it, Tauri stays in dev mode and a
 packaged window has no embedded document. Generate/schema binaries require `dev-tools` and are not
 packaged. See [ui.md](ui.md).
 
-Quit, SIGINT/SIGTERM/SIGHUP and Tauri's exit event converge on one idempotent off-main teardown:
-stop accepting IPC/config work, cancel monitors, cancel and reap the owned startup job, stop the
-registry in reverse order, release windows, tray and socket, then let Tauri exit. The signal thread
-is closed and joined by that teardown, on the host worker rather than the main thread. Only an
-explicit quit request starts that teardown: Tauri's last-window `ExitRequested` (`code: None`, from
+Quit, SIGINT/SIGTERM/SIGHUP, Tauri's exit event and AppKit's terminate decision converge on one
+idempotent off-main coordinator. A request only records a deadline: the first sets a five-second
+total and the cause, and a later one shortens it to 250 ms from that request without ever passing
+the total. A dedicated `stache-teardown` thread stores exactly one outcome (`Clean`, `Partial` or
+`Uncertain`) in memory, makes one bounded record attempt through a non-blocking channel, using
+50 ms reserved inside that total, and dispatches one terminal action. The coordinator runs the
+ordered stages itself rather than the host worker: invalidate every module and native handle
+without waiting on the lifecycle or a slot lock, reap the config watcher, permission ticker,
+startup job and socket acceptance while observing the host worker inside the same stage budget,
+stop the registry in reverse start order one module at a time, run native cleanup in the approved
+order, store the outcome with its bounded record and one terminal status, close the signal
+bridge, open the exit gate and run the terminal action. Every wait is capped at
+`min(2 s, remaining)` and wakes on escalation within 10 ms, so a hung owner is named and
+abandoned at its bound while the next stage still runs.
+
+Each owner has a stable record name: `host-worker`, `watcher`, `permission-ticker`,
+`startup-job`, `module:<id>`, `socket`, `activation`, `tray` and `windows`. A registered native
+owner is released by its own completion answer; a dispatch is never an acknowledgement, so
+`Clean` is reported only when every owner proved that it released its resource. The activation
+observer, the tray item and the tracked windows are removed by their own main-thread hops, and
+the tray hop no longer shares the final `app.exit`. The `!Send` activation guard stays on main in
+a thread-local cell that only a main-thread closure takes and drops. After one main-thread hop
+misses its budget, every remaining main-thread owner is still released but named unacknowledged
+without another wait, because the same stalled queue would spend the total; worker-thread owners
+keep their own wait. Socket acknowledgement requires the accept thread and every handler permit
+to finish, and a socket inode that cannot be removed is reported instead of dropped. An answer
+that arrives after the outcome is inert: it may release what it owns, but it cannot publish,
+change the outcome or write a second record.
+
+With an AppKit reply pending the terminal action is `reply(true)` on main; otherwise Tauri exits
+with the intended code, separately from the tray hop. A terminal action not accepted by the
+deadline exits this process at that deadline; a claimed AppKit reply that never completes gets
+one further two-second hop, capped at seven seconds from the first request. A coordinated restart
+relaunches only after a `Clean` outcome, after releasing the instance lock. The signal thread is
+closed and joined by that terminal action, never on the main thread. Only an explicit quit
+request starts teardown: Tauri's last-window `ExitRequested` (`code: None`, from
 `tauri-runtime-wry`'s `Destroyed` handler) just drops the window registry entry, while the
-`Some(code)` form from `app.exit` prevents that exit and requests the shutdown.
+`Some(code)` form from `app.exit` prevents that exit and requests the shutdown. Real Cmd-Q
+reaches the coordinator through the default menu's Quit item, with the Test Window frontmost, but
+a repeat Cmd-Q does not escalate while the reply is pending; a signal does. Logout, restart and
+shutdown have not been verified end to end.
 `execOnStartup` runs once on its own owned thread after first setup, never for CLI, reload or a
 second launch; a long-lived command cannot delay readiness or shutdown. See [ipc.md](ipc.md) and
 [config.md](config.md).

@@ -27,6 +27,13 @@ use objc2_foundation::{NSNotification, NSNotificationCenter};
 /// Construct it with [`ActivationObserver::install`] on the main thread and keep
 /// it alive for the lifetime of the event loop. The observer removes itself from
 /// the notification center when dropped.
+///
+/// The guard is `!Send`, so it cannot be moved to another thread to be dropped:
+///
+/// ```compile_fail,E0277
+/// fn assert_send<T: Send>() {}
+/// assert_send::<stache_macos::ActivationObserver>();
+/// ```
 pub struct ActivationObserver {
     center: Retained<NSNotificationCenter>,
     token: Retained<ProtocolObject<dyn NSObjectProtocol>>,

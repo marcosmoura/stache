@@ -660,6 +660,78 @@ fn an_already_issued_termination_finishes_after_a_concurrent_stop() {
 }
 
 #[test]
+fn invalidation_is_prompt_while_a_native_send_holds_the_gate() {
+    let (control, backend, _executor) = harness(true, Duration::from_secs(5));
+    let observation = control.install(&CancellationToken::new(), |_| {}).expect("install");
+    let _ = backend.add_running("com.apple.Music");
+    let application = observation.running_applications("com.apple.Music").expect("snapshot")[0];
+    let accepted = observation.accept().expect("accept");
+    // This barrier is inside the irreversible native send, where the control
+    // holds the commit gate.
+    let barrier = backend.block_next_terminate_issuance();
+    std::thread::scope(|scope| {
+        let terminate = scope.spawn(|| observation.terminate(accepted, application));
+        assert!(
+            barrier.wait_entered(Duration::from_secs(2)),
+            "the termination must hold the commit gate inside the native send"
+        );
+        let started = Instant::now();
+        observation.invalidate();
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "invalidation must not wait for the stalled send: {:?}",
+            started.elapsed()
+        );
+        assert!(!observation.is_active(), "the generation is inert immediately");
+        // A queued action rechecks the generation at issuance. The permit is
+        // that exact decision and must refuse without taking the gate.
+        let request = RequestCommit::new(Instant::now() + Duration::from_secs(5));
+        let permit = observation.state.issuance(observation.generation, accepted, &request, None);
+        assert!(
+            permit.issue(|| ()).is_none(),
+            "nothing may be issued after invalidation"
+        );
+        let _ = barrier.release();
+        assert_eq!(
+            terminate.join().expect("terminate").expect("result"),
+            TerminateOutcome::Requested,
+            "work already issued finishes inert"
+        );
+    });
+    let stale = observation.accept().expect("accept");
+    assert_eq!(stale.revision, 0, "a later acceptance yields a stale token");
+    assert_eq!(backend.termination_requests().len(), 1);
+    observation.stop().expect("cleanup");
+}
+
+#[test]
+fn a_queued_open_after_invalidation_never_reaches_the_native_send() {
+    let (control, backend, executor) = harness(true, Duration::from_millis(20));
+    let observation = control.install(&CancellationToken::new(), |_| {}).expect("install");
+    let accepted = observation.accept().expect("accept");
+    let completed = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&completed);
+    executor.set_on_main(false);
+    assert_eq!(
+        observation
+            .open(accepted, Path::new("/Applications/Spotify.app"), move |_| {
+                counter.fetch_add(1, Ordering::SeqCst);
+            })
+            .expect_err("queued"),
+        ApplicationError::TimedOut
+    );
+    observation.invalidate();
+    executor.set_on_main(true);
+    executor.drain();
+    assert!(
+        backend.open_requests().is_empty(),
+        "an invalidated generation must refuse the queued issuance"
+    );
+    assert_eq!(completed.load(Ordering::SeqCst), 0, "no completion may run");
+    observation.stop().expect("cleanup");
+}
+
+#[test]
 fn a_newer_accepted_revision_keeps_a_queued_action_inert() {
     let (control, backend, executor) = harness(true, Duration::from_secs(5));
     let observation = control.install(&CancellationToken::new(), |_| {}).expect("install");

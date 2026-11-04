@@ -39,6 +39,7 @@ pub mod module;
 pub mod paths;
 pub mod permissions;
 pub mod registry;
+pub mod shutdown;
 pub mod status;
 pub mod threading;
 pub mod windows;
@@ -62,7 +63,12 @@ pub use paths::{
     AppEnvironment, AppPathError, AppPaths, IDENTITY, MAX_SOCKET_PATH, SOCKET_FILE_NAME,
 };
 pub use permissions::{Permission, PermissionError, PermissionProvider, PermissionStatus};
-pub use registry::{ModuleHandle, Registry, ReloadReport, ReloadStatus};
+pub use registry::{
+    ModuleHandle, ModuleInvalidation, Registry, ReloadReport, ReloadStatus, StopTarget,
+};
+pub use shutdown::{
+    CANCELLATION_QUANTUM, OWNER_WAIT_BUDGET, ShutdownWait, wait_for_finish, wait_until,
+};
 pub use status::{
     ConfigDiagnostic, ModuleFailure, ModuleSnapshot, ModuleStatus, UnavailableReason,
 };

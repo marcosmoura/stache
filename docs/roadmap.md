@@ -48,26 +48,18 @@ permission request, the test window and Quit cover the shipped actions, and the 
 rebuilt from a status snapshot on the main thread rather than mutated in place.
 
 The user asked for a release-only Reload item to be preserved anyway. It is a planned
-follow-up, not shipped behavior: it needs the coordinated restart path from the planned
-[teardown spec](specs/2026-11-03-teardown/00-overview.md) on `feat/teardown`, must stay
+follow-up, not shipped behavior: it uses the coordinated restart path from the
+[teardown spec](specs/2026-11-03-teardown/00-overview.md), must prove the bundled `open -n`
+relaunch, must stay
 release-only and main-thread-bound, and must not reintroduce whole-app restart as the
 config-change path.
 
-## Separate foundation follow-up
+## Coordinated teardown limitations
 
-The known Cmd-Q/logout coordinated-teardown gap needs its own scoped follow-up.
-noTunes must honor the existing registry stop/shutdown contract; its spec does not
-claim to repair every host termination path.
-
-### Coordinated teardown follow-up
-
-The Cmd-Q/logout teardown gap has its own planned spec:
-[2026-11-03-teardown](specs/2026-11-03-teardown/00-overview.md) (draft, branch
-`feat/teardown`). It would converge every AppKit-initiated terminate path on one bounded
-coordinator with honest outcomes and add the coordinated restart path the future
-release-only tray Reload item needs. Until it ships, those paths bypass teardown. Modules
-honor the existing registry stop/shutdown contract; no module spec claims to repair host
-termination.
+Every AppKit-initiated terminate path now converges on one bounded coordinator
+([spec](specs/2026-11-03-teardown/00-overview.md)). Real Cmd-Q is verified. Logout, restart and
+shutdown use the same route but have not been run for real; the owner accepted that as a
+documented limitation. Verifying them needs a disposable login session or a spare machine.
 
 ## Release and packaging
 

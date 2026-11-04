@@ -102,6 +102,6 @@ observe, terminate or launch a real application, and no automated check prompts
 for a permission. Real observation and force-termination remain an explicit,
 opt-in check.
 
-The known Cmd-Q/logout shutdown route is out of scope: the module reacts to
-application launches, not to host termination paths. See the
-[spec](../specs/2026-11-03-notunes/00-overview.md) for that follow-up.
+Host termination stops the module through the coordinated teardown
+([overview](../architecture/overview.md)). Logout, restart and shutdown use that route
+but have not been run for real.

@@ -12,6 +12,7 @@ use crate::events::EventBus;
 use crate::logging::ScopedLogger;
 use crate::module::ModuleId;
 use crate::permissions::PermissionProvider;
+use crate::registry::ModuleInvalidation;
 use crate::threading::{CancellationToken, MainThreadExecutor, WorkerHandle};
 use crate::windows::WindowCapability;
 
@@ -24,6 +25,7 @@ pub struct ModuleContext {
     workers: WorkerHandle,
     permissions: Arc<dyn PermissionProvider>,
     cancellation: CancellationToken,
+    invalidation: ModuleInvalidation,
     windows: WindowCapability,
 }
 
@@ -41,6 +43,7 @@ impl ModuleContext {
         logger: ScopedLogger,
         workers: WorkerHandle,
         cancellation: CancellationToken,
+        invalidation: ModuleInvalidation,
         services: ContextServices,
     ) -> Self {
         Self {
@@ -51,6 +54,7 @@ impl ModuleContext {
             workers,
             permissions: services.permissions,
             cancellation,
+            invalidation,
             windows: services.windows,
         }
     }
@@ -110,6 +114,17 @@ impl ModuleContext {
     /// cancel it themselves.
     #[must_use]
     pub fn cancellation(&self) -> CancellationToken { self.cancellation.clone() }
+
+    /// The logical invalidation handle for this module.
+    ///
+    /// The registry fires it during stage-1 teardown without taking a
+    /// registry, slot or lifecycle lock, including while a start or stop holds
+    /// one of those locks. It is not a cleanup path: a module drops queued
+    /// native work that has not been issued and lets already-issued work
+    /// finish inert. Listeners run at most once; a listener registered after
+    /// invalidation runs immediately.
+    #[must_use]
+    pub const fn invalidation(&self) -> &ModuleInvalidation { &self.invalidation }
 
     /// The module's declared window surfaces and the host's window backend.
     #[must_use]

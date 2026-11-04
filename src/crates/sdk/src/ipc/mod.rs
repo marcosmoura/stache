@@ -18,4 +18,6 @@ pub use router::{
     CORE_MODULE, ConfigCore, CoreHandler, HandlerError, HandlerErrorKind, HandlerResult,
     IpcHandler, Router, RouterError, decode_params, encode_response,
 };
-pub use server::{IpcServer, MAX_CONNECTIONS, REQUEST_LIMIT, ServerConfig, ServerError};
+pub use server::{
+    IpcServer, MAX_CONNECTIONS, REQUEST_LIMIT, ServerConfig, ServerError, SocketShutdown,
+};

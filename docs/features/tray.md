@@ -26,7 +26,9 @@ reaches AppKit.
 - A rebuild that fails leaves the existing menu in place. The error is not surfaced:
   `AppUi::status` discards the value `tray::update` returns, so a failed rebuild produces
   no log line and no status diagnostic.
-- `AppUi::exit` removes the tray by id on the main thread as part of shutdown.
+- The coordinator's `tray` owner removes the tray by id through its own acknowledged
+  main-thread hop, separate from the final exit; a missing tray counts as removed.
+  AppKit's terminate reply path instead answers once and lets AppKit terminate.
 
 ## Rows
 
@@ -73,8 +75,9 @@ clicked and never implies an action it does not have.
 - `permission` triggers the explicit permission request.
 - `test-window` opens or focuses the development test window.
 - `quit` calls `HostHandle::request_shutdown`, the one idempotent teardown coordinator.
-  Cmd-Q and other AppKit-initiated quits do not run that coordinator yet; that is the known
-  gap described in the [roadmap](../roadmap.md).
+  Cmd-Q and other AppKit-initiated quits reach the same coordinator through the observed
+  `applicationShouldTerminate:`; their real-session behavior is not verified yet, so the
+  [roadmap](../roadmap.md) follow-up stays open.
 
 ## Invariants and pitfalls
 

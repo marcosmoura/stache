@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 04 — Verification and gates
@@ -131,3 +131,34 @@ non-zero.
   outside the owned process.
 - Materialize [Affected docs](00-overview.md#affected-docs) in the part that ships each behavior, and
   state only what the gates proved.
+
+## Gate evidence
+
+Runs of 2026-11-04, on `feat/teardown` at `bc91f86`, with the user present. A pass covers
+that run only. `04-03` used the `bun run tauri:build` bundle; the second-Cmd-Q `04-04` run
+used a harness with a temporary read-only key diagnostic, since removed. Each preflight
+query showed only the owned PID and legacy Stache, which was never signalled.
+
+| Gate            | Result  | Evidence                                                                                                                    |
+| --------------- | ------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `04-01`         | pass    | 739 Rust tests, including real-thread scenarios; passes repeated under four parallel suite runs                             |
+| `04-02`         | pass    | `uncertain cause=terminate elapsed_ms=2073 unacknowledged=[smoke-hang]`, one outcome record, status 0, socket gone          |
+| `04-03`         | pass    | Bundle, real key: `clean cause=terminate elapsed_ms=153`, one record, status 0, socket gone                                 |
+| `04-04` SIGTERM | pass    | Exit 225 ms after the signal: `escalated=true`, `uncertain`, `forced_exit=false reply_late=false`, status 0                 |
+| `04-04` Cmd-Q   | limited | Repeat key reached the process during the hang but started no second request: `escalated=false`, ended at the 2 s bound     |
+| `04-05`         | pass    | `clean cause=terminate elapsed_ms=76`, one record, status 0, socket gone                                                    |
+| `04-06`         | not run | No disposable session or spare machine. `Info.plist` sets no sudden or automatic termination key. Accepted as a limitation. |
+| `04-07`         | pass    | Bundle: `clean cause=request elapsed_ms=57`, one record, status 0, socket gone                                              |
+| `04-08`         | pass    | Harness direct-spawn path: first and successor runs both `clean`, successor reached readiness, nothing left running         |
+| `04-09`         | pass    | 6 fake-query refusal tests; no identifier-addressed event was sent, so the optional AppleScript evidence was not run        |
+
+The owner explicitly accepted `04-06` as a documented limitation on 2026-11-04, so this part is
+done without a logout run. Logout, restart and shutdown stay unverified and must not be claimed
+until an approved run covers them.
+
+Findings from these runs:
+
+- `04-04` found that owner waits spent the reserved budget, so an escalated run force-exited
+  instead of replying. Fixed in `bc91f86`; `04-02`, `04-04` and `04-05` were re-run after it.
+- While legacy Stache runs with `commandQuit` enabled, its event tap swallows Cmd-Q and the key
+  never reaches this process. The first `04-03` attempts failed this way; the user turned it off.

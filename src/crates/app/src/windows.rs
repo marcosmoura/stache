@@ -5,7 +5,7 @@
 //! it. Windows are labelled `stache-test-<n>`, the only labels the test-window
 //! capability grants.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -15,6 +15,8 @@ use stache_sdk::{
     WindowError, WindowId, WindowRequest,
 };
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+
+use crate::shutdown::{NativeOwner, OwnerAnswer};
 
 /// Owner used for the explicit developer test window.
 pub const HOST_OWNER: ModuleId = ModuleId::new("stache");
@@ -35,14 +37,25 @@ pub trait WindowHost: Send + Sync {
     fn open(&self, spec: &NativeWindowSpec) -> Result<(), String>;
     /// Focuses an existing window, if it still exists.
     fn focus(&self, label: &str);
-    /// Closes an existing window, if it still exists.
-    fn close(&self, label: &str);
+    /// Closes an existing window and reports what happened to it.
+    fn close(&self, label: &str) -> CloseOutcome;
 
     /// Whether the page in this window finished loading.
     ///
     /// Native adapters report their page-load hook; fake adapters are already
     /// loaded.
     fn is_loaded(&self, _label: &str) -> bool { true }
+}
+
+/// What one native close request did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CloseOutcome {
+    /// The window was asked to close; its `Destroyed` event acknowledges it.
+    Closing,
+    /// The window was already gone, which counts as closed.
+    AlreadyGone,
+    /// The native close failed.
+    Failed(String),
 }
 
 /// A window creation request translated for the native adapter.
@@ -122,15 +135,19 @@ impl WindowHost for TauriWindowHost {
         }
     }
 
-    fn close(&self, label: &str) {
-        if let Some(window) = self.app.get_webview_window(label) {
-            let _ = window.close();
-        }
+    fn close(&self, label: &str) -> CloseOutcome {
         #[cfg(feature = "smoke")]
         self.loaded
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .retain(|loaded| loaded != label);
+        let Some(window) = self.app.get_webview_window(label) else {
+            return CloseOutcome::AlreadyGone;
+        };
+        match window.close() {
+            Ok(()) => CloseOutcome::Closing,
+            Err(error) => CloseOutcome::Failed(error.to_string()),
+        }
     }
 
     #[cfg(feature = "smoke")]
@@ -154,6 +171,33 @@ struct Entry {
 struct WindowState {
     by_key: BTreeMap<(ModuleId, String), Entry>,
     by_id: BTreeMap<WindowId, Entry>,
+    /// Labels a close was dispatched for and whose `Destroyed` event is still
+    /// outstanding, including windows released by a stopping module.
+    closing: BTreeSet<String>,
+    /// A close for this cycle failed or could not be dispatched.
+    close_failed: bool,
+    /// One-shot answers waiting for `closing` to drain.
+    releases: Vec<OwnerAnswer>,
+}
+
+impl WindowState {
+    /// Answers every waiting release once no label is still closing.
+    ///
+    /// A failure is kept until a release is actually answered, so a close that
+    /// failed during a module stop still makes the later windows release fail.
+    fn settle(&mut self) {
+        if !self.closing.is_empty() || self.releases.is_empty() {
+            return;
+        }
+        for answer in self.releases.drain(..) {
+            if self.close_failed {
+                answer.fail();
+            } else {
+                answer.succeed();
+            }
+        }
+        self.close_failed = false;
+    }
 }
 
 /// Reuses one window per owner/key and closes module windows on stop.
@@ -207,6 +251,53 @@ impl NativeWindows {
     /// Removes a window that the OS destroyed, without asking it to close.
     pub fn window_closed(&self, label: &str) { self.shared.forget_label(label); }
 
+    /// Queues one native close and records the label until its event arrives.
+    fn dispatch_close(&self, label: &str) {
+        self.shared.lock().closing.insert(label.to_owned());
+        let shared = Arc::clone(&self.shared);
+        let job_label = label.to_owned();
+        let dispatched = self.shared.dispatch(move |host| match host.close(&job_label) {
+            CloseOutcome::Closing => {}
+            CloseOutcome::AlreadyGone => shared.forget_label(&job_label),
+            CloseOutcome::Failed(error) => {
+                shared.lock().close_failed = true;
+                shared.log(LogLevel::Warn, format!("window close failed: {error}"));
+                shared.forget_label(&job_label);
+            }
+        });
+        if let Err(error) = dispatched {
+            self.shared.lock().close_failed = true;
+            self.shared
+                .log(LogLevel::Warn, format!("window close dispatch failed: {error}"));
+            self.shared.forget_label(label);
+        }
+    }
+
+    /// Closes every tracked window and answers once each close is acknowledged.
+    ///
+    /// The answer is immediate when nothing is open. A window already gone or
+    /// closed by an earlier module release counts as closed; a failed close or a
+    /// failed dispatch makes the answer `failed`.
+    #[must_use]
+    pub fn release_all(&self) -> OwnerAnswer {
+        let answer = OwnerAnswer::new();
+        let labels: Vec<String> = {
+            let mut state = self.shared.lock();
+            let labels: Vec<String> =
+                state.by_id.values().map(|entry| entry.label.clone()).collect();
+            state.closing.extend(labels.iter().cloned());
+            state.by_id.clear();
+            state.by_key.clear();
+            state.releases.push(answer.clone());
+            state.settle();
+            labels
+        };
+        for label in labels {
+            self.dispatch_close(&label);
+        }
+        answer
+    }
+
     /// Whether the page in this window finished loading.
     #[cfg(feature = "smoke")]
     #[must_use]
@@ -238,6 +329,8 @@ impl WindowShared {
         let mut state = self.lock();
         state.by_id.retain(|_, entry| entry.label != label);
         state.by_key.retain(|_, entry| entry.label != label);
+        state.closing.remove(label);
+        state.settle();
     }
 
     fn dispatch(
@@ -372,10 +465,7 @@ impl WindowBackend for NativeWindows {
             state.by_key.retain(|_, entry| entry.id != window);
             entry
         };
-        if let Err(error) = self.shared.dispatch(move |host| host.close(&entry.label)) {
-            self.shared
-                .log(LogLevel::Warn, format!("window close dispatch failed: {error}"));
-        }
+        self.dispatch_close(&entry.label);
     }
 
     fn release_owner(&self, owner: ModuleId) {
@@ -397,30 +487,7 @@ impl WindowBackend for NativeWindows {
             labels
         };
         for label in labels {
-            if let Err(error) = self.shared.dispatch(move |host| host.close(&label)) {
-                self.shared.log(
-                    LogLevel::Warn,
-                    format!("window release dispatch failed: {error}"),
-                );
-            }
-        }
-    }
-
-    fn close_all(&self) {
-        let labels: Vec<String> = {
-            let mut state = self.shared.lock();
-            let labels = state.by_id.values().map(|entry| entry.label.clone()).collect();
-            state.by_id.clear();
-            state.by_key.clear();
-            labels
-        };
-        for label in labels {
-            if let Err(error) = self.shared.dispatch(move |host| host.close(&label)) {
-                self.shared.log(
-                    LogLevel::Warn,
-                    format!("window close-all dispatch failed: {error}"),
-                );
-            }
+            self.dispatch_close(&label);
         }
     }
 }
@@ -431,6 +498,25 @@ impl fmt::Debug for NativeWindows {
             .field("open", &self.len())
             .finish_non_exhaustive()
     }
+}
+
+/// The acknowledged owner for every tracked window.
+pub struct WindowsOwner {
+    windows: Arc<NativeWindows>,
+}
+
+impl WindowsOwner {
+    /// Wraps one bookkeeping layer as a teardown owner.
+    #[must_use]
+    pub const fn new(windows: Arc<NativeWindows>) -> Self { Self { windows } }
+}
+
+impl NativeOwner for WindowsOwner {
+    fn name(&self) -> &'static str { "windows" }
+
+    fn on_main(&self) -> bool { true }
+
+    fn release(&self) -> OwnerAnswer { self.windows.release_all() }
 }
 
 #[cfg(test)]
@@ -444,6 +530,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::shutdown::OwnerState;
 
     #[derive(Default)]
     struct FakeHost {
@@ -451,6 +538,8 @@ mod tests {
         focused: Mutex<Vec<String>>,
         closed: Mutex<Vec<String>>,
         fail_next: AtomicBool,
+        fail_close: AtomicBool,
+        gone: AtomicBool,
     }
 
     impl WindowHost for FakeHost {
@@ -466,7 +555,17 @@ mod tests {
             self.focused.lock().expect("focused").push(label.to_owned());
         }
 
-        fn close(&self, label: &str) { self.closed.lock().expect("closed").push(label.to_owned()); }
+        fn close(&self, label: &str) -> CloseOutcome {
+            self.closed.lock().expect("closed").push(label.to_owned());
+            if self.fail_close.swap(false, Ordering::SeqCst) {
+                return CloseOutcome::Failed("injected close failure".to_owned());
+            }
+            if self.gone.load(Ordering::SeqCst) {
+                CloseOutcome::AlreadyGone
+            } else {
+                CloseOutcome::Closing
+            }
+        }
     }
 
     struct Inline;
@@ -631,15 +730,96 @@ mod tests {
         let owner = ModuleId::new("one");
         windows.open(owner, &request("test", "a")).expect("a");
         windows.open(owner, &request("test", "b")).expect("b");
-        windows.close_all();
+        let answer = windows.release_all();
         executor.run();
         assert!(host.opened.lock().expect("opened").is_empty());
         assert!(windows.is_empty());
+        let closed = host.closed.lock().expect("closed").clone();
+        for label in closed {
+            windows.window_closed(&label);
+        }
+        assert_eq!(answer.state(), OwnerState::Succeeded);
 
         windows.open(owner, &request("test", "a")).expect("reopen");
         executor.run();
         assert_eq!(host.opened.lock().expect("opened").len(), 1);
         assert_eq!(windows.len(), 1);
+    }
+
+    #[test]
+    fn release_all_answers_only_after_every_labels_close_event() {
+        let (windows, host) = windows();
+        let one = ModuleId::new("one");
+        let two = ModuleId::new("two");
+        windows.open(one, &request("test", "a")).expect("one a");
+        windows.open(one, &request("test", "b")).expect("one b");
+        windows.open(two, &request("test", "a")).expect("two a");
+        // The registry releases a module window before the windows stage runs.
+        windows.release_owner(two);
+        let answer = windows.release_all();
+        assert!(!answer.is_answered());
+        let mut labels = host.closed.lock().expect("closed").clone();
+        assert_eq!(labels.len(), 3);
+        let last = labels.pop().expect("last label");
+        for label in labels {
+            windows.window_closed(&label);
+            assert!(
+                !answer.is_answered(),
+                "one outstanding label must keep the answer pending"
+            );
+        }
+        windows.window_closed(&last);
+        assert_eq!(
+            answer.state(),
+            OwnerState::Succeeded,
+            "every released and teardown-closed label is acknowledged"
+        );
+    }
+
+    #[test]
+    fn release_all_with_nothing_open_answers_immediately() {
+        let (windows, _host) = windows();
+        assert_eq!(windows.release_all().state(), OwnerState::Succeeded);
+    }
+
+    #[test]
+    fn an_already_gone_window_counts_as_closed() {
+        let (windows, host) = windows();
+        host.gone.store(true, Ordering::SeqCst);
+        windows.open(ModuleId::new("one"), &request("test", "main")).expect("open");
+        let answer = windows.release_all();
+        assert_eq!(answer.state(), OwnerState::Succeeded);
+        assert_eq!(host.closed.lock().expect("closed").len(), 1);
+    }
+
+    #[test]
+    fn a_failed_close_makes_the_release_a_failure() {
+        let (windows, host) = windows();
+        host.fail_close.store(true, Ordering::SeqCst);
+        windows.open(ModuleId::new("one"), &request("test", "main")).expect("open");
+        let answer = windows.release_all();
+        assert_eq!(answer.state(), OwnerState::Failed);
+    }
+
+    #[test]
+    fn a_missing_close_event_leaves_the_release_pending() {
+        let (windows, _host) = windows();
+        windows.open(ModuleId::new("one"), &request("test", "main")).expect("open");
+        let answer = windows.release_all();
+        assert_eq!(answer.state(), OwnerState::Pending);
+        assert!(
+            !answer.is_answered(),
+            "a window without its Destroyed event is not acknowledged"
+        );
+    }
+
+    #[test]
+    fn the_windows_owner_is_named_and_waited_on_the_main_hop_budget() {
+        let (windows, _host) = windows();
+        let owner = WindowsOwner::new(windows);
+        assert_eq!(owner.name(), "windows");
+        assert!(owner.on_main());
+        assert_eq!(owner.release().state(), OwnerState::Succeeded);
     }
 
     #[test]

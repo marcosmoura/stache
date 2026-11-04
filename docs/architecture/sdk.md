@@ -106,6 +106,17 @@ the host can resolve; lookup policy beyond `PATH` belongs to part 6.
   callbacks), then join workers. A stopped group rejects new spawns. On a failed
   configure/start the same cleanup runs immediately; `needs_stop` stays set only
   when that cleanup stop itself failed.
+- Each runtime also carries a `ModuleInvalidation` handle, returned by
+  `ctx.invalidation()`. The registry fires it during the first teardown stage
+  without taking the registry, slot or lifecycle lock, including while a start or
+  stop holds one of those locks. It is logical invalidation only: queued native
+  work that was never issued becomes inert, already-issued work finishes inert,
+  and a listener registered after invalidation runs immediately. It is not a
+  cleanup path; `Module::stop` still performs the acknowledged native removal.
+- During coordinated teardown the registry stops modules in reverse start order,
+  one at a time, each on an abandonable carrier bounded by `min(2 s, remaining)`.
+  A hung module is named `module:<id>` and abandoned with the locks it took, and
+  the next module still stops.
 - `cancel_and_join` must not be called from one of that group's own workers.
   Registry operations that join run on the caller's thread, so the host calls
   disable/pause/reload/shutdown off the main thread.

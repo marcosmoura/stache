@@ -22,6 +22,12 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": ["vite.config.ts", "lint-staged.config.ts", "stylelint.config.mjs", "scripts/**/*.ts"],
+  "include": [
+    "vite.config.ts",
+    "vitest.scripts.config.ts",
+    "lint-staged.config.ts",
+    "stylelint.config.mjs",
+    "scripts/**/*.ts"
+  ],
   "exclude": ["_legacy", ".worktrees", "target", "node_modules"]
 }

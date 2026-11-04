@@ -3,8 +3,11 @@
 //! One registry owns every transition. There are no global registries and no
 //! mutable statics. Each module has its own lock, so independent modules can be
 //! operated on concurrently; the registry-wide map lock is never held while a
-//! module method runs. Multi-module operations (start, shutdown, permission and
-//! service recovery) take a separate lifecycle lock so they cannot interleave.
+//! module method runs. Multi-module operations (start, permission and service
+//! recovery) take a separate lifecycle lock so they cannot interleave.
+//! Teardown does not: [`Registry::invalidate`] fires logical module
+//! invalidation, [`Registry::shutdown_targets`] reads stop metadata, and
+//! [`Registry::stop_module`] stops one module without ever taking `lifecycle`.
 //! The only nesting is the consumer's module lock while `service_ready` reads the
 //! provider's published metadata; it never takes the provider's module lock,
 //! calls provider code or joins a worker. Readers never take a module lock, so
@@ -37,6 +40,7 @@ use crate::events::EventBus;
 use crate::logging::{Logger, ScopedLogger};
 use crate::module::{Module, ModuleConfig, ModuleDescriptor, ModuleId, ServiceId};
 use crate::permissions::{Permission, PermissionProvider, PermissionStatus};
+use crate::shutdown::ShutdownWait;
 use crate::status::{
     ConfigDiagnostic, ModuleFailure, ModuleSnapshot, ModuleStatus, UnavailableReason,
 };
@@ -104,6 +108,19 @@ pub struct ReloadReport {
     /// The configuration remains committed at its revised state; the module
     /// snapshot records `Failed` with the same error.
     pub start_error: Option<ModuleError>,
+}
+
+/// One module the coordinator must stop, in reverse start order.
+///
+/// Targets come from [`Registry::shutdown_targets`] and are handed back to
+/// [`Registry::stop_module`]. The sequence is the start order the module was
+/// admitted with; a higher sequence stops first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StopTarget {
+    /// The module to stop.
+    pub id: ModuleId,
+    /// The reverse-start sequence assigned when the start was admitted.
+    pub sequence: u64,
 }
 
 /// Configuration erased once at registration.
@@ -174,30 +191,103 @@ struct Runtime {
     workers: WorkerGroup,
     cancellation: CancellationToken,
     windows: WindowCapability,
-    sequence: u64,
 }
 
 impl Runtime {
-    fn new(
-        id: ModuleId,
-        sequence: u64,
-        surfaces: &'static [SurfaceId],
-        backend: Arc<dyn WindowBackend>,
-    ) -> Self {
+    fn new(id: ModuleId, surfaces: &'static [SurfaceId], backend: Arc<dyn WindowBackend>) -> Self {
         let workers = WorkerGroup::new(id.as_str());
         let cancellation = workers.cancellation();
         let windows = WindowCapability::new(id, surfaces, backend, cancellation.clone());
-        Self {
-            workers,
-            cancellation,
-            windows,
-            sequence,
-        }
+        Self { workers, cancellation, windows }
     }
 
     fn invalidate_windows(&self) { self.windows.invalidate(); }
 
     fn release_windows(&self) { self.windows.release_owner(); }
+}
+
+/// Logical, lock-free invalidation shared with one module.
+///
+/// Each [`ModuleSlot`] owns one handle for its whole lifetime and the registry
+/// retains it outside the slot state lock and outside `lifecycle`, so
+/// [`Registry::invalidate`] can fire it while a start or stop holds either
+/// lock. Firing is logical only: queued native work drops, already-issued work
+/// finishes inert.
+///
+/// A listener runs exactly once, after the listener list lock has been
+/// released and never under a registry, slot or lifecycle lock. A panicking
+/// listener is contained with [`std::panic::catch_unwind`] so it cannot stop
+/// the other listeners or poison the handle; the release profile aborts on
+/// panic, so that containment applies only where unwinding is enabled.
+#[derive(Clone, Default)]
+pub struct ModuleInvalidation {
+    state: Arc<InvalidationState>,
+}
+
+#[derive(Default)]
+struct InvalidationState {
+    invalidated: AtomicBool,
+    listeners: Mutex<Vec<Arc<dyn Fn() + Send + Sync>>>,
+}
+
+impl ModuleInvalidation {
+    /// Creates a handle that has not been invalidated.
+    #[must_use]
+    pub fn new() -> Self { Self::default() }
+
+    /// Invalidates once. Never takes a registry, slot or lifecycle lock.
+    ///
+    /// Repeated calls are no-ops. Every listener registered before this call
+    /// runs exactly once before it returns.
+    pub fn invalidate(&self) {
+        if self.state.invalidated.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let listeners = {
+            let mut listeners = lock(&self.state.listeners);
+            std::mem::take(&mut *listeners)
+        };
+        run_listeners(&listeners);
+    }
+
+    /// Whether invalidation has been requested.
+    #[must_use]
+    pub fn is_invalidated(&self) -> bool { self.state.invalidated.load(Ordering::SeqCst) }
+
+    /// Registers a listener, running it immediately when already invalidated.
+    ///
+    /// The check and the insertion both hold the listener lock, so a concurrent
+    /// [`ModuleInvalidation::invalidate`] cannot miss this registration. A
+    /// listener registered after invalidation is invoked exactly once, before
+    /// this call returns.
+    pub fn on_invalidate(&self, listener: Arc<dyn Fn() + Send + Sync>) {
+        {
+            let mut listeners = lock(&self.state.listeners);
+            if !self.state.invalidated.load(Ordering::SeqCst) {
+                listeners.push(listener);
+                return;
+            }
+        }
+        run_listener(&listener);
+    }
+}
+
+fn run_listeners(listeners: &[Arc<dyn Fn() + Send + Sync>]) {
+    for listener in listeners {
+        run_listener(listener);
+    }
+}
+
+fn run_listener(listener: &Arc<dyn Fn() + Send + Sync>) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| listener()));
+}
+
+impl fmt::Debug for ModuleInvalidation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ModuleInvalidation")
+            .field("invalidated", &self.is_invalidated())
+            .finish_non_exhaustive()
+    }
 }
 
 struct ModuleSlot {
@@ -208,6 +298,23 @@ struct ModuleSlot {
     /// This lock never guards module code. Readers and service readiness hold
     /// it only long enough to clone the current snapshot.
     published: Mutex<ModuleSnapshot>,
+    /// Stop metadata readable without the slot state lock.
+    ///
+    /// Teardown snapshots targets from this cell, so a blocked start that holds
+    /// the state lock cannot delay it. The cell is only ever mutated for a few
+    /// instructions and never held across module code.
+    meta: Mutex<SlotMeta>,
+    /// Logical invalidation shared with every runtime of this module.
+    invalidation: ModuleInvalidation,
+}
+
+/// Stop metadata for one slot, kept outside the slot state lock.
+#[derive(Clone, Copy, Debug, Default)]
+struct SlotMeta {
+    /// The start sequence assigned when the start was admitted.
+    sequence: Option<u64>,
+    /// Set from admission of a start until a successful stop commits.
+    needs_stop: bool,
 }
 
 impl ModuleSlot {
@@ -431,11 +538,23 @@ impl Registry {
             needs_stop: false,
         };
         let published = Mutex::new(state.snapshot(id));
-        slots.push(Arc::new(ModuleSlot {
+        let slot = Arc::new(ModuleSlot {
             descriptor,
             state: Mutex::new(state),
             published,
-        }));
+            meta: Mutex::new(SlotMeta::default()),
+            invalidation: ModuleInvalidation::new(),
+        });
+        slots.push(Arc::clone(&slot));
+        // A shutdown that started while this registration held the slots lock
+        // must not leave a module behind: remove it and invalidate its handle
+        // before returning, so no native work can be issued for it.
+        if self.shutting_down.load(Ordering::SeqCst) {
+            slots.retain(|existing| !Arc::ptr_eq(existing, &slot));
+            drop(slots);
+            slot.invalidation.invalidate();
+            return Err(RegistryError::ShuttingDown);
+        }
         Ok(ModuleHandle { id, marker: PhantomData })
     }
 
@@ -450,6 +569,9 @@ impl Registry {
     /// Returns a declaration error before starting anything, or the first module
     /// failure after attempting every module.
     pub fn start_all(&self) -> RegistryResult<()> {
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Err(RegistryError::ShuttingDown);
+        }
         let _lifecycle = lock(&self.lifecycle);
         if self.shutting_down.load(Ordering::SeqCst) {
             return Err(RegistryError::ShuttingDown);
@@ -482,6 +604,9 @@ impl Registry {
     /// # Errors
     /// Returns an unknown-handle, shutdown or module error.
     pub fn set_enabled<C>(&self, handle: ModuleHandle<C>, enabled: bool) -> RegistryResult<()> {
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Err(RegistryError::ShuttingDown);
+        }
         let slot = self.slot(handle)?;
         let result = self.set_enabled_inner(&slot, enabled);
         self.reconcile_after(&slot, result)
@@ -490,6 +615,11 @@ impl Registry {
     fn set_enabled_inner(&self, slot: &ModuleSlot, enabled: bool) -> RegistryResult<()> {
         {
             let mut guard = slot.lock_state();
+            // Commitment recheck: a shutdown that raced the entry check must
+            // not admit a transition, including an already-satisfied change.
+            if self.shutting_down.load(Ordering::SeqCst) {
+                return Err(RegistryError::ShuttingDown);
+            }
             if guard.enabled == enabled {
                 if !enabled || guard.paused {
                     return Ok(());
@@ -517,6 +647,9 @@ impl Registry {
     /// # Errors
     /// Returns an unknown-handle or stop error.
     pub fn pause<C>(&self, handle: ModuleHandle<C>) -> RegistryResult<()> {
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Err(RegistryError::ShuttingDown);
+        }
         let slot = self.slot(handle)?;
         let result = self.pause_inner(&slot);
         self.reconcile_after(&slot, result)
@@ -524,6 +657,9 @@ impl Registry {
 
     fn pause_inner(&self, slot: &ModuleSlot) -> RegistryResult<()> {
         let mut guard = slot.lock_state();
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Err(RegistryError::ShuttingDown);
+        }
         if guard.paused {
             return Ok(());
         }
@@ -544,6 +680,9 @@ impl Registry {
     /// # Errors
     /// Returns an unknown-handle or module error.
     pub fn resume<C>(&self, handle: ModuleHandle<C>) -> RegistryResult<()> {
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Err(RegistryError::ShuttingDown);
+        }
         let slot = self.slot(handle)?;
         let result = self.resume_inner(&slot);
         self.reconcile_after(&slot, result)
@@ -552,6 +691,9 @@ impl Registry {
     fn resume_inner(&self, slot: &ModuleSlot) -> RegistryResult<()> {
         {
             let mut guard = slot.lock_state();
+            if self.shutting_down.load(Ordering::SeqCst) {
+                return Err(RegistryError::ShuttingDown);
+            }
             if !guard.paused {
                 return Ok(());
             }
@@ -586,6 +728,9 @@ impl Registry {
         handle: ModuleHandle<C>,
         config: C,
     ) -> RegistryResult<ReloadReport> {
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Err(RegistryError::ShuttingDown);
+        }
         let slot = self.slot(handle)?;
         let status = match self.reload_inner(&slot, config) {
             Ok(status) => status,
@@ -617,6 +762,9 @@ impl Registry {
     /// untouched. Failed modules are retried so a changed configuration can
     /// recover them.
     fn start_after_reload(&self, slot: &ModuleSlot) -> RegistryResult<()> {
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Err(RegistryError::ShuttingDown);
+        }
         if !self.started.load(Ordering::SeqCst) {
             return Ok(());
         }
@@ -655,6 +803,11 @@ impl Registry {
         let candidate: Box<dyn ErasedConfig> = Box::new(ConfigBox(config));
         let enabled = candidate.enabled();
         let mut guard = slot.lock_state();
+        // Commitment recheck: shutdown may have started while the candidate was
+        // validated, so refuse before mutating the diagnostic, config or state.
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Err(RegistryError::ShuttingDown);
+        }
         let state = &mut *guard;
         state.diagnostic = None;
         let unchanged =
@@ -755,6 +908,9 @@ impl Registry {
     /// # Errors
     /// Returns a declaration or stop error.
     pub fn service_failed(&self, service: ServiceId) -> RegistryResult<()> {
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Err(RegistryError::ShuttingDown);
+        }
         let _lifecycle = lock(&self.lifecycle);
         if self.shutting_down.load(Ordering::SeqCst) {
             return Err(RegistryError::ShuttingDown);
@@ -771,6 +927,9 @@ impl Registry {
     /// # Errors
     /// Returns a declaration or module error.
     pub fn service_recovered(&self, service: ServiceId) -> RegistryResult<()> {
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Err(RegistryError::ShuttingDown);
+        }
         let _lifecycle = lock(&self.lifecycle);
         if self.shutting_down.load(Ordering::SeqCst) {
             return Err(RegistryError::ShuttingDown);
@@ -789,7 +948,7 @@ impl Registry {
     /// module lock.
     fn reconcile_locked(&self) -> RegistryResult<()> {
         if self.shutting_down.load(Ordering::SeqCst) {
-            return Ok(());
+            return Err(RegistryError::ShuttingDown);
         }
         let slots = self.slots_snapshot();
         let descriptors: Vec<ModuleDescriptor> = slots.iter().map(|slot| slot.descriptor).collect();
@@ -889,6 +1048,9 @@ impl Registry {
         permission: Permission,
         status: PermissionStatus,
     ) -> RegistryResult<()> {
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Err(RegistryError::ShuttingDown);
+        }
         let _lifecycle = lock(&self.lifecycle);
         if self.shutting_down.load(Ordering::SeqCst) {
             return Err(RegistryError::ShuttingDown);
@@ -946,42 +1108,108 @@ impl Registry {
         first_error.map_or(reconciled, Err)
     }
 
-    /// Stops every module in reverse start order.
+    /// Sets the shutdown latch and invalidates every module handle.
     ///
-    /// Cancels each runtime before calling `stop`, then joins its workers.
-    /// Repeated calls are no-ops. Once called, the registry refuses new starts
-    /// and registrations.
+    /// Takes no lifecycle lock, no slot state lock and joins nothing, so it
+    /// returns even while another thread holds either lock in module code.
+    pub fn invalidate(&self) {
+        self.shutting_down.store(true, Ordering::SeqCst);
+        for slot in self.slots_snapshot() {
+            slot.invalidation.invalidate();
+        }
+    }
+
+    /// Snapshots stop targets in reverse start order from slot metadata only.
+    ///
+    /// Returns immediately even while a start holds a slot state lock. A slot
+    /// that already stopped is omitted.
+    #[must_use]
+    pub fn shutdown_targets(&self) -> Vec<StopTarget> {
+        let mut targets: Vec<StopTarget> = self
+            .slots_snapshot()
+            .iter()
+            .filter_map(|slot| {
+                let meta = *lock(&slot.meta);
+                if !meta.needs_stop {
+                    return None;
+                }
+                let sequence = meta.sequence?;
+                Some(StopTarget {
+                    id: slot.descriptor.id,
+                    sequence,
+                })
+            })
+            .collect();
+        targets.sort_by_key(|target| std::cmp::Reverse(target.sequence));
+        targets
+    }
+
+    /// Stops exactly one target. Idempotent and never refused.
+    ///
+    /// Takes only this module's state lock, publishes a non-running status,
+    /// then quiesces so the ordinary stop path performs the stop and its retry
+    /// bookkeeping. It never takes `lifecycle`. A target that already stopped
+    /// is a no-op.
+    ///
+    /// # Errors
+    /// Returns the module's stop failure. The slot stays consistent: it keeps
+    /// `needs_stop` set and reports `Failed`, so the next target still stops.
+    pub fn stop_module(&self, target: &StopTarget) -> RegistryResult<()> {
+        self.stop_target(target, None).map(|_| ())
+    }
+
+    /// Stops one target like [`Registry::stop_module`], bounding its worker join.
+    ///
+    /// Returns `Ok(false)` when `Module::stop` returned but a worker outlived the
+    /// bound. That worker is detached and the slot lock is released, so a hung
+    /// worker retains nothing another caller needs.
+    ///
+    /// # Errors
+    /// Returns the module's stop failure, as [`Registry::stop_module`] does.
+    pub fn stop_module_bounded(
+        &self,
+        target: &StopTarget,
+        wait: &dyn ShutdownWait,
+    ) -> RegistryResult<bool> {
+        self.stop_target(target, Some(wait))
+    }
+
+    fn stop_target(
+        &self,
+        target: &StopTarget,
+        wait: Option<&dyn ShutdownWait>,
+    ) -> RegistryResult<bool> {
+        let Some(slot) =
+            self.slots_snapshot().into_iter().find(|slot| slot.descriptor.id == target.id)
+        else {
+            return Ok(true);
+        };
+        let mut guard = slot.lock_state();
+        if guard.runtime.is_none() && !guard.needs_stop {
+            return Ok(true);
+        }
+        guard.status = if guard.enabled {
+            ModuleStatus::Stopped
+        } else {
+            ModuleStatus::Disabled
+        };
+        guard.publish();
+        self.quiesce_joining(&slot, &mut guard, wait)
+    }
+
+    /// Invalidates every module, then stops them in reverse start order.
+    ///
+    /// Repeated calls are no-ops. Once called, the registry refuses new starts,
+    /// registrations and lifecycle changes with [`RegistryError::ShuttingDown`].
+    /// No lifecycle lock is taken and no lock spans a stop.
     ///
     /// # Errors
     /// Returns the first stop failure after attempting every module.
     pub fn shutdown(&self) -> RegistryResult<()> {
-        let _lifecycle = lock(&self.lifecycle);
-        self.shutting_down.store(true, Ordering::SeqCst);
-        let mut targets: Vec<(u64, Arc<ModuleSlot>)> = Vec::new();
-        for slot in self.slots_snapshot() {
-            let target = {
-                let state = lock(&slot.state);
-                (state.runtime.is_some() || state.needs_stop)
-                    .then(|| state.runtime.as_ref().map_or(0, |runtime| runtime.sequence))
-            };
-            if let Some(sequence) = target {
-                targets.push((sequence, Arc::clone(&slot)));
-            }
-        }
-        targets.sort_by_key(|target| std::cmp::Reverse(target.0));
+        self.invalidate();
         let mut first_error = None;
-        for (_, slot) in targets {
-            let mut guard = slot.lock_state();
-            if guard.runtime.is_none() && !guard.needs_stop {
-                continue;
-            }
-            guard.status = if guard.enabled {
-                ModuleStatus::Stopped
-            } else {
-                ModuleStatus::Disabled
-            };
-            guard.publish();
-            if let Err(error) = self.quiesce(&slot, &mut guard) {
+        for target in self.shutdown_targets() {
+            if let Err(error) = self.stop_module(&target) {
                 keep_first(&mut first_error, error);
             }
         }
@@ -989,6 +1217,9 @@ impl Registry {
     }
 
     fn start_slot(&self, slot: &ModuleSlot) -> RegistryResult<()> {
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Err(RegistryError::ShuttingDown);
+        }
         let mut guard = slot.lock_state();
         let state = &mut *guard;
         if self.shutting_down.load(Ordering::SeqCst) {
@@ -1026,15 +1257,34 @@ impl Registry {
             }
         }
         let sequence = self.next_sequence.fetch_add(1, Ordering::Relaxed);
+        // Metadata is truthful from admission, so teardown can find this
+        // module while the start below is still blocked in module code.
+        {
+            let mut meta = lock(&slot.meta);
+            meta.sequence = Some(sequence);
+            meta.needs_stop = true;
+        }
         state.runtime = Some(Runtime::new(
             slot.descriptor.id,
-            sequence,
             slot.descriptor.surfaces,
             Arc::clone(&self.windows),
         ));
         state.needs_stop = true;
         match self.configure_and_start(slot, state) {
             Ok(()) => {
+                if self.shutting_down.load(Ordering::SeqCst) {
+                    // The latch was set while this start was in flight. Release
+                    // what it created before returning: a late completion must
+                    // not publish running state, restart work or keep a native
+                    // resource alive past the refusal.
+                    state.status = if state.enabled {
+                        ModuleStatus::Stopped
+                    } else {
+                        ModuleStatus::Disabled
+                    };
+                    let _cleanup = self.quiesce(slot, state);
+                    return Err(RegistryError::ShuttingDown);
+                }
                 state.status = ModuleStatus::Running;
                 Ok(())
             }
@@ -1075,8 +1325,19 @@ impl Registry {
     /// Stops the module and joins its workers. The caller holds the module lock
     /// and has already set the non-running target status.
     fn quiesce(&self, slot: &ModuleSlot, state: &mut ModuleState) -> RegistryResult<()> {
+        self.quiesce_joining(slot, state, None).map(|_| ())
+    }
+
+    /// Returns whether every worker joined. Without a `wait` the join is
+    /// unbounded; with one, a worker outliving the bound is detached.
+    fn quiesce_joining(
+        &self,
+        slot: &ModuleSlot,
+        state: &mut ModuleState,
+        wait: Option<&dyn ShutdownWait>,
+    ) -> RegistryResult<bool> {
         if state.runtime.is_none() && !state.needs_stop {
-            return Ok(());
+            return Ok(true);
         }
         // Publish before cancelling or calling `stop` so a dependent checking
         // this provider's readiness sees the non-running target immediately.
@@ -1089,7 +1350,6 @@ impl Registry {
         let runtime = state.runtime.take().unwrap_or_else(|| {
             Runtime::new(
                 slot.descriptor.id,
-                0,
                 slot.descriptor.surfaces,
                 Arc::clone(&self.windows),
             )
@@ -1109,11 +1369,19 @@ impl Registry {
         // keeps the runtime available for the stop context without widening the
         // gate.
         runtime.release_windows();
-        runtime.workers.cancel_and_join();
+        let joined = if let Some(wait) = wait {
+            runtime.workers.cancel_and_join_bounded(wait)
+        } else {
+            runtime.workers.cancel_and_join();
+            true
+        };
         match result {
             Ok(()) => {
                 state.needs_stop = false;
-                Ok(())
+                let mut meta = lock(&slot.meta);
+                meta.needs_stop = false;
+                meta.sequence = None;
+                Ok(joined)
             }
             Err(error) => {
                 state.needs_stop = true;
@@ -1145,6 +1413,7 @@ impl Registry {
             ScopedLogger::new(Arc::clone(&self.logger), slot.descriptor.id, operation),
             runtime.workers.handle(),
             runtime.cancellation.clone(),
+            slot.invalidation.clone(),
             crate::context::ContextServices {
                 events: Arc::clone(&self.events),
                 main_thread: Arc::clone(&self.main_thread),
@@ -1192,7 +1461,9 @@ fn keep_first(first: &mut Option<RegistryError>, error: RegistryError) {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Barrier, mpsc};
+    use std::thread;
     use std::time::Duration;
 
     use super::*;
@@ -1352,8 +1623,6 @@ mod tests {
         fn close(&self, _: crate::windows::WindowId) {}
 
         fn release_owner(&self, owner: ModuleId) { lock(&self.released).push(owner); }
-
-        fn close_all(&self) {}
     }
 
     #[derive(Default)]
@@ -1399,8 +1668,6 @@ mod tests {
             lock(&self.released).push(owner);
             lock(&self.entries).retain(|(entry_owner, _), _| *entry_owner != owner);
         }
-
-        fn close_all(&self) {}
     }
 
     static TEST_SURFACES: [crate::windows::SurfaceId; 1] = [crate::windows::SurfaceId::new("test")];
@@ -1748,6 +2015,29 @@ mod tests {
         gate: Option<Arc<Gate>>,
         trace: Arc<Trace>,
         state: Arc<Mutex<FakeState>>,
+        invalidation: Arc<Mutex<Option<ModuleInvalidation>>>,
+        invalidation_hits: Arc<AtomicUsize>,
+        native: Arc<Mutex<Vec<&'static str>>>,
+        descriptor_entered: Option<mpsc::Sender<()>>,
+    }
+
+    impl FakeModule {
+        /// Simulates queued native work, which rechecks the handle at issuance.
+        fn issue(&self, action: &'static str) {
+            issue_native(&self.invalidation, &self.native, action);
+        }
+    }
+
+    /// Queued native work: dropped when its captured handle is invalidated.
+    fn issue_native(
+        handle: &Mutex<Option<ModuleInvalidation>>,
+        native: &Mutex<Vec<&'static str>>,
+        action: &'static str,
+    ) {
+        let invalidated = lock(handle).as_ref().is_some_and(ModuleInvalidation::is_invalidated);
+        if !invalidated {
+            lock(native).push(action);
+        }
     }
 
     fn fake(id: &'static str, trace: &Arc<Trace>) -> (FakeModule, Arc<Mutex<FakeState>>) {
@@ -1764,6 +2054,10 @@ mod tests {
                 gate: None,
                 trace: Arc::clone(trace),
                 state: Arc::clone(&state),
+                invalidation: Arc::new(Mutex::new(None)),
+                invalidation_hits: Arc::new(AtomicUsize::new(0)),
+                native: Arc::new(Mutex::new(Vec::new())),
+                descriptor_entered: None,
             },
             state,
         )
@@ -1773,6 +2067,9 @@ mod tests {
         type Config = FakeConfig;
 
         fn descriptor(&self) -> ModuleDescriptor {
+            if let Some(entered) = &self.descriptor_entered {
+                let _ = entered.send(());
+            }
             ModuleDescriptor {
                 id: self.id,
                 provides: self.provides,
@@ -1801,6 +2098,15 @@ mod tests {
         }
 
         fn start(&mut self, ctx: &ModuleContext) -> ModuleResult<()> {
+            let invalidation = ctx.invalidation().clone();
+            {
+                let hits = Arc::clone(&self.invalidation_hits);
+                invalidation.on_invalidate(Arc::new(move || {
+                    hits.fetch_add(1, Ordering::SeqCst);
+                }));
+            }
+            *lock(&self.invalidation) = Some(invalidation);
+            self.issue("start");
             if let Some(gate) = &self.gate {
                 gate.pass(Blocked::Start);
             }
@@ -3105,5 +3411,367 @@ mod tests {
 
         release.send(()).expect("release worker");
         disable_thread.join().expect("stop thread");
+    }
+
+    #[test]
+    fn the_invalidation_handle_and_stop_target_are_send_and_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<ModuleInvalidation>();
+        assert_send_sync::<StopTarget>();
+    }
+
+    #[test]
+    fn invalidation_runs_each_listener_exactly_once_and_never_under_the_listener_lock() {
+        let invalidation = ModuleInvalidation::new();
+        let first = Arc::new(AtomicUsize::new(0));
+        let second = Arc::new(AtomicUsize::new(0));
+        let first_seen = Arc::clone(&first);
+        invalidation.on_invalidate(Arc::new(move || {
+            first_seen.fetch_add(1, Ordering::SeqCst);
+        }));
+        let second_seen = Arc::clone(&second);
+        let reenter = invalidation.clone();
+        invalidation.on_invalidate(Arc::new(move || {
+            // Re-entering the handle would deadlock if the list lock were held
+            // while listeners ran.
+            reenter.on_invalidate(Arc::new(|| {}));
+            second_seen.fetch_add(1, Ordering::SeqCst);
+        }));
+        assert!(!invalidation.is_invalidated());
+        invalidation.invalidate();
+        invalidation.invalidate();
+        assert!(invalidation.is_invalidated());
+        assert_eq!(first.load(Ordering::SeqCst), 1);
+        assert_eq!(second.load(Ordering::SeqCst), 1);
+
+        let late = Arc::new(AtomicUsize::new(0));
+        let late_seen = Arc::clone(&late);
+        invalidation.on_invalidate(Arc::new(move || {
+            late_seen.fetch_add(1, Ordering::SeqCst);
+        }));
+        assert_eq!(
+            late.load(Ordering::SeqCst),
+            1,
+            "a late registration runs immediately"
+        );
+    }
+
+    #[test]
+    fn a_panicking_listener_does_not_stop_the_others() {
+        let invalidation = ModuleInvalidation::new();
+        invalidation.on_invalidate(Arc::new(|| panic!("expected test panic")));
+        let ran = Arc::new(AtomicBool::new(false));
+        let ran_in_listener = Arc::clone(&ran);
+        invalidation.on_invalidate(Arc::new(move || {
+            ran_in_listener.store(true, Ordering::SeqCst);
+        }));
+        invalidation.invalidate();
+        assert!(ran.load(Ordering::SeqCst));
+        assert!(invalidation.is_invalidated());
+    }
+
+    #[test]
+    fn invalidation_fires_while_a_start_holds_lifecycle_and_the_slot_lock() {
+        let harness = Harness::new();
+        let (module, state, entered, release) = harness.gated("blocked", Blocked::Start);
+        let invalidation = Arc::clone(&module.invalidation);
+        let hits = Arc::clone(&module.invalidation_hits);
+        let native = Arc::clone(&module.native);
+        let handle = harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        let registry = Arc::new(harness.registry);
+
+        let starter = {
+            let registry = Arc::clone(&registry);
+            thread::spawn(move || registry.start_all())
+        };
+        wait_until_blocked(&entered);
+
+        // `start_all` holds `lifecycle` and this start holds the slot lock.
+        registry.invalidate();
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "the handle fires despite both locks"
+        );
+        let captured = lock(&invalidation).clone().expect("the start captured the handle");
+        assert!(captured.is_invalidated());
+        assert_eq!(*lock(&native), vec!["start"]);
+
+        // Queued native work rechecks the handle at issuance.
+        issue_native(&invalidation, &native, "queued");
+        assert_eq!(
+            *lock(&native),
+            vec!["start"],
+            "queued work must not issue after invalidation"
+        );
+
+        release.send(()).expect("release start");
+        let result = starter.join().expect("start thread");
+        assert!(matches!(result, Err(RegistryError::ShuttingDown)));
+        assert_eq!(
+            registry.snapshot(handle).expect("snapshot").status,
+            ModuleStatus::Stopped
+        );
+        assert_eq!(lock(&state).stops, 1, "a late start releases its runtime inline");
+    }
+
+    #[test]
+    fn a_committed_start_blocked_at_the_latch_is_refused_and_releases_its_runtime() {
+        let harness = Harness::new();
+        let (module, state, entered, release) = harness.gated("late-start", Blocked::Start);
+        let handle = harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        let registry = Arc::new(harness.registry);
+
+        let starter = {
+            let registry = Arc::clone(&registry);
+            thread::spawn(move || registry.set_enabled(handle, true))
+        };
+        wait_until_blocked(&entered);
+        registry.invalidate();
+        release.send(()).expect("release start");
+
+        let result = starter.join().expect("start thread");
+        assert!(matches!(result, Err(RegistryError::ShuttingDown)));
+        let snapshot = registry.snapshot(handle).expect("snapshot");
+        assert_eq!(snapshot.status, ModuleStatus::Stopped);
+        assert_eq!(lock(&state).starts, 1);
+        assert_eq!(lock(&state).stops, 1, "the refused start quiesced inline");
+        assert!(
+            registry.shutdown_targets().is_empty(),
+            "no target survived the refusal"
+        );
+    }
+
+    #[test]
+    fn registration_racing_shutdown_is_refused_and_existing_handles_are_invalidated() {
+        let harness = Harness::new();
+        let (module, _state) = harness.fake("existing");
+        let invalidation = Arc::clone(&module.invalidation);
+        let hits = Arc::clone(&module.invalidation_hits);
+        harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        harness.registry.start_all().expect("start");
+        let existing = lock(&invalidation).clone().expect("the start captured the handle");
+
+        let (descriptor_entered, descriptor_rx) = mpsc::channel();
+        let (mut racing, _) = harness.fake("racing");
+        racing.descriptor_entered = Some(descriptor_entered);
+        let registry = Arc::new(harness.registry);
+
+        // Holding the slots lock parks the registration after its entry check
+        // and lets the latch be set before it can push.
+        let slots = lock(&registry.slots);
+        let racer = {
+            let registry = Arc::clone(&registry);
+            thread::spawn(move || registry.register(racing, FakeConfig::on(1)))
+        };
+        descriptor_rx.recv_timeout(Duration::from_secs(5)).expect("descriptor read");
+        let invalidator = {
+            let registry = Arc::clone(&registry);
+            thread::spawn(move || registry.invalidate())
+        };
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !registry.shutting_down.load(Ordering::SeqCst) {
+            assert!(std::time::Instant::now() < deadline, "the latch was never set");
+            thread::yield_now();
+        }
+        drop(slots);
+        invalidator.join().expect("invalidator");
+
+        assert!(matches!(
+            racer.join().expect("registration"),
+            Err(RegistryError::ShuttingDown)
+        ));
+        assert_eq!(registry.snapshots().len(), 1, "the racing slot was removed");
+        assert!(existing.is_invalidated());
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn lifecycle_and_registration_are_refused_after_invalidation() {
+        let harness = Harness::new();
+        let (module, state) = harness.fake("solo");
+        let handle = harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        let (paused, _) = harness.fake("paused");
+        let paused_handle = harness.registry.register(paused, FakeConfig::on(1)).expect("paused");
+        let (staged, _) = harness.fake("staged");
+        let staged_handle = harness.registry.register(staged, FakeConfig::off(1)).expect("staged");
+        harness.registry.start_all().expect("start");
+        harness.registry.pause(paused_handle).expect("pause");
+
+        harness.registry.invalidate();
+
+        assert!(matches!(
+            harness.registry.set_enabled(handle, true),
+            Err(RegistryError::ShuttingDown)
+        ));
+        assert!(matches!(
+            harness.registry.set_enabled(handle, false),
+            Err(RegistryError::ShuttingDown)
+        ));
+        assert!(matches!(
+            harness.registry.pause(paused_handle),
+            Err(RegistryError::ShuttingDown)
+        ));
+        assert!(matches!(
+            harness.registry.resume(paused_handle),
+            Err(RegistryError::ShuttingDown)
+        ));
+        assert!(matches!(
+            harness.registry.reload(handle, FakeConfig::on(2)),
+            Err(RegistryError::ShuttingDown)
+        ));
+        assert!(matches!(
+            harness.registry.reload(staged_handle, FakeConfig::on(2)),
+            Err(RegistryError::ShuttingDown)
+        ));
+        assert!(matches!(
+            harness.registry.start_all(),
+            Err(RegistryError::ShuttingDown)
+        ));
+        assert!(matches!(
+            harness.registry.service_failed(SERVICE),
+            Err(RegistryError::ShuttingDown)
+        ));
+        assert!(matches!(
+            harness.registry.service_recovered(SERVICE),
+            Err(RegistryError::ShuttingDown)
+        ));
+        assert!(matches!(
+            harness
+                .registry
+                .on_permission_change(Permission::Accessibility, PermissionStatus::Granted),
+            Err(RegistryError::ShuttingDown)
+        ));
+        let (late, _) = harness.fake("late");
+        assert!(matches!(
+            harness.registry.register(late, FakeConfig::on(1)),
+            Err(RegistryError::ShuttingDown)
+        ));
+
+        // Nothing was mutated by the refused calls.
+        assert_eq!(
+            harness.registry.snapshot(handle).expect("snapshot").status,
+            ModuleStatus::Running
+        );
+        assert_eq!(
+            harness.registry.snapshot(paused_handle).expect("paused").status,
+            ModuleStatus::Paused
+        );
+        assert_eq!(
+            harness.registry.snapshot(staged_handle).expect("staged").status,
+            ModuleStatus::Disabled
+        );
+        assert_eq!(lock(&state).starts, 1);
+        assert_eq!(lock(&state).stops, 0);
+    }
+
+    #[test]
+    fn targets_are_reverse_start_order_and_a_failing_stop_does_not_stop_the_next() {
+        let harness = Harness::new();
+        let (first, first_state) = harness.fake("first");
+        let (mut broken, _) = harness.fake("broken");
+        broken.fail.stop = true;
+        let (last, last_state) = harness.fake("last");
+        harness.registry.register(first, FakeConfig::on(1)).expect("first");
+        harness.registry.register(broken, FakeConfig::on(1)).expect("broken");
+        harness.registry.register(last, FakeConfig::on(1)).expect("last");
+        harness.registry.start_all().expect("start");
+
+        let targets = harness.registry.shutdown_targets();
+        let ids: Vec<ModuleId> = targets.iter().map(|target| target.id).collect();
+        assert_eq!(ids, vec![
+            ModuleId::new("last"),
+            ModuleId::new("broken"),
+            ModuleId::new("first")
+        ]);
+        assert!(targets.windows(2).all(|pair| pair[0].sequence > pair[1].sequence));
+
+        let error = harness.registry.shutdown().expect_err("the failing stop is reported");
+        assert!(matches!(error, RegistryError::Module(_)));
+        let stops: Vec<String> = harness
+            .trace
+            .events()
+            .into_iter()
+            .filter(|event| event.ends_with("stop"))
+            .collect();
+        assert_eq!(stops, vec!["last.stop", "broken.stop", "first.stop"]);
+        assert_eq!(lock(&last_state).stops, 1);
+        assert_eq!(lock(&first_state).stops, 1);
+        // The failing slot stays a target so a retry can name it.
+        let remaining = harness.registry.shutdown_targets();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, ModuleId::new("broken"));
+    }
+
+    #[test]
+    fn a_stopped_slot_is_omitted_and_stop_module_is_idempotent() {
+        let harness = Harness::new();
+        let (first, first_state) = harness.fake("first");
+        let (second, second_state) = harness.fake("second");
+        let first_handle = harness.registry.register(first, FakeConfig::on(1)).expect("first");
+        harness.registry.register(second, FakeConfig::on(1)).expect("second");
+        harness.registry.start_all().expect("start");
+        harness.registry.pause(first_handle).expect("pause");
+
+        let targets = harness.registry.shutdown_targets();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].id, ModuleId::new("second"));
+
+        let stopped = StopTarget {
+            id: ModuleId::new("first"),
+            sequence: 0,
+        };
+        harness.registry.stop_module(&stopped).expect("idempotent stop");
+        assert_eq!(lock(&first_state).stops, 1);
+        assert_eq!(lock(&second_state).stops, 0);
+    }
+
+    #[test]
+    fn targets_return_during_a_blocked_start_and_the_stop_waits_for_the_slot_lock() {
+        let harness = Harness::new();
+        let (module, state, entered, release) = harness.gated("blocked", Blocked::Start);
+        harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        let registry = Arc::new(harness.registry);
+
+        let starter = {
+            let registry = Arc::clone(&registry);
+            thread::spawn(move || registry.start_all())
+        };
+        wait_until_blocked(&entered);
+
+        let targets = {
+            let registry = Arc::clone(&registry);
+            within("shutdown_targets", move || registry.shutdown_targets())
+        };
+        assert_eq!(targets.len(), 1, "metadata is available during a blocked start");
+        let target = targets[0];
+
+        let (result, result_rx) = mpsc::channel();
+        let stopper = {
+            let registry = Arc::clone(&registry);
+            thread::spawn(move || {
+                let outcome = registry.stop_module(&target);
+                let _ = result.send(outcome);
+            })
+        };
+        assert_eq!(
+            lock(&state).stops,
+            0,
+            "module code must not run during the start"
+        );
+        assert!(
+            result_rx.recv_timeout(Duration::from_millis(200)).is_err(),
+            "the stop must wait for the slot lock instead of refusing"
+        );
+
+        release.send(()).expect("release start");
+        starter.join().expect("start thread").expect("start completes");
+        result_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("stop result")
+            .expect("the stop succeeds");
+        stopper.join().expect("stop thread");
+        assert_eq!(lock(&state).stops, 1, "the waiting stop performed the stop");
+        assert!(registry.shutdown_targets().is_empty());
     }
 }

@@ -289,9 +289,6 @@ pub trait WindowBackend: Send + Sync {
     /// The registry calls this when the module stops, including after a failed
     /// configure or start, so an owner never leaks a window.
     fn release_owner(&self, owner: ModuleId);
-
-    /// Closes every window owned by the host.
-    fn close_all(&self);
 }
 
 /// The narrow window surface handed to one module through its context.
@@ -538,8 +535,6 @@ impl WindowBackend for UnavailableWindows {
     fn close(&self, _: WindowId) {}
 
     fn release_owner(&self, _: ModuleId) {}
-
-    fn close_all(&self) {}
 }
 
 #[cfg(test)]
@@ -596,8 +591,6 @@ mod tests {
                 .expect("entries")
                 .retain(|(entry_owner, _), _| *entry_owner != owner);
         }
-
-        fn close_all(&self) {}
     }
 
     const SURFACES: &[SurfaceId] = &[SurfaceId::new("test")];
@@ -628,8 +621,6 @@ mod tests {
         fn close(&self, window: WindowId) { self.inner.close(window); }
 
         fn release_owner(&self, owner: ModuleId) { self.inner.release_owner(owner); }
-
-        fn close_all(&self) { self.inner.close_all(); }
     }
 
     fn capability(backend: Arc<FakeBackend>) -> WindowCapability {
@@ -765,8 +756,6 @@ mod tests {
             }
 
             fn release_owner(&self, owner: ModuleId) { self.inner.release_owner(owner); }
-
-            fn close_all(&self) { self.inner.close_all(); }
         }
 
         let (entered_tx, entered_rx) = std::sync::mpsc::channel();

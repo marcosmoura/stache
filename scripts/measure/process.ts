@@ -266,6 +266,72 @@ function classifyExecutable(
   return null;
 }
 
+/** Why an instance query did not prove exclusive ownership. */
+export type InstanceRefusal = 'foreign-instance' | 'unknown-identity' | 'query-failed';
+
+/** A refusal to treat the owned PID as the only running next instance. */
+export class InstanceCollisionError extends Error {
+  readonly reason: InstanceRefusal;
+  readonly evidence: RunningStacheProcess[];
+
+  constructor(reason: InstanceRefusal, message: string, evidence: RunningStacheProcess[] = []) {
+    super(message);
+    this.name = 'InstanceCollisionError';
+    this.reason = reason;
+    this.evidence = evidence;
+  }
+}
+
+/**
+ * Requires the only running `com.marcosmoura.stache.next` instance to be the
+ * owned PID.
+ *
+ * The query is injected so tests never touch a real process table. Legacy
+ * `com.marcosmoura.stache` entries are a distinct identity: they never count as
+ * a collision, but they also never satisfy ownership. A foreign or unidentified
+ * next instance, a missing owned instance, and a failed query all refuse by
+ * throwing {@link InstanceCollisionError}; nothing here signals or launches a
+ * process.
+ */
+export function assertNoOtherNextInstance(
+  query: () => RunningStacheProcess[],
+  ownedPid: number,
+): RunningStacheProcess[] {
+  let evidence: RunningStacheProcess[];
+  try {
+    evidence = query();
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new InstanceCollisionError('query-failed', `the instance query failed: ${detail}`);
+  }
+
+  const nextInstances = evidence.filter((entry) => entry.kind === 'next');
+  const unidentified = nextInstances.find((entry) => entry.pid === null);
+  if (unidentified !== undefined) {
+    throw new InstanceCollisionError(
+      'unknown-identity',
+      `a next instance has no verifiable PID: ${unidentified.description}`,
+      evidence,
+    );
+  }
+  const foreign = nextInstances.find((entry) => entry.pid !== ownedPid);
+  if (foreign !== undefined) {
+    throw new InstanceCollisionError(
+      'foreign-instance',
+      `another next instance is running: pid ${foreign.pid} (${foreign.description})`,
+      evidence,
+    );
+  }
+  if (!nextInstances.some((entry) => entry.pid === ownedPid)) {
+    throw new InstanceCollisionError(
+      'unknown-identity',
+      `the owned pid ${ownedPid} is not a reported next instance`,
+      evidence,
+    );
+  }
+  return evidence;
+}
+
 function matchesTargetExecutable(executablePath: string, target: Target): boolean {
   if (executablePath === target.executablePath) {
     return true;
