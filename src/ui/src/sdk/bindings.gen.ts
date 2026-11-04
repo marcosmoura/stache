@@ -290,9 +290,18 @@ export type KeepAwakeConditionKind =
 "observationDispatchFailed";
 
 /**  Automatic prevention of display, idle and system sleep. */
-export type KeepAwakeConfig = {
+export type KeepAwakeConfig = KeepAwakeConfig_Serialize | KeepAwakeConfig_Deserialize;
+
+/**  Automatic prevention of display, idle and system sleep. */
+export type KeepAwakeConfig_Deserialize = {
 	/**  Whether Keep Awake should prevent display, idle and system sleep. */
 	enabled?: boolean,
+};
+
+/**  Automatic prevention of display, idle and system sleep. */
+export type KeepAwakeConfig_Serialize = {
+	/**  Whether Keep Awake should prevent display, idle and system sleep. */
+	enabled: boolean,
 };
 
 /**
@@ -313,14 +322,30 @@ export type KeepAwakeRuntimeStatus = {
 };
 
 /**  The typed response of `keepAwake.status`. */
-export type KeepAwakeStatus = {
+export type KeepAwakeStatus = KeepAwakeStatus_Serialize | KeepAwakeStatus_Deserialize;
+
+/**  The typed response of `keepAwake.status`. */
+export type KeepAwakeStatus_Deserialize = {
 	/**
 	 *  Published registry metadata for the Keep Awake module.
 	 *
 	 *  The projection keeps the exact decimal revision string. A held
 	 *  configuration diagnostic takes precedence over the snapshot diagnostic.
 	 */
-	module: ModuleStatusView,
+	module: ModuleStatusView_Deserialize,
+	/**  The module's single published runtime observation. */
+	runtime: KeepAwakeRuntimeStatus,
+};
+
+/**  The typed response of `keepAwake.status`. */
+export type KeepAwakeStatus_Serialize = {
+	/**
+	 *  Published registry metadata for the Keep Awake module.
+	 *
+	 *  The projection keeps the exact decimal revision string. A held
+	 *  configuration diagnostic takes precedence over the snapshot diagnostic.
+	 */
+	module: ModuleStatusView_Serialize,
 	/**  The module's single published runtime observation. */
 	runtime: KeepAwakeRuntimeStatus,
 };
