@@ -31,8 +31,8 @@ Subagents never spawn other agents. The orchestrator does all git operations.
 ## Orchestrator flow
 
 1. **Refine.** Ask questions until scope, non-goals and acceptance criteria are agreed. Optionally run `explorer`.
-2. **Isolate.** Create a branch and worktree: `git worktree add .worktrees/<slug> -b <feat|fix>/<slug> main`, then `bun install --frozen-lockfile` in it. All later work happens there. Linked-worktree prepare retains shared hook configuration.
-3. **Spec.** `spec-writer` writes the spec, split into parts if large. The orchestrator reviews it, then commits `docs(spec): add <slug> spec`.
+2. **Spec.** `spec-writer` writes the spec, split into parts if large. The orchestrator reviews it, then commits `docs(spec): add <slug> spec` on `main` before implementation.
+3. **Isolate.** Create the branch and worktree from the updated `main`: `git worktree add .worktrees/<slug> -b <feat|fix>/<slug> main`, then `bun install --frozen-lockfile` in it, so the worktree starts with its spec. Implementation happens there. Linked-worktree prepare retains shared hook configuration.
 4. **Confirm.** The orchestrator asks you before starting each part.
 5. **Implement.** For each approved part: set `in-progress`, run `worker`, review the diff, run `bun run lint`, `bun run format:check` and `bun run test`, set `done`, commit.
 6. **Summarize.** Parts and status, commits, verification, open items.
@@ -42,6 +42,8 @@ Subagents never spawn other agents. The orchestrator does all git operations.
 ## Merge gate
 
 A branch with a spec may only be merged, or proposed for merge, when every part file (`NN-*.md`, not the overview) in its spec directory has `status: done`. If any part is `draft` or `in-progress`, the orchestrator refuses and names the unfinished parts. Keeping or discarding the branch is always allowed.
+
+This gate applies to implementation branches, not to landing approved draft specs on `main` before implementation.
 
 Unfinished work can resume in a later session: start the orchestrator and name the slug. It reads the spec's `00-overview.md` and the worktree's git state, then continues with the next part that isn't done.
 
