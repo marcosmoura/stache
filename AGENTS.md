@@ -35,6 +35,7 @@ Project subagents are `explorer`, `spec-writer`, `worker`, `reviewer`; global de
 ## Hard rules
 
 - Never merge a branch with an unfinished part in `docs/specs/`.
+- When merging, always squash commits and preserve the original author.
 - Ask approval before implementing each part; planned APIs are not shipped APIs.
 - Update behavior docs in the same change. Preserve archived historical instructions.
 - Never set git identity. Linked-worktree prepare must not change shared hook configuration.
