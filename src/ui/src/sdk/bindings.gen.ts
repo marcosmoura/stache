@@ -27,6 +27,32 @@ export type AppInfo = {
 	identifier: string,
 };
 
+/**
+ *  Ownership state of the Keep Awake power assertion.
+ *
+ *  Assertion state is never inferred from lifecycle, enabled or paused state.
+ */
+export type AssertionState =
+/**  Release is confirmed; no acquisition, candidate or unresolved ID remains. */
+"inactive" |
+/**
+ *  Published before native creation or candidate validation, while unadopted
+ *  work is in flight.
+ */
+"acquiring" |
+/**
+ *  The current generation holds a complete, adopted lease.
+ *
+ *  This proves owned IOPM prevention only. It is not immunity from lid
+ *  close, forced sleep or low-battery policy.
+ */
+"active" |
+/**
+ *  Published before native release or rollback while cleanup is in progress
+ *  or unresolved, so sleep may still be prevented.
+ */
+"releasePending";
+
 /**  A device that must be present for a priority entry to be considered. */
 export type AudioDeviceDependency = AudioDeviceDependency_Serialize | AudioDeviceDependency_Deserialize;
 
@@ -233,6 +259,123 @@ export type HostStatus_Serialize = {
 	/**  Every catalog file in file order. */
 	config: ConfigFileView_Serialize[],
 };
+
+/**  One actionable runtime condition. */
+export type KeepAwakeCondition = {
+	/**  Which failure the condition reports. */
+	kind: KeepAwakeConditionKind,
+	/**  Actionable, user-facing description of the failure. */
+	message: string,
+};
+
+/**
+ *  The kind of a published runtime condition.
+ *
+ *  Variants are ordered so a stable, deduplicated condition list can be sorted
+ *  by kind.
+ */
+export type KeepAwakeConditionKind =
+/**  Lock observation could not be installed; polling fallback is in use. */
+"observerUnavailable" |
+/**  Reading the current lock state failed. */
+"lockProbeFailed" |
+/**  Creating or adopting the assertion lease failed. */
+"assertionAcquireFailed" |
+/**  Releasing the assertion lease or rolling back failed. */
+"assertionReleaseFailed" |
+/**
+ *  Screen lock observation could not be removed; the callback is inert and
+ *  removal retries on the next lifecycle cleanup.
+ */
+"observationDispatchFailed";
+
+/**  Automatic prevention of display, idle and system sleep. */
+export type KeepAwakeConfig = KeepAwakeConfig_Serialize | KeepAwakeConfig_Deserialize;
+
+/**  Automatic prevention of display, idle and system sleep. */
+export type KeepAwakeConfig_Deserialize = {
+	/**  Whether Keep Awake should prevent display, idle and system sleep. */
+	enabled?: boolean,
+};
+
+/**  Automatic prevention of display, idle and system sleep. */
+export type KeepAwakeConfig_Serialize = {
+	/**  Whether Keep Awake should prevent display, idle and system sleep. */
+	enabled: boolean,
+};
+
+/**
+ *  The module's published runtime observation.
+ *
+ *  The fields are sampled together under one short lock. Envelope data such as
+ *  lifecycle, enabled, paused and diagnostics belongs to the app, not here.
+ */
+export type KeepAwakeRuntimeStatus = {
+	/**  Ownership state of the power assertion. */
+	assertionState: AssertionState,
+	/**  Best-effort screen-lock knowledge. */
+	lockState: LockState,
+	/**  How lock changes are observed. */
+	observation: LockObservation,
+	/**  Current deduplicated conditions; empty when healthy. */
+	conditions: KeepAwakeCondition[],
+};
+
+/**  The typed response of `keepAwake.status`. */
+export type KeepAwakeStatus = KeepAwakeStatus_Serialize | KeepAwakeStatus_Deserialize;
+
+/**  The typed response of `keepAwake.status`. */
+export type KeepAwakeStatus_Deserialize = {
+	/**
+	 *  Published registry metadata for the Keep Awake module.
+	 *
+	 *  The projection keeps the exact decimal revision string. A held
+	 *  configuration diagnostic takes precedence over the snapshot diagnostic.
+	 */
+	module: ModuleStatusView_Deserialize,
+	/**  The module's single published runtime observation. */
+	runtime: KeepAwakeRuntimeStatus,
+};
+
+/**  The typed response of `keepAwake.status`. */
+export type KeepAwakeStatus_Serialize = {
+	/**
+	 *  Published registry metadata for the Keep Awake module.
+	 *
+	 *  The projection keeps the exact decimal revision string. A held
+	 *  configuration diagnostic takes precedence over the snapshot diagnostic.
+	 */
+	module: ModuleStatusView_Serialize,
+	/**  The module's single published runtime observation. */
+	runtime: KeepAwakeRuntimeStatus,
+};
+
+/**  How the runtime learns about lock changes. */
+export type LockObservation =
+/**  No observation is installed. */
+"inactive" |
+/**
+ *  Distributed notifications refresh lock knowledge, backed by the owned
+ *  reconciliation timer.
+ */
+"notificationsAndPolling" |
+/**
+ *  Notification installation failed for this generation, so the owned timer
+ *  polls alone.
+ */
+"pollingFallback";
+
+/**  Best-effort knowledge of the screen lock. */
+export type LockState =
+/**  The lock could not be read, or no runtime observation is current. */
+"unknown" |
+/**  The session reports a locked screen. */
+"locked" |
+/**
+ *  The session reports an unlocked screen, including a valid dictionary with
+ *  no lock key.
+ */
+"unlocked";
 
 /**  Severity of one log record. */
 export type LogLevel =

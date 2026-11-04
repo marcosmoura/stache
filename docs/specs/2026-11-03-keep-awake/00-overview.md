@@ -4,7 +4,7 @@ branch: feat/keep-awake
 
 # Keep Awake rewrite
 
-Read when planning the independent Keep Awake module. This is a draft, not shipped behavior or permission to implement.
+Read when checking the independent Keep Awake module's completed implementation and decisions. Both parts ship on `main`; this record does not authorize further implementation.
 
 ## Goal
 
@@ -41,8 +41,8 @@ The first implemented/merged noTunes part 01 defines generic catalog migration/d
 
 | Part                       | Summary                                                                   | Status |
 | -------------------------- | ------------------------------------------------------------------------- | ------ |
-| [01](01-config-native.md)  | Typed config/catalog/migration and safe native adapters; feasibility gate | draft  |
-| [02](02-runtime-status.md) | Owned lock-aware runtime, production factory and typed read-only status   | draft  |
+| [01](01-config-native.md)  | Typed config/catalog/migration and safe native adapters; feasibility gate | done   |
+| [02](02-runtime-status.md) | Owned lock-aware runtime, production factory and typed read-only status   | done   |
 
 Each part must independently build, test and be committable. Part 01 registers configuration, not a production runtime; part 02 depends only on part 01 and the shipped foundation. Only the orchestrator changes status, after approval and verification. Unfinished parts block merge.
 
@@ -63,12 +63,12 @@ Default tests use fakes: no real assertion, screen lock, wake, app launch or com
 
 Real-device power verification is optional and requires explicit approval **for each run**. If approved later, capture `pmset -g assertions` before/after, identify only the owned Next process and exclude competing legacy assertions. Screen-lock interaction is manual, separately authorized; never automate lock/wake. Record unavailable/manual cases honestly rather than claiming execution.
 
-Process exit releases OS assertions, but is not proof of successful application cleanup. The branch adopts the [coordinated teardown contract merged into `main`](../2026-11-03-teardown/00-overview.md): SDK invalidation makes the generation inert and cancels/wakes native acquisition; `Module::stop`/rollback owns physical cleanup. `NativeSlot::PowerAssertion` (stable name `power-assertion`) acknowledges coherent native-ledger state from the same `AssertionOwner`, not a second cleanup path. Never acknowledge active, acquiring, cleaning or unresolved ownership as clean. Branch integration is verified with fakes and builds; merge approval is pending. Real power/lock behavior remains **unverified**, and each native run requires separate approval. No real power operation is permitted during spec writing.
+Process exit releases OS assertions, but is not proof of successful application cleanup. The implementation adopts the [coordinated teardown contract merged into `main`](../2026-11-03-teardown/00-overview.md): SDK invalidation makes the generation inert and cancels/wakes native acquisition; `Module::stop`/rollback owns physical cleanup. `NativeSlot::PowerAssertion` (stable name `power-assertion`) acknowledges coherent native-ledger state from the same `AssertionOwner`, not a second cleanup path. Never acknowledge active, acquiring, cleaning or unresolved ownership as clean. Integration is verified with fakes and builds; squash merge into `main` was approved. Real power/lock behavior remains **unverified**, and each native run requires separate approval. No real power operation is permitted during spec writing.
 
 ## Affected docs
 
-- [Planned feature notice](../../features/keep-awake.md) remains clearly not shipped until implementation.
-- [Index](../../index.md) routes this planned spec alongside the other workstreams.
+- [Feature docs](../../features/keep-awake.md) describe shipped behavior and native verification limits.
+- [Index](../../index.md) routes this completed spec alongside the other workstreams.
 - Part 01 updates [config](../../architecture/config.md) and the feature notice with shipped configuration/native limitations, without claiming a runtime.
 - Part 02 materializes feature behavior, [IPC](../../architecture/ipc.md), and narrowly updates [new-module](../../guides/new-module.md)/[testing](../../guides/testing.md) references where required. Do not rewrite generic SDK docs or historical legacy docs.
 

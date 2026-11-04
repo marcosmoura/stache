@@ -133,6 +133,18 @@ fn schema_is_piped_as_plain_json() {
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(stdout(&output).contains("dependsOn"));
 
+    let output = workspace.run(&["schema", "keepAwake"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let value: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("keepAwake schema JSON");
+    assert!(
+        value["$id"]
+            .as_str()
+            .is_some_and(|id| id.ends_with("/schemas/keepAwake.schema.json"))
+    );
+    assert_eq!(value["properties"]["enabled"]["type"], "boolean");
+    assert_eq!(value["properties"]["enabled"]["default"], false);
+
     let output = workspace.run(&["schema", "notunes"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let body = stdout(&output);
@@ -293,6 +305,7 @@ fn config_path_uses_the_explicit_directory() {
     let body = stdout(&output);
     assert!(body.starts_with(&format!("{}\n", directory.display())), "{body}");
     assert!(body.contains("  global.jsonc\n"), "{body}");
+    assert!(body.contains("  keepAwake.jsonc\n"), "{body}");
     assert!(body.contains("  notunes.jsonc\n"), "{body}");
     assert!(body.contains("  proxyAudio.jsonc\n"), "{body}");
     assert_no_desktop(&workspace);
@@ -306,6 +319,9 @@ fn config_init_writes_the_registered_templates() {
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(directory.join("global.jsonc").exists());
     assert!(directory.join("proxyAudio.jsonc").exists());
+    let keep_awake = std::fs::read_to_string(directory.join("keepAwake.jsonc")).expect("keepAwake");
+    assert!(keep_awake.contains("\"enabled\": false"), "{keep_awake}");
+    assert!(!keep_awake.contains("duration"), "{keep_awake}");
     let notunes = std::fs::read_to_string(directory.join("notunes.jsonc")).expect("notunes");
     assert!(notunes.contains("\"enabled\": false"), "{notunes}");
     assert!(!notunes.contains("targetApp"), "{notunes}");

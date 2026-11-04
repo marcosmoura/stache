@@ -18,6 +18,14 @@ fn the_shared_builder_exports_commands_events_and_config_types_without_a_host() 
         "export type HostStatus",
         "export type ConfigFileView",
         "export type GlobalConfig",
+        "export type KeepAwakeConfig",
+        "export type KeepAwakeStatus",
+        "export type KeepAwakeRuntimeStatus",
+        "export type AssertionState",
+        "export type LockState",
+        "export type LockObservation",
+        "export type KeepAwakeCondition",
+        "export type KeepAwakeConditionKind",
         "export type ProxyAudioConfig",
         "export type MatchStrategy",
         "export type StartupCommands",
@@ -30,6 +38,16 @@ fn the_shared_builder_exports_commands_events_and_config_types_without_a_host() 
     assert!(
         bindings.contains("revision: string"),
         "revision must be text on the wire"
+    );
+    for field in ["assertionState", "lockState", "conditions"] {
+        assert!(
+            bindings.contains(field),
+            "Keep Awake runtime uses the camelCase field `{field}`"
+        );
+    }
+    assert!(
+        bindings.contains("\"releasePending\""),
+        "the four-state assertion enum is exported from the shared collection"
     );
     assert!(
         !bindings.contains("audioList"),

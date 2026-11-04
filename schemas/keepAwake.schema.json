@@ -1,0 +1,14 @@
+{
+  "$id": "https://raw.githubusercontent.com/marcosmoura/stache/main/schemas/keepAwake.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "KeepAwakeConfig",
+  "description": "Automatic prevention of display, idle and system sleep.",
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "description": "Whether Keep Awake should prevent display, idle and system sleep.",
+      "type": "boolean",
+      "default": false
+    }
+  }
+}

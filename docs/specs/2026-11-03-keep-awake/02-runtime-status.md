@@ -1,10 +1,10 @@
 ---
-status: draft
+status: done
 ---
 
 # 02 — Owned runtime and read-only status
 
-Read when implementing Keep Awake runtime after part 01's gate and separate explicit approval. Everything below is planned, not shipped.
+Read when checking the completed Keep Awake runtime and read-only status contract. This part ships on `main`; requirements and acceptance evidence are retained below.
 
 ## Scope
 
@@ -49,14 +49,14 @@ The app owns generic factory/registry/router composition; the module owns power 
 
 ## Acceptance criteria
 
-- [ ] KA02-01: Generic production registration/control/config recovery works; default-disabled Keep Awake starts no native activity and adds no TCC request, CLI, webview or independent toggle.
-- [ ] KA02-02: Locked startup runs without acquisition; unlocked startup acquires once; lock releases/unlock restores all-three prevention without Bar.
-- [ ] KA02-03: Disable/pause/stop cancel and join; release failure surfaces lifecycle cleanup error and retains pending IDs/status until bounded cleanup resolves. Late work cannot resurrect resources or affect a successor; resume resolves pending cleanup and refreshes lock first.
-- [ ] KA02-04: One worker/subscription/timer per generation, two-second owned reconciliation and notification coalescing survive dropped signals and unchanged reloads without duplication.
-- [ ] KA02-05: Initial unknown/acquire failure attempts rollback and supports generic Retry; absent-key compatibility is unlocked, not unknown. Live failures report acquiring during outstanding acquisition, releasePending during cleanup or unresolved failure, and inactive only after confirmed cleanup; retain failed cleanup ownership, recover on bounded refresh and avoid log spam. Observer failure uses visible probe-only fallback.
-- [ ] KA02-06: App-owned typed/read-only status is available in every lifecycle state, including acquiring and in-progress/pending cleanup; assertion/lock/conditions remain truthful, with assertionReleaseFailed only on actual failure. Held file diagnostic overrides registry diagnostic, preserves last-good runtime and clears on identical-good repair. Queries cause no native, filesystem or configuration effects.
-- [ ] KA02-07: Fake races prove bounded dispatch/cancellation, stale-candidate disposal, prompt published reads during barrier-blocked native creation/release and identity safety without imposing impossible SDK lock rules. Such reads never falsely claim inactive or fully adopted active prevention.
-- [ ] KA02-08: Generated DTO checks and all validation pass; behavior docs describe limits honestly; proxyAudio behavior stays unchanged and manual cases are explicitly marked unverified if not authorized.
+- [x] KA02-01: Generic production registration/control/config recovery works; default-disabled Keep Awake starts no native activity and adds no TCC request, CLI, webview or independent toggle.
+- [x] KA02-02: Locked startup runs without acquisition; unlocked startup acquires once; lock releases/unlock restores all-three prevention without Bar.
+- [x] KA02-03: Disable/pause/stop cancel and join; release failure surfaces lifecycle cleanup error and retains pending IDs/status until bounded cleanup resolves. Late work cannot resurrect resources or affect a successor; resume resolves pending cleanup and refreshes lock first.
+- [x] KA02-04: One worker/subscription/timer per generation, two-second owned reconciliation and notification coalescing survive dropped signals and unchanged reloads without duplication.
+- [x] KA02-05: Initial unknown/acquire failure attempts rollback and supports generic Retry; absent-key compatibility is unlocked, not unknown. Live failures report acquiring during outstanding acquisition, releasePending during cleanup or unresolved failure, and inactive only after confirmed cleanup; retain failed cleanup ownership, recover on bounded refresh and avoid log spam. Observer failure uses visible probe-only fallback.
+- [x] KA02-06: App-owned typed/read-only status is available in every lifecycle state, including acquiring and in-progress/pending cleanup; assertion/lock/conditions remain truthful, with assertionReleaseFailed only on actual failure. Held file diagnostic overrides registry diagnostic, preserves last-good runtime and clears on identical-good repair. Queries cause no native, filesystem or configuration effects.
+- [x] KA02-07: Fake races prove bounded dispatch/cancellation, stale-candidate disposal, prompt published reads during barrier-blocked native creation/release and identity safety without imposing impossible SDK lock rules. Such reads never falsely claim inactive or fully adopted active prevention.
+- [x] KA02-08: Generated DTO checks and all validation pass; behavior docs describe limits honestly; proxyAudio behavior stays unchanged and manual cases are explicitly marked unverified if not authorized.
 
 ## Tests
 
@@ -81,4 +81,4 @@ bun run tauri:build
 RUSTDOCFLAGS='-D warnings' cargo doc -p stache-keep-awake -p stache-macos -p stache-app --no-deps
 ```
 
-All default validation is fake-backed for Keep Awake; no real acquisition or screen lock, including doctests. Materialize [feature docs](../../features/keep-awake.md), update [IPC](../../architecture/ipc.md) for the actual status contract, and minimally adjust [testing](../../guides/testing.md), [new-module](../../guides/new-module.md) and index routes to distinguish shipped behavior from historical plans. Preserve legacy docs. The branch adopts the [merged coordinated teardown contract](../2026-11-03-teardown/00-overview.md): SDK invalidation makes the generation inert and cancels/wakes native acquisition, while `Module::stop`/rollback owns physical cleanup. `NativeSlot::PowerAssertion` (`power-assertion`) acknowledges coherent native-ledger state of that same `AssertionOwner`; it adds no second cleanup path and must not acknowledge active, acquiring, cleaning or unresolved ownership as clean. Branch integration is verified with fakes and builds; merge approval is pending. Real power/lock behavior remains **unverified**; checks require new per-run approval and the [overview safety protocol](00-overview.md#validation-and-safety).
+All default validation is fake-backed for Keep Awake; no real acquisition or screen lock, including doctests. Materialize [feature docs](../../features/keep-awake.md), update [IPC](../../architecture/ipc.md) for the actual status contract, and minimally adjust [testing](../../guides/testing.md), [new-module](../../guides/new-module.md) and index routes to distinguish shipped behavior from historical plans. Preserve legacy docs. The implementation adopts the [merged coordinated teardown contract](../2026-11-03-teardown/00-overview.md): SDK invalidation makes the generation inert and cancels/wakes native acquisition, while `Module::stop`/rollback owns physical cleanup. `NativeSlot::PowerAssertion` (`power-assertion`) acknowledges coherent native-ledger state of that same `AssertionOwner`; it adds no second cleanup path and must not acknowledge active, acquiring, cleaning or unresolved ownership as clean. Integration is verified with fakes and builds; squash merge into `main` was approved. Real power/lock behavior remains **unverified**; checks require new per-run approval and the [overview safety protocol](00-overview.md#validation-and-safety).

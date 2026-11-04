@@ -10,12 +10,17 @@
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
+use stache_keep_awake::{
+    AssertionState, KeepAwakeCondition, KeepAwakeConditionKind, KeepAwakeConfig,
+    KeepAwakeRuntimeStatus, LockObservation, LockState,
+};
 use stache_notunes::NoTunesConfig;
 use stache_proxy_audio::{AudioDeviceInfo, AudioListKind, AudioListParams, ProxyAudioConfig};
 use stache_sdk::{GlobalConfig, IDENTITY, ModuleSnapshot, ModuleStatus, UnavailableReason};
 use tauri_specta::{Builder, collect_commands, collect_events};
 
 use crate::host::HostState;
+pub use crate::keep_awake::KeepAwakeStatus;
 
 /// Application identity shown by the test window.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Type)]
@@ -225,15 +230,26 @@ pub fn config_file_view(
 /// Builds the typed command and event collection mounted by the desktop host.
 ///
 /// The config types are exported explicitly; they are the authoritative catalog
-/// types used by `global.jsonc`, `proxyAudio.jsonc` and `notunes.jsonc`. The
-/// pilot's read-only listing DTOs are exported without a Tauri command: the pilot
-/// has no UI and its socket method is not a webview surface.
+/// types used by `global.jsonc`, `keepAwake.jsonc`, `proxyAudio.jsonc` and
+/// `notunes.jsonc`. The Keep Awake status envelope and its reachable runtime
+/// DTOs are exported from the same collection, so the generated client cannot
+/// mirror them by hand. The pilot's read-only listing DTOs are exported without
+/// a Tauri command: the pilot has no UI and its socket method is not a webview
+/// surface.
 #[must_use]
 pub fn builder() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new()
         .commands(collect_commands![app_info, host_status])
         .events(collect_events![StatusChanged])
         .typ::<GlobalConfig>()
+        .typ::<KeepAwakeConfig>()
+        .typ::<KeepAwakeStatus>()
+        .typ::<KeepAwakeRuntimeStatus>()
+        .typ::<AssertionState>()
+        .typ::<LockState>()
+        .typ::<LockObservation>()
+        .typ::<KeepAwakeCondition>()
+        .typ::<KeepAwakeConditionKind>()
         .typ::<NoTunesConfig>()
         .typ::<ProxyAudioConfig>()
         .typ::<AudioDeviceInfo>()

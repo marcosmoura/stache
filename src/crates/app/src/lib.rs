@@ -12,6 +12,7 @@ pub mod catalog;
 pub mod commands;
 pub mod config_edit;
 pub mod host;
+pub mod keep_awake;
 pub mod logging;
 pub mod permissions;
 pub mod shutdown;
@@ -32,7 +33,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use stache_cli::CliEnvironment;
-use stache_macos::{AccessibilityPermission, ActivationObserver, MainThread, TerminateObservation};
+use stache_macos::{
+    AccessibilityPermission, ActivationObserver, AssertionOwner, MainThread, TerminateObservation,
+};
 use stache_sdk::{
     AppEnvironment, AppPaths, ConfigPaths, EventBus, InstanceError, InstanceLock, LogFilter,
     LogLevel, LogRecord, Logger, MainThreadExecutor, ModuleId, Operation,
@@ -45,6 +48,7 @@ use crate::host::{
     HostDriver, HostHandle, HostServices, HostSettings, HostState, HostUi, ModuleFactories,
     new_host,
 };
+use crate::keep_awake::PowerAssertionOwner;
 use crate::logging::StderrLogger;
 use crate::permissions::PermissionPoll;
 use crate::shutdown::{
@@ -361,6 +365,12 @@ fn run_with(
         Arc::clone(&logger),
     );
     let (host, driver) = new_host(Arc::clone(&teardown));
+    // The composition root owns one Keep Awake assertion owner for the whole
+    // module lifetime. The setup closure moves a clone into the production
+    // factory; the original is registered below as the teardown acknowledgement
+    // over the same ledger.
+    let power_owner = AssertionOwner::system();
+    let setup_power_owner = power_owner.clone();
     let setup_host = host.clone();
     let setup_gate = gate.clone();
     let outcome_gate = gate.clone();
@@ -401,7 +411,8 @@ fn run_with(
             });
             // The production factories take the last executor clone: modules
             // dispatch native work through it and never retain a second one.
-            let factories = ModuleFactories::production(Arc::clone(&main_thread));
+            let factories =
+                ModuleFactories::production(Arc::clone(&main_thread), setup_power_owner);
             let services = HostServices {
                 logger: Arc::clone(&logger),
                 log_filter: filter,
@@ -487,6 +498,13 @@ fn run_with(
             let _ = tray_app.remove_tray_by_id(tray::TRAY_ID);
             Ok(())
         })),
+    );
+    // Keep Awake's native cleanup stays with its module `stop` and rollback. This
+    // adapter only acknowledges that same ledger after the registry stage, so it
+    // is registered before the coordinator starts and can never race a request.
+    teardown.register_owner(
+        NativeSlot::PowerAssertion,
+        Arc::new(PowerAssertionOwner::new(power_owner)),
     );
     // The coordinator exists before the observation and before `run_return`,
     // so no request can arrive without a driver already waiting for it.

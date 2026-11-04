@@ -20,6 +20,7 @@ Each file is its own catalog document, named after the exact identifier:
 ```text
 ~/.config/stache/
   global.jsonc       GlobalConfig
+  keepAwake.jsonc    KeepAwakeConfig
   notunes.jsonc      NoTunesConfig
   proxyAudio.jsonc   ProxyAudioConfig
 ```
@@ -32,6 +33,15 @@ and backs the shipped blocker runtime: enabling it installs application
 observation and terminates Apple Music/iTunes. Catalog support alone starts no
 module, creates no webview and installs no native observation; see
 [notunes.md](../features/notunes.md).
+
+`keepAwake.jsonc` is registered for configuration, schema, template and
+migration, with only `enabled` (default `false`). It backs the shipped Keep
+Awake runtime: an accepted `enabled: true` starts one module generation that
+manages the lock-aware power assertion, while `false` stops it. Construction,
+registration and configuration acquire nothing. A rejected parse, type, I/O or
+deleted file keeps the last accepted revision and live lease and records a
+diagnostic; identical last-good bytes clear it without lease churn. See
+[keep-awake.md](../features/keep-awake.md).
 
 ## Parsing
 
@@ -123,7 +133,9 @@ instance, CLI invocation and every reload skip it.
 validation, deleted, application), optional line/column for parser errors and
 the serde field path for type errors. The registry keeps its own validation
 diagnostic on the module snapshot; the store keeps the file-level one. They
-describe the same candidate and never change the observed status.
+describe the same candidate and never change the observed status. Keep Awake's
+`keepAwake.status` overlays the held store diagnostic before the registry
+diagnostic; see [ipc.md](ipc.md#keep-awake-status).
 
 Unknown keys are warnings, not diagnostics. The store keeps a separate warning
 list per file and `config path` renders it, so the file stays accepted and an
@@ -135,7 +147,7 @@ unchanged save is still a no-op instead of re-decoding forever.
 stache config init [-f] [-p DIR] [--stdout]
 stache config path
 stache config migrate [--from FILE] [-f]
-stache schema [global|notunes|proxyAudio]
+stache schema [global|keepAwake|notunes|proxyAudio]
 ```
 
 The commands run from the single `stache` binary. From a checkout use
@@ -172,8 +184,8 @@ not that a host accepted it.
 styles keys, strings, numbers and literals only when stdout is a terminal; see
 [ipc.md](ipc.md#output).
 
-`schema` defaults to the global schema; `schema proxyAudio` prints the pilot
-schema and `schema notunes` the blocker configuration. Unknown IDs fail.
+`schema` defaults to the global schema; `schema keepAwake`, `schema proxyAudio`
+and `schema notunes` print those registered module schemas. Unknown IDs fail.
 
 ## Migration
 
@@ -187,10 +199,11 @@ destination, migration refuses even with `--force`.
 
 `execOnStartup` and a `logging` section are converted into `global.jsonc`.
 Every registered module section is decoded and validated by the catalog's
-authoritative type: `proxyAudio` and `notunes` today. A type may also translate
-legacy spellings first through `ModuleConfig::migrate_legacy_section`, which
-migration calls before decoding and writing; that hook is the only place a
-configuration type knows about values the running configuration rejects.
+authoritative type: `keepAwake`, `proxyAudio` and `notunes` today. A type may
+also translate legacy spellings first through
+`ModuleConfig::migrate_legacy_section`, which migration calls before decoding and
+writing; that hook is the only place a configuration type knows about values the
+running configuration rejects.
 `notunes` uses it to turn the legacy `targetApp` preset names into a bundle
 identifier and to drop an explicit block-only value. A legacy section that was
 enabled and had no `targetApp` used to mean Spotify; the migrated file now blocks
@@ -202,9 +215,14 @@ same-ID `.jsonc` files; the loader does not register or activate them. Legacy
 inside a registered module section are reported while the section is still
 validated and copied into its `.jsonc` file, where the typed configuration
 ignores them. A missing registered module section is emitted as the same
-commented template as `config init`; absent unported sections create no file.
-Collision and `--force` rules match `init`. Every validation, copy, drop and
-warning is printed.
+commented template as `config init`, reported generically as
+`emitted default template <file>` with ` (disabled)` when the registered default
+is disabled; absent unported sections create no file. `keepAwake` therefore
+always migrates disabled, whether the legacy `bar` section was enabled, disabled
+or absent. Legacy has no Keep Awake setting, so migration never creates or
+infers a separate enable flag and never treats Bar consent as Keep Awake
+consent. Collision and `--force` rules match `init`. Every validation, copy,
+drop and warning is printed.
 
 This is a breaking layout change: the new loader never reads the legacy single
 file, so run `config migrate` once (or `config init`) after switching.
@@ -220,10 +238,11 @@ bun run generate-schema -- --check
 ```
 
 The `generate-schema` binary writes `schemas/global.schema.json`,
-`schemas/notunes.schema.json` and `schemas/proxyAudio.schema.json`
-deterministically; `--check` writes nothing and exits non-zero on missing or
-stale files. Templates are generated from the serialized `Default` plus schema
-descriptions, so there is no second hand-maintained file.
+`schemas/keepAwake.schema.json`, `schemas/notunes.schema.json` and
+`schemas/proxyAudio.schema.json` deterministically; `--check` writes nothing and
+exits non-zero on missing or stale files. Templates are generated from the
+serialized `Default` plus schema descriptions, so there is no second
+hand-maintained file.
 
 Tests use temporary directories and injected `ConfigEnvironment` values; no
 test reads the real home or changes an environment variable.

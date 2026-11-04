@@ -14,12 +14,12 @@ list. The module is inert unless `proxyAudio.jsonc` sets `enabled`.
 
 ## Entry points
 
-| Caller                    | Entry                                                                              |
-| ------------------------- | ---------------------------------------------------------------------------------- |
-| Desktop host registration | `app/src/host.rs` `ProxyAudioFactory` / `ModuleFactories::production(main_thread)` |
-| Module runtime            | `proxy-audio/src/watcher.rs` `ProxyAudioModule`                                    |
-| CLI                       | `proxy-audio/src/cli.rs` contribution; `stache audio list`                         |
-| Socket                    | `proxy-audio/src/ipc.rs` `AudioIpc`; `proxyAudio.list`                             |
+| Caller                    | Entry                                                                                           |
+| ------------------------- | ----------------------------------------------------------------------------------------------- |
+| Desktop host registration | `app/src/host.rs` `ProxyAudioFactory` / `ModuleFactories::production(main_thread, power_owner)` |
+| Module runtime            | `proxy-audio/src/watcher.rs` `ProxyAudioModule`                                                 |
+| CLI                       | `proxy-audio/src/cli.rs` contribution; `stache audio list`                                      |
+| Socket                    | `proxy-audio/src/ipc.rs` `AudioIpc`; `proxyAudio.list`                                          |
 
 The app crate is the only place that knows both the module and `stache-macos`.
 The module depends on `stache-sdk` and `stache-macos` only; the SDK has no audio

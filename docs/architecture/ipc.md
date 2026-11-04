@@ -65,8 +65,11 @@ reap the watcher, permission poller and owned startup job while observing the ho
 worker in the same stage budget, stop the registry in reverse start order one module at
 a time, then release the socket and the registered native owners. Each wait is capped at
 `min(2 s, remaining)`, so a hung owner is named unacknowledged and abandoned instead of
-joined. Socket acknowledgement requires both the accept thread and every handler gate
-permit to finish under one bound; acceptance stops without joining the accept thread and
+joined. Keep Awake's `power-assertion` slot acknowledges the release its module `stop` already
+performed over the same ledger; an active or acquiring generation, a release in flight or an
+unresolved ID is never reported clean, and the slot retries nothing. Socket acknowledgement
+requires both the accept thread and every handler gate permit to finish under one bound;
+acceptance stops without joining the accept thread and
 the owned endpoint is removed after that bound, so a connection holding its handler cannot
 delay it. A failed removal of the owned inode is reported as `failed socket` instead of
 being dropped, while an already-missing endpoint or a foreign inode at that path counts as
@@ -103,6 +106,54 @@ as a typed error and the server keeps serving.
 omitted or `null`), `input` or `output`; the response is the same
 `AudioDeviceInfo` shape as `stache audio list --json`. The handler shares the
 listing service with the command and never starts a listener.
+
+### Keep Awake status
+
+`keepAwake.status` is the other module method and is also read-only. Omitted or
+`null` params and `{}` are the same zero-argument request; any non-empty object,
+string, number, boolean or array (including `[]`) is `invalidParams`, and an
+unknown method is `unknownMethod`. The response is the app-owned
+`KeepAwakeStatus` envelope:
+
+```json
+{
+  "module": {
+    "id": "keepAwake",
+    "state": "running",
+    "enabled": true,
+    "paused": false,
+    "revision": "3",
+    "detail": null,
+    "diagnostic": null
+  },
+  "runtime": {
+    "assertionState": "active",
+    "lockState": "unlocked",
+    "observation": "notificationsAndPolling",
+    "conditions": []
+  }
+}
+```
+
+`module` is the `ModuleStatusView` projection: lifecycle, enabled, paused, the
+exact revision as a decimal string and diagnostics. The handler prefers the held
+`ConfigStore` file diagnostic over the registry diagnostic, so a rejected parse,
+type, I/O or deleted file stays visible while the last accepted configuration,
+revision and lease remain live. `runtime` is the module's single published
+observation, copied from `KeepAwakeSnapshot::read()`; condition kinds keep a
+stable order. The envelope and runtime DTOs are exported through the same
+`bindings::builder()` collection as the other config types, so
+`generate-bindings` is the only TypeScript update; there is no Tauri command, CLI
+command or hand-written TypeScript mirror.
+
+The method answers in every module state, including disabled, paused, failed,
+locked, acquiring and `releasePending`. It copies published and held data only:
+no native probe or assertion, worker start, observer install, filesystem read or
+write, configuration apply or window effect. Runtime fields are coherent with
+each other, but lifecycle, diagnostics and runtime are sampled separately, so a
+response is an observation, not a globally atomic snapshot. `active` proves
+owned prevention, not immunity to lid close, forced sleep or low-battery policy.
+See [keep-awake.md](../features/keep-awake.md).
 
 `core` is reserved. `core.reload` rereads every file and returns per-file
 `applied { revision }`, `unchanged` or `rejected` outcomes with diagnostics;

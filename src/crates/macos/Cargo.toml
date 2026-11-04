@@ -21,7 +21,10 @@ objc2 = "0.6.5"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSResponder", "NSRunningApplication", "NSWorkspace", "block2", "std"] }
 objc2-core-audio = { version = "0.3.2", default-features = false, features = ["AudioHardware", "std"] }
 objc2-core-audio-types = { version = "0.3.2", default-features = false, features = ["CoreAudioBaseTypes", "std"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSArray", "NSBundle", "NSDate", "NSError", "NSNotification", "NSObject", "NSOperation", "NSString", "NSTimer", "NSURL", "block2", "std"] }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["CFBase", "CFDictionary", "CFNumber", "CFString", "std"] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["CGSession", "std"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSArray", "NSBundle", "NSDate", "NSDistributedNotificationCenter", "NSError", "NSNotification", "NSObject", "NSOperation", "NSString", "NSTimer", "NSURL", "block2", "std"] }
+objc2-io-kit = { version = "0.3.2", default-features = false, features = ["pwr_mgt", "std"] }
 stache-sdk = { path = "../sdk" }
 
 [lints]

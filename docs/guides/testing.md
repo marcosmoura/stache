@@ -38,7 +38,26 @@ player. The noTunes opt-in check runs only with approval for that run, from an
 isolated temporary config/identity with any legacy noTunes disabled; see
 [notunes.md](../features/notunes.md).
 
-`cargo doc -p stache-sdk -p stache-macos -p stache-proxy-audio -p stache-notunes -p stache-cli --no-deps`
+Keep Awake validation is fake-backed. No automated check creates a real power
+assertion, locks or unlocks the screen, wakes the machine, installs a real
+distributed observer or launches Stache Next. Module tests drive fake assertion
+and observation backends, in-memory lock results, barriers and races, and a fake
+clock; app host tests write malformed JSON, a wrong boolean and a deleted file,
+run the normal watcher/reload path, query the actual `keepAwake.status` socket,
+restore identical last-good bytes and verify both held store and snapshot
+diagnostics clear without lease churn. They also cover tray Enable/Disable JSONC
+edits, session Pause/Resume without disk writes and shutdown cancellation. The host
+suite drives the real coordinator over the fake owner: a clean module stop with
+observation removal ends `Clean`, a persistent release failure ends `Partial` naming
+`module:keepAwake` and `power-assertion`, and a barrier-hung release or observation
+removal ends `Uncertain` without a false clean. The Keep Awake envelope and
+runtime DTOs use the shared bindings collector, so the generated DTO check is
+their gate; there is no Keep Awake Tauri command or CLI command. Real
+three-assertion behavior, notification delivery, manual lock/unlock, resume and
+forced-sleep checks remain **unverified**; they require approval for each run and
+the [spec's power protocol](../specs/2026-11-03-keep-awake/00-overview.md#validation-and-safety).
+
+`cargo doc -p stache-sdk -p stache-macos -p stache-keep-awake -p stache-proxy-audio -p stache-notunes -p stache-cli --no-deps`
 builds their public docs; pass `RUSTDOCFLAGS='-D warnings'` in validation.
 Socket tests use temp directories and temp sockets only; no test reads or writes
 the real cache, runtime, configuration or legacy identity.
@@ -63,17 +82,20 @@ the real cache, runtime, configuration or legacy identity.
 - `test:native`: cargo-nextest across only the root workspace with
   `--features stache-app/dev-tools`; checks desktop identity/window policy, the SDK lifecycle, config
   and window suites, app host races/permissions/shutdown, the proxyAudio policy and fake-backend
-  lifecycle, the noTunes blocker sweep/launch/reconfigure/stop policy, the macOS audio
+  lifecycle, the noTunes blocker sweep/launch/reconfigure/stop policy, the Keep Awake fake
+  lock/assertion/observation matrix and its host status/socket suites, the macOS audio
   listener-rollback tests and the macOS adapter unit tests. Native tests
   never prompt for Accessibility and never change the system default audio device; the real
   main-thread/window smoke test is the opt-in `stache-smoke` harness described below.
   Generator binaries require `dev-tools` and are excluded from the release bundle.
-- `cargo nextest run -p stache-sdk -p stache-cli -p stache-proxy-audio -p stache-notunes -p stache-macos`
-  runs the config/audio/blocker foundation. The proxyAudio lifecycle suite uses a fake backend for
+- `cargo nextest run -p stache-sdk -p stache-cli -p stache-proxy-audio -p stache-notunes -p stache-keep-awake -p stache-macos`
+  runs the config/audio/blocker/keep-awake foundation. The proxyAudio lifecycle suite uses a fake backend for
   every listener, worker-spawn, set-default and stop-race failpoint; no test starts a real listener.
   The noTunes suite uses `FakeApplicationBackend` and `ManualExecutor` for every observation, sweep,
   launch, open and stop failpoint; no test observes, terminates or launches a real application.
-  `cargo doc -p stache-sdk -p stache-macos -p stache-proxy-audio -p stache-notunes -p stache-cli --no-deps`
+  The Keep Awake suite uses fake assertion, lock-probe, observation and clock inputs; no test
+  acquires real power prevention or interacts with the real screen lock.
+  `cargo doc -p stache-sdk -p stache-macos -p stache-keep-awake -p stache-proxy-audio -p stache-notunes -p stache-cli --no-deps`
   builds their public docs.
 - `generate-schema` writes the committed `schemas/*.schema.json` from the registered types.
   `generate-schema -- --check` writes nothing and fails on missing or stale files; config templates are
