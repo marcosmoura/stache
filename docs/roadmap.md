@@ -1,70 +1,77 @@
 # Runtime rewrite roadmap
 
-Read when choosing the next module to specify. **Mostly planned work; shipped
-modules are named as shipped.**
+Read when checking what is finished, awaiting integration, specified or still planned.
+Snapshot: **2026-11-04**. Here, **finished/shipped means merged into `main`**, not a
+packaged public release. Only an ad-hoc development bundle exists; no release artifact
+has shipped.
 
-The foundation parts 01–06 are shipped; their specs remain historical records.
-Each tool below has its own spec/branch and needs approval before implementation.
-[noTunes](specs/2026-11-03-notunes/00-overview.md) is shipped: Part 01
-configuration/native groundwork and Part 02 runtime integration are done.
+## Status overview
 
-## Planned rewrites
+| Status                     | Workstream                                                                           | Progress                              | Next step / notes                                                                                           |
+| -------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Finished                   | [Foundation](specs/2026-11-02-foundation/00-overview.md)                             | 6/6 done on `main`                    | Includes native tray and proxyAudio (Part 06).                                                              |
+| Finished                   | [noTunes](specs/2026-11-03-notunes/00-overview.md)                                   | 2/2 done on `main`                    | Configuration/native groundwork and [owned runtime](features/notunes.md) shipped.                           |
+| Finished                   | [Coordinated teardown](specs/2026-11-03-teardown/00-overview.md)                     | 4/4 done on `main`                    | Bounded teardown, native-owner acknowledgements and coordinated restart shipped; verification limits below. |
+| Integration pending        | [Keep Awake](specs/2026-11-03-keep-awake/00-overview.md)                             | 2/2 done on branch; 2 draft on `main` | Integrate `feat/keep-awake` with latest teardown/owner contract and reverify. Not shipped on `main`.        |
+| Specified, not started     | [Wallpapers](specs/2026-11-03-wallpapers/00-overview.md)                             | 4 draft parts                         | `feat/wallpapers`                                                                                           |
+| Specified, not started     | [Keybindings / Caps Lock / section-key](specs/2026-11-03-keybindings/00-overview.md) | 5 draft parts                         | `feat/keybindings`; establishes shared input service.                                                       |
+| Specified, not started     | [Hold-to-Quit](specs/2026-11-03-hold-to-quit/00-overview.md)                         | 4 draft parts                         | `feat/hold-to-quit`; depends on shared input service.                                                       |
+| Specified, not started     | [MenuAnywhere](specs/2026-11-03-menu-anywhere/00-overview.md)                        | 3 draft parts                         | `feat/menu-anywhere`; depends on shared input service.                                                      |
+| Specified, not started     | [Bar](specs/2026-11-03-bar/00-overview.md)                                           | 8 draft parts                         | `feat/bar`; preserve legacy visual parity.                                                                  |
+| Specified, not started     | [Tiling](specs/2026-11-03-tiling/00-overview.md)                                     | 10 draft parts                        | `feat/tiling`; **last runtime rewrite**.                                                                    |
+| Specified, not started     | [Release and packaging](specs/2026-11-03-release/00-overview.md)                     | 6 draft parts                         | `feat/release`; independent of runtime rewrite order.                                                       |
+| Planned, no dedicated spec | Tray “Reload Stache”                                                                 | Not shipped or separately specified   | Release-only follow-up; coordinated restart prerequisite is shipped.                                        |
 
-These specs are drafts on `main`, not shipped features. Implementation remains
-one authorized part at a time on each workstream's own branch. Keep Awake is
-the next rewrite target; the approved order is below, with Tiling last and blocked
-until the smaller rewrites land and their shared foundations are exercised together.
+Foundation also includes the owned [module SDK](architecture/sdk.md),
+[typed configuration and reload](architecture/config.md), [socket IPC and standalone CLI](architecture/ipc.md),
+and [typed UI SDK and test window](architecture/ui.md). The [tray](features/tray.md)
+belongs to foundation, not a separate spec; [proxyAudio](features/proxy-audio.md) switches audio devices.
 
-| Order | Tool                                                                                                      | Sequencing rationale                                                                   |
-| ----- | --------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| 1     | noTunes                                                                                                   | First approved rewrite target; narrow application-observation boundary.                |
-| 2     | [Keep Awake](specs/2026-11-03-keep-awake/00-overview.md) (`feat/keep-awake`)                              | Own configuration and lifecycle, independent of Bar; Bar later consumes state.         |
-| 3     | [Wallpapers](specs/2026-11-03-wallpapers/00-overview.md) (`feat/wallpapers`)                              | Independent native tool; can also proceed independently of noTunes.                    |
-| 4     | [Keybindings / Caps Lock / section-key](specs/2026-11-03-keybindings/00-overview.md) (`feat/keybindings`) | Establish concrete input needs and safe adapter reuse.                                 |
-| 5     | [Hold-to-Quit](specs/2026-11-03-hold-to-quit/00-overview.md) (`feat/hold-to-quit`)                        | Reuse input adapters where justified by actual requirements.                           |
-| 6     | [MenuAnywhere](specs/2026-11-03-menu-anywhere/00-overview.md) (`feat/menu-anywhere`)                      | Follow input/native-menu work, without a speculative generic SDK.                      |
-| 7     | [Bar](specs/2026-11-03-bar/00-overview.md) (`feat/bar`)                                                   | Status/UI can ship before tiling; never owns the native Keep Awake service.            |
-| 8     | [Tiling](specs/2026-11-03-tiling/00-overview.md) (`feat/tiling`)                                          | Last; owns tiling-specific workspace display and Bar-reserved screen-area integration. |
+Keep Awake's completion is recorded on `feat/keep-awake` at `f868cf8`, not in main's
+spec metadata. No part is currently marked `in-progress`; integration pending does not
+mean active coding or unfinished implementation. Specified work has only documentation
+on its branches: a draft is not approval. Implement one authorized part at a time.
 
-noTunes first, independent Keep Awake and tiling last are explicit decisions.
-The middle order is a dependency/risk recommendation, not a hard technical chain.
-Share safe `stache-macos` adapters where justified; do not require a universal
-event-tap framework before a real consumer. Keep Bar/tiling integration in the
-final tiling spec so neither feature acquires a circular prerequisite.
-Later merges must rebase on latest `main`, preserve additive catalog/schema/bindings/
-index routes and other-module tests, and reuse earlier generic facilities rather
-than introduce parallel plumbing or dependencies on unmerged module branches.
+## Runtime sequence and hard gates
 
-Preserve existing CLI commands/output contracts. No Settings UI is planned here;
+noTunes → Keep Awake → Wallpapers → Keybindings → Hold-to-Quit → MenuAnywhere → Bar
+→ **Tiling LAST**.
+
+The middle order is a dependency/risk recommendation, not a universal technical chain.
+
+| Gate          | Required before proceeding                                                                                                                                             |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Shared input  | Keybindings lands the service needed by Hold-to-Quit and MenuAnywhere runtimes.                                                                                        |
+| Bar indicator | Keep Awake owns independent, lock-aware power prevention, lifecycle resources and read-only status. Bar only consumes state, never owns the native power service.      |
+| Tiling last   | All smaller rewrites land and shared contracts are exercised. Tiling owns workspace display and Bar-reserved screen-area integration, avoiding circular prerequisites. |
+
+Later branches must integrate latest `main`, preserve additive catalog/schema/bindings/
+index routes and other-module tests, and reuse merged generic facilities. Share safe
+`stache-macos` adapters for concrete consumers; do not introduce parallel plumbing,
+dependencies on unmerged module branches or a speculative universal event-tap framework.
+
+## Verification and release gates
+
+| Area                   | Evidence / remaining gate                                                                                                                                                                                                                         |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Teardown               | Real Cmd-Q, SIGTERM and harness direct-spawn relaunch verified. Real logout, system restart and shutdown **not verified**; owner accepted this limitation. See [gate evidence](specs/2026-11-03-teardown/04-verification-gates.md#gate-evidence). |
+| Keep Awake             | Reverify after integration with latest `main`. Native power/lock checks remain **unverified**; builds and fake-backed tests are insufficient. Each run requires explicit approval; screen-lock interaction is manual and separately authorized.   |
+| Signing / notarization | [Release Part 03](specs/2026-11-03-release/03-signing-notarization.md) is blocked on signing/notary credentials.                                                                                                                                  |
+| Release identity       | [Release Part 04](specs/2026-11-03-release/04-identity-switch.md) requires legacy removal and recorded approval.                                                                                                                                  |
+| Release merge          | All six release parts must be done. Ad-hoc builds do not satisfy signing or publication gates.                                                                                                                                                    |
+| Tray “Reload Stache”   | Prove bundled `open -n` relaunch; keep release-only, main-thread-bound and surface restart failure. A non-`Clean` teardown does not relaunch and leaves no app running.                                                                           |
+
+The release draft plans arm64/macOS 26+ DMG and zip artifacts, Developer ID signing,
+notarization, the staged release identity `Stache` / `com.marcosmoura.stache` with isolated
+development identity, CLI access, install/migration/removal rules, a Homebrew cask and
+release verification. It adds no runtime feature.
+
+Tray Reload must never make whole-app restart the configuration-change path. The per-module
+configuration watcher and `stache reload` remain the normal reload model.
+
+## Standing boundaries
+
+Preserve existing CLI commands and output contracts. No Settings UI is planned;
 widgets are permanently removed, not deferred. No legacy runtime is ported implicitly.
-
-## Tray: no Reload item
-
-The shipped tray ([feature](features/tray.md)) deliberately does not port the legacy
-release-only **Reload Stache** item. Configuration now reloads per module through the
-watcher and `stache reload` exists on the CLI, so restarting the whole application for a
-configuration change is no longer part of the model. Enable, Pause/Resume, Retry, the
-permission request, the test window and Quit cover the shipped actions, and the menu is
-rebuilt from a status snapshot on the main thread rather than mutated in place.
-
-The user asked for a release-only Reload item to be preserved anyway. It is a planned
-follow-up, not shipped behavior: it uses the coordinated restart path from the
-[teardown spec](specs/2026-11-03-teardown/00-overview.md), must prove the bundled `open -n`
-relaunch, must stay
-release-only and main-thread-bound, and must not reintroduce whole-app restart as the
-config-change path.
-
-## Coordinated teardown limitations
-
-Every AppKit-initiated terminate path now converges on one bounded coordinator
-([spec](specs/2026-11-03-teardown/00-overview.md)). Real Cmd-Q is verified. Logout, restart and
-shutdown use the same route but have not been run for real; the owner accepted that as a
-documented limitation. Verifying them needs a disposable login session or a spare machine.
-
-## Release and packaging
-
-Planned, not shipped. The [release spec](specs/2026-11-03-release/00-overview.md) covers one
-version, DMG and zip artifacts, Developer ID signing and notarization, the staged switch to
-`Stache` / `com.marcosmoura.stache`, install and legacy-removal rules, and release verification.
-It adds no runtime feature and is independent of the tool order above. Its branch cannot merge
-until signing credentials exist and the legacy app is removed and approved for removal.
+Keep legacy/new identities isolated and never terminate by shared executable name.
+Follow the [approval and merge workflow](workflow.md): unfinished parts block merging.
