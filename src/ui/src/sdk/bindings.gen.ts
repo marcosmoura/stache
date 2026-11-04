@@ -8,12 +8,12 @@ export const commands = {
 	/**  Returns the static application identity. */
 	appInfo: () => __TAURI_INVOKE<AppInfo>("app_info"),
 	/**  Returns the last published host status without touching module locks. */
-	hostStatus: () => __TAURI_INVOKE<HostStatus>("host_status"),
+	hostStatus: () => __TAURI_INVOKE<HostStatus_Serialize>("host_status"),
 };
 
 /** Events */
 export const events = {
-	statusChanged: makeEvent<StatusChanged>("status-changed"),
+	statusChanged: makeEvent<StatusChanged_Serialize, StatusChanged_Deserialize>("status-changed"),
 };
 
 /* Types */
@@ -28,11 +28,22 @@ export type AppInfo = {
 };
 
 /**  A device that must be present for a priority entry to be considered. */
-export type AudioDeviceDependency = {
+export type AudioDeviceDependency = AudioDeviceDependency_Serialize | AudioDeviceDependency_Deserialize;
+
+/**  A device that must be present for a priority entry to be considered. */
+export type AudioDeviceDependency_Deserialize = {
 	/**  The name or pattern of the required device. */
 	name?: string,
 	/**  How the required device name is matched. */
 	strategy?: MatchStrategy,
+};
+
+/**  A device that must be present for a priority entry to be considered. */
+export type AudioDeviceDependency_Serialize = {
+	/**  The name or pattern of the required device. */
+	name: string,
+	/**  How the required device name is matched. */
+	strategy: MatchStrategy,
 };
 
 /**  One audio device as shown by `stache audio list` and `proxyAudio.list`. */
@@ -60,7 +71,7 @@ export type AudioDevicePriority_Deserialize = {
 	/**  How the device name is matched. */
 	strategy?: MatchStrategy,
 	/**  A device that must be connected before this entry is eligible. */
-	dependsOn?: AudioDeviceDependency | null,
+	dependsOn?: AudioDeviceDependency_Deserialize | null,
 };
 
 /**  One entry in an input or output priority list. */
@@ -70,7 +81,7 @@ export type AudioDevicePriority_Serialize = {
 	/**  How the device name is matched. */
 	strategy: MatchStrategy,
 	/**  A device that must be connected before this entry is eligible. */
-	dependsOn?: AudioDeviceDependency | null,
+	dependsOn?: AudioDeviceDependency_Serialize,
 };
 
 /**  The device direction requested by `proxyAudio.list`. */
@@ -87,9 +98,26 @@ export type AudioListKind =
  *
  *  Omitting the parameters, or sending `null`, means [`AudioListKind::All`].
  */
-export type AudioListParams = {
+export type AudioListParams = AudioListParams_Serialize | AudioListParams_Deserialize;
+
+/**
+ *  Parameters for `proxyAudio.list`.
+ *
+ *  Omitting the parameters, or sending `null`, means [`AudioListKind::All`].
+ */
+export type AudioListParams_Deserialize = {
 	/**  The devices to return. */
 	kind?: AudioListKind,
+};
+
+/**
+ *  Parameters for `proxyAudio.list`.
+ *
+ *  Omitting the parameters, or sending `null`, means [`AudioListKind::All`].
+ */
+export type AudioListParams_Serialize = {
+	/**  The devices to return. */
+	kind: AudioListKind,
 };
 
 /**  The local state of one catalog file. */
@@ -102,7 +130,26 @@ export type ConfigFileState =
 "invalid";
 
 /**  One configuration file as seen by the host. */
-export type ConfigFileView = {
+export type ConfigFileView = ConfigFileView_Serialize | ConfigFileView_Deserialize;
+
+/**  One configuration file as seen by the host. */
+export type ConfigFileView_Deserialize = {
+	/**  File name, for example `proxyAudio.jsonc`. */
+	file: string,
+	/**  Absolute path. */
+	path: string,
+	/**  Local parse/validation state. */
+	state: ConfigFileState,
+	/**  Whether the current bytes were accepted for a loaded global or module. */
+	active: boolean,
+	/**  The held host diagnostic, or the current invalid-file diagnostic. */
+	diagnostic?: string | null,
+	/**  Unknown keys in an otherwise valid file. */
+	warnings: string[],
+};
+
+/**  One configuration file as seen by the host. */
+export type ConfigFileView_Serialize = {
 	/**  File name, for example `proxyAudio.jsonc`. */
 	file: string,
 	/**  Absolute path. */
@@ -124,15 +171,56 @@ export type ConfigFileView = {
  *  file name is `global.jsonc`. `enabled` exists only to satisfy
  *  [`ModuleConfig`] and is always `true`.
  */
-export type GlobalConfig = {
+export type GlobalConfig = GlobalConfig_Serialize | GlobalConfig_Deserialize;
+
+/**
+ *  The global configuration shared by every module.
+ *
+ *  The registry never hosts this type as a module; it is a catalog entry whose
+ *  file name is `global.jsonc`. `enabled` exists only to satisfy
+ *  [`ModuleConfig`] and is always `true`.
+ */
+export type GlobalConfig_Deserialize = {
 	/**  Logging behavior for the host. */
-	logging?: LoggingConfig,
+	logging?: LoggingConfig_Deserialize,
 	/**  Commands to execute once per desktop launch. */
 	execOnStartup?: StartupCommands,
 };
 
+/**
+ *  The global configuration shared by every module.
+ *
+ *  The registry never hosts this type as a module; it is a catalog entry whose
+ *  file name is `global.jsonc`. `enabled` exists only to satisfy
+ *  [`ModuleConfig`] and is always `true`.
+ */
+export type GlobalConfig_Serialize = {
+	/**  Logging behavior for the host. */
+	logging: LoggingConfig_Serialize,
+	/**  Commands to execute once per desktop launch. */
+	execOnStartup: StartupCommands,
+};
+
 /**  Point-in-time status published to the tray and the test window. */
-export type HostStatus = {
+export type HostStatus = HostStatus_Serialize | HostStatus_Deserialize;
+
+/**  Point-in-time status published to the tray and the test window. */
+export type HostStatus_Deserialize = {
+	/**  Whether initial host setup completed. */
+	ready: boolean,
+	/**
+	 *  Persistent host conditions followed by the last action failure, joined
+	 *  with `"; "`. A later successful action clears only its own part.
+	 */
+	error?: string | null,
+	/**  Every registered module, in registration order. */
+	modules: ModuleStatusView_Deserialize[],
+	/**  Every catalog file in file order. */
+	config: ConfigFileView_Deserialize[],
+};
+
+/**  Point-in-time status published to the tray and the test window. */
+export type HostStatus_Serialize = {
 	/**  Whether initial host setup completed. */
 	ready: boolean,
 	/**
@@ -141,9 +229,9 @@ export type HostStatus = {
 	 */
 	error: string | null,
 	/**  Every registered module, in registration order. */
-	modules: ModuleStatusView[],
+	modules: ModuleStatusView_Serialize[],
 	/**  Every catalog file in file order. */
-	config: ConfigFileView[],
+	config: ConfigFileView_Serialize[],
 };
 
 /**  Severity of one log record. */
@@ -158,11 +246,22 @@ export type LogLevel =
 "error";
 
 /**  Logging behavior selected by `global.jsonc`. */
-export type LoggingConfig = {
+export type LoggingConfig = LoggingConfig_Serialize | LoggingConfig_Deserialize;
+
+/**  Logging behavior selected by `global.jsonc`. */
+export type LoggingConfig_Deserialize = {
 	/**  Minimum severity the host writes. */
 	level?: LogLevel,
 	/**  Whether the host includes development-only detail in its records. */
 	debug?: boolean,
+};
+
+/**  Logging behavior selected by `global.jsonc`. */
+export type LoggingConfig_Serialize = {
+	/**  Minimum severity the host writes. */
+	level: LogLevel,
+	/**  Whether the host includes development-only detail in its records. */
+	debug: boolean,
 };
 
 /**  Strategy used to match a device name. */
@@ -199,7 +298,43 @@ export type ModuleState =
  *  `state` and `detail` describe the runtime; `diagnostic` describes a rejected
  *  configuration. A rejected reload never disguises a running module as failed.
  */
-export type ModuleStatusView = {
+export type ModuleStatusView = ModuleStatusView_Serialize | ModuleStatusView_Deserialize;
+
+/**
+ *  UI-facing status of one module.
+ *
+ *  `state` and `detail` describe the runtime; `diagnostic` describes a rejected
+ *  configuration. A rejected reload never disguises a running module as failed.
+ */
+export type ModuleStatusView_Deserialize = {
+	/**  Stable module identifier. */
+	id: string,
+	/**  Observed lifecycle state. */
+	state: ModuleState,
+	/**  Desired enabled flag. */
+	enabled: boolean,
+	/**  Session-only pause flag. */
+	paused: boolean,
+	/**
+	 *  Last accepted configuration revision as an exact decimal string.
+	 *
+	 *  JavaScript numbers cannot hold every SDK `u64` exactly, so the value is
+	 *  opaque text on the wire. Never parse it into a `number`.
+	 */
+	revision: string,
+	/**  Permission, missing prerequisite or failure detail. */
+	detail?: string | null,
+	/**  Diagnostic for the most recently rejected configuration. */
+	diagnostic?: string | null,
+};
+
+/**
+ *  UI-facing status of one module.
+ *
+ *  `state` and `detail` describe the runtime; `diagnostic` describes a rejected
+ *  configuration. A rejected reload never disguises a running module as failed.
+ */
+export type ModuleStatusView_Serialize = {
 	/**  Stable module identifier. */
 	id: string,
 	/**  Observed lifecycle state. */
@@ -245,7 +380,7 @@ export type NoTunesConfig_Serialize = {
 	 *  path or a bundle identifier. Omitting it blocks without launching
 	 *  anything.
 	 */
-	targetApp?: string | null,
+	targetApp?: string,
 };
 
 /**  Automatic audio-device selection. */
@@ -279,28 +414,41 @@ string |
 string[];
 
 /**  Event emitted when [`HostStatus`] changes. */
-export type StatusChanged = {
+export type StatusChanged = StatusChanged_Serialize | StatusChanged_Deserialize;
+
+/**  Event emitted when [`HostStatus`] changes. */
+export type StatusChanged_Deserialize = {
 	/**  The new status. */
-	status: HostStatus,
+	status: HostStatus_Deserialize,
+};
+
+/**  Event emitted when [`HostStatus`] changes. */
+export type StatusChanged_Serialize = {
+	/**  The new status. */
+	status: HostStatus_Serialize,
 };
 
 /* Tauri Specta runtime */
 type EventEmit<T> = [T] extends [null] ? () => Promise<void> : (payload: T) => Promise<void>;
 
-function makeEvent<T>(name: string, serialize?: (payload: T) => unknown, deserialize?: (payload: any) => T) {
-    const mapEvent = (cb: __TAURI_EVENT.EventCallback<T>) => (event: __TAURI_EVENT.Event<any>) => cb({ ...event, payload: deserialize ? deserialize(event.payload) : event.payload });
-    const mapPayload = (payload: T) => serialize ? serialize(payload) : payload;
+type EventEmitTo<T> = [T] extends [null] ? (target: __TAURI_EVENT.EventTarget | string) => Promise<void> : (target: __TAURI_EVENT.EventTarget | string, payload: T) => Promise<void>;
+
+function makeEvent<TListen, TEmit = TListen>(name: string, serialize?: (payload: TEmit) => unknown, deserialize?: (payload: any) => TListen) {
+    const mapEvent = (cb: __TAURI_EVENT.EventCallback<TListen>) => (event: __TAURI_EVENT.Event<any>) => cb({ ...event, payload: deserialize ? deserialize(event.payload) : event.payload });
+    const mapPayload = (payload: TEmit) => serialize ? serialize(payload) : payload;
 
     const base = {
-        listen: (cb: __TAURI_EVENT.EventCallback<T>) => __TAURI_EVENT.listen(name, mapEvent(cb)),
-        once: (cb: __TAURI_EVENT.EventCallback<T>) => __TAURI_EVENT.once(name, mapEvent(cb)),
-        emit: ((payload: T) => __TAURI_EVENT.emit(name, mapPayload(payload)) as unknown) as EventEmit<T>
+        listen: (cb: __TAURI_EVENT.EventCallback<TListen>) => __TAURI_EVENT.listen(name, mapEvent(cb)),
+        once: (cb: __TAURI_EVENT.EventCallback<TListen>) => __TAURI_EVENT.once(name, mapEvent(cb)),
+        emit: ((payload: TEmit) => __TAURI_EVENT.emit(name, mapPayload(payload)) as unknown) as EventEmit<TEmit>,
+        emitTo: ((to: __TAURI_EVENT.EventTarget | string, payload: TEmit) => __TAURI_EVENT.emitTo(to, name, mapPayload(payload)) as unknown) as EventEmitTo<TEmit>
     };
 
     const fn = (target: import("@tauri-apps/api/webview").Webview | import("@tauri-apps/api/window").Window) => ({
-        listen: (cb: __TAURI_EVENT.EventCallback<T>) => target.listen(name, mapEvent(cb)),
-        once: (cb: __TAURI_EVENT.EventCallback<T>) => target.once(name, mapEvent(cb)),
-        emit: ((payload: T) => target.emit(name, mapPayload(payload)) as unknown) as EventEmit<T>
+        listen: (cb: __TAURI_EVENT.EventCallback<TListen>) => target.listen(name, mapEvent(cb)),
+        once: (cb: __TAURI_EVENT.EventCallback<TListen>) => target.once(name, mapEvent(cb)),
+        emit: ((payload: TEmit) => target.emit(name, mapPayload(payload)) as unknown) as EventEmit<TEmit>,
+        emitTo: ((to: __TAURI_EVENT.EventTarget | string, payload: TEmit) => target.emitTo(to, name, mapPayload(payload)) as unknown) as EventEmitTo<TEmit>
     });
 
     return Object.assign(fn, base);

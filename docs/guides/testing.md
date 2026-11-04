@@ -204,10 +204,10 @@ manual because automating a menu-bar click is outside the owned process.
 
 ## Bundles and prerequisites
 
-The Cargo lock pins `tauri =2.12.4`, the same minor as the pinned
+The Cargo lock pins `tauri =2.12.5`, the same minor as the pinned
 `@tauri-apps/api 2.12.4`; the Tauri CLI rejects a Rust/JS minor mismatch
 ("Found version mismatched Tauri packages…"), so the two move together. The rest
-of the lock only carries what that pin requires: `tauri-build =2.7.3`,
+of the lock only carries what that pin requires: `tauri-build =2.7.4`,
 `tauri-runtime`, `tauri-runtime-wry`, `tauri-utils`, `tauri-codegen`/`tauri-macros`,
 `wry`, `tao`, `muda` and `tray-icon`. Cargo audit currently reports upstream
 maintenance/unsoundness warnings. The Bun lock pins patched Vite/Vitest and
