@@ -491,6 +491,13 @@ impl Registry {
         {
             let mut guard = slot.lock_state();
             if guard.enabled == enabled {
+                if !enabled && guard.needs_stop {
+                    // A previous stop failed, so this repeat retries its cleanup.
+                    guard.status = ModuleStatus::Disabled;
+                    guard.publish();
+                    self.quiesce(slot, &mut guard)?;
+                    return Ok(());
+                }
                 if !enabled || guard.paused {
                     return Ok(());
                 }
@@ -512,7 +519,8 @@ impl Registry {
     /// Pauses a module without editing its configuration.
     ///
     /// A running module is stopped and marked `Paused`. A disabled module keeps
-    /// the pause flag for the next enable. Pausing twice is a no-op.
+    /// the pause flag for the next enable. Pausing twice is a no-op unless the
+    /// first stop failed, in which case the repeat retries that cleanup.
     ///
     /// # Errors
     /// Returns an unknown-handle or stop error.
@@ -524,7 +532,7 @@ impl Registry {
 
     fn pause_inner(&self, slot: &ModuleSlot) -> RegistryResult<()> {
         let mut guard = slot.lock_state();
-        if guard.paused {
+        if guard.paused && !(guard.enabled && guard.needs_stop) {
             return Ok(());
         }
         guard.paused = true;
@@ -2778,6 +2786,46 @@ mod tests {
             other => panic!("expected Failed, got {other:?}"),
         }
         assert_eq!(lock(&state).stops, 1);
+    }
+
+    #[test]
+    fn repeating_a_failed_disable_or_pause_retries_the_stop() {
+        let harness = Harness::new();
+        let (mut disabled, disabled_state) = harness.fake("failed-disable");
+        disabled.fail.stop = true;
+        let disabled = harness.registry.register(disabled, FakeConfig::on(1)).expect("register");
+        let (mut paused, paused_state) = harness.fake("failed-pause");
+        paused.fail.stop = true;
+        let paused = harness.registry.register(paused, FakeConfig::on(1)).expect("register");
+        harness.registry.start_all().expect("start_all");
+
+        harness.registry.set_enabled(disabled, false).expect_err("stop fails");
+        harness.registry.set_enabled(disabled, false).expect_err("the repeat retries");
+        assert_eq!(lock(&disabled_state).stops, 2);
+        assert_eq!(lock(&disabled_state).starts, 1, "a retry starts nothing");
+
+        harness.registry.pause(paused).expect_err("stop fails");
+        harness.registry.pause(paused).expect_err("the repeat retries");
+        assert_eq!(lock(&paused_state).stops, 2);
+        assert_eq!(lock(&paused_state).starts, 1, "a retry starts nothing");
+    }
+
+    #[test]
+    fn repeating_a_clean_disable_or_pause_does_not_stop_again() {
+        let harness = Harness::new();
+        let (disabled, disabled_state) = harness.fake("clean-disable");
+        let disabled = harness.registry.register(disabled, FakeConfig::on(1)).expect("register");
+        let (paused, paused_state) = harness.fake("clean-pause");
+        let paused = harness.registry.register(paused, FakeConfig::on(1)).expect("register");
+        harness.registry.start_all().expect("start_all");
+
+        harness.registry.set_enabled(disabled, false).expect("disable");
+        harness.registry.set_enabled(disabled, false).expect("repeat");
+        assert_eq!(lock(&disabled_state).stops, 1);
+
+        harness.registry.pause(paused).expect("pause");
+        harness.registry.pause(paused).expect("repeat");
+        assert_eq!(lock(&paused_state).stops, 1);
     }
 
     #[test]

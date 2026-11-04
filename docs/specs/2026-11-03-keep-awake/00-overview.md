@@ -41,8 +41,8 @@ The first implemented/merged noTunes part 01 defines generic catalog migration/d
 
 | Part                       | Summary                                                                   | Status |
 | -------------------------- | ------------------------------------------------------------------------- | ------ |
-| [01](01-config-native.md)  | Typed config/catalog/migration and safe native adapters; feasibility gate | draft  |
-| [02](02-runtime-status.md) | Owned lock-aware runtime, production factory and typed read-only status   | draft  |
+| [01](01-config-native.md)  | Typed config/catalog/migration and safe native adapters; feasibility gate | done   |
+| [02](02-runtime-status.md) | Owned lock-aware runtime, production factory and typed read-only status   | done   |
 
 Each part must independently build, test and be committable. Part 01 registers configuration, not a production runtime; part 02 depends only on part 01 and the shipped foundation. Only the orchestrator changes status, after approval and verification. Unfinished parts block merge.
 

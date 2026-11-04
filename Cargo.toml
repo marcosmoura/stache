@@ -6,6 +6,7 @@ members = [
     "src/crates/app",
     "src/crates/cli",
     "src/crates/macos",
+    "src/crates/modules/keep-awake",
     "src/crates/modules/notunes",
     "src/crates/modules/proxy-audio",
     "src/crates/sdk",

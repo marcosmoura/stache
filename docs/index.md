@@ -17,7 +17,7 @@ Read when navigating the shipped foundation, explicitly planned rewrites or the 
 | Foundation spec and acceptance      | [spec](specs/2026-11-02-foundation/00-overview.md)                                          |
 | Planned rewrite order               | [roadmap](roadmap.md)                                                                       |
 | noTunes (shipped)                   | [feature](features/notunes.md), [spec](specs/2026-11-03-notunes/00-overview.md)             |
-| Keep Awake (planned)                | [feature](features/keep-awake.md), [spec](specs/2026-11-03-keep-awake/00-overview.md)       |
+| Keep Awake (shipped)                | [feature](features/keep-awake.md), [spec](specs/2026-11-03-keep-awake/00-overview.md)       |
 | Wallpapers (planned)                | [feature](features/wallpapers.md), [spec](specs/2026-11-03-wallpapers/00-overview.md)       |
 | Keybindings (planned)               | [feature](features/keybindings.md), [spec](specs/2026-11-03-keybindings/00-overview.md)     |
 | Hold-to-Quit (planned)              | [feature](features/hold-to-quit.md), [spec](specs/2026-11-03-hold-to-quit/00-overview.md)   |

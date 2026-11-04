@@ -1,0 +1,24 @@
+[package]
+name = "stache-keep-awake"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Stache Keep Awake configuration"
+readme = "../../../../README.md"
+keywords = ["stache", "keep-awake", "configuration"]
+categories = ["config"]
+
+[dependencies]
+schemars = "1.2.3"
+serde = { version = "1.0.229", features = ["derive"] }
+specta = { version = "=2.0.0-rc.26", features = ["derive"] }
+stache-macos = { path = "../../macos" }
+stache-sdk = { path = "../../sdk" }
+
+[dev-dependencies]
+serde_json = "1.0.154"
+stache-macos = { path = "../../macos", features = ["testing"] }
+
+[lints]
+workspace = true

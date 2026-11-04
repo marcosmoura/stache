@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 02 — Owned runtime and read-only status
@@ -49,14 +49,14 @@ The app owns generic factory/registry/router composition; the module owns power 
 
 ## Acceptance criteria
 
-- [ ] KA02-01: Generic production registration/control/config recovery works; default-disabled Keep Awake starts no native activity and adds no TCC request, CLI, webview or independent toggle.
-- [ ] KA02-02: Locked startup runs without acquisition; unlocked startup acquires once; lock releases/unlock restores all-three prevention without Bar.
-- [ ] KA02-03: Disable/pause/stop cancel and join; release failure surfaces lifecycle cleanup error and retains pending IDs/status until bounded cleanup resolves. Late work cannot resurrect resources or affect a successor; resume resolves pending cleanup and refreshes lock first.
-- [ ] KA02-04: One worker/subscription/timer per generation, two-second owned reconciliation and notification coalescing survive dropped signals and unchanged reloads without duplication.
-- [ ] KA02-05: Initial unknown/acquire failure attempts rollback and supports generic Retry; absent-key compatibility is unlocked, not unknown. Live failures report acquiring during outstanding acquisition, releasePending during cleanup or unresolved failure, and inactive only after confirmed cleanup; retain failed cleanup ownership, recover on bounded refresh and avoid log spam. Observer failure uses visible probe-only fallback.
-- [ ] KA02-06: App-owned typed/read-only status is available in every lifecycle state, including acquiring and in-progress/pending cleanup; assertion/lock/conditions remain truthful, with assertionReleaseFailed only on actual failure. Held file diagnostic overrides registry diagnostic, preserves last-good runtime and clears on identical-good repair. Queries cause no native, filesystem or configuration effects.
-- [ ] KA02-07: Fake races prove bounded dispatch/cancellation, stale-candidate disposal, prompt published reads during barrier-blocked native creation/release and identity safety without imposing impossible SDK lock rules. Such reads never falsely claim inactive or fully adopted active prevention.
-- [ ] KA02-08: Generated DTO checks and all validation pass; behavior docs describe limits honestly; proxyAudio behavior stays unchanged and manual cases are explicitly marked unverified if not authorized.
+- [x] KA02-01: Generic production registration/control/config recovery works; default-disabled Keep Awake starts no native activity and adds no TCC request, CLI, webview or independent toggle.
+- [x] KA02-02: Locked startup runs without acquisition; unlocked startup acquires once; lock releases/unlock restores all-three prevention without Bar.
+- [x] KA02-03: Disable/pause/stop cancel and join; release failure surfaces lifecycle cleanup error and retains pending IDs/status until bounded cleanup resolves. Late work cannot resurrect resources or affect a successor; resume resolves pending cleanup and refreshes lock first.
+- [x] KA02-04: One worker/subscription/timer per generation, two-second owned reconciliation and notification coalescing survive dropped signals and unchanged reloads without duplication.
+- [x] KA02-05: Initial unknown/acquire failure attempts rollback and supports generic Retry; absent-key compatibility is unlocked, not unknown. Live failures report acquiring during outstanding acquisition, releasePending during cleanup or unresolved failure, and inactive only after confirmed cleanup; retain failed cleanup ownership, recover on bounded refresh and avoid log spam. Observer failure uses visible probe-only fallback.
+- [x] KA02-06: App-owned typed/read-only status is available in every lifecycle state, including acquiring and in-progress/pending cleanup; assertion/lock/conditions remain truthful, with assertionReleaseFailed only on actual failure. Held file diagnostic overrides registry diagnostic, preserves last-good runtime and clears on identical-good repair. Queries cause no native, filesystem or configuration effects.
+- [x] KA02-07: Fake races prove bounded dispatch/cancellation, stale-candidate disposal, prompt published reads during barrier-blocked native creation/release and identity safety without imposing impossible SDK lock rules. Such reads never falsely claim inactive or fully adopted active prevention.
+- [x] KA02-08: Generated DTO checks and all validation pass; behavior docs describe limits honestly; proxyAudio behavior stays unchanged and manual cases are explicitly marked unverified if not authorized.
 
 ## Tests
 

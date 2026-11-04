@@ -270,6 +270,28 @@ parameters have distinct `HandlerError` constructors, so clients can branch on
 the kind instead of the message. `core` is reserved for reload and status.
 See [ipc.md](../architecture/ipc.md) for the wire shape and limits.
 
+A factory contributes handlers through `ipc_handlers`, which receives a clone of
+the app's read-only `FactoryContext`:
+
+```rust
+fn ipc_handlers(
+    &self,
+    context: &FactoryContext,
+) -> Vec<(&'static str, Arc<dyn IpcHandler>)> {
+    vec![("ticker", Arc::new(TickerIpc::new(context.clone())))]
+}
+```
+
+The context wraps a private registry and store and exposes only
+`module_snapshot(id)` and `diagnostic(id)`: published lifecycle metadata and the
+held file diagnostic. It offers no mutable registry or store, no configuration
+apply or write and no disk access, so a handler cannot start, stop or reconfigure
+a module while composing a response. Use it for a read-only app-owned status
+envelope such as Keep Awake's; all policy and runtime ownership stay in the
+module. See [keep-awake.md](../features/keep-awake.md) for that contract.
+Existing factories keep their registration and runtime behavior; only their
+handler signature gains the context.
+
 ## Pilot example: proxyAudio
 
 The shipping pilot combines the pieces above. It is the reference for a module
@@ -288,7 +310,7 @@ with a native watcher, a CLI command and a socket method:
 - `src/crates/modules/proxy-audio/src/ipc.rs` implements `IpcHandler` for the
   read-only `list` method.
 - `src/crates/app/src/host.rs` has one `ModuleFactory` that registers the module
-  and returns its `ipc_handlers()`, both over one shared backend;
+  and returns its `ipc_handlers(context)`, both over one shared backend;
   `ModuleFactories::production(main_thread)` is the composition root used by
   `run_with`. `src/crates/app/src/bindings.rs` exports the listing DTOs, not a
   Tauri command, because the pilot has no UI.

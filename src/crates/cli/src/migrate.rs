@@ -249,9 +249,24 @@ fn plan(
         let template = catalog.template(id).ok_or_else(|| {
             MigrateError::Catalog(format!("{id} is not registered in the configuration catalog"))
         })?;
+        reports.push(emitted_default(&name, catalog.default_value(id)));
         files.insert(name, template);
     }
     Ok(MigrationPlan { files, reports })
+}
+
+/// Reports a template emitted for a section absent from the source.
+///
+/// The registered default decides whether the file is described as disabled;
+/// migration never guesses from a legacy section that the new file does not own.
+fn emitted_default(name: &str, default: Option<&Value>) -> String {
+    let disabled =
+        default.and_then(|value| value.get("enabled")).and_then(Value::as_bool) == Some(false);
+    if disabled {
+        format!("emitted default template {name} (disabled)")
+    } else {
+        format!("emitted default template {name}")
+    }
 }
 
 /// The registered module whose exact identifier matches a legacy section.
@@ -396,6 +411,23 @@ mod tests {
     }
 
     impl ModuleConfig for Pilot {
+        fn enabled(&self) -> bool { self.enabled }
+
+        fn validate(&self) -> Result<(), ConfigError> { Ok(()) }
+    }
+
+    /// A pilot whose typed default is enabled, to prove the report is generic.
+    #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, JsonSchema)]
+    #[serde(default, rename_all = "camelCase")]
+    struct EnabledPilot {
+        enabled: bool,
+    }
+
+    impl Default for EnabledPilot {
+        fn default() -> Self { Self { enabled: true } }
+    }
+
+    impl ModuleConfig for EnabledPilot {
         fn enabled(&self) -> bool { self.enabled }
 
         fn validate(&self) -> Result<(), ConfigError> { Ok(()) }
@@ -602,6 +634,7 @@ mod tests {
         assert_eq!(plan.reports, vec![
             "warning: unknown notunes key `legacy` is preserved in notunes.jsonc and ignored by the typed configuration",
             "validated notunes -> notunes.jsonc",
+            "emitted default template proxyAudio.jsonc (disabled)",
         ]);
         assert!(plan.files["notunes.jsonc"].contains("\"legacy\": 1"));
     }
@@ -629,6 +662,51 @@ mod tests {
             catalog.template(ModuleId::new("notunes")).expect("notunes template")
         );
         assert_eq!(plan.files.len(), 3);
+    }
+
+    #[test]
+    fn an_absent_module_with_a_disabled_default_is_reported_as_disabled() {
+        let mut catalog = catalog();
+        catalog.register::<Pilot>(ModuleId::new("keepAwake")).expect("keepAwake");
+        let plan = plan(&parse("{}"), Path::new("config.jsonc"), &catalog).expect("plan");
+        assert_eq!(
+            plan.files["keepAwake.jsonc"],
+            catalog.template(ModuleId::new("keepAwake")).expect("keepAwake template")
+        );
+        assert!(
+            plan.reports
+                .contains(&"emitted default template keepAwake.jsonc (disabled)".to_owned()),
+            "{:?}",
+            plan.reports
+        );
+    }
+
+    #[test]
+    fn a_default_enabled_type_is_not_reported_as_disabled() {
+        let mut catalog = ConfigCatalog::new();
+        catalog.register::<GlobalConfig>(GlobalConfig::ID).expect("global");
+        catalog.register::<EnabledPilot>(ModuleId::new("optIn")).expect("optIn");
+        let plan = plan(&parse("{}"), Path::new("config.jsonc"), &catalog).expect("plan");
+        assert_eq!(plan.reports, ["emitted default template optIn.jsonc"]);
+    }
+
+    #[test]
+    fn a_present_registered_section_is_not_reported_as_a_default() {
+        let mut catalog = ConfigCatalog::new();
+        catalog.register::<GlobalConfig>(GlobalConfig::ID).expect("global");
+        catalog.register::<Pilot>(ModuleId::new("keepAwake")).expect("keepAwake");
+        let plan = plan(
+            &parse(r#"{ "keepAwake": { "enabled": true } }"#),
+            Path::new("config.jsonc"),
+            &catalog,
+        )
+        .expect("plan");
+        assert!(
+            !plan.reports.iter().any(|report| report.starts_with("emitted default template")),
+            "{:?}",
+            plan.reports
+        );
+        assert!(plan.reports.contains(&"validated keepAwake -> keepAwake.jsonc".to_owned()));
     }
 }
 
@@ -794,6 +872,25 @@ mod integration_tests {
                 "force={force}: the source must stay untouched"
             );
         }
+    }
+
+    #[test]
+    fn absent_registered_modules_report_the_disabled_default_on_stdout() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let source = root.path().join("legacy.jsonc");
+        let destination = root.path().join("new");
+        fs::write(&source, "{}").expect("source");
+        let (code, out, err) =
+            run_migration(Some(&source), &destination, false, &ConfigEnvironment::default());
+        assert_eq!(code, ExitCode::SUCCESS, "{err}");
+        assert!(
+            out.contains("emitted default template proxyAudio.jsonc (disabled)"),
+            "{out}"
+        );
+        assert_eq!(
+            fs::read_to_string(destination.join("proxyAudio.jsonc")).expect("pilot"),
+            catalog().template(ModuleId::new("proxyAudio")).expect("pilot template")
+        );
     }
 
     #[test]

@@ -4,6 +4,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::process::ExitCode;
 
+use stache_keep_awake::KeepAwakeConfig;
 use stache_notunes::NoTunesConfig;
 use stache_proxy_audio::ProxyAudioConfig;
 use stache_sdk::{CommandCatalog, ConfigCatalog, GlobalConfig};
@@ -16,10 +17,14 @@ fn catalog() -> ConfigCatalog { stache_app::catalog::catalog().expect("catalog")
 fn the_catalog_owns_the_global_and_module_files() {
     let catalog = catalog();
     let ids: Vec<&str> = catalog.ids().map(stache_sdk::ModuleId::as_str).collect();
-    assert_eq!(ids, ["global", "notunes", "proxyAudio"]);
+    assert_eq!(ids, ["global", "keepAwake", "notunes", "proxyAudio"]);
     assert_eq!(
         catalog.file_name(GlobalConfig::ID).as_deref(),
         Some("global.jsonc")
+    );
+    assert_eq!(
+        catalog.file_name(KeepAwakeConfig::ID).as_deref(),
+        Some("keepAwake.jsonc")
     );
     assert_eq!(
         catalog.file_name(NoTunesConfig::ID).as_deref(),
@@ -54,6 +59,39 @@ fn the_notunes_schema_describes_an_optional_target_string() {
 }
 
 #[test]
+fn the_keep_awake_schema_describes_the_single_boolean() {
+    let catalog = catalog();
+    let rendered = catalog.schema_json(KeepAwakeConfig::ID).expect("registered").expect("render");
+    assert!(rendered.contains("/schemas/keepAwake.schema.json"), "{rendered}");
+    let schema: serde_json::Value = serde_json::from_str(&rendered).expect("schema JSON");
+    assert_eq!(schema["title"], "KeepAwakeConfig");
+    assert_eq!(schema["properties"]["enabled"]["type"], "boolean");
+    assert_eq!(schema["properties"]["enabled"]["default"], false);
+    assert_eq!(
+        schema["properties"]["enabled"]["description"],
+        "Whether Keep Awake should prevent display, idle and system sleep."
+    );
+    assert!(
+        schema.get("$defs").is_none(),
+        "one boolean needs no definitions: {rendered}"
+    );
+}
+
+#[test]
+fn keep_awake_schema_and_template_generation_is_deterministic() {
+    let catalog = catalog();
+    let schema = catalog.schema_json(KeepAwakeConfig::ID).expect("registered").expect("render");
+    assert_eq!(
+        schema,
+        catalog.schema_json(KeepAwakeConfig::ID).expect("registered").expect("render")
+    );
+    assert_eq!(
+        catalog.template(KeepAwakeConfig::ID),
+        catalog.template(KeepAwakeConfig::ID)
+    );
+}
+
+#[test]
 fn the_pilot_schema_describes_the_legacy_fields() {
     let rendered = catalog().schema_json(ProxyAudioConfig::ID).expect("schema").expect("render");
     assert!(rendered.contains("/schemas/proxyAudio.schema.json"));
@@ -67,6 +105,9 @@ fn templates_come_from_the_typed_defaults() {
     let global = catalog.template(GlobalConfig::ID).expect("global template");
     assert!(global.contains("\"execOnStartup\": []"));
     assert!(global.contains("\"$schema\""));
+    let keep_awake = catalog.template(KeepAwakeConfig::ID).expect("keepAwake template");
+    assert!(keep_awake.contains("\"enabled\": false"), "{keep_awake}");
+    assert!(!keep_awake.contains("duration"), "{keep_awake}");
     let notunes = catalog.template(NoTunesConfig::ID).expect("notunes template");
     assert!(notunes.contains("\"enabled\": false"));
     assert!(!notunes.contains("targetApp"), "{notunes}");
@@ -267,6 +308,111 @@ fn an_absent_notunes_section_receives_the_same_template_as_init() {
 }
 
 #[test]
+fn keep_awake_migration_always_emits_the_disabled_default() {
+    for (label, source_text) in [
+        ("enabled", r#"{ "bar": { "enabled": true } }"#),
+        ("disabled", r#"{ "bar": { "enabled": false } }"#),
+        ("absent", "{}"),
+    ] {
+        let root = tempfile::tempdir().expect("temp dir");
+        let source = root.path().join("legacy.jsonc");
+        let destination = root.path().join("config");
+        fs::write(&source, source_text).expect("source");
+        let (code, out, err) = migrate(&source, &destination, false);
+        assert_eq!(code, ExitCode::SUCCESS, "{label}: {err}");
+        let expected = catalog().template(KeepAwakeConfig::ID).expect("keepAwake template");
+        let written = fs::read_to_string(destination.join("keepAwake.jsonc")).expect("keepAwake");
+        assert_eq!(written, expected, "{label}");
+        let (decoded, warnings) = catalog()
+            .decode_typed::<KeepAwakeConfig>(
+                KeepAwakeConfig::ID,
+                &destination.join("keepAwake.jsonc"),
+                &written,
+            )
+            .expect("typed keepAwake");
+        assert!(warnings.is_empty(), "{label}: {warnings:?}");
+        assert!(
+            !decoded.enabled,
+            "{label}: migration must not infer consent from Bar"
+        );
+        assert!(
+            out.contains("emitted default template keepAwake.jsonc (disabled)"),
+            "{label}: {out}"
+        );
+        assert_eq!(
+            fs::read_to_string(&source).expect("source"),
+            source_text,
+            "{label}"
+        );
+        match label {
+            "enabled" | "disabled" => {
+                let bar: serde_json::Value = serde_json::from_str(
+                    &fs::read_to_string(destination.join("bar.jsonc")).expect("bar"),
+                )
+                .expect("bar JSON");
+                assert_eq!(
+                    bar,
+                    serde_json::json!({ "enabled": label == "enabled" }),
+                    "{label}: the unported section stays verbatim"
+                );
+            }
+            _ => assert!(!destination.join("bar.jsonc").exists(), "{label}"),
+        }
+    }
+}
+
+#[test]
+fn keep_awake_migration_refuses_collisions_and_never_writes_the_source() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let source = root.path().join("legacy.jsonc");
+    let destination = root.path().join("config");
+    fs::create_dir_all(&destination).expect("destination");
+    fs::write(&source, "{}").expect("source");
+    let sentinel = destination.join("keepAwake.jsonc");
+    fs::write(&sentinel, "{ \"sentinel\": true }\n").expect("sentinel");
+
+    let (code, _out, err) = migrate(&source, &destination, false);
+    assert_eq!(code, ExitCode::FAILURE);
+    assert!(err.contains("refusing to overwrite existing files"), "{err}");
+    assert!(err.contains("keepAwake.jsonc"), "{err}");
+    assert_eq!(
+        fs::read_to_string(&sentinel).expect("sentinel"),
+        "{ \"sentinel\": true }\n"
+    );
+    assert!(
+        !destination.join("global.jsonc").exists(),
+        "a refused plan writes nothing"
+    );
+
+    let (code, _out, err) = migrate(&source, &destination, true);
+    assert_eq!(code, ExitCode::SUCCESS, "{err}");
+    assert_eq!(
+        fs::read_to_string(&sentinel).expect("replaced"),
+        catalog().template(KeepAwakeConfig::ID).expect("keepAwake template")
+    );
+
+    let root = tempfile::tempdir().expect("temp dir");
+    let directory = root.path().join("config");
+    fs::create_dir_all(&directory).expect("config");
+    let source = directory.join("keepAwake.jsonc");
+    let contents = r#"{ "bar": { "enabled": true } }"#;
+    fs::write(&source, contents).expect("source");
+    for force in [false, true] {
+        let (code, _out, err) = migrate(&source, &directory, force);
+        assert_eq!(code, ExitCode::FAILURE, "force={force}: {err}");
+        assert!(
+            err.contains("is also a migration destination"),
+            "force={force}: {err}"
+        );
+        assert_eq!(
+            fs::read_to_string(&source).expect("source"),
+            contents,
+            "force={force}: the source must stay untouched"
+        );
+    }
+}
+
+#[test]
 fn config_path_reports_typed_notunes_state() {
     let root = tempfile::tempdir().expect("temp dir");
     let directory = root.path().join("config");
@@ -314,7 +460,7 @@ fn run_path(directory: &std::path::Path) -> (ExitCode, String, String) {
 }
 
 #[test]
-fn production_registers_the_audio_pilot_before_the_notunes_blocker() {
+fn production_registers_the_audio_pilot_the_blocker_and_keep_awake() {
     use std::sync::Arc;
 
     use stache_app::host::ModuleFactories;
@@ -332,5 +478,107 @@ fn production_registers_the_audio_pilot_before_the_notunes_blocker() {
 
     let production = ModuleFactories::production(Arc::new(NoExecutor));
     let ids: Vec<&str> = production.entries().iter().map(|factory| factory.id().as_str()).collect();
-    assert_eq!(ids, ["proxyAudio", "notunes"]);
+    assert_eq!(ids, ["proxyAudio", "notunes", "keepAwake"]);
+}
+
+#[test]
+fn an_enabled_keep_awake_file_is_bound_but_stays_stopped_with_production_factories() {
+    use std::sync::Arc;
+
+    use stache_app::host::ModuleFactories;
+    use stache_sdk::{
+        ConfigFileId, ConfigPaths, ConfigStore, DiscardLogger, EventBus, Initial, LogFilter,
+        MainThreadExecutor, ModuleStatus, Permission, PermissionError, PermissionProvider,
+        PermissionStatus, Registry, ReloadOutcome, ThreadError, UnavailableWindows,
+    };
+
+    struct NoExecutor;
+
+    impl MainThreadExecutor for NoExecutor {
+        fn is_main_thread(&self) -> bool { false }
+
+        fn execute(&self, _: Box<dyn FnOnce() + Send + 'static>) -> Result<(), ThreadError> {
+            Ok(())
+        }
+    }
+
+    struct AllowAll;
+
+    impl PermissionProvider for AllowAll {
+        fn status(&self, _: Permission) -> PermissionStatus { PermissionStatus::Granted }
+
+        fn request(&self, _: Permission) -> Result<PermissionStatus, PermissionError> {
+            Ok(PermissionStatus::Granted)
+        }
+    }
+
+    let root = tempfile::tempdir().expect("temp dir");
+    let directory = root.path().join("config");
+    fs::create_dir_all(&directory).expect("config");
+
+    let registry = Arc::new(Registry::new(
+        Arc::new(DiscardLogger),
+        Arc::new(EventBus::new()),
+        Arc::new(NoExecutor),
+        Arc::new(AllowAll),
+        Arc::new(UnavailableWindows),
+    ));
+    let store = ConfigStore::new(
+        Arc::clone(&registry),
+        catalog(),
+        ConfigPaths::new(&directory),
+        Arc::new(LogFilter::default()),
+    );
+    let missing = store.initial::<KeepAwakeConfig>(KeepAwakeConfig::ID).expect("initial");
+    assert!(
+        matches!(missing, Initial::Default(config) if !config.enabled),
+        "a missing file uses the disabled default"
+    );
+
+    fs::write(directory.join("keepAwake.jsonc"), r#"{ "enabled": true }"#).expect("keepAwake");
+
+    // Production registration binds the enabled file but never starts it. It is
+    // safe because registration performs no native call; only `start_all` starts
+    // an enabled module, and that would use the real system backend.
+    let factories = ModuleFactories::production(Arc::new(NoExecutor));
+    for factory in factories.entries() {
+        factory.register(&registry, &store).expect("register");
+    }
+    let keep_awake = registry
+        .snapshots()
+        .into_iter()
+        .find(|snapshot| snapshot.id == KeepAwakeConfig::ID)
+        .expect("keepAwake is bound");
+    assert!(keep_awake.enabled, "the enabled file is accepted");
+    assert_eq!(
+        keep_awake.status,
+        ModuleStatus::Stopped,
+        "registration alone must not start the module"
+    );
+    assert_eq!(keep_awake.revision.to_string(), "1");
+    assert!(
+        store.current_source_accepted(ConfigFileId::module(KeepAwakeConfig::ID)),
+        "the enabled file is accepted for the bound runtime"
+    );
+    assert!(
+        matches!(
+            store.reload_one(KeepAwakeConfig::ID),
+            Ok(ReloadOutcome::Unchanged)
+        ),
+        "an unchanged reload keeps the accepted configuration"
+    );
+
+    let initial = store.initial::<KeepAwakeConfig>(KeepAwakeConfig::ID).expect("initial");
+    assert!(
+        matches!(initial, Initial::Loaded(config) if config.enabled),
+        "the configuration itself is valid and enabled"
+    );
+    assert!(
+        stache_sdk::inspect_paths(store.catalog(), store.paths())
+            .entries
+            .iter()
+            .any(|entry| entry.file == ConfigFileId::module(KeepAwakeConfig::ID)
+                && entry.state == stache_sdk::PathState::Valid),
+        "catalog commands still discover the file"
+    );
 }

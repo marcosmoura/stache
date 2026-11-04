@@ -218,10 +218,10 @@ fn module_rows(rows: &mut Vec<TrayRow>, module: &ModuleStatusView) {
         };
         rows.push(item(id, label, Some(action), None));
     }
-    if module.enabled
-        && !module.paused
-        && matches!(module.state, ModuleState::Failed | ModuleState::Unavailable)
-    {
+    // A failed disabled or paused module has a failed stop to retry.
+    let retryable = module.state == ModuleState::Failed
+        || (module.state == ModuleState::Unavailable && module.enabled && !module.paused);
+    if retryable {
         rows.push(item(
             format!("retry:{}", module.id),
             format!("Retry {}", module.id),
@@ -368,11 +368,15 @@ mod tests {
     }
 
     #[test]
-    fn retry_is_only_offered_for_an_enabled_unpaused_failed_module() {
+    fn retry_is_offered_for_every_failed_module_and_only_an_active_unavailable_one() {
         let mut snapshot = status();
         snapshot.modules = vec![module(ModuleState::Failed, false, false)];
-        assert!(!actions(&rows(&snapshot)).iter().any(|a| matches!(a, TrayAction::Retry(_))));
+        assert!(actions(&rows(&snapshot)).iter().any(|a| matches!(a, TrayAction::Retry(_))));
         snapshot.modules = vec![module(ModuleState::Failed, true, true)];
+        assert!(actions(&rows(&snapshot)).iter().any(|a| matches!(a, TrayAction::Retry(_))));
+        snapshot.modules = vec![module(ModuleState::Unavailable, false, false)];
+        assert!(!actions(&rows(&snapshot)).iter().any(|a| matches!(a, TrayAction::Retry(_))));
+        snapshot.modules = vec![module(ModuleState::Unavailable, true, true)];
         assert!(!actions(&rows(&snapshot)).iter().any(|a| matches!(a, TrayAction::Retry(_))));
         snapshot.modules = vec![module(ModuleState::Failed, true, false)];
         assert_eq!(actions(&rows(&snapshot)), vec![

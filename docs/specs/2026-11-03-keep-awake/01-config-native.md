@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 01 — Configuration and native feasibility
@@ -44,14 +44,14 @@ Known integration points:
 
 ## Acceptance criteria
 
-- [ ] KA01-01: Config defaults, serde casing/type rejection, `ModuleConfig`, schema and Specta export all derive from one type; generated checks are deterministic.
-- [ ] KA01-02: Catalog commands include `keepAwake`; migration with legacy `bar.enabled: true`, false and absent emits disabled defaults and preserves existing overwrite/source-safety behavior.
-- [ ] KA01-03: No production runtime/factory, assertion, observer or webview is started by config, migration, schema/bindings generation or default tests.
-- [ ] KA01-04: Fake creation failure at each position rolls back preceding IDs; release/rollback failure at each ID retains pending ownership, blocks fresh acquisition and supports bounded recovery. Fake barriers allow part 02 to observe creation and release/rollback in progress before native completion. Each ID is successfully released exactly once; repeated confirmed cleanup is inert and Drop attempts are not proof of release.
-- [ ] KA01-05: Probe maps valid booleans and valid-dictionary/key-absent compatibility correctly; null/unreadable dictionary and present wrong-type data produce typed unknown without invalid reads or ownership leaks.
-- [ ] KA01-06: Compile-proven safe ownership satisfies `Module: Send` without unsafe Send shims; native callbacks contain panics and only signal.
-- [ ] KA01-07: Fake dispatcher proves bounded cancellable installation/removal, late-install suppression, callback invalidation and successor identity safety; timeout cleanup limitations are documented.
-- [ ] KA01-08: Public/best-effort API evidence and gate result are recorded; all listed checks pass without power operations, and lasting docs describe config-only availability honestly.
+- [x] KA01-01: Config defaults, serde casing/type rejection, `ModuleConfig`, schema and Specta export all derive from one type; generated checks are deterministic.
+- [x] KA01-02: Catalog commands include `keepAwake`; migration with legacy `bar.enabled: true`, false and absent emits disabled defaults and preserves existing overwrite/source-safety behavior.
+- [x] KA01-03: No production runtime/factory, assertion, observer or webview is started by config, migration, schema/bindings generation or default tests.
+- [x] KA01-04: Fake creation failure at each position rolls back preceding IDs; release/rollback failure at each ID retains pending ownership, blocks fresh acquisition and supports bounded recovery. Fake barriers allow part 02 to observe creation and release/rollback in progress before native completion. Each ID is successfully released exactly once; repeated confirmed cleanup is inert and Drop attempts are not proof of release.
+- [x] KA01-05: Probe maps valid booleans and valid-dictionary/key-absent compatibility correctly; null/unreadable dictionary and present wrong-type data produce typed unknown without invalid reads or ownership leaks.
+- [x] KA01-06: Compile-proven safe ownership satisfies `Module: Send` without unsafe Send shims; native callbacks contain panics and only signal.
+- [x] KA01-07: Fake dispatcher proves bounded cancellable installation/removal, late-install suppression, callback invalidation and successor identity safety; timeout cleanup limitations are documented.
+- [x] KA01-08: Public/best-effort API evidence and gate result are recorded; all listed checks pass without power operations, and lasting docs describe config-only availability honestly.
 
 ## Tests
 

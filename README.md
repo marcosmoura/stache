@@ -16,20 +16,20 @@
 
 ## Features
 
-The `proxyAudio` and `notunes` modules ship. Every other row is an approved rewrite on the
-[roadmap](docs/roadmap.md), not shipped behavior.
+The `proxyAudio`, `notunes` and `keepAwake` modules ship. Every other row is an approved rewrite on
+the [roadmap](docs/roadmap.md), not shipped behavior.
 
-| Feature              | Description                                                                                                                       |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| **Status Bar**       | Planned. Custom menubar with workspaces, media, weather, CPU, battery and clock widgets on the primary display.                   |
-| **Tiling**           | Planned. Tiling window manager with virtual workspaces per screen, layout algorithms, gaps and borders; last on the roadmap.      |
-| **Wallpapers**       | Planned. Dynamic wallpaper rotation with blur and rounded corners, applied per display without System Events.                     |
-| **Audio Management** | Keeps the default input and output on the best available device using ordered name-pattern rules, with AirPlay and HDMI handling. |
-| **Keybindings**      | Planned. Global keyboard shortcuts on a shared input-tap service with fixed priority ordering.                                    |
-| **MenuAnywhere**     | Planned. Summon any app's menu at the cursor position.                                                                            |
-| **noTunes**          | Terminates Apple Music and iTunes on launch and optionally opens one replacement player.                                          |
-| **Hold-to-Quit**     | Planned. Require holding Cmd+Q before an application quits, with a native HUD and Finder/Stache pass-through.                     |
-| **Keep Awake**       | Planned. Prevent display and system sleep, releasing on lock and restoring on unlock; a standalone module the bar later controls. |
+| Feature              | Description                                                                                                                            |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **Status Bar**       | Planned. Custom menubar with workspaces, media, weather, CPU, battery and clock widgets on the primary display.                        |
+| **Tiling**           | Planned. Tiling window manager with virtual workspaces per screen, layout algorithms, gaps and borders; last on the roadmap.           |
+| **Wallpapers**       | Planned. Dynamic wallpaper rotation with blur and rounded corners, applied per display without System Events.                          |
+| **Audio Management** | Keeps the default input and output on the best available device using ordered name-pattern rules, with AirPlay and HDMI handling.      |
+| **Keybindings**      | Planned. Global keyboard shortcuts on a shared input-tap service with fixed priority ordering.                                         |
+| **MenuAnywhere**     | Planned. Summon any app's menu at the cursor position.                                                                                 |
+| **noTunes**          | Terminates Apple Music and iTunes on launch and optionally opens one replacement player.                                               |
+| **Hold-to-Quit**     | Planned. Require holding Cmd+Q before an application quits, with a native HUD and Finder/Stache pass-through.                          |
+| **Keep Awake**       | Prevents display, idle and system sleep while the session is unlocked; releases on lock and restores on unlock, with read-only status. |
 
 ## Requirements
 
@@ -64,8 +64,10 @@ cargo build -p stache-app --bin stache
 ./target/debug/stache config init
 ```
 
-`config init` writes `global.jsonc`, `notunes.jsonc` and `proxyAudio.jsonc`; each file is validated
-and reloaded on its own.
+`config init` writes `global.jsonc`, `keepAwake.jsonc`, `notunes.jsonc` and `proxyAudio.jsonc`; each
+file is validated separately, and runtime-backed modules reload independently. `keepAwake.jsonc`
+starts disabled: setting `enabled: true` (or tray Enable) starts the lock-aware power assertion,
+and an invalid file keeps the last accepted lease and reports a diagnostic.
 
 2. Enable what you need. `proxyAudio.jsonc`:
 

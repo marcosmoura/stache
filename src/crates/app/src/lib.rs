@@ -12,6 +12,7 @@ pub mod catalog;
 pub mod commands;
 pub mod config_edit;
 pub mod host;
+pub mod keep_awake;
 pub mod logging;
 pub mod permissions;
 pub mod shutdown;

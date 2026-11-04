@@ -33,21 +33,21 @@ reaches AppKit.
 `rows(&HostStatus)` is a pure description, so wording and eligibility are testable
 without AppKit. It produces, in order:
 
-| Row                        | Kind       | Content                                                       |
-| -------------------------- | ---------- | ------------------------------------------------------------- |
-| `status`                   | non-action | `Stache Next`, or `Stache Next — starting…` before readiness  |
-| `error`                    | non-action | Host error, truncated                                         |
-| `enable:<id>`              | check item | `<id> enabled`; checked state is the configuration flag       |
-| `state:<id>`               | non-action | Two-space indent, `<id>: <state label>`                       |
-| `detail:<id>`              | non-action | Two-space indent, runtime detail when present, truncated      |
-| `diagnostic:<id>`          | non-action | Two-space indent, `configuration: <diagnostic>`, truncated    |
-| `pause:<id>`/`resume:<id>` | menu item  | Present for an enabled module; `Pause <id>` or `Resume <id>`  |
-| `retry:<id>`               | menu item  | `Retry <id>`, only when enabled, not paused, and failed       |
-| `permission`               | menu item  | `Request Accessibility…` when any module waits for permission |
-| `config:<file>`            | non-action | `<file>: <diagnostic>`, truncated                             |
-| `warning:<file>:<index>`   | non-action | `<file>: <warning>`, truncated                                |
-| `test-window`              | menu item  | `Open Test Window`                                            |
-| `quit`                     | menu item  | `Quit Stache Next`                                            |
+| Row                        | Kind       | Content                                                         |
+| -------------------------- | ---------- | --------------------------------------------------------------- |
+| `status`                   | non-action | `Stache Next`, or `Stache Next — starting…` before readiness    |
+| `error`                    | non-action | Host error, truncated                                           |
+| `enable:<id>`              | check item | `<id> enabled`; checked state is the configuration flag         |
+| `state:<id>`               | non-action | Two-space indent, `<id>: <state label>`                         |
+| `detail:<id>`              | non-action | Two-space indent, runtime detail when present, truncated        |
+| `diagnostic:<id>`          | non-action | Two-space indent, `configuration: <diagnostic>`, truncated      |
+| `pause:<id>`/`resume:<id>` | menu item  | Present for an enabled module; `Pause <id>` or `Resume <id>`    |
+| `retry:<id>`               | menu item  | `Retry <id>`, when failed, or enabled, unpaused and unavailable |
+| `permission`               | menu item  | `Request Accessibility…` when any module waits for permission   |
+| `config:<file>`            | non-action | `<file>: <diagnostic>`, truncated                               |
+| `warning:<file>:<index>`   | non-action | `<file>: <warning>`, truncated                                  |
+| `test-window`              | menu item  | `Open Test Window`                                              |
+| `quit`                     | menu item  | `Quit Stache Next`                                              |
 
 Separators sit between the status block, the test window and Quit.
 
@@ -69,7 +69,7 @@ clicked and never implies an action it does not have.
   target is committed with a no-clobber rename; a symlink is refused; an invalid file is
   never overwritten.
 - `pause:<id>` / `resume:<id>` are session-only and never write a file.
-- `retry:<id>` retries an eligible failed or unavailable module.
+- `retry:<id>` retries an eligible failed or unavailable module. A failed module that is disabled or paused has a failed stop, so Retry repeats that cleanup and starts nothing.
 - `permission` triggers the explicit permission request.
 - `test-window` opens or focuses the development test window.
 - `quit` calls `HostHandle::request_shutdown`, the one idempotent teardown coordinator.
@@ -98,6 +98,7 @@ clicked and never implies an action it does not have.
 
 The pure row description is covered in `src/crates/app/src/tray.rs`: truncation on a
 character boundary, a running module showing a plain state row with no Retry, Retry
-eligibility only for an enabled unpaused failed module, module and file diagnostics as
-separate non-action rows, and paused/disabled rows offering no Retry. A real tray click
+eligibility for every failed module and only an enabled unpaused unavailable one, module and
+file diagnostics as separate non-action rows, and healthy paused/disabled rows offering no
+Retry. A real tray click
 remains a manual check.

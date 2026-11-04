@@ -21,8 +21,11 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use serde::de::DeserializeOwned;
-use stache_macos::ApplicationControl;
+use stache_keep_awake::{KeepAwakeConfig, KeepAwakeModule, KeepAwakeSnapshot};
 use stache_macos::audio::{AudioBackend, CoreAudioBackend};
+use stache_macos::{
+    ApplicationControl, AssertionOwner, LockObservationInstaller, LockProbe, SystemLockProbe,
+};
 use stache_notunes::{NoTunesConfig, NoTunesModule};
 use stache_proxy_audio::{AudioIpc, ProxyAudioConfig, ProxyAudioModule};
 use stache_sdk::ipc::{
@@ -30,15 +33,17 @@ use stache_sdk::ipc::{
     RouterError, ServerError,
 };
 use stache_sdk::{
-    CancellationToken, ChangeSet, ConfigCatalog, ConfigPaths, ConfigStore, ConfigStoreError,
-    ConfigWatcher, EventBus, Initial, LogFilter, Logger, MainThreadExecutor, Module, ModuleConfig,
-    ModuleHandle, ModuleId, ModuleSnapshot, ModuleStatus, PathEntry, Permission,
-    PermissionProvider, PermissionStatus, Registry, RegistryError, ReloadOutcome, WatchError,
-    WindowBackend, WindowError, WindowKey, WindowKind, WindowRequest, WindowSize, inspect_paths,
+    CancellationToken, ChangeSet, ConfigCatalog, ConfigFileId, ConfigPaths, ConfigStore,
+    ConfigStoreError, ConfigWatcher, EventBus, Initial, LogFilter, Logger, MainThreadExecutor,
+    Module, ModuleConfig, ModuleHandle, ModuleId, ModuleSnapshot, ModuleStatus, PathEntry,
+    Permission, PermissionProvider, PermissionStatus, Registry, RegistryError, ReloadOutcome,
+    WatchError, WindowBackend, WindowError, WindowKey, WindowKind, WindowRequest, WindowSize,
+    inspect_paths,
 };
 
 use crate::bindings::{HostStatus, ModuleStatusView, config_file_view};
 use crate::config_edit::{CommitOutcome, EnableEditError, plan_enabled};
+use crate::keep_awake::KeepAwakeIpc;
 use crate::permissions::{
     PermissionHost, PermissionManager, PermissionPoll, PermissionTicker, PollSchedule,
     RefreshReport, RefreshTrigger, TickGate,
@@ -146,6 +151,41 @@ impl<C: ModuleConfig> ModuleControl for ModuleHandle<C> {
     fn resume(&self, registry: &Registry) -> Result<(), RegistryError> { registry.resume(*self) }
 }
 
+/// Read-only views a module factory may use while building socket handlers.
+///
+/// The context holds the same registry and configuration store the host already
+/// owns and exposes only published snapshots and held diagnostics. It never
+/// exposes the mutable registry or store, reads disk or applies configuration,
+/// so a handler built from it observes state instead of changing it.
+#[derive(Clone)]
+pub struct FactoryContext {
+    registry: Arc<Registry>,
+    store: Arc<ConfigStore>,
+}
+
+impl FactoryContext {
+    /// Wraps the host's registry and configuration store.
+    #[must_use]
+    pub const fn new(registry: Arc<Registry>, store: Arc<ConfigStore>) -> Self {
+        Self { registry, store }
+    }
+
+    /// The published snapshot of one module, if it is registered.
+    ///
+    /// This reads only published metadata, never the module's lifecycle lock or
+    /// the module itself.
+    #[must_use]
+    pub fn module_snapshot(&self, id: ModuleId) -> Option<ModuleSnapshot> {
+        self.registry.snapshots().into_iter().find(|snapshot| snapshot.id == id)
+    }
+
+    /// The configuration diagnostic currently held for one module file.
+    #[must_use]
+    pub fn diagnostic(&self, id: ModuleId) -> Option<stache_sdk::config::ConfigDiagnostic> {
+        self.store.diagnostic(ConfigFileId::module(id))
+    }
+}
+
 /// One module's registration in the composition root.
 ///
 /// Part 6 implements this in the app crate; the SDK never sees the factory.
@@ -166,8 +206,11 @@ pub trait ModuleFactory: Send + Sync {
     /// Socket handlers this factory contributes to the host router.
     ///
     /// The default is empty; a module that has a socket surface returns its
-    /// module name and handler here.
-    fn ipc_handlers(&self) -> Vec<(&'static str, Arc<dyn IpcHandler>)> { Vec::new() }
+    /// module name and handler here. The context carries only read-only
+    /// published registry snapshots and held configuration diagnostics.
+    fn ipc_handlers(&self, _context: &FactoryContext) -> Vec<(&'static str, Arc<dyn IpcHandler>)> {
+        Vec::new()
+    }
 }
 
 /// Registers one module from its catalog initial state and binds its config.
@@ -216,7 +259,7 @@ impl ModuleFactory for ProxyAudioFactory {
         register_module(registry, store, ProxyAudioModule::new(Arc::clone(&self.backend)))
     }
 
-    fn ipc_handlers(&self) -> Vec<(&'static str, Arc<dyn IpcHandler>)> {
+    fn ipc_handlers(&self, _context: &FactoryContext) -> Vec<(&'static str, Arc<dyn IpcHandler>)> {
         vec![(
             ProxyAudioConfig::ID.as_str(),
             Arc::new(AudioIpc::new(Arc::clone(&self.backend))),
@@ -247,6 +290,68 @@ impl ModuleFactory for NoTunesFactory {
     }
 }
 
+/// Registers the Keep Awake runtime and its read-only status handler over one
+/// shared runtime cell.
+///
+/// Construction is inert: the owner, probe and observation installer perform no
+/// native work until an enabled module is started. The factory creates exactly
+/// one [`KeepAwakeSnapshot`] cell and shares it with both the module (through
+/// `with_snapshot`) and the socket handler, so a status query reads the module's
+/// publication instead of a mirror. Tests inject fake adapters through
+/// [`KeepAwakeFactory::new`]; the production list uses the inert native ones.
+pub struct KeepAwakeFactory {
+    owner: AssertionOwner,
+    probe: Arc<dyn LockProbe>,
+    observation: LockObservationInstaller,
+    snapshot: KeepAwakeSnapshot,
+}
+
+impl KeepAwakeFactory {
+    /// Creates a factory over one injected owner, probe and observation
+    /// installer.
+    #[must_use]
+    pub fn new(
+        owner: AssertionOwner,
+        probe: Arc<dyn LockProbe>,
+        observation: LockObservationInstaller,
+    ) -> Self {
+        Self {
+            owner,
+            probe,
+            observation,
+            snapshot: KeepAwakeSnapshot::default(),
+        }
+    }
+}
+
+impl ModuleFactory for KeepAwakeFactory {
+    fn id(&self) -> ModuleId { KeepAwakeConfig::ID }
+
+    fn register(
+        &self,
+        registry: &Registry,
+        store: &ConfigStore,
+    ) -> Result<Arc<dyn ModuleControl>, HostError> {
+        register_module(
+            registry,
+            store,
+            KeepAwakeModule::with_snapshot(
+                self.owner.clone(),
+                Arc::clone(&self.probe),
+                self.observation.clone(),
+                self.snapshot.clone(),
+            ),
+        )
+    }
+
+    fn ipc_handlers(&self, context: &FactoryContext) -> Vec<(&'static str, Arc<dyn IpcHandler>)> {
+        vec![(
+            KeepAwakeConfig::ID.as_str(),
+            Arc::new(KeepAwakeIpc::new(context.clone(), self.snapshot.clone())),
+        )]
+    }
+}
+
 /// The factories the composition root registers.
 #[derive(Default)]
 pub struct ModuleFactories {
@@ -258,18 +363,27 @@ impl ModuleFactories {
     #[must_use]
     pub const fn new() -> Self { Self { entries: Vec::new() } }
 
-    /// Creates the production list: the proxyAudio pilot and the noTunes blocker.
+    /// Creates the production list: the proxyAudio pilot, the noTunes blocker and
+    /// Keep Awake.
     ///
-    /// Registration only creates the modules and the pilot's read-only handler;
-    /// it starts no listener and installs no application observer. Starting
-    /// depends on the accepted configuration. Both factories share the host's
-    /// main-thread executor; neither module keeps a second clone of it.
+    /// Registration only creates the modules and their read-only handlers; it
+    /// starts no listener, installs no application or lock observer and acquires
+    /// no power assertion. Starting depends on the accepted configuration. Every
+    /// factory shares the host's main-thread executor; no module keeps a second
+    /// clone of it.
     #[must_use]
     pub fn production(main_thread: Arc<dyn MainThreadExecutor>) -> Self {
         let backend: Arc<dyn AudioBackend> = Arc::new(CoreAudioBackend);
         Self::new()
             .with(ProxyAudioFactory::new(backend))
-            .with(NoTunesFactory::new(ApplicationControl::system(main_thread)))
+            .with(NoTunesFactory::new(ApplicationControl::system(Arc::clone(
+                &main_thread,
+            ))))
+            .with(KeepAwakeFactory::new(
+                AssertionOwner::system(),
+                Arc::new(SystemLockProbe),
+                LockObservationInstaller::system(main_thread),
+            ))
     }
 
     /// Adds one factory.
@@ -733,12 +847,13 @@ impl Runner {
         if self.handle.shutdown_requested() {
             return Ok(());
         }
+        let context = FactoryContext::new(Arc::clone(&self.registry), Arc::clone(&self.store));
         let mut router = Router::new(Arc::new(HostCore {
             core: ConfigCore::new(Arc::clone(&self.store)),
             sender: self.handle.sender.clone(),
         }));
         for factory in self.settings.factories.entries() {
-            for (name, handler) in factory.ipc_handlers() {
+            for (name, handler) in factory.ipc_handlers(&context) {
                 router.register(name, handler)?;
             }
         }
@@ -918,19 +1033,27 @@ impl Runner {
             return;
         };
         let module = control.id();
-        let eligible = self
-            .registry
-            .snapshots()
-            .into_iter()
-            .find(|snapshot| snapshot.id == module)
-            .is_some_and(|snapshot| snapshot.enabled && !snapshot.paused);
-        if !eligible {
+        let snapshot = self.registry.snapshots().into_iter().find(|snapshot| snapshot.id == module);
+        let Some(snapshot) = snapshot else {
+            self.record_action_error(format!("module `{module}` has no published snapshot"));
+            return;
+        };
+        // A failed state while disabled or paused can only be a failed stop, so
+        // Retry repeats that request: it retries the cleanup and starts nothing.
+        let failed = matches!(snapshot.status, ModuleStatus::Failed(_));
+        let result = if !snapshot.enabled && failed {
+            control.set_enabled(&self.registry, false)
+        } else if snapshot.enabled && snapshot.paused && failed {
+            control.pause(&self.registry)
+        } else if snapshot.enabled && !snapshot.paused {
+            control.set_enabled(&self.registry, true)
+        } else {
             self.record_action_error(format!(
                 "module `{module}` cannot retry while disabled or paused"
             ));
             return;
-        }
-        match control.set_enabled(&self.registry, true) {
+        };
+        match result {
             Ok(()) => self.clear_action_error(),
             Err(error) => self.record_action_error(error.to_string()),
         }
@@ -1185,7 +1308,7 @@ mod tests {
     }
 
     #[test]
-    fn production_factories_register_the_audio_pilot_and_the_notunes_blocker() {
+    fn production_factories_register_the_audio_pilot_the_blocker_and_keep_awake() {
         let root = tempfile::tempdir().expect("root");
         let registry = Arc::new(Registry::new(
             Arc::new(DiscardLogger),
@@ -1194,12 +1317,12 @@ mod tests {
             Arc::new(AllowAll),
             Arc::new(NoWindows),
         ));
-        let store = ConfigStore::new(
+        let store = Arc::new(ConfigStore::new(
             Arc::clone(&registry),
             crate::catalog::catalog().expect("catalog"),
             ConfigPaths::new(root.path().join("config")),
             Arc::new(LogFilter::default()),
-        );
+        ));
         let factories = ModuleFactories::production(Arc::new(NoMainThread));
         let ids: Vec<ModuleId> = factories.entries().iter().map(|factory| factory.id()).collect();
         assert_eq!(
@@ -1207,8 +1330,9 @@ mod tests {
             [
                 stache_proxy_audio::ProxyAudioConfig::ID,
                 stache_notunes::NoTunesConfig::ID,
+                stache_keep_awake::KeepAwakeConfig::ID,
             ],
-            "production registers the audio pilot first and the blocker second"
+            "production registers the audio pilot, the blocker and then Keep Awake"
         );
 
         for factory in factories.entries() {
@@ -1227,14 +1351,31 @@ mod tests {
             );
         }
 
+        // Binding the default-disabled file starts no assertion, probe, observer,
+        // worker or timer and never creates the configuration file.
+        let keep_awake = registry
+            .snapshots()
+            .into_iter()
+            .find(|snapshot| snapshot.id == stache_keep_awake::KeepAwakeConfig::ID)
+            .expect("keepAwake snapshot");
+        assert!(!keep_awake.enabled, "the default configuration is disabled");
+        assert!(
+            !store.paths().module_file(stache_keep_awake::KeepAwakeConfig::ID).exists(),
+            "registration never writes the configuration file"
+        );
+
+        let context = FactoryContext::new(Arc::clone(&registry), Arc::clone(&store));
         let audio = &factories.entries()[0];
-        let handlers = audio.ipc_handlers();
+        let handlers = audio.ipc_handlers(&context);
         assert_eq!(handlers.len(), 1);
         assert_eq!(handlers[0].0, "proxyAudio");
         assert!(
-            factories.entries()[1].ipc_handlers().is_empty(),
+            factories.entries()[1].ipc_handlers(&context).is_empty(),
             "the blocker contributes no command or socket handler"
         );
+        let handlers = factories.entries()[2].ipc_handlers(&context);
+        assert_eq!(handlers.len(), 1);
+        assert_eq!(handlers[0].0, "keepAwake");
     }
 
     #[test]

@@ -89,6 +89,54 @@ omitted or `null`), `input` or `output`; the response is the same
 `AudioDeviceInfo` shape as `stache audio list --json`. The handler shares the
 listing service with the command and never starts a listener.
 
+### Keep Awake status
+
+`keepAwake.status` is the other module method and is also read-only. Omitted or
+`null` params and `{}` are the same zero-argument request; any non-empty object,
+string, number, boolean or array (including `[]`) is `invalidParams`, and an
+unknown method is `unknownMethod`. The response is the app-owned
+`KeepAwakeStatus` envelope:
+
+```json
+{
+  "module": {
+    "id": "keepAwake",
+    "state": "running",
+    "enabled": true,
+    "paused": false,
+    "revision": "3",
+    "detail": null,
+    "diagnostic": null
+  },
+  "runtime": {
+    "assertionState": "active",
+    "lockState": "unlocked",
+    "observation": "notificationsAndPolling",
+    "conditions": []
+  }
+}
+```
+
+`module` is the `ModuleStatusView` projection: lifecycle, enabled, paused, the
+exact revision as a decimal string and diagnostics. The handler prefers the held
+`ConfigStore` file diagnostic over the registry diagnostic, so a rejected parse,
+type, I/O or deleted file stays visible while the last accepted configuration,
+revision and lease remain live. `runtime` is the module's single published
+observation, copied from `KeepAwakeSnapshot::read()`; condition kinds keep a
+stable order. The envelope and runtime DTOs are exported through the same
+`bindings::builder()` collection as the other config types, so
+`generate-bindings` is the only TypeScript update; there is no Tauri command, CLI
+command or hand-written TypeScript mirror.
+
+The method answers in every module state, including disabled, paused, failed,
+locked, acquiring and `releasePending`. It copies published and held data only:
+no native probe or assertion, worker start, observer install, filesystem read or
+write, configuration apply or window effect. Runtime fields are coherent with
+each other, but lifecycle, diagnostics and runtime are sampled separately, so a
+response is an observation, not a globally atomic snapshot. `active` proves
+owned prevention, not immunity to lid close, forced sleep or low-battery policy.
+See [keep-awake.md](../features/keep-awake.md).
+
 `core` is reserved. `core.reload` rereads every file and returns per-file
 `applied { revision }`, `unchanged` or `rejected` outcomes with diagnostics;
 `core.status` returns the configuration directory, each file's state
