@@ -141,8 +141,14 @@ Record the actual restart/quiet-period/cleanup observations before marking this 
 composition with fake native and permission services: early quit, repeated
 shutdown, blocked-start/shutdown races, queued main-thread drain,
 watcher/enable/invalid/conflict cases, permission polling, ticker rescheduling and
-window leases. It never launches Tauri, a tray, a webview or a real system
-prompt.
+window leases. The teardown coordinator is exercised with an injected clock, fake
+terminal and recording record channel: a blocked configuration commit ends
+`Uncertain` naming `host-worker` and still dispatches, a later request shortens but
+never extends the total, repeat and post-outcome requests change nothing, a
+blocked record sink is `unavailable` without delaying the terminal action, two
+concurrent requests give one run and one outcome, and only a `Clean` restart
+relaunches after releasing the instance claim. It never launches Tauri, a tray, a
+webview, a real system prompt, `terminate:` or a relaunch.
 
 H10 runs the real run loop through a separate, feature-gated binary. Use the
 provided per-user temporary root, not a fixed `/tmp` directory, and check the
@@ -178,6 +184,41 @@ PID. It exits 0 after the shared shutdown path completes. The reload never
 enables `proxyAudio`, so smoke never starts the audio runtime or changes the
 default device. It never reads real configuration, launches legacy automation or
 prompts for permissions.
+
+The teardown terminate observation proof (`TEARDOWN-01-01`, `TEARDOWN-01-02`) is a
+separate scenario of the same binary, selected only by `STACHE_SMOKE_TERMINATE`.
+It **requires per-run approval**: do not run it as part of the checks above, and
+never run the `stache-smoke` binary built below without that approval.
+
+```sh
+SMOKE_ROOT=$(mktemp -d "${TMPDIR%/}/opencode/s.XXX")
+SOCKET="$SMOKE_ROOT/com.marcosmoura.stache.next/ipc"
+test "${#SOCKET}" -le 103 || { echo "temporary root too long"; exit 1; }
+HOME="$SMOKE_ROOT" TMPDIR="$SMOKE_ROOT" XDG_CONFIG_HOME="$SMOKE_ROOT/config" \
+  STACHE_SMOKE_TERMINATE=1 \
+  cargo run -q --release -p stache-app --features smoke --bin stache-smoke
+echo "exit=$?"
+rm -r -- "$SMOKE_ROOT"
+```
+
+Without `STACHE_SMOKE_TERMINATE` the binary runs the checks described above
+unchanged. With it, the scenario uses the shipped observation and coordinator —
+it installs neither — calls the real `terminate:` on its own process only, and
+prints this evidence while `AppKit` waits for the coordinator's single reply:
+
+```text
+smoke: ok: applicationShouldTerminate: reached the shipped teardown coordinator
+smoke: ok: a main-queue job ran while the terminate reply was pending
+smoke: ok: a tao proxy event ran while the terminate reply was pending
+smoke: ok: the coordinated teardown owns the reply; waiting for termination
+```
+
+Each step is bounded to 5 s and the process has 10 s after the last probe to
+terminate; a missing step prints `smoke: FAIL: …` and exits non-zero. The
+coordinator prints its one `teardown: outcome=…` record before the reply. The
+scenario never signals or terminates another process, never terminates by
+executable name and does not enable a module. Real Cmd-Q, logout and shutdown remain
+unverified and need the disposable-session procedure in the spec.
 
 The opt-in real-process failure probe deliberately makes the socket too long and
 must exit non-zero even though `run_return` reports zero on macOS:

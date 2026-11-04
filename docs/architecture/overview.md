@@ -71,13 +71,24 @@ lists only the least-privilege `test-window` capability. The app crate defines t
 packaged window has no embedded document. Generate/schema binaries require `dev-tools` and are not
 packaged. See [ui.md](ui.md).
 
-Quit, SIGINT/SIGTERM/SIGHUP and Tauri's exit event converge on one idempotent off-main teardown:
-stop accepting IPC/config work, cancel monitors, cancel and reap the owned startup job, stop the
-registry in reverse order, release windows, tray and socket, then let Tauri exit. The signal thread
-is closed and joined by that teardown, on the host worker rather than the main thread. Only an
-explicit quit request starts that teardown: Tauri's last-window `ExitRequested` (`code: None`, from
-`tauri-runtime-wry`'s `Destroyed` handler) just drops the window registry entry, while the
-`Some(code)` form from `app.exit` prevents that exit and requests the shutdown.
+Quit, SIGINT/SIGTERM/SIGHUP, Tauri's exit event and AppKit's terminate decision converge on one
+idempotent off-main coordinator. A request only records a deadline: the first sets a five-second
+total and the cause, and a later one shortens it to 250 ms from that request without ever passing
+the total. A dedicated `stache-teardown` thread stores exactly one outcome (`Clean`, `Partial` or
+`Uncertain`) in memory, makes one bounded record attempt through a non-blocking channel, using
+50 ms reserved inside that total, and dispatches one terminal action. The host worker still performs today's ordered teardown — stop
+accepting IPC/config work, cancel monitors, cancel and reap the owned startup job, stop the
+registry in reverse order, release windows and the socket — and reports its completion; those
+stages are not yet bounded by the coordinator, so a blocked stage is named unacknowledged rather
+than joined within a budget, and a stalled main thread can still delay the terminal action. With
+an AppKit reply pending the terminal action is `reply(true)` on main; otherwise the tray is
+removed and Tauri exits with the intended code. A coordinated restart relaunches only after a
+`Clean` outcome, after releasing the instance lock. The signal thread is closed and joined by that
+terminal action, never on the main thread. Only an explicit quit request starts teardown: Tauri's
+last-window `ExitRequested` (`code: None`, from `tauri-runtime-wry`'s `Destroyed` handler) just
+drops the window registry entry, while the `Some(code)` form from `app.exit` prevents that exit
+and requests the shutdown. Real Cmd-Q, logout and shutdown have not been verified end to end yet;
+the terminate route is observed and automated around fakes.
 `execOnStartup` runs once on its own owned thread after first setup, never for CLI, reload or a
 second launch; a long-lived command cannot delay readiness or shutdown. See [ipc.md](ipc.md) and
 [config.md](config.md).

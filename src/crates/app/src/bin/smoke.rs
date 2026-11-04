@@ -37,6 +37,15 @@ fn main() -> ExitCode {
         eprintln!("stache: {error}");
         return ExitCode::FAILURE;
     }
+    if std::env::var_os(stache_app::smoke::TERMINATE_ENV).is_some() {
+        return match stache_app::run_smoke_terminate(config) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("stache: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     match stache_app::run_smoke(config) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {

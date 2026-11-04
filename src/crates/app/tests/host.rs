@@ -4,7 +4,7 @@
 //! socket, tray, Accessibility prompt or legacy process.
 
 use std::fs;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -16,6 +16,10 @@ use stache_app::host::{
     NoTunesFactory, new_host, register_module,
 };
 use stache_app::permissions::PermissionPoll;
+use stache_app::shutdown::{
+    InstanceOwner, ManualClock, RecordDelivery, Teardown, TeardownCause, TeardownRecordChannel,
+    TeardownResult, TerminalAction, TerminalDriver, report_terminate_install_failure,
+};
 use stache_app::startup::CommandRunner;
 use stache_app::tray::{TrayItem, TrayRow};
 use stache_app::windows::{NativeWindowSpec, NativeWindows, WindowHost};
@@ -51,7 +55,8 @@ struct Counters {
     start: AtomicUsize,
     stop: AtomicUsize,
     reconfigure: AtomicUsize,
-    fail_next_start: std::sync::atomic::AtomicBool,
+    fail_next_start: AtomicBool,
+    fail_next_stop: AtomicBool,
 }
 
 struct Gate {
@@ -85,6 +90,7 @@ struct TestModule {
     counters: Arc<Counters>,
     permission: bool,
     gate: Option<Arc<Gate>>,
+    configure_gate: Option<Arc<Gate>>,
 }
 
 static ACCESS: [Permission; 1] = [Permission::Accessibility];
@@ -106,6 +112,9 @@ impl Module for TestModule {
 
     fn configure(&mut self, _: &TestConfig, _: &ModuleContext) -> ModuleResult<()> {
         self.counters.configure.fetch_add(1, Ordering::SeqCst);
+        if let Some(gate) = &self.configure_gate {
+            gate.wait();
+        }
         Ok(())
     }
 
@@ -130,8 +139,16 @@ impl Module for TestModule {
         Ok(())
     }
 
-    fn stop(&mut self, _: &ModuleContext) -> ModuleResult<()> {
+    fn stop(&mut self, ctx: &ModuleContext) -> ModuleResult<()> {
         self.counters.stop.fetch_add(1, Ordering::SeqCst);
+        if self.counters.fail_next_stop.swap(false, Ordering::SeqCst) {
+            return Err(stache_sdk::ModuleError::new(
+                ctx.id(),
+                stache_sdk::Operation::Stop,
+                stache_sdk::ErrorCategory::Lifecycle,
+                "injected stop failure",
+            ));
+        }
         Ok(())
     }
 }
@@ -140,6 +157,7 @@ struct TestFactory {
     counters: Arc<Counters>,
     permission: bool,
     gate: Option<Arc<Gate>>,
+    configure_gate: Option<Arc<Gate>>,
 }
 
 impl ModuleFactory for TestFactory {
@@ -154,6 +172,7 @@ impl ModuleFactory for TestFactory {
             counters: Arc::clone(&self.counters),
             permission: self.permission,
             gate: self.gate.clone(),
+            configure_gate: self.configure_gate.clone(),
         })
     }
 }
@@ -215,18 +234,47 @@ impl CommandRunner for FailingCommands {
 #[derive(Default)]
 struct FakeWorld {
     statuses: Mutex<Vec<HostStatus>>,
-    exits: AtomicUsize,
-    exit_codes: Mutex<Vec<i32>>,
 }
 
 impl HostUi for FakeWorld {
     fn status(&self, status: &HostStatus) {
         self.statuses.lock().expect("statuses").push(status.clone());
     }
+}
 
-    fn exit(&self, code: i32) {
-        self.exits.fetch_add(1, Ordering::SeqCst);
-        self.exit_codes.lock().expect("exit codes").push(code);
+#[derive(Default)]
+struct FakeInstance {
+    released: AtomicBool,
+}
+
+impl InstanceOwner for FakeInstance {
+    fn release(&self) { self.released.store(true, Ordering::SeqCst); }
+}
+
+#[derive(Default)]
+struct RecordingRecords {
+    lines: Mutex<Vec<String>>,
+}
+
+impl TeardownRecordChannel for RecordingRecords {
+    fn record(&self, line: &str, _budget: Duration) -> RecordDelivery {
+        self.lines.lock().expect("records").push(line.to_owned());
+        RecordDelivery::Delivered
+    }
+}
+
+#[derive(Default)]
+struct FakeTerminal {
+    actions: Mutex<Vec<TerminalAction>>,
+}
+
+impl FakeTerminal {
+    fn actions(&self) -> Vec<TerminalAction> { self.actions.lock().expect("actions").clone() }
+}
+
+impl TerminalDriver for FakeTerminal {
+    fn dispatch(&self, action: TerminalAction) {
+        self.actions.lock().expect("actions").push(action);
     }
 }
 
@@ -344,6 +392,12 @@ impl Fixture {
 struct Harness {
     handle: HostHandle,
     driver: Option<HostDriver>,
+    teardown: Arc<Teardown>,
+    clock: Arc<ManualClock>,
+    records: Arc<RecordingRecords>,
+    instance: Arc<FakeInstance>,
+    terminal: Arc<FakeTerminal>,
+    configure_gate: Option<Arc<Gate>>,
     world: Arc<FakeWorld>,
     counters: Arc<Counters>,
     permissions: Arc<FakePermissions>,
@@ -359,10 +413,26 @@ impl Harness {
         commands: Arc<dyn CommandRunner>,
         windows: Arc<dyn WindowBackend>,
     ) -> Self {
-        let (handle, driver) = new_host();
+        Self::with_teardown(permissions, main, commands, windows, default_teardown())
+    }
+
+    fn with_teardown(
+        permissions: Arc<FakePermissions>,
+        main: Arc<dyn MainThreadExecutor>,
+        commands: Arc<dyn CommandRunner>,
+        windows: Arc<dyn WindowBackend>,
+        parts: TeardownParts,
+    ) -> Self {
+        let (handle, driver) = new_host(Arc::clone(&parts.teardown));
         Self {
             handle,
             driver: Some(driver),
+            teardown: parts.teardown,
+            clock: parts.clock,
+            records: parts.records,
+            instance: parts.instance,
+            terminal: parts.terminal,
+            configure_gate: None,
             world: Arc::new(FakeWorld::default()),
             counters: Arc::new(Counters::default()),
             permissions,
@@ -404,6 +474,7 @@ impl Harness {
             counters: Arc::clone(&self.counters),
             permission,
             gate,
+            configure_gate: self.configure_gate.clone(),
         });
         if let Some(control) = no_tunes {
             factories = factories.with(NoTunesFactory::new(control));
@@ -420,6 +491,48 @@ impl Harness {
     fn wait_ready(&self) { wait_for(&self.handle, "ready", |status| status.ready); }
 
     fn wait_exit(&self) -> bool { self.handle.wait_for_exit(Duration::from_secs(10)) }
+
+    fn wait_teardown(&self) -> stache_app::shutdown::TeardownOutcome {
+        self.teardown
+            .wait_for_outcome(Duration::from_secs(10))
+            .expect("stored teardown outcome")
+    }
+
+    fn wait_terminal(&self) {
+        assert!(self.teardown.wait_for_terminal(Duration::from_secs(10)));
+    }
+
+    fn records(&self) -> Vec<String> { self.records.lines.lock().expect("records").clone() }
+}
+
+struct TeardownParts {
+    teardown: Arc<Teardown>,
+    clock: Arc<ManualClock>,
+    records: Arc<RecordingRecords>,
+    instance: Arc<FakeInstance>,
+    terminal: Arc<FakeTerminal>,
+}
+
+fn default_teardown() -> TeardownParts {
+    let clock = Arc::new(ManualClock::new());
+    let records = Arc::new(RecordingRecords::default());
+    let instance = Arc::new(FakeInstance::default());
+    let terminal = Arc::new(FakeTerminal::default());
+    let teardown = Teardown::new(
+        clock.clone(),
+        records.clone(),
+        instance.clone(),
+        Arc::new(DiscardLogger),
+    );
+    teardown.install_terminal(terminal.clone());
+    teardown.start().expect("start the teardown coordinator");
+    TeardownParts {
+        teardown,
+        clock,
+        records,
+        instance,
+        terminal,
+    }
 }
 
 fn wait_for(handle: &HostHandle, label: &str, predicate: impl Fn(&HostStatus) -> bool) {
@@ -463,7 +576,12 @@ fn early_shutdown_before_setup_starts_nothing_and_exits_once() {
     harness.handle.request_shutdown();
     harness.start(&fixture, false, None);
     assert!(harness.wait_exit(), "runner must finish");
-    assert_eq!(harness.world.exits.load(Ordering::SeqCst), 1);
+    let outcome = harness.wait_teardown();
+    assert_eq!(outcome.result, TeardownResult::Clean);
+    assert_eq!(outcome.recorded_code, 0);
+    harness.wait_terminal();
+    assert_eq!(harness.terminal.actions(), vec![TerminalAction::Exit(0)]);
+    assert_eq!(harness.records().len(), 1);
     assert_eq!(harness.counters.start.load(Ordering::SeqCst), 0);
     assert_eq!(harness.counters.configure.load(Ordering::SeqCst), 0);
     assert!(!harness.handle.status().ready);
@@ -480,11 +598,15 @@ fn a_host_startup_failure_reports_a_failure_exit_code() {
     let mut second = plain_harness();
     second.start(&fixture, false, None);
     assert!(second.wait_exit(), "the failed host must finish");
+    let outcome = second.wait_teardown();
+    assert_eq!(outcome.result, TeardownResult::Partial);
+    second.wait_terminal();
     assert_eq!(
-        *second.world.exit_codes.lock().expect("exit codes"),
-        vec![1],
+        second.terminal.actions(),
+        vec![TerminalAction::Exit(1)],
         "a host startup failure must not be converted to success"
     );
+    assert_eq!(outcome.recorded_code, 1);
     assert!(second.handle.status().error.is_some());
 
     first.handle.request_shutdown();
@@ -503,8 +625,11 @@ fn repeated_shutdown_requests_converge_on_one_exit() {
     harness.handle.request_shutdown();
     harness.handle.request_permission();
     assert!(harness.wait_exit(), "runner must finish");
+    harness.wait_teardown();
+    harness.wait_terminal();
     harness.handle.request_shutdown();
-    assert_eq!(harness.world.exits.load(Ordering::SeqCst), 1);
+    assert_eq!(harness.terminal.actions(), vec![TerminalAction::Exit(0)]);
+    assert_eq!(harness.records().len(), 1, "exactly one outcome record");
     assert_eq!(harness.counters.stop.load(Ordering::SeqCst), 1);
     assert!(!harness.handle.status().ready);
 }
@@ -943,7 +1068,9 @@ fn shutdown_during_a_blocked_start_stops_once_without_deadlock() {
         "shutdown must finish after the start returns"
     );
     assert_eq!(harness.counters.stop.load(Ordering::SeqCst), 1);
-    assert_eq!(harness.world.exits.load(Ordering::SeqCst), 1);
+    harness.wait_teardown();
+    harness.wait_terminal();
+    assert_eq!(harness.terminal.actions(), vec![TerminalAction::Exit(0)]);
 }
 
 #[test]
@@ -971,7 +1098,11 @@ fn queued_main_thread_work_is_drained_after_shutdown_without_waiting_on_it() {
         std::thread::sleep(Duration::from_millis(5));
     }
     assert!(host.opened.lock().expect("opened").is_empty());
-    assert_eq!(queued.drain(), 1);
+    // The reservation is visible just before its job is queued.
+    while queued.drain() == 0 {
+        assert!(Instant::now() < deadline, "the open job was not queued");
+        std::thread::sleep(Duration::from_millis(5));
+    }
     assert_eq!(host.opened.lock().expect("opened").len(), 1);
 
     harness.handle.request_shutdown();
@@ -1282,4 +1413,219 @@ fn a_denied_permission_neither_blocks_notunes_nor_prompts() {
 
     notunes.harness.handle.request_shutdown();
     assert!(notunes.harness.wait_exit());
+}
+
+#[test]
+fn a_blocked_configuration_commit_is_uncertain_named_and_still_dispatches() {
+    let fixture = fixture();
+    fixture.write("testModule.jsonc", "{ \"enabled\": false }\n");
+    let gate = Gate::new();
+    let mut harness = plain_harness();
+    harness.configure_gate = Some(gate.clone());
+    harness.start(&fixture, false, None);
+    harness.wait_ready();
+
+    harness.handle.set_enabled("testModule", true);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while harness.counters.configure.load(Ordering::SeqCst) == 0 {
+        assert!(
+            Instant::now() < deadline,
+            "the configuration commit never blocked"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        fixture.read("testModule.jsonc").contains("\"enabled\": true"),
+        "the configuration commit must already be on disk"
+    );
+
+    let requested = Instant::now();
+    harness.handle.request_shutdown();
+    harness.clock.advance(stache_app::shutdown::TEARDOWN_TOTAL);
+    let outcome = harness.wait_teardown();
+    assert_eq!(outcome.result, TeardownResult::Uncertain);
+    assert_eq!(outcome.recorded_code, 1);
+    assert!(
+        outcome.failed.is_empty(),
+        "a blocked command did not report a failure"
+    );
+    assert_eq!(outcome.unacknowledged, vec!["host-worker"]);
+    harness.wait_terminal();
+    assert_eq!(
+        harness.terminal.actions(),
+        vec![TerminalAction::Exit(1)],
+        "the terminal action must not wait for the blocked command"
+    );
+    assert!(
+        requested.elapsed() < Duration::from_secs(5),
+        "the fake clock must not sleep through the budget"
+    );
+    assert_eq!(harness.records().len(), 1);
+
+    // Let the abandoned command finish; its late answer must not upgrade the
+    // outcome or write a second record.
+    gate.open();
+    assert!(harness.wait_exit());
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(harness.teardown.outcome(), Some(outcome));
+    assert_eq!(harness.records().len(), 1);
+    assert_eq!(harness.terminal.actions(), vec![TerminalAction::Exit(1)]);
+}
+
+#[test]
+fn a_clean_restart_relaunches_once_after_releasing_the_claim() {
+    let fixture = fixture();
+    let mut harness = plain_harness();
+    harness.start(&fixture, false, None);
+    harness.wait_ready();
+
+    harness.handle.request_restart();
+    assert!(harness.wait_exit());
+    let outcome = harness.wait_teardown();
+    assert_eq!(outcome.result, TeardownResult::Clean);
+    assert_eq!(outcome.cause, TeardownCause::Restart);
+    assert_eq!(outcome.recorded_code, 0);
+    harness.wait_terminal();
+    assert_eq!(harness.terminal.actions(), vec![TerminalAction::Restart]);
+    assert!(
+        harness.instance.released.load(Ordering::SeqCst),
+        "a relaunch must not race the instance lock"
+    );
+    assert_eq!(harness.records().len(), 1);
+    assert!(harness.records()[0].contains("cause=restart"));
+}
+
+#[test]
+fn a_partial_restart_finishes_without_relaunching() {
+    let fixture = fixture();
+    fixture.write("testModule.jsonc", "{ \"enabled\": true }\n");
+    let mut harness = plain_harness();
+    harness.start(&fixture, false, None);
+    harness.wait_ready();
+    wait_for(&harness.handle, "running", |status| {
+        status.modules.iter().any(|module| module.state == ModuleState::Running)
+    });
+
+    harness.counters.fail_next_stop.store(true, Ordering::SeqCst);
+    harness.handle.request_restart();
+    assert!(harness.wait_exit());
+    let outcome = harness.wait_teardown();
+    assert_eq!(outcome.result, TeardownResult::Partial);
+    assert_eq!(outcome.recorded_code, 1);
+    assert_eq!(outcome.failed, vec!["host-worker"]);
+    harness.wait_terminal();
+    assert_eq!(harness.terminal.actions(), vec![TerminalAction::Exit(1)]);
+    assert!(!harness.instance.released.load(Ordering::SeqCst));
+    assert_eq!(harness.records().len(), 1);
+    assert!(harness.records()[0].contains("cause=restart"));
+}
+
+#[test]
+fn an_uncertain_restart_finishes_without_relaunching() {
+    let fixture = fixture();
+    fixture.write("testModule.jsonc", "{ \"enabled\": false }\n");
+    let gate = Gate::new();
+    let mut harness = plain_harness();
+    harness.configure_gate = Some(gate.clone());
+    harness.start(&fixture, false, None);
+    harness.wait_ready();
+
+    harness.handle.set_enabled("testModule", true);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while harness.counters.configure.load(Ordering::SeqCst) == 0 {
+        assert!(
+            Instant::now() < deadline,
+            "the configuration commit never blocked"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    harness.handle.request_restart();
+    harness.clock.advance(stache_app::shutdown::TEARDOWN_TOTAL);
+    let outcome = harness.wait_teardown();
+    assert_eq!(outcome.result, TeardownResult::Uncertain);
+    assert_eq!(outcome.unacknowledged, vec!["host-worker"]);
+    harness.wait_terminal();
+    assert_eq!(harness.terminal.actions(), vec![TerminalAction::Exit(1)]);
+    assert!(!harness.instance.released.load(Ordering::SeqCst));
+    assert_eq!(harness.records().len(), 1);
+    assert!(harness.records()[0].contains("cause=restart"));
+
+    gate.open();
+    assert!(harness.wait_exit());
+}
+
+#[test]
+fn a_restart_never_relaunches_while_an_appkit_reply_is_pending() {
+    let fixture = fixture();
+    let mut harness = plain_harness();
+    harness.start(&fixture, false, None);
+    harness.wait_ready();
+
+    harness.handle.request_restart();
+    assert_eq!(
+        harness.teardown.begin_terminate(),
+        stache_app::shutdown::TeardownAnswer::Later
+    );
+    assert!(harness.wait_exit());
+    assert_eq!(
+        harness.wait_teardown().result,
+        TeardownResult::Clean,
+        "the host answered; only the reply pending state blocks relaunch"
+    );
+    harness.wait_terminal();
+    assert_eq!(harness.terminal.actions(), vec![TerminalAction::Reply]);
+    assert!(!harness.instance.released.load(Ordering::SeqCst));
+}
+
+#[test]
+fn only_the_first_non_zero_exit_code_is_recorded() {
+    let fixture = fixture();
+    let mut harness = plain_harness();
+    harness.start(&fixture, false, None);
+    harness.wait_ready();
+
+    harness.handle.request_shutdown_with_code(Some(0));
+    harness.handle.request_shutdown_with_code(Some(7));
+    harness.handle.request_shutdown_with_code(Some(3));
+    assert!(harness.wait_exit());
+    let outcome = harness.wait_teardown();
+    assert_eq!(outcome.result, TeardownResult::Clean);
+    assert_eq!(outcome.recorded_code, 7);
+    harness.wait_terminal();
+    assert_eq!(harness.terminal.actions(), vec![TerminalAction::Exit(7)]);
+}
+
+#[test]
+fn a_terminate_install_failure_stays_a_status_condition() {
+    let fixture = fixture();
+    fixture.write("testModule.jsonc", "{ \"enabled\": false }\n");
+    let mut harness = plain_harness();
+    harness.start(&fixture, false, None);
+    harness.wait_ready();
+
+    report_terminate_install_failure(&harness.handle, &DiscardLogger, "rejected selector");
+    wait_for(&harness.handle, "terminate condition", |status| {
+        status
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("terminate observation is unavailable"))
+    });
+
+    fixture.write("testModule.jsonc", "{ \"enabled\": true }\n");
+    wait_for(&harness.handle, "later success", |status| {
+        status.modules.iter().any(|module| module.state == ModuleState::Running)
+    });
+    assert!(
+        harness
+            .handle
+            .status()
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("terminate observation is unavailable")),
+        "a later successful action must not hide the installation failure"
+    );
+
+    harness.handle.request_shutdown();
+    assert!(harness.wait_exit());
 }

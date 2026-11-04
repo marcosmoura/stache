@@ -57,15 +57,20 @@ listener, webview or `execOnStartup`. After the tray exists, the background host
 starts modules and then `IpcServer` with `ConfigCore` over the one
 `ConfigStore`. The server is owned by the host, not by a Tauri plugin.
 
-Shutdown is one idempotent coordinator shared by tray Quit, SIGINT/SIGTERM/SIGHUP
-and Tauri's exit event. It runs off the main thread: stop accepting IPC and
-configuration work, cancel the watcher, permission poller and owned startup job,
-reap that job's direct child, shut the registry down in reverse start order,
-release owned windows/tray and the socket, close and join the signal thread, then
-let Tauri exit on the main thread. A non-zero host exit code reaches the CLI as a
-failure instead of being reported as success. Repeated requests are no-ops. Module
-socket handlers are contributed by their factories and registered on the same
-`Router` before the server starts; there is no second server.
+Shutdown is one idempotent coordinator shared by tray Quit, SIGINT/SIGTERM/SIGHUP,
+Tauri's exit event and AppKit's terminate decision. Requests only record a deadline;
+the dedicated coordinator thread owns the single outcome and terminal action, while
+the host worker performs today's ordered teardown off the main thread: stop accepting
+IPC and configuration work, cancel the watcher, permission poller and owned startup
+job, reap that job's direct child, shut the registry down in reverse start order, and
+release owned windows and the socket. Those stages are still unbounded behind the
+coordinator. The total is five seconds from the first request; a later request
+shortens it to 250 ms from itself. A non-zero intended host code reaches the CLI as
+a failure instead of being reported as success, and exactly one outcome record is
+attempted. Repeated requests never start a second run. Module socket handlers are
+contributed by their factories and registered on the same `Router` before the server
+starts; there is no second server. Real Cmd-Q, logout and shutdown are observed by the
+same route but have not been verified end to end.
 
 ## Wire protocol
 

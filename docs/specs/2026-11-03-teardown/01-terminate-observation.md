@@ -1,5 +1,5 @@
 ---
-status: draft
+status: in-progress
 ---
 
 # 01 — Terminate observation and one coordinator

@@ -40,6 +40,15 @@ use crate::windows::NativeWindows;
 /// Environment variable used by the first process to spawn the second launch.
 pub const SECOND_ENV: &str = "STACHE_SMOKE_SECOND";
 
+/// Environment variable that selects the opt-in terminate observation proof.
+pub const TERMINATE_ENV: &str = "STACHE_SMOKE_TERMINATE";
+
+/// How long one terminate proof step may take before the run fails.
+const TERMINATE_STEP_BOUND: Duration = Duration::from_secs(5);
+
+/// How long termination may take after the reply before the run fails.
+const TERMINATE_EXIT_BOUND: Duration = Duration::from_secs(5);
+
 const PROXY_AUDIO: &str = "proxyAudio";
 
 /// Baseline file written before the host starts: valid and explicitly disabled.
@@ -92,6 +101,86 @@ pub fn start(context: SmokeContext) {
     let _ = thread::Builder::new()
         .name("stache-smoke".to_owned())
         .spawn(move || run_checks(&context));
+}
+
+/// Schedules the terminate request and starts the proof on a worker thread.
+///
+/// Called from Tauri's setup hook on the main thread, during the first run-loop
+/// iteration. The observation and the coordinator are already installed and
+/// running from the shipped desktop path; this scenario never installs its own,
+/// so it exercises the production route, including its single automatic reply.
+pub fn start_terminate(app: &AppHandle, host: &HostHandle) {
+    // Fire `terminate:` from a run-loop timer, like a menu action, so neither
+    // the main queue nor tao's callback is on the stack when AppKit starts
+    // waiting for the reply.
+    if let Err(error) = stache_macos::terminate_after(Duration::from_millis(500)) {
+        fail(&format!("cannot schedule the terminate request: {error}"));
+    }
+    let app = app.clone();
+    let host = host.clone();
+    if let Err(error) = thread::Builder::new()
+        .name("stache-smoke-terminate".to_owned())
+        .spawn(move || run_terminate_checks(&app, &host))
+    {
+        fail(&format!("cannot start the terminate proof: {error}"));
+    }
+}
+
+/// Proves that a real `terminate:` reaches the shipped coordinator and that two
+/// main-thread routes still run while `AppKit` waits for its reply.
+///
+/// Every wait is bounded, and any missing step prints `smoke: FAIL:` and exits
+/// non-zero. The coordinator replies `true` by itself; nothing here calls
+/// [`stache_macos::reply_to_terminate`]. A successful run ends inside `AppKit`,
+/// so this function does not return.
+fn run_terminate_checks(app: &AppHandle, host: &HostHandle) {
+    if !host.wait_until_teardown_requested(TERMINATE_STEP_BOUND) {
+        fail("the added applicationShouldTerminate: did not reach the teardown coordinator");
+    }
+    if host.teardown_outcome().is_some() {
+        fail("teardown finished before the terminate request could be observed");
+    }
+    pass("applicationShouldTerminate: reached the shipped teardown coordinator");
+
+    // Both proofs run while the reply is still pending: AppKit is inside its
+    // modal panel run loop, and these jobs only run if that loop services the
+    // main queue and tao's common-mode sources.
+    let (sender, receiver) = std::sync::mpsc::channel();
+    if run_on_main(Box::new(move || {
+        let _ = sender.send(());
+    }))
+    .is_err()
+    {
+        fail("cannot enqueue the main-queue proof job");
+    }
+    match receiver.recv_timeout(TERMINATE_STEP_BOUND) {
+        Ok(()) => pass("a main-queue job ran while the terminate reply was pending"),
+        Err(error) => fail(&format!(
+            "the main queue did not run while the reply was pending: {error}"
+        )),
+    }
+
+    let (sender, receiver) = std::sync::mpsc::channel();
+    if app
+        .run_on_main_thread(move || {
+            let _ = sender.send(());
+        })
+        .is_err()
+    {
+        fail("cannot post the tao proxy proof event");
+    }
+    match receiver.recv_timeout(TERMINATE_STEP_BOUND) {
+        Ok(()) => pass("a tao proxy event ran while the terminate reply was pending"),
+        Err(error) => fail(&format!(
+            "the tao proxy did not run while the reply was pending: {error}"
+        )),
+    }
+
+    // The coordinator dispatches the single reply on main as soon as the host
+    // acknowledges or its total deadline expires.
+    pass("the coordinated teardown owns the reply; waiting for termination");
+    thread::sleep(TERMINATE_EXIT_BOUND + TERMINATE_STEP_BOUND);
+    fail("the coordinated teardown did not terminate after the reply");
 }
 
 /// Claims the instance lock and reports whether another process owns it.
@@ -486,7 +575,7 @@ fn pass(message: &str) {
     println!("smoke: ok: {message}");
 }
 
-fn fail(message: &str) -> ! {
+pub(crate) fn fail(message: &str) -> ! {
     eprintln!("smoke: FAIL: {message}");
     process::exit(1);
 }

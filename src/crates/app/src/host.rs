@@ -14,7 +14,6 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
@@ -43,6 +42,7 @@ use crate::permissions::{
     PermissionHost, PermissionManager, PermissionPoll, PermissionTicker, PollSchedule,
     RefreshReport, RefreshTrigger, TickGate,
 };
+use crate::shutdown::{Teardown, TeardownCause, TeardownOutcome};
 use crate::startup::{CommandRunner, StartupJob};
 use crate::windows::HOST_OWNER;
 
@@ -320,8 +320,6 @@ pub struct HostServices {
 pub trait HostUi: Send + Sync {
     /// Publishes a new status snapshot.
     fn status(&self, status: &HostStatus);
-    /// Requests final process exit. Called on the host worker thread.
-    fn exit(&self, code: i32);
 }
 
 /// A typed host setup or action failure.
@@ -420,7 +418,7 @@ pub struct HostState(pub HostHandle);
 pub struct HostHandle {
     sender: Sender<HostCommand>,
     status: Arc<Mutex<HostStatus>>,
-    shutdown_requested: Arc<AtomicBool>,
+    teardown: Arc<Teardown>,
     finished: Arc<Finished>,
 }
 
@@ -463,16 +461,44 @@ impl HostHandle {
     /// Retries an enabled, non-paused module that is failed or unavailable.
     pub fn retry(&self, id: impl Into<String>) { self.send(HostCommand::Retry(id.into())); }
 
-    /// Requests the idempotent shutdown coordinator.
+    /// Requests the idempotent teardown coordinator.
     pub fn request_shutdown(&self) {
-        if !self.shutdown_requested.swap(true, Ordering::SeqCst) {
-            self.send(HostCommand::Shutdown);
-        }
+        self.teardown.request(TeardownCause::Request, None);
+        self.send(HostCommand::Shutdown);
     }
 
-    /// Whether shutdown was requested.
+    /// Requests teardown from Tauri's exit event, keeping its first non-zero code.
+    pub fn request_shutdown_with_code(&self, code: Option<i32>) {
+        self.teardown.request(TeardownCause::Exit, code);
+        self.send(HostCommand::Shutdown);
+    }
+
+    /// Requests one coordinated restart through the same coordinator.
+    pub fn request_restart(&self) {
+        self.teardown.request(TeardownCause::Restart, None);
+        self.send(HostCommand::Shutdown);
+    }
+
+    /// Whether a teardown request has arrived.
     #[must_use]
-    pub fn shutdown_requested(&self) -> bool { self.shutdown_requested.load(Ordering::SeqCst) }
+    pub fn shutdown_requested(&self) -> bool { self.teardown.requested() }
+
+    /// The stored teardown outcome, if the coordinator reached its deadline.
+    #[must_use]
+    pub fn teardown_outcome(&self) -> Option<TeardownOutcome> { self.teardown.outcome() }
+
+    /// Waits, off the main thread, until a teardown request arrives.
+    #[must_use]
+    pub fn wait_until_teardown_requested(&self, timeout: Duration) -> bool {
+        self.teardown.wait_until_requested(timeout)
+    }
+
+    /// Keeps one condition visible until the host restarts.
+    pub fn note_condition(&self, message: String) { self.send(HostCommand::Condition(message)); }
+
+    pub(crate) fn host_worker_finished(&self, success: bool) {
+        self.teardown.host_worker_finished(success);
+    }
 
     /// Waits until the runner finished all teardown.
     ///
@@ -511,14 +537,14 @@ impl HostHandle {
     }
 }
 
-/// Creates the command handle and the not-yet-started driver.
+/// Creates the command handle over one coordinator and the not-yet-started driver.
 #[must_use]
-pub fn new_host() -> (HostHandle, HostDriver) {
+pub fn new_host(teardown: Arc<Teardown>) -> (HostHandle, HostDriver) {
     let (sender, receiver) = mpsc::channel();
     let handle = HostHandle {
         sender,
         status: Arc::new(Mutex::new(HostStatus::default())),
-        shutdown_requested: Arc::new(AtomicBool::new(false)),
+        teardown,
         finished: Arc::new(Finished {
             done: Mutex::new(false),
             signal: Condvar::new(),
@@ -555,6 +581,7 @@ impl HostDriver {
 
 enum HostCommand {
     SetEnabled { id: String, enabled: bool },
+    Condition(String),
     Pause(String),
     Resume(String),
     Retry(String),
@@ -649,7 +676,9 @@ impl Runner {
 
     fn run(mut self, receiver: &Receiver<HostCommand>) {
         if self.handle.shutdown_requested() {
-            self.finish(0);
+            // The existing early path: nothing started, so the host worker has
+            // no in-flight work to quiesce and reports success.
+            self.finish(true);
             return;
         }
         if let Err(error) = self.start() {
@@ -657,12 +686,12 @@ impl Runner {
             self.log_warn(format!("host setup failed: {error}"));
             self.publish();
             self.teardown();
-            self.finish(1);
+            self.finish(false);
             return;
         }
         if self.handle.shutdown_requested() {
-            self.teardown();
-            self.finish(0);
+            let success = self.teardown();
+            self.finish(success);
             return;
         }
         self.ready = true;
@@ -681,6 +710,9 @@ impl Runner {
             }
             match command {
                 HostCommand::Shutdown => break,
+                HostCommand::Condition(message) | HostCommand::WatcherFailed(message) => {
+                    self.add_condition(message);
+                }
                 HostCommand::SetEnabled { id, enabled } => self.set_enabled(&id, enabled),
                 HostCommand::Pause(id) => self.pause(&id),
                 HostCommand::Resume(id) => self.resume(&id),
@@ -701,12 +733,11 @@ impl Runner {
                     }
                 }
                 HostCommand::ConfigChanges(changes) => self.apply_config(&changes),
-                HostCommand::WatcherFailed(message) => self.add_condition(message),
                 HostCommand::OpenTestWindow => self.open_test_window(),
             }
         }
-        self.teardown();
-        self.finish(0);
+        let success = self.teardown();
+        self.finish(success);
     }
 
     fn start(&mut self) -> Result<(), HostError> {
@@ -1005,7 +1036,12 @@ impl Runner {
         self.publish();
     }
 
-    fn teardown(&mut self) {
+    /// Runs today's ordered teardown and reports whether it acknowledged.
+    ///
+    /// The stages are still unbounded; the coordinator's own deadline is what
+    /// keeps a blocked stage from delaying the outcome.
+    fn teardown(&mut self) -> bool {
+        let mut success = true;
         // Stop ingress before dropping services that handlers may still use.
         if let Some(mut ipc) = self.ipc.take() {
             ipc.shutdown();
@@ -1024,14 +1060,16 @@ impl Runner {
         // This thread is never the AppKit main thread.
         if let Err(error) = self.registry.shutdown() {
             self.log_warn(format!("module shutdown reported: {error}"));
+            success = false;
         }
         self.services.windows.close_all();
         self.ready = false;
         self.publish();
+        success
     }
 
-    fn finish(self, code: i32) {
-        self.ui.exit(code);
+    fn finish(self, success: bool) {
+        self.handle.host_worker_finished(success);
         self.handle.finish();
     }
 
@@ -1150,8 +1188,15 @@ mod tests {
 
     impl HostUi for QuietUi {
         fn status(&self, _: &HostStatus) {}
+    }
 
-        fn exit(&self, _: i32) {}
+    fn quiet_teardown() -> Arc<Teardown> {
+        Teardown::new(
+            Arc::new(crate::shutdown::SystemClock),
+            Arc::new(crate::shutdown::DiscardRecordChannel),
+            Arc::new(crate::shutdown::InstanceClaim::default()),
+            Arc::new(DiscardLogger),
+        )
     }
 
     fn runner(root: &Path) -> Runner {
@@ -1180,7 +1225,7 @@ mod tests {
                 backoff_max: Duration::from_millis(1),
             },
         };
-        let (handle, _driver) = new_host();
+        let (handle, _driver) = new_host(quiet_teardown());
         Runner::new(settings, services, handle, Arc::new(QuietUi))
     }
 

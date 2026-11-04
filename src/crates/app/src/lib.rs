@@ -31,7 +31,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use stache_cli::CliEnvironment;
-use stache_macos::{AccessibilityPermission, ActivationObserver, MainThread};
+use stache_macos::{AccessibilityPermission, ActivationObserver, MainThread, TerminateObservation};
 use stache_sdk::{
     AppEnvironment, AppPaths, ConfigPaths, EventBus, InstanceError, InstanceLock, LogFilter,
     LogLevel, LogRecord, Logger, MainThreadExecutor, ModuleId, Operation,
@@ -46,7 +46,11 @@ use crate::host::{
 };
 use crate::logging::StderrLogger;
 use crate::permissions::PermissionPoll;
-use crate::shutdown::{ExitAction, ExitGate, SignalBridge, exit_request_action};
+use crate::shutdown::{
+    BoundedRecordChannel, ExitAction, ExitGate, InstanceClaim, InstanceOwner, ReplyGuard,
+    SignalBridge, StderrRecordSink, SystemClock, Teardown, TerminalAction, TerminalDriver,
+    exit_request_action, report_terminate_install_failure,
+};
 use crate::startup::ProcessCommands;
 use crate::windows::{NativeWindows, TauriWindowHost};
 
@@ -55,9 +59,7 @@ struct WindowsState(Arc<NativeWindows>);
 
 struct AppUi {
     app: tauri::AppHandle,
-    gate: ExitGate,
     main_thread: Arc<dyn MainThreadExecutor>,
-    signals: Arc<Mutex<Option<SignalBridge>>>,
 }
 
 impl HostUi for AppUi {
@@ -69,25 +71,65 @@ impl HostUi for AppUi {
             let _ = tray::update(&app, &snapshot);
         }));
     }
+}
 
-    fn exit(&self, code: i32) {
+/// Runs the one terminal action chosen by the coordinator.
+///
+/// The reply path never calls `app.exit`: once `AppKit` has a pending
+/// `applicationShouldTerminate:`, only a single `true` reply may finish it.
+struct DesktopTerminal {
+    app: tauri::AppHandle,
+    gate: ExitGate,
+    main_thread: Arc<dyn MainThreadExecutor>,
+    signals: Arc<Mutex<Option<SignalBridge>>>,
+    reply: ReplyGuard,
+}
+
+impl DesktopTerminal {
+    fn stop_signals(&self) {
         let bridge =
             { self.signals.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() };
         if let Some(bridge) = bridge {
             bridge.stop();
         }
-        self.gate.record_exit(code);
-        let app = self.app.clone();
-        let fallback = self.app.clone();
-        if self
-            .main_thread
-            .execute(Box::new(move || {
-                app.remove_tray_by_id(tray::TRAY_ID);
-                app.exit(code);
-            }))
-            .is_err()
-        {
-            fallback.exit(code);
+    }
+}
+
+impl TerminalDriver for DesktopTerminal {
+    fn dispatch(&self, action: TerminalAction) {
+        match action {
+            TerminalAction::Reply => {
+                let reply = self.reply.clone();
+                // A stalled main thread can delay this closure. Bounding that
+                // is the next part's forced-exit work, which shares this reply
+                // guard; this part adds no forced exit.
+                let _ = self.main_thread.execute(Box::new(move || {
+                    if reply.claim() {
+                        let _ = stache_macos::reply_to_terminate();
+                    }
+                }));
+            }
+            TerminalAction::Exit(code) => {
+                self.stop_signals();
+                self.gate.record_exit(code);
+                let app = self.app.clone();
+                let fallback = self.app.clone();
+                if self
+                    .main_thread
+                    .execute(Box::new(move || {
+                        app.remove_tray_by_id(tray::TRAY_ID);
+                        app.exit(code);
+                    }))
+                    .is_err()
+                {
+                    fallback.exit(code);
+                }
+            }
+            TerminalAction::Restart => {
+                self.stop_signals();
+                self.gate.record_exit(0);
+                self.app.request_restart();
+            }
         }
     }
 }
@@ -147,6 +189,28 @@ pub fn run_smoke(config_paths: ConfigPaths) -> Result<(), String> {
     }
 }
 
+/// Runs the opt-in terminate observation proof.
+///
+/// The shipped desktop path installs the observation and starts the coordinator
+/// before the run loop, so this scenario exercises exactly that path: it only
+/// schedules a real `terminate:` and inspects the running coordination. A
+/// successful run ends inside `AppKit` and never returns.
+///
+/// # Errors
+/// Never returns `Ok`; a return means setup failed or the run loop stopped
+/// without completing termination.
+#[cfg(feature = "smoke")]
+pub fn run_smoke_terminate(config_paths: ConfigPaths) -> Result<(), String> {
+    match run_with(
+        config_paths,
+        Some(Box::new(|app, host, _, _| smoke::start_terminate(app, host))),
+        Instant::now(),
+    ) {
+        Ok(()) => smoke::fail("the terminate proof left the run loop without terminating"),
+        Err(error) => smoke::fail(&format!("desktop setup failed: {error}")),
+    }
+}
+
 #[allow(clippy::too_many_lines)] // One ordered Tauri setup and teardown sequence.
 fn run_with(
     config_paths: ConfigPaths,
@@ -169,13 +233,28 @@ fn run_with(
     let main_thread: Arc<dyn MainThreadExecutor> = Arc::new(MainThread);
     let signal_logger = Arc::clone(&logger);
     let setup_logger = Arc::clone(&logger);
-    let (host, driver) = new_host();
+    let install_logger = Arc::clone(&logger);
+    // The claim is shareable so a coordinated restart can release it before
+    // Tauri relaunches the next process.
+    let instance = InstanceClaim::new(instance);
+    let teardown = Teardown::new(
+        Arc::new(SystemClock),
+        Arc::new(BoundedRecordChannel::new(Arc::new(StderrRecordSink))),
+        Arc::new(instance.clone()),
+        Arc::clone(&logger),
+    );
+    let (host, driver) = new_host(Arc::clone(&teardown));
     let setup_host = host.clone();
     let setup_gate = gate.clone();
     let outcome_gate = gate.clone();
+    let terminal_gate = gate.clone();
+    let terminal_main_thread = Arc::clone(&main_thread);
+    let signals = Arc::new(Mutex::new(None::<SignalBridge>));
+    let setup_signals = Arc::clone(&signals);
+    let exit_teardown = Arc::clone(&teardown);
 
     let app = tauri::Builder::default()
-        .manage(HostState(host))
+        .manage(HostState(host.clone()))
         .invoke_handler(invoke)
         .setup(move |app| {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
@@ -197,12 +276,9 @@ fn run_with(
                 window_host,
                 Arc::clone(&logger),
             ));
-            let signals = Arc::new(Mutex::new(None::<SignalBridge>));
             let ui = Arc::new(AppUi {
                 app: app.handle().clone(),
-                gate: gate.clone(),
                 main_thread: Arc::clone(&main_thread),
-                signals: Arc::clone(&signals),
             });
             // The production factories take the last executor clone: modules
             // dispatch native work through it and never retain a second one.
@@ -232,7 +308,7 @@ fn run_with(
             let hook_host = setup_host.clone();
             match SignalBridge::install(move || setup_host.request_shutdown()) {
                 Ok(bridge) => {
-                    *signals.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+                    *setup_signals.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
                         Some(bridge);
                 }
                 Err(error) => signal_logger.log(stache_sdk::LogRecord {
@@ -250,9 +326,30 @@ fn run_with(
         .build(context())
         .map_err(|error| error.to_string())?;
 
+    teardown.install_terminal(Arc::new(DesktopTerminal {
+        app: app.handle().clone(),
+        gate: terminal_gate,
+        main_thread: terminal_main_thread,
+        signals: Arc::clone(&signals),
+        reply: ReplyGuard::new(),
+    }));
+    // The coordinator exists before the observation and before `run_return`,
+    // so no request can arrive without a driver already waiting for it.
+    teardown
+        .start()
+        .map_err(|error| format!("cannot start the teardown coordinator: {error}"))?;
     let activation_host = app.state::<HostState>().0.clone();
     let activation = ActivationObserver::install(move || activation_host.refresh_permissions())
         .ok_or_else(|| "activation observer requires the main thread".to_owned())?;
+    if let Err(error) = TerminateObservation::install({
+        let teardown = Arc::clone(&teardown);
+        move || match teardown.begin_terminate() {
+            crate::shutdown::TeardownAnswer::Later => stache_macos::TerminateAnswer::Later,
+            crate::shutdown::TeardownAnswer::Now => stache_macos::TerminateAnswer::Now,
+        }
+    }) {
+        report_terminate_install_failure(&host, install_logger.as_ref(), &error.to_string());
+    }
     let code = app.run_return(move |app, event| match event {
         RunEvent::ExitRequested { code, api, .. } => {
             let gate = app.state::<ExitGate>();
@@ -261,7 +358,7 @@ fn run_with(
                 ExitAction::PreventOnly => api.prevent_exit(),
                 ExitAction::PreventAndShutdown => {
                     api.prevent_exit();
-                    app.state::<HostState>().0.request_shutdown();
+                    app.state::<HostState>().0.request_shutdown_with_code(code);
                 }
             }
         }
@@ -270,11 +367,16 @@ fn run_with(
             event: tauri::WindowEvent::Destroyed,
             ..
         } => app.state::<WindowsState>().0.window_closed(&label),
+        // An unobserved terminate path never reaches the coordinator; the one
+        // bypass record keeps that gap visible instead of silent.
+        RunEvent::Exit => {
+            exit_teardown.note_unrecorded_exit();
+        }
         _ => {}
     });
     let intended = outcome_gate.exit_code();
     drop(activation);
-    drop(instance);
+    instance.release();
     finish_result(code, intended)
 }
 
@@ -450,6 +552,7 @@ mod tests {
     fn a_non_zero_host_exit_is_a_cli_failure() {
         assert!(finish_result(0, None).is_ok());
         assert!(finish_result(0, Some(1)).is_err());
+        assert!(finish_result(0, Some(7)).is_err());
         assert!(finish_result(1, None).is_err());
         assert!(finish_result(2, Some(0)).is_err());
         assert!(finish_result(0, Some(0)).is_ok());
