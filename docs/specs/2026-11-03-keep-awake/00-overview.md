@@ -63,7 +63,7 @@ Default tests use fakes: no real assertion, screen lock, wake, app launch or com
 
 Real-device power verification is optional and requires explicit approval **for each run**. If approved later, capture `pmset -g assertions` before/after, identify only the owned Next process and exclude competing legacy assertions. Screen-lock interaction is manual, separately authorized; never automate lock/wake. Record unavailable/manual cases honestly rather than claiming execution.
 
-Process exit releases OS assertions. The existing Cmd-Q/logout coordinated-teardown gap is a separate follow-up; this spec does not claim to fix it. No real power operation is permitted during spec writing.
+Process exit releases OS assertions, but is not proof of successful application cleanup. The branch adopts the [coordinated teardown contract merged into `main`](../2026-11-03-teardown/00-overview.md): SDK invalidation makes the generation inert and cancels/wakes native acquisition; `Module::stop`/rollback owns physical cleanup. `NativeSlot::PowerAssertion` (stable name `power-assertion`) acknowledges coherent native-ledger state from the same `AssertionOwner`, not a second cleanup path. Never acknowledge active, acquiring, cleaning or unresolved ownership as clean. Branch integration is verified with fakes and builds; merge approval is pending. Real power/lock behavior remains **unverified**, and each native run requires separate approval. No real power operation is permitted during spec writing.
 
 ## Affected docs
 
