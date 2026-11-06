@@ -108,7 +108,12 @@ fn cache_path_and_clear_use_the_injected_identity() {
     assert_eq!(stdout(&output), "Cache cleared successfully. Freed 4 bytes.\n");
     assert!(!workspace.cache().exists());
     assert!(legacy.join("keep").exists());
-    assert_no_desktop(&workspace);
+    // The exclusive cache lease creates the runtime directory, so this checks
+    // that no desktop endpoint exists rather than that the directory is absent.
+    assert!(
+        !workspace.runtime().join("ipc").exists(),
+        "cache clear must not start a desktop host"
+    );
 
     let output = workspace.run(&["cache", "clear"]);
     assert!(output.status.success());
@@ -224,7 +229,8 @@ fn completions_are_generated_for_supported_shells() {
     assert!(script.contains("reload"));
     assert!(script.contains("audio"));
     assert!(!script.contains("tiling"));
-    assert!(!script.contains("wallpaper"));
+    assert!(script.contains("wallpaper"));
+    assert!(script.contains("generate-all"));
     assert_no_desktop(&workspace);
 }
 
@@ -343,4 +349,100 @@ fn strip_ansi(input: &str) -> String {
         }
     }
     output
+}
+
+#[test]
+fn wallpaper_help_lists_exactly_the_legacy_commands() {
+    let workspace = Workspace::new();
+    let output = workspace.run(&["wallpaper", "--help"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let help = stdout(&output);
+    for needle in [
+        "set",
+        "generate-all",
+        "list",
+        "Wallpaper management commands",
+    ] {
+        assert!(help.contains(needle), "{needle}: {help}");
+    }
+    let output = workspace.run(&["wallpaper", "set", "--help"]);
+    let help = stdout(&output);
+    assert!(help.contains("--random"), "{help}");
+    assert!(help.contains("-s, --screen <SCREEN>"), "{help}");
+    assert!(help.contains("[default: all]"), "{help}");
+    assert!(
+        help.contains("stache wallpaper set --random --screen 2"),
+        "{help}"
+    );
+    assert_no_desktop(&workspace);
+}
+
+#[test]
+fn wallpaper_grammar_errors_exit_two_and_argument_errors_exit_one_before_any_work() {
+    let workspace = Workspace::new();
+    let output = workspace.run(&["wallpaper", "set", "--random", "--screen", "two"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        stderr(&output).contains("Invalid screen value 'two'"),
+        "{}",
+        stderr(&output)
+    );
+    let output = workspace.run(&["wallpaper", "set", "--screen", "99999999999"]);
+    assert_eq!(output.status.code(), Some(2));
+
+    let output = workspace.run(&["wallpaper", "set", "image.png", "--random"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(stdout(&output), "");
+    assert_eq!(
+        stderr(&output),
+        "stache: Cannot specify both <path> and --random. Use one or the other.\n"
+    );
+    let output = workspace.run(&["wallpaper", "set"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        stderr(&output),
+        "stache: Either <path> or --random must be specified.\n"
+    );
+    assert_no_desktop(&workspace);
+}
+
+#[test]
+fn wallpaper_list_and_generate_all_are_local_and_report_empty_pools() {
+    let workspace = Workspace::new();
+    let output = workspace.run(&["wallpaper", "list"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "No wallpapers found.\n");
+    let output = workspace.run(&["wallpaper", "generate-all"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "No wallpapers to generate.\n");
+    assert_no_desktop(&workspace);
+
+    let config = workspace.home().join("cfg");
+    fs::create_dir_all(&config).expect("config");
+    fs::write(config.join("wallpapers.jsonc"), "{ nope").expect("malformed");
+    let output = workspace.run(&["-c", config.to_str().expect("utf-8"), "wallpaper", "list"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(stdout(&output), "");
+    assert!(
+        stderr(&output).starts_with("stache: Wallpaper error: "),
+        "{}",
+        stderr(&output)
+    );
+    assert_no_desktop(&workspace);
+}
+
+#[test]
+fn a_missing_path_shaped_wallpaper_argument_never_reaches_the_desktop_or_socket() {
+    let workspace = Workspace::new();
+    let output = workspace.run(&["wallpaper", "set", "./definitely-missing.png"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(stdout(&output), "");
+    assert!(
+        stderr(&output).starts_with(
+            "stache: Wallpaper error: Invalid wallpaper path \"./definitely-missing.png\": "
+        ),
+        "{}",
+        stderr(&output)
+    );
+    assert_no_desktop(&workspace);
 }

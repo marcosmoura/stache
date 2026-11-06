@@ -60,13 +60,16 @@ starts modules and then `IpcServer` with `ConfigCore` over the one
 Shutdown is one idempotent coordinator shared by tray Quit, SIGINT/SIGTERM/SIGHUP,
 Tauri's exit event and AppKit's terminate decision. Requests only record a deadline;
 the dedicated coordinator thread owns the single outcome and terminal action and runs
-the ordered stages itself off the main thread: invalidate IPC and configuration work,
+the ordered stages itself off the main thread: close factory admission and wake
+factory-owned host-service waits, invalidate IPC and configuration work,
 reap the watcher, permission poller and owned startup job while observing the host
 worker in the same stage budget, stop the registry in reverse start order one module at
-a time, then release the socket and the registered native owners. Each wait is capped at
+a time, drain factory-owned services in reverse registration order, then release the
+socket and the registered native owners. Each wait is capped at
 `min(2 s, remaining)`, so a hung owner is named unacknowledged and abandoned instead of
-joined. Keep Awake's `power-assertion` slot acknowledges the release its module `stop` already
-performed over the same ledger; an active or acquiring generation, a release in flight or an
+joined; a factory drain names `factory:<id>`. Keep Awake's `power-assertion` slot
+acknowledges the release its module `stop` already performed over the same ledger;
+an active or acquiring generation, a release in flight or an
 unresolved ID is never reported clean, and the slot retries nothing. Socket acknowledgement
 requires both the accept thread and every handler gate permit to finish under one bound;
 acceptance stops without joining the accept thread and
@@ -155,6 +158,34 @@ response is an observation, not a globally atomic snapshot. `active` proves
 owned prevention, not immunity to lid close, forced sleep or low-battery policy.
 See [keep-awake.md](../features/keep-awake.md).
 
+### Wallpapers set
+
+`wallpapers.set` carries `WallpapersSetParams` (`configDirectory`,
+`selection`, `screen`) and answers with one `WallpapersSetOutcome` in
+`Response::Ok` data. Transport success means the request was handled, never that
+a wallpaper was applied: `status` is `fullSuccess`, `partial`, `failure`,
+`cancelled` or `uncertain`, with a typed `cause` and per-display
+`WallpapersTargetOutcome` entries using `applied`, `failed`, `notAttempted` or
+`unknown`. `selection` is `file` (absolute literal path), `collection` (zero-based
+accepted-pool index), `name` (a file name or stem looked up on the accepted pool,
+case-insensitive, first pool entry wins; a miss is a typed `invalidSelection`) or
+`random`. The server canonicalizes the requested configuration directory and
+its own accepted identity before any work and refuses a different reachable
+directory. The handler is synchronous; it enforces `WALLPAPERS_SERVER_BUDGET`
+(115 s) internally for admission, processing and native work. The facade is
+registered even while the module is disabled or paused. The contributed
+`stache wallpaper set` is the caller of the 120-second client budget: it builds
+`IpcClient::with_options(socket, RetryPolicy::legacy(), WALLPAPERS_CLIENT_BUDGET)`
+and sends exactly one `wallpapers.set` with no separate `core.status` probe.
+Only `NotRunning` (nothing was sent) allows one standalone application. Every
+other client error, a malformed `Ok` payload or a `handler` wire error is an
+uncertain outcome with no local application and no retry; other wire error kinds
+are reported as typed refusals before any native change. Built-in client and
+server transport defaults, wire limits, connection cap and retry policy are
+unchanged. See [wallpapers.md](../features/wallpapers.md#cli). The request,
+selection, screen, outcome, cause and target DTOs are generated from the same
+Rust types through `bindings::builder()`.
+
 `core` is reserved. `core.reload` rereads every file and returns per-file
 `applied { revision }`, `unchanged` or `rejected` outcomes with diagnostics;
 `core.status` returns the configuration directory, each file's state
@@ -232,7 +263,9 @@ arbitrary malicious same-UID path mutation between filesystem checks and use.
 - socket: `runtime/ipc`, rejected above 103 bytes because that is the
   macOS `sun_path` limit;
 - instance: `runtime/instance.lock`, a private `0600` regular file locked
-  exclusively for the desktop process lifetime.
+  exclusively for the desktop process lifetime;
+- cache lease: `runtime/cache.lock`, a private `0600` regular file locked shared
+  or exclusively for cache work, never unlinked by a participant.
 
 Missing `HOME` or `TMPDIR` fails with a typed error rather than falling back to
 a shared directory. Relative anchors are refused; existing directory anchors
@@ -245,11 +278,23 @@ roots and never touch the real home, cache, runtime or legacy identity.
 
 `cache path` prints the bare path. `cache clear` refuses a symlinked,
 non-directory or foreign-owned cache path, counts bytes without following
-symlinks (links and sockets contribute none), then removes the directory tree.
-The two legacy messages are preserved byte-for-byte; byte formatting matches
+symlinks (links and sockets contribute none), then removes the directory tree
+under one exclusive cache lease. It waits at most five seconds for that lease;
+on expiry it mutates nothing, prints
+`stache: Failed to clear cache: cache is busy; retry after current operations finish.`
+and exits 1, while a cancelled wait prints
+`stache: Failed to clear cache: operation cancelled.` and exits 1. The root is
+revalidated under the lease and the held lock identity is checked again just
+before removal.
+
+Clear may create the runtime directory `0700` for the lease but never creates a
+socket, and it never removes the lock. The legacy success and empty messages
+are preserved byte-for-byte; byte formatting matches
 `0 bytes`, `1.00 KB`, `1.50 MB`, `1.00 GB`. Clearing can never reach the
 runtime directory, the configuration directory or the legacy
-`com.marcosmoura.stache` cache.
+`com.marcosmoura.stache` cache. The lease is coordination among cooperating
+processes, not protection against OS or temporary-directory cleaners or
+malicious same-UID mutation.
 
 ## Audio command
 
@@ -259,6 +304,22 @@ starts the desktop and never registers a change listener. Neither flag, or both,
 selects every device; results are sorted by name. JSON preserves the legacy
 `name` / `type` / `input` / `output` keys and is styled only on a terminal. See
 [proxy-audio.md](../features/proxy-audio.md).
+
+## Wallpaper command
+
+`wallpaper set|list|generate-all` is contributed by `stache-wallpapers`
+(`src/cli/`), added in `src/crates/app/src/commands.rs`; `stache-cli` still never
+imports a module. The composition root injects the config and identity
+environment, invocation CWD, the control-socket transport, the native desktop
+(`NativeDesktop` over `MainThread`, which runs inline on the CLI process main
+thread), processor, clock, random source and a cancellation scope. The scope
+installs the existing `SignalBridge` only while a wallpaper command runs, so
+the first SIGINT/SIGTERM/SIGHUP cancels a `generate-all` or standalone `set`
+cooperatively while the command runs. A second signal force-exits with status 130. The default handlers are not restored afterwards; the process exits right
+after the command.
+`list` and `generate-all` never touch the socket. The global `-c/--config`
+value propagates into the subcommand matches and resolves exactly like the
+built-ins. See [wallpapers.md](../features/wallpapers.md#cli).
 
 Contributed executors receive the same `ansi` flag as built-ins
 (`CliExecutor::execute`), so a contributed command follows one terminal policy.

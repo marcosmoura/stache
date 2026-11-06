@@ -1,0 +1,70 @@
+{
+  "$id": "https://raw.githubusercontent.com/marcosmoura/stache/main/schemas/wallpapers.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WallpapersConfig",
+  "description": "Wallpaper source selection, rotation timing and image effects.\n\nDefaults are disabled with no sources. A nonempty `path` replaces `list`\nentirely, including when that directory is invalid. Configured source\nstrings are trimmed; paths are resolved relative to the configuration\ndirectory, never the process working directory.",
+  "type": "object",
+  "properties": {
+    "blur": {
+      "description": "Blur level in pixels for the Gaussian blur effect.",
+      "type": "integer",
+      "format": "uint32",
+      "default": 0,
+      "minimum": 0
+    },
+    "enabled": {
+      "description": "Whether Wallpapers should run.",
+      "type": "boolean",
+      "default": false
+    },
+    "interval": {
+      "description": "Time in seconds between wallpaper changes. Zero changes only once, when\nrotation starts.\n\nThe Rust field and schema are `u64`; the generated TypeScript uses\n`number`, which loses precision above 2^53.",
+      "type": "integer",
+      "format": "uint64",
+      "default": 0,
+      "minimum": 0
+    },
+    "list": {
+      "description": "Wallpaper filenames to use. If `path` is specified, this list is ignored.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
+    "mode": {
+      "description": "Wallpaper selection mode: random or sequential.",
+      "$ref": "#/$defs/WallpaperMode",
+      "default": "random"
+    },
+    "path": {
+      "description": "Directory containing wallpaper images.\nIf specified, all image files in this directory are used and the `list`\nfield is ignored.",
+      "type": "string",
+      "default": ""
+    },
+    "radius": {
+      "description": "Radius in pixels for rounded corners.",
+      "type": "integer",
+      "format": "uint32",
+      "default": 0,
+      "minimum": 0
+    }
+  },
+  "$defs": {
+    "WallpaperMode": {
+      "description": "Wallpaper cycling mode.",
+      "oneOf": [
+        {
+          "description": "Select a random wallpaper each time.",
+          "type": "string",
+          "const": "random"
+        },
+        {
+          "description": "Cycle through wallpapers in order.",
+          "type": "string",
+          "const": "sequential"
+        }
+      ]
+    }
+  }
+}

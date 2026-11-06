@@ -9,10 +9,10 @@
 //! locked with an advisory exclusive lock. The kernel releases it when the
 //! process exits, so a crash cannot leave an unrecoverable instance.
 
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::{fmt, fs, io};
 
+use crate::lockfile::{self, LockError};
 use crate::paths::AppPaths;
 
 /// The instance lock file name inside the runtime directory.
@@ -97,43 +97,9 @@ impl InstanceLock {
                 message: error.to_string(),
             }
         })?;
-        let directory = fs::symlink_metadata(runtime).map_err(|error| InstanceError::Io {
-            action: "inspect runtime",
-            path: runtime.to_path_buf(),
-            error,
-        })?;
         let path = runtime.join(INSTANCE_FILE_NAME);
-        let fd = rustix::fs::open(
-            &path,
-            rustix::fs::OFlags::CREATE
-                | rustix::fs::OFlags::RDWR
-                | rustix::fs::OFlags::NOFOLLOW
-                | rustix::fs::OFlags::CLOEXEC
-                | rustix::fs::OFlags::NONBLOCK,
-            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-        )
-        .map_err(|error| InstanceError::Io {
-            action: "open lock",
-            path: path.clone(),
-            error: error.into(),
-        })?;
-        let file = fs::File::from(fd);
-        let metadata = file.metadata().map_err(|error| InstanceError::Io {
-            action: "inspect lock",
-            path: path.clone(),
-            error,
-        })?;
-        if !metadata.is_file()
-            || metadata.uid() != paths.owner()
-            || metadata.mode() & 0o777 != 0o600
-            || metadata.nlink() != 1
-        {
-            return Err(InstanceError::Runtime {
-                path,
-                message: "lock must be a private, owned regular file".to_owned(),
-            });
-        }
-        file.try_lock().map_err(|error| match error {
+        let lock = lockfile::open(&path, runtime, paths.owner()).map_err(instance_error)?;
+        lock.file.try_lock().map_err(|error| match error {
             fs::TryLockError::WouldBlock => {
                 InstanceError::AlreadyRunning { runtime: runtime.to_path_buf() }
             }
@@ -143,38 +109,25 @@ impl InstanceLock {
                 error,
             },
         })?;
-        let current = fs::symlink_metadata(&path).map_err(|error| InstanceError::Io {
-            action: "recheck lock",
-            path: path.clone(),
-            error,
-        })?;
-        if current.dev() != metadata.dev() || current.ino() != metadata.ino() {
-            return Err(InstanceError::Runtime {
-                path,
-                message: "lock file was replaced while acquiring it".to_owned(),
-            });
-        }
-        let current_runtime = fs::symlink_metadata(runtime).map_err(|error| InstanceError::Io {
-            action: "recheck runtime",
-            path: runtime.to_path_buf(),
-            error,
-        })?;
-        if current_runtime.dev() != directory.dev()
-            || current_runtime.ino() != directory.ino()
-            || !current_runtime.is_dir()
-            || current_runtime.uid() != paths.owner()
-        {
-            return Err(InstanceError::Runtime {
-                path: runtime.to_path_buf(),
-                message: "runtime directory was replaced while acquiring the lock".to_owned(),
-            });
-        }
-        Ok(Self { _file: file, path })
+        lockfile::verify(&path, runtime, paths.owner(), lock.identity, lock.directory)
+            .map_err(instance_error)?;
+        Ok(Self { _file: lock.file, path })
     }
 
     /// The lock file path.
     #[must_use]
     pub fn path(&self) -> &Path { &self.path }
+}
+
+fn instance_error(error: LockError) -> InstanceError {
+    match error {
+        LockError::Io { action, path, error } => InstanceError::Io { action, path, error },
+        LockError::Replaced { path } => InstanceError::Runtime {
+            path,
+            message: "lock identity changed while acquiring it".to_owned(),
+        },
+        LockError::Unsafe { path, message } => InstanceError::Runtime { path, message },
+    }
 }
 
 #[cfg(test)]

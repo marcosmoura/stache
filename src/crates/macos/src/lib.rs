@@ -9,6 +9,7 @@ pub mod accessibility;
 pub mod activation;
 pub mod applications;
 pub mod audio;
+pub mod desktop;
 pub mod display;
 pub mod keep_awake;
 pub mod main_thread;
@@ -29,6 +30,14 @@ pub use applications::{
 pub use audio::{
     AudioBackend, AudioChangeSubscription, AudioDevice, AudioDeviceId, AudioDirection, AudioError,
     AudioWakeup, CoreAudioBackend,
+};
+#[cfg(any(test, feature = "testing"))]
+pub use desktop::testing::{FakeDesktop, FakeSetCall};
+pub use desktop::{
+    DESKTOP_ACKNOWLEDGEMENT_BUDGET, DesktopBackend, DesktopClock, DesktopError, DesktopKeepalive,
+    DesktopOperation, DisplayEntry, DisplayFrame, DisplayId, DisplaySnapshot,
+    GuardedDesktopBackend, NativeDesktop, NativeOperationAccount, NativeOperationTracker,
+    SystemDesktopClock,
 };
 pub use display::is_screen_mirroring_active;
 #[cfg(any(test, feature = "testing"))]

@@ -85,6 +85,13 @@ The pilot's read-only listing DTOs — `AudioDeviceInfo`, `AudioListKind` and
 `proxyAudio.list` socket request and response, but the pilot has no Tauri
 command and no UI module: launch still creates no window and no webview.
 
+`WallpapersSetParams`, `WallpaperSelection`, `WallpaperScreen`,
+`WallpapersSetOutcome`, `WallpapersOutcomeStatus`, `WallpapersOutcomeCause`,
+`WallpapersTargetOutcome`, `WallpapersTargetResult` and
+`WallpapersTargetFailure` are exported the same way. They describe the
+`wallpapers.set` socket request and its typed domain outcome; no Tauri command
+or UI surface consumes them yet.
+
 Serde phases make `ProxyAudioConfig` and `AudioDevicePriority` unions of
 `_Serialize` and `_Deserialize` shapes. Unified serde mode is rejected because
 `skip_serializing_if` cannot be represented there. The JSON Schemas remain the

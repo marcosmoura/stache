@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 03 — Runtime and host coordination
@@ -189,16 +189,16 @@ document them in `docs/architecture/ipc.md`; do not add tool policy to transport
 
 ## Acceptance criteria
 
-- [ ] WP03-01: Production registration/start/stop uses the SDK path and requires no other
+- [x] WP03-01: Production registration/start/stop uses the SDK path and requires no other
       tool; defaults start no rotation or native application.
-- [ ] WP03-02: Start/enable/resume, publication-barrier staging, interval-only changes
+- [x] WP03-02: Start/enable/resume, publication-barrier staging, interval-only changes
       and rejected source reloads have the exact image/resource behavior above;
       empty enabled rotation has the shipped typed failed-start/Retry mapping.
-- [ ] WP03-03: Exactly one wakeable timer and one serialized apply path survive repeated
+- [x] WP03-03: Exactly one wakeable timer and one serialized apply path survive repeated
       reload/pause/resume/stop; stale jobs are inert at native/state boundaries.
-- [ ] WP03-04: Host set works disabled/paused using accepted staged config, including
+- [x] WP03-04: Host set works disabled/paused using accepted staged config, including
       malformed initial file fixed later and rejected/deleted reloads.
-- [ ] WP03-05: Server-enforced identity, partial DTOs and finite cold-request budget
+- [x] WP03-05: Server-enforced identity, partial DTOs and finite cold-request budget
       pass compile/fake-time proofs with implementation feasibility evidence;
       built-in limits/defaults are unchanged. Factory/types/docs and overview gates pass.
 
@@ -257,6 +257,13 @@ fake work. SDK transport regression tests prove built-in five-second defaults,
 wire limits, connection cap and absent-only retry behavior remain unchanged.
 
 ## Notes
+
+Implementation adaptations: the factory lives in `src/crates/app/src/wallpapers.rs`
+and registers through `host::register_module_observed`, which `register_module`
+now delegates to. The shutdown order follows the coordinated teardown that landed
+after this part was written: factory begin hooks run in stage 1, modules stop and
+factories drain in the registry stage, and the socket slot closes afterward.
+Admission is already closed by then, so a late handler returns a cancelled outcome.
 
 Explicit operations may own short-lived processing/native work while disabled;
 that does not mean a module runtime was started. Do not weaken generic SDK

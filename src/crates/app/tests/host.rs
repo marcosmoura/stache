@@ -3,7 +3,9 @@
 //! These tests never touch the real home, configuration directory, runtime
 //! socket, tray, Accessibility prompt or legacy process.
 
+use std::ffi::OsString;
 use std::fs;
+use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::time::{Duration, Instant};
@@ -12,8 +14,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use stache_app::bindings::{HostStatus, ModuleState};
 use stache_app::host::{
-    HostDriver, HostHandle, HostServices, HostSettings, HostUi, ModuleFactories, ModuleFactory,
-    NoTunesFactory, new_host, register_module,
+    FactoryContext, HostDriver, HostHandle, HostServices, HostSettings, HostUi, ModuleFactories,
+    ModuleFactory, NoTunesFactory, new_host, register_module,
 };
 use stache_app::permissions::PermissionPoll;
 use stache_app::shutdown::{
@@ -24,16 +26,34 @@ use stache_app::shutdown::{
 };
 use stache_app::startup::CommandRunner;
 use stache_app::tray::{TrayItem, TrayRow};
+use stache_app::wallpapers::WallpapersFactory;
 use stache_app::windows::{
     CloseOutcome, NativeWindowSpec, NativeWindows, WindowHost, WindowsOwner,
 };
-use stache_macos::{ApplicationControl, FakeApplicationBackend, ManualExecutor};
-use stache_sdk::ipc::IpcClient;
+use stache_cli::CliEnvironment;
+use stache_macos::{
+    ApplicationControl, DesktopBackend, DesktopError, DesktopOperation, DisplayEntry, DisplayFrame,
+    DisplayId, DisplaySnapshot, FakeApplicationBackend, FakeDesktop, GuardedDesktopBackend,
+    ManualExecutor,
+};
+use stache_sdk::ipc::{HandlerResult, IpcClient, IpcHandler, Request, Response, RetryPolicy};
+use stache_sdk::shutdown::ShutdownWait;
 use stache_sdk::{
-    AppEnvironment, AppPaths, ConfigCatalog, ConfigError, ConfigPaths, DiscardLogger, EventBus,
-    LogFilter, MainThreadExecutor, Module, ModuleConfig, ModuleContext, ModuleDescriptor, ModuleId,
-    ModuleResult, Permission, PermissionError, PermissionProvider, PermissionStatus, SurfaceId,
-    ThreadError, WindowBackend, WindowError, WindowId, WindowRequest,
+    AppEnvironment, AppPaths, CommandCatalog, ConfigCatalog, ConfigEnvironment, ConfigError,
+    ConfigPaths, DiscardLogger, EventBus, LogFilter, MainThreadExecutor, Module, ModuleConfig,
+    ModuleContext, ModuleDescriptor, ModuleId, ModuleResult, Permission, PermissionError,
+    PermissionProvider, PermissionStatus, SurfaceId, ThreadError, WindowBackend, WindowError,
+    WindowId, WindowRequest,
+};
+use stache_wallpapers::cli::{
+    IpcTransport, SetTransport, WallpapersCliEnv, contribution as wallpaper_contribution,
+    never_cancelled,
+};
+use stache_wallpapers::{
+    Processor, RealProcessor, RuntimeClock, ServiceConfig, SourceContext, SystemRandom,
+    SystemRuntimeClock, WALLPAPERS_CLIENT_BUDGET, WallpaperScreen, WallpaperSelection,
+    WallpapersOutcomeCause, WallpapersOutcomeStatus, WallpapersService, WallpapersSetOutcome,
+    WallpapersSetParams, WallpapersTargetFailure, WallpapersTargetOutcome, WallpapersTargetResult,
 };
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -307,6 +327,178 @@ impl FakeExit {
     fn codes(&self) -> Vec<i32> { self.codes.lock().expect("exit codes").clone() }
 }
 
+/// A guarded desktop whose native setter waits on a test barrier.
+struct BlockingDesktop {
+    inner: FakeDesktop,
+    entered: Mutex<Option<mpsc::Sender<()>>>,
+    release: Mutex<Option<mpsc::Receiver<()>>>,
+}
+
+impl BlockingDesktop {
+    const fn new(
+        inner: FakeDesktop,
+        entered: mpsc::Sender<()>,
+        release: mpsc::Receiver<()>,
+    ) -> Self {
+        Self {
+            inner,
+            entered: Mutex::new(Some(entered)),
+            release: Mutex::new(Some(release)),
+        }
+    }
+
+    fn block(&self) {
+        let entered = self.entered.lock().expect("entered").take();
+        if let Some(entered) = entered {
+            entered.send(()).expect("the test waits for the native call");
+        }
+        let release = self.release.lock().expect("release").take();
+        if let Some(release) = release {
+            release.recv().expect("the test releases the native call");
+        }
+    }
+}
+
+impl DesktopBackend for BlockingDesktop {
+    fn snapshot(&self) -> Result<DisplaySnapshot, DesktopError> { self.inner.snapshot() }
+
+    fn set_image(
+        &self,
+        display: DisplayId,
+        expected: &DisplayEntry,
+        image: &std::path::Path,
+    ) -> Result<(), DesktopError> {
+        self.inner.set_image(display, expected, image)
+    }
+}
+
+impl GuardedDesktopBackend for BlockingDesktop {
+    fn snapshot_guarded(
+        &self,
+        operation: &DesktopOperation,
+    ) -> Result<DisplaySnapshot, DesktopError> {
+        self.inner.snapshot_guarded(operation)
+    }
+
+    fn set_image_guarded(
+        &self,
+        operation: &DesktopOperation,
+        display: DisplayId,
+        expected: &DisplayEntry,
+        image: &std::path::Path,
+    ) -> Result<(), DesktopError> {
+        operation.check("desktop image set")?;
+        self.block();
+        self.inner.set_image_guarded(operation, display, expected, image)
+    }
+}
+
+/// A guarded desktop that signals each successful native set.
+struct SignalingDesktop {
+    inner: FakeDesktop,
+    applied: mpsc::Sender<()>,
+}
+
+impl SignalingDesktop {
+    const fn new(inner: FakeDesktop, applied: mpsc::Sender<()>) -> Self { Self { inner, applied } }
+}
+
+impl DesktopBackend for SignalingDesktop {
+    fn snapshot(&self) -> Result<DisplaySnapshot, DesktopError> { self.inner.snapshot() }
+
+    fn set_image(
+        &self,
+        display: DisplayId,
+        expected: &DisplayEntry,
+        image: &std::path::Path,
+    ) -> Result<(), DesktopError> {
+        self.inner.set_image(display, expected, image)
+    }
+}
+
+impl GuardedDesktopBackend for SignalingDesktop {
+    fn snapshot_guarded(
+        &self,
+        operation: &DesktopOperation,
+    ) -> Result<DisplaySnapshot, DesktopError> {
+        self.inner.snapshot_guarded(operation)
+    }
+
+    fn set_image_guarded(
+        &self,
+        operation: &DesktopOperation,
+        display: DisplayId,
+        expected: &DisplayEntry,
+        image: &std::path::Path,
+    ) -> Result<(), DesktopError> {
+        let outcome = self.inner.set_image_guarded(operation, display, expected, image);
+        if outcome.is_ok() {
+            let _ = self.applied.send(());
+        }
+        outcome
+    }
+}
+
+/// A shutdown wait that advances instantly, so a blocked owner is abandoned
+/// without sleeping through the real two-second budget.
+struct AdvancingWait {
+    start: Instant,
+    offset: Mutex<Duration>,
+    budget: Duration,
+}
+
+impl AdvancingWait {
+    fn new() -> Self {
+        Self {
+            start: Instant::now(),
+            offset: Mutex::new(Duration::ZERO),
+            budget: Duration::from_secs(2),
+        }
+    }
+}
+
+impl ShutdownWait for AdvancingWait {
+    fn now(&self) -> Instant { self.start + *self.offset.lock().expect("offset") }
+
+    fn deadline(&self) -> Instant { self.start + self.budget }
+
+    fn wait(&self, timeout: Duration) { *self.offset.lock().expect("offset") += timeout; }
+}
+
+fn wallpaper_snapshot() -> DisplaySnapshot {
+    DisplaySnapshot::new(vec![DisplayEntry {
+        id: DisplayId::new(1),
+        frame: DisplayFrame { width: 1600.0, height: 900.0 },
+        scale: 1.0,
+    }])
+}
+
+fn write_wallpaper_png(path: &std::path::Path) {
+    let pixels = image::RgbImage::from_fn(8, 8, |x, y| {
+        #[allow(clippy::cast_possible_truncation)]
+        image::Rgb([(x * 32) as u8, (y * 32) as u8, 64])
+    });
+    let file = fs::File::create(path).expect("image file");
+    pixels
+        .write_with_encoder(image::codecs::png::PngEncoder::new(file))
+        .expect("encode png");
+}
+
+fn wallpapers_service(
+    fixture: &Fixture,
+    backend: Arc<dyn GuardedDesktopBackend>,
+) -> Arc<WallpapersService> {
+    WallpapersService::new(ServiceConfig {
+        paths: fixture.app.clone(),
+        source: SourceContext::new(fixture.paths.directory(), Some(fixture.root().to_path_buf())),
+        backend,
+        clock: Arc::new(SystemRuntimeClock),
+        random: Arc::new(SystemRandom),
+        processor: Arc::new(RealProcessor),
+    })
+    .expect("wallpaper service")
+}
+
 /// A clock a test jumps explicitly while owner waits sleep real, bounded
 /// slices.
 ///
@@ -542,6 +734,19 @@ impl Harness {
         gate: Option<Arc<Gate>>,
         no_tunes: Option<ApplicationControl>,
     ) {
+        let mut factories = ModuleFactories::new().with(TestFactory {
+            counters: Arc::clone(&self.counters),
+            permission,
+            gate,
+            configure_gate: self.configure_gate.clone(),
+        });
+        if let Some(control) = no_tunes {
+            factories = factories.with(NoTunesFactory::new(control));
+        }
+        self.start_with_factories(fixture, factories);
+    }
+
+    fn start_with_factories(&mut self, fixture: &Fixture, factories: ModuleFactories) {
         let driver = self.driver.take().expect("driver");
         let permissions: Arc<dyn PermissionProvider> = self.permissions.clone();
         let commands: Arc<dyn CommandRunner> = self.commands.clone();
@@ -559,15 +764,6 @@ impl Harness {
                 backoff_max: Duration::from_millis(5),
             },
         };
-        let mut factories = ModuleFactories::new().with(TestFactory {
-            counters: Arc::clone(&self.counters),
-            permission,
-            gate,
-            configure_gate: self.configure_gate.clone(),
-        });
-        if let Some(control) = no_tunes {
-            factories = factories.with(NoTunesFactory::new(control));
-        }
         let settings = HostSettings {
             app: fixture.app.clone(),
             config: fixture.paths.clone(),
@@ -718,6 +914,133 @@ fn plain_harness() -> Harness {
         Arc::new(FakeCommands::default()),
         Arc::new(RecordingWindows::default()),
     )
+}
+
+#[test]
+fn a_catalogued_wallpapers_file_stays_unbound_and_inactive() {
+    use stache_app::bindings::ConfigFileState;
+
+    let fixture = fixture();
+    fixture.write(
+        "wallpapers.jsonc",
+        "{ \"enabled\": true, \"path\": \"images\" }\n",
+    );
+    let mut harness = plain_harness();
+    harness.start(&fixture, false, None);
+    harness.wait_ready();
+    let status = harness.handle.status();
+    let wallpapers = status
+        .config
+        .iter()
+        .find(|file| file.file == "wallpapers.jsonc")
+        .expect("wallpapers is a catalog file in core status");
+    assert_eq!(wallpapers.state, ConfigFileState::Valid);
+    assert!(
+        !wallpapers.active,
+        "catalog support alone must not bind a runtime"
+    );
+    assert!(wallpapers.diagnostic.is_none());
+    assert!(status.error.is_none(), "{:?}", status.error);
+    assert!(
+        !status.modules.iter().any(|module| module.id == "wallpapers"),
+        "this harness supplies only TestFactory, so catalog bytes alone register no runtime"
+    );
+    harness.handle.request_shutdown();
+    assert!(harness.wait_exit());
+    harness.wait_teardown();
+    harness.wait_terminal();
+}
+
+#[test]
+fn a_factory_can_read_the_accepted_config_through_the_factory_context() {
+    use stache_sdk::{
+        ConfigStore, DiscardLogger, EventBus, Initial, LogFilter, ModuleHandle, ReloadOutcome,
+        UnavailableWindows,
+    };
+
+    struct WatchFactory {
+        counters: Arc<Counters>,
+        handle: Mutex<Option<ModuleHandle<TestConfig>>>,
+        watch: Mutex<Option<stache_sdk::AcceptedWatch<TestConfig>>>,
+    }
+
+    impl ModuleFactory for WatchFactory {
+        fn id(&self) -> ModuleId { TestConfig::ID }
+
+        fn register(
+            &self,
+            registry: &stache_sdk::Registry,
+            store: &ConfigStore,
+        ) -> Result<Arc<dyn stache_app::host::ModuleControl>, stache_app::host::HostError> {
+            let module = TestModule {
+                counters: Arc::clone(&self.counters),
+                permission: false,
+                gate: None,
+                configure_gate: None,
+            };
+            let handle = match store.initial::<TestConfig>(TestConfig::ID)? {
+                Initial::Default(config) | Initial::Loaded(config) => {
+                    registry.register(module, config)?
+                }
+                Initial::Invalid(diagnostic) => registry.register_rejected(
+                    module,
+                    stache_sdk::ConfigDiagnostic::new(diagnostic.message),
+                )?,
+            };
+            store.bind(handle)?;
+            *self.handle.lock().expect("handle") = Some(handle);
+            Ok(Arc::new(handle))
+        }
+
+        fn ipc_handlers(
+            &self,
+            context: &FactoryContext,
+        ) -> Vec<(&'static str, Arc<dyn stache_sdk::ipc::IpcHandler>)> {
+            let handle = self.handle.lock().expect("handle").expect("registered");
+            let watch = context.accepted_watch(handle).expect("accepted watch");
+            *self.watch.lock().expect("watch") = Some(watch);
+            Vec::new()
+        }
+    }
+
+    let fixture = fixture();
+    fixture.write("testModule.jsonc", "{ \"enabled\": false, \"value\": 1 }\n");
+    let registry = Arc::new(stache_sdk::Registry::new(
+        Arc::new(DiscardLogger),
+        Arc::new(EventBus::new()),
+        Arc::new(InlineMain),
+        FakePermissions::new(PermissionStatus::Granted),
+        Arc::new(UnavailableWindows),
+    ));
+    let store = Arc::new(ConfigStore::new(
+        Arc::clone(&registry),
+        fixture.catalog.clone(),
+        fixture.paths.clone(),
+        Arc::new(LogFilter::default()),
+    ));
+    let factory = WatchFactory {
+        counters: Arc::new(Counters::default()),
+        handle: Mutex::new(None),
+        watch: Mutex::new(None),
+    };
+    factory.register(&registry, &store).expect("register");
+    let context = FactoryContext::new(Arc::clone(&registry), Arc::clone(&store));
+    factory.ipc_handlers(&context);
+    let watch = factory.watch.lock().expect("watch").clone().expect("handler obtained a watch");
+
+    let accepted = watch.read().expect("accepted at registration");
+    assert_eq!(accepted.revision, 1);
+    assert_eq!(accepted.config.value, 1);
+
+    fixture.write("testModule.jsonc", "{ \"enabled\": true, \"value\": 2 }\n");
+    assert_eq!(
+        store.reload_one(TestConfig::ID).expect("reload"),
+        ReloadOutcome::Applied { revision: 2 }
+    );
+    let accepted = watch.read().expect("accepted after reload");
+    assert_eq!(accepted.revision, 2);
+    assert_eq!(accepted.config.value, 2);
+    assert!(accepted.config.enabled);
 }
 
 #[test]
@@ -2336,4 +2659,1511 @@ fn a_blocked_record_sink_keeps_the_slot_readable_and_bounds_the_forced_exit() {
         "one outcome record reached the sink"
     );
     release.send(()).expect("release the sink");
+}
+
+fn event_log(events: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
+    events.lock().expect("events").clone()
+}
+
+fn wait_for_event(events: &Arc<Mutex<Vec<String>>>, event: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !event_log(events).iter().any(|known| known == event) {
+        assert!(Instant::now() < deadline, "timed out waiting for `{event}`");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+/// One factory that either registers the test module or fails before it does.
+struct StartupFactory {
+    id: &'static str,
+    fail: bool,
+    events: Arc<Mutex<Vec<String>>>,
+}
+
+impl StartupFactory {
+    fn push(&self, event: &str) {
+        self.events.lock().expect("events").push(format!("{event}:{}", self.id));
+    }
+}
+
+impl ModuleFactory for StartupFactory {
+    fn id(&self) -> ModuleId { ModuleId::new(self.id) }
+
+    fn register(
+        &self,
+        registry: &stache_sdk::Registry,
+        store: &stache_sdk::ConfigStore,
+    ) -> Result<Arc<dyn stache_app::host::ModuleControl>, stache_app::host::HostError> {
+        if self.fail {
+            return Err(stache_app::host::HostError::Thread(
+                "injected registration failure".to_owned(),
+            ));
+        }
+        register_module(registry, store, TestModule {
+            counters: Arc::new(Counters::default()),
+            permission: false,
+            gate: None,
+            configure_gate: None,
+        })
+    }
+
+    fn begin_shutdown(&self) { self.push("begin"); }
+
+    fn finish_shutdown(&self, _: &dyn stache_sdk::shutdown::ShutdownWait) -> Result<bool, String> {
+        self.push("finish");
+        Ok(true)
+    }
+}
+
+#[test]
+fn a_partial_factory_startup_still_closes_every_begin_and_finish_hook() {
+    let fixture = fixture();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let factories = ModuleFactories::new()
+        .with(StartupFactory {
+            id: "missing",
+            fail: true,
+            events: Arc::clone(&events),
+        })
+        .with(StartupFactory {
+            id: "testModule",
+            fail: false,
+            events: Arc::clone(&events),
+        });
+    let mut harness = plain_harness();
+    harness.start_with_factories(&fixture, factories);
+
+    assert!(harness.wait_exit(), "the failed runner must finish");
+    let outcome = harness.wait_teardown();
+    assert_eq!(outcome.result, TeardownResult::Partial, "{outcome}");
+    assert_eq!(event_log(&events), [
+        "begin:missing",
+        "begin:testModule",
+        "finish:testModule",
+        "finish:missing",
+    ]);
+}
+
+struct ServiceMarker;
+
+/// A factory whose drain blocks until a test releases it.
+struct BlockedFinishFactory {
+    events: Arc<Mutex<Vec<String>>>,
+    gate: Arc<Gate>,
+    entered: Mutex<Option<mpsc::Sender<()>>>,
+    _service: Arc<ServiceMarker>,
+}
+
+impl ModuleFactory for BlockedFinishFactory {
+    fn id(&self) -> ModuleId { TestConfig::ID }
+
+    fn register(
+        &self,
+        registry: &stache_sdk::Registry,
+        store: &stache_sdk::ConfigStore,
+    ) -> Result<Arc<dyn stache_app::host::ModuleControl>, stache_app::host::HostError> {
+        register_module(registry, store, TestModule {
+            counters: Arc::new(Counters::default()),
+            permission: false,
+            gate: None,
+            configure_gate: None,
+        })
+    }
+
+    fn begin_shutdown(&self) { self.events.lock().expect("events").push("begin".to_owned()); }
+
+    fn finish_shutdown(&self, _: &dyn stache_sdk::shutdown::ShutdownWait) -> Result<bool, String> {
+        let sender = self.entered.lock().expect("entered").take();
+        if let Some(sender) = sender {
+            let _ = sender.send(());
+        }
+        self.gate.wait();
+        self.events.lock().expect("events").push("finish".to_owned());
+        Ok(true)
+    }
+}
+
+#[test]
+fn factory_state_outlives_the_runner_until_its_drain_returns() {
+    let fixture = fixture();
+    fixture.write("testModule.jsonc", "{ \"enabled\": false }\n");
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let gate = Gate::new();
+    let (sender, entered) = mpsc::channel();
+    let service = Arc::new(ServiceMarker);
+    let retained = Arc::downgrade(&service);
+    let factories = ModuleFactories::new().with(BlockedFinishFactory {
+        events: Arc::clone(&events),
+        gate: Arc::clone(&gate),
+        entered: Mutex::new(Some(sender)),
+        _service: service,
+    });
+    let mut harness = plain_harness();
+    harness.start_with_factories(&fixture, factories);
+    harness.wait_ready();
+
+    harness.handle.request_shutdown();
+    assert!(harness.wait_exit(), "the runner must finish first");
+    entered
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the factory drain runs after the runner finished");
+    assert!(
+        retained.upgrade().is_some(),
+        "the factory service is still owned while its drain is blocked"
+    );
+
+    gate.open();
+    let outcome = harness.wait_teardown();
+    assert_eq!(outcome.result, TeardownResult::Clean, "{outcome}");
+    assert!(event_log(&events).iter().any(|event| event == "finish"));
+}
+
+struct SocketHandler {
+    events: Arc<Mutex<Vec<String>>>,
+    gate: Arc<Gate>,
+}
+
+impl IpcHandler for SocketHandler {
+    fn handle(&self, _: &str, _: serde_json::Value) -> HandlerResult<serde_json::Value> {
+        self.events.lock().expect("events").push("handler-entered".to_owned());
+        self.gate.wait();
+        self.events.lock().expect("events").push("handler-done".to_owned());
+        Ok(serde_json::Value::Null)
+    }
+}
+
+struct SocketOrderFactory {
+    events: Arc<Mutex<Vec<String>>>,
+    gate: Arc<Gate>,
+}
+
+impl ModuleFactory for SocketOrderFactory {
+    fn id(&self) -> ModuleId { TestConfig::ID }
+
+    fn register(
+        &self,
+        registry: &stache_sdk::Registry,
+        store: &stache_sdk::ConfigStore,
+    ) -> Result<Arc<dyn stache_app::host::ModuleControl>, stache_app::host::HostError> {
+        register_module(registry, store, TestModule {
+            counters: Arc::new(Counters::default()),
+            permission: false,
+            gate: None,
+            configure_gate: None,
+        })
+    }
+
+    fn ipc_handlers(&self, _: &FactoryContext) -> Vec<(&'static str, Arc<dyn IpcHandler>)> {
+        vec![(
+            TestConfig::ID.as_str(),
+            Arc::new(SocketHandler {
+                events: Arc::clone(&self.events),
+                gate: Arc::clone(&self.gate),
+            }),
+        )]
+    }
+
+    fn begin_shutdown(&self) {
+        self.events.lock().expect("events").push("begin".to_owned());
+        self.gate.open();
+    }
+
+    fn finish_shutdown(&self, _: &dyn stache_sdk::shutdown::ShutdownWait) -> Result<bool, String> {
+        self.events.lock().expect("events").push("finish".to_owned());
+        Ok(true)
+    }
+}
+
+#[test]
+fn begin_shutdown_wakes_a_running_socket_handler_before_its_join() {
+    let fixture = fixture();
+    fixture.write("testModule.jsonc", "{ \"enabled\": false }\n");
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let gate = Gate::new();
+    let factories = ModuleFactories::new().with(SocketOrderFactory {
+        events: Arc::clone(&events),
+        gate: Arc::clone(&gate),
+    });
+    let mut harness = plain_harness();
+    harness.start_with_factories(&fixture, factories);
+    harness.wait_ready();
+
+    let client = IpcClient::new(fixture.app.socket_path().expect("socket"));
+    let request = Request {
+        module: TestConfig::ID.as_str().to_owned(),
+        method: "hold".to_owned(),
+        params: serde_json::Value::Null,
+    };
+    let caller = std::thread::spawn(move || client.request(&request));
+    wait_for_event(&events, "handler-entered");
+
+    harness.handle.request_shutdown();
+    assert!(harness.wait_exit(), "the runner must finish");
+    let outcome = harness.wait_teardown();
+    assert_eq!(outcome.result, TeardownResult::Clean, "{outcome}");
+    let _ = caller.join().expect("the client thread");
+
+    let events = event_log(&events);
+    let entered = events.iter().position(|event| event == "handler-entered").expect("entered");
+    let begin = events.iter().position(|event| event == "begin").expect("begin");
+    let done = events.iter().position(|event| event == "handler-done").expect("done");
+    assert!(entered < begin, "{events:?}");
+    assert!(
+        begin < done,
+        "begin-shutdown must wake the handler before its join: {events:?}"
+    );
+}
+
+#[test]
+fn a_blocked_wallpapers_native_call_is_unacknowledged_until_released() {
+    let fixture = fixture();
+    fixture.write(
+        "wallpapers.jsonc",
+        "{ \"enabled\": false, \"list\": [\"wall.png\"] }\n",
+    );
+    let image = fixture.paths.directory().join("wall.png");
+    write_wallpaper_png(&image);
+
+    let desktop = FakeDesktop::with_snapshot(wallpaper_snapshot());
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let backend: Arc<dyn GuardedDesktopBackend> =
+        Arc::new(BlockingDesktop::new(desktop, entered_tx, release_rx));
+    let service = wallpapers_service(&fixture, backend);
+    let factory = WallpapersFactory::with_service(Arc::clone(&service));
+
+    let mut harness = Harness::with_teardown(
+        FakePermissions::new(PermissionStatus::Granted),
+        Arc::new(InlineMain),
+        Arc::new(FakeCommands::default()),
+        Arc::new(RecordingWindows::default()),
+        real_teardown(),
+    );
+    harness.start_with_factories(&fixture, ModuleFactories::new().with(factory));
+    harness.wait_ready();
+    assert!(
+        harness
+            .handle
+            .status()
+            .modules
+            .iter()
+            .any(|module| module.id == "wallpapers" && module.state == ModuleState::Disabled),
+        "the disabled module is registered without starting rotation"
+    );
+
+    let params = WallpapersSetParams {
+        config_directory: fixture.paths.directory().display().to_string(),
+        selection: WallpaperSelection::File {
+            path: image.display().to_string(),
+        },
+        screen: WallpaperScreen::All,
+    };
+    let caller = {
+        let service = Arc::clone(&service);
+        std::thread::spawn(move || service.set_with_budget(&params, Duration::from_secs(30)))
+    };
+    entered_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the blocked native call was entered");
+
+    harness.handle.request_shutdown();
+    assert!(harness.wait_exit(), "the runner must still finish");
+    let outcome = harness.wait_teardown();
+    assert!(
+        outcome.unacknowledged.iter().any(|owner| owner == "factory:wallpapers"),
+        "a live native call must be named instead of pretending teardown finished: {outcome}"
+    );
+    harness.wait_terminal();
+
+    release_tx.send(()).expect("release the native call");
+    let _ = caller.join().expect("the wallpaper caller thread");
+
+    // Once the issued call and the coordinator return, the same factory drain
+    // acknowledges. The wait advances instantly, so no test sleeps through the
+    // real owner budget.
+    let wait = AdvancingWait::new();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if service.finish_shutdown(&wait) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the wallpaper service never acknowledged after release"
+        );
+        std::thread::yield_now();
+    }
+}
+
+#[test]
+fn an_enabled_wallpapers_module_applies_one_initial_job_without_a_timer() {
+    let fixture = fixture();
+    fixture.write(
+        "wallpapers.jsonc",
+        "{ \"enabled\": true, \"list\": [\"wall.png\"] }\n",
+    );
+    let image = fixture.paths.directory().join("wall.png");
+    write_wallpaper_png(&image);
+
+    let desktop = FakeDesktop::with_snapshot(wallpaper_snapshot());
+    let (applied_tx, applied_rx) = mpsc::channel();
+    let backend: Arc<dyn GuardedDesktopBackend> =
+        Arc::new(SignalingDesktop::new(desktop, applied_tx));
+    let factory = WallpapersFactory::with_service(wallpapers_service(&fixture, backend));
+    let mut harness = plain_harness();
+    harness.start_with_factories(&fixture, ModuleFactories::new().with(factory));
+    harness.wait_ready();
+    assert!(
+        harness
+            .handle
+            .status()
+            .modules
+            .iter()
+            .any(|module| module.id == "wallpapers" && module.state == ModuleState::Running),
+        "an accepted enabled file starts the rotation module"
+    );
+    applied_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the first rotation job applied the wallpaper");
+
+    harness.handle.request_shutdown();
+    assert!(harness.wait_exit());
+    harness.wait_teardown();
+    assert!(
+        applied_rx.try_recv().is_err(),
+        "interval zero has one initial job and no timer retry"
+    );
+}
+
+#[test]
+fn the_host_socket_merges_the_wallpapers_route() {
+    let fixture = fixture();
+    fixture.write(
+        "wallpapers.jsonc",
+        "{ \"enabled\": false, \"list\": [\"wall.png\"] }\n",
+    );
+    let image = fixture.paths.directory().join("wall.png");
+    write_wallpaper_png(&image);
+
+    let desktop = FakeDesktop::with_snapshot(wallpaper_snapshot());
+    let backend: Arc<dyn GuardedDesktopBackend> = Arc::new(desktop.clone());
+    let factory = WallpapersFactory::with_service(wallpapers_service(&fixture, backend));
+    let mut harness = plain_harness();
+    harness.start_with_factories(&fixture, ModuleFactories::new().with(factory));
+    harness.wait_ready();
+
+    let client = IpcClient::with_options(
+        fixture.app.socket_path().expect("socket"),
+        RetryPolicy::single(),
+        Duration::from_secs(30),
+    );
+    let params = WallpapersSetParams {
+        config_directory: fixture.paths.directory().display().to_string(),
+        selection: WallpaperSelection::File {
+            path: image.display().to_string(),
+        },
+        screen: WallpaperScreen::All,
+    };
+    let request = Request::new("wallpapers", "set", &params).expect("request");
+    let outcome = match client.request(&request).expect("wallpapers route") {
+        Response::Ok { data } => {
+            serde_json::from_value::<WallpapersSetOutcome>(data).expect("typed outcome")
+        }
+        Response::Error { error } => panic!("unexpected wire error: {error:?}"),
+    };
+    assert_eq!(outcome.status, WallpapersOutcomeStatus::FullSuccess);
+    assert_eq!(desktop.calls().len(), 1);
+
+    harness.handle.request_shutdown();
+    assert!(harness.wait_exit());
+    harness.wait_teardown();
+}
+
+// ---------------------------------------------------------------------------
+// `wallpapers.set` wire round trips through the real server and real client
+// ---------------------------------------------------------------------------
+
+fn two_display_snapshot() -> DisplaySnapshot {
+    DisplaySnapshot::new(vec![
+        DisplayEntry {
+            id: DisplayId::new(1),
+            frame: DisplayFrame { width: 160.0, height: 90.0 },
+            scale: 1.0,
+        },
+        DisplayEntry {
+            id: DisplayId::new(2),
+            frame: DisplayFrame { width: 120.0, height: 80.0 },
+            scale: 2.0,
+        },
+    ])
+}
+
+/// A running host with the real wallpapers route over a temporary socket.
+struct WallpaperWire {
+    fixture: Fixture,
+    harness: Harness,
+    desktop: FakeDesktop,
+    service: Arc<WallpapersService>,
+    client: IpcClient,
+    image: std::path::PathBuf,
+}
+
+impl WallpaperWire {
+    fn start(config: &str) -> Self {
+        let fixture = fixture();
+        fixture.write("wallpapers.jsonc", config);
+        let image = fixture.paths.directory().join("wall.png");
+        write_wallpaper_png(&image);
+        let desktop = FakeDesktop::with_snapshot(two_display_snapshot());
+        let backend: Arc<dyn GuardedDesktopBackend> = Arc::new(desktop.clone());
+        let service = wallpapers_service(&fixture, backend);
+        let factory = WallpapersFactory::with_service(Arc::clone(&service));
+        let mut harness = plain_harness();
+        harness.start_with_factories(&fixture, ModuleFactories::new().with(factory));
+        harness.wait_ready();
+        // The exported budget must be usable through the real client.
+        let client = IpcClient::with_options(
+            fixture.app.socket_path().expect("socket"),
+            RetryPolicy::legacy(),
+            WALLPAPERS_CLIENT_BUDGET,
+        );
+        Self {
+            fixture,
+            harness,
+            desktop,
+            service,
+            client,
+            image,
+        }
+    }
+
+    fn disabled() -> Self { Self::start("{ \"enabled\": false, \"list\": [\"wall.png\"] }\n") }
+
+    fn params(&self, selection: WallpaperSelection) -> WallpapersSetParams {
+        WallpapersSetParams {
+            config_directory: self.fixture.paths.directory().display().to_string(),
+            selection,
+            screen: WallpaperScreen::All,
+        }
+    }
+
+    fn file(&self) -> WallpaperSelection {
+        WallpaperSelection::File {
+            path: self.image.display().to_string(),
+        }
+    }
+
+    /// Sends one request through the socket; transport must hand back `Ok`
+    /// data, never a wire error.
+    fn wire(&self, params: &WallpapersSetParams) -> WallpapersSetOutcome {
+        let request = Request::new("wallpapers", "set", params).expect("request");
+        match self.client.request(&request).expect("transport") {
+            Response::Ok { data } => {
+                assert!(
+                    data.get("error").is_none(),
+                    "an outcome must not smuggle a wire error: {data}"
+                );
+                serde_json::from_value(data).expect("typed outcome")
+            }
+            Response::Error { error } => panic!("a handled outcome became a wire error: {error:?}"),
+        }
+    }
+
+    /// The service-produced outcome, computed directly on the same service
+    /// before the wire call, with the same scripted fake and inputs.
+    fn expected(&self, params: &WallpapersSetParams) -> WallpapersSetOutcome {
+        self.service.set(params)
+    }
+
+    fn roundtrip(
+        &self,
+        params: &WallpapersSetParams,
+    ) -> (WallpapersSetOutcome, WallpapersSetOutcome) {
+        let expected = self.expected(params);
+        let actual = self.wire(params);
+        (actual, expected)
+    }
+
+    fn finish(self) {
+        self.harness.handle.request_shutdown();
+        assert!(self.harness.wait_exit());
+        self.harness.wait_teardown();
+    }
+}
+
+const fn applied(display: u32) -> WallpapersTargetOutcome {
+    WallpapersTargetOutcome {
+        display,
+        target: WallpapersTargetResult::Applied,
+    }
+}
+
+#[test]
+fn wire_roundtrip_full_success_over_the_exported_client_budget() {
+    let wire = WallpaperWire::disabled();
+    let params = wire.params(wire.file());
+    let (actual, expected) = wire.roundtrip(&params);
+    assert_eq!(actual, expected);
+    assert_eq!(actual.status, WallpapersOutcomeStatus::FullSuccess);
+    assert_eq!(actual.cause, None);
+    assert_eq!(actual.applied, [1, 2]);
+    assert!(
+        actual.failed.is_empty() && actual.not_attempted.is_empty() && actual.unknown.is_empty()
+    );
+    assert_eq!(actual.targets, [applied(1), applied(2)]);
+    assert_eq!(
+        wire.desktop.calls().len(),
+        4,
+        "two direct and two wire native sets"
+    );
+    wire.finish();
+}
+
+#[test]
+fn wire_roundtrip_partial_with_one_known_native_failure() {
+    let wire = WallpaperWire::disabled();
+    wire.desktop.set_outcome(
+        DisplayId::new(2),
+        Err(DesktopError::Native {
+            display: DisplayId::new(2),
+            message: "rejected".to_owned(),
+        }),
+    );
+    let params = wire.params(wire.file());
+    let (actual, expected) = wire.roundtrip(&params);
+    assert_eq!(actual, expected);
+    assert_eq!(actual.status, WallpapersOutcomeStatus::Partial);
+    assert!(
+        matches!(actual.cause, Some(WallpapersOutcomeCause::Native { .. })),
+        "{actual:?}"
+    );
+    assert_eq!(actual.applied, [1]);
+    assert_eq!(actual.failed, [2]);
+    assert!(actual.not_attempted.is_empty() && actual.unknown.is_empty());
+    assert_eq!(actual.targets.len(), 2);
+    assert_eq!(actual.targets[0], applied(1));
+    assert_eq!(actual.targets[1].display, 2);
+    assert!(
+        matches!(
+            &actual.targets[1].target,
+            WallpapersTargetResult::Failed { reason: WallpapersTargetFailure::Native, message }
+                if message.contains("rejected")
+        ),
+        "{:?}",
+        actual.targets[1]
+    );
+    wire.finish();
+}
+
+#[test]
+fn wire_roundtrip_unknown_target_after_an_issued_set() {
+    let wire = WallpaperWire::disabled();
+    wire.desktop.set_outcome(
+        DisplayId::new(2),
+        Err(DesktopError::Unknown { operation: "desktop image set" }),
+    );
+    let params = wire.params(wire.file());
+    let (actual, expected) = wire.roundtrip(&params);
+    assert_eq!(actual, expected);
+    assert_eq!(actual.status, WallpapersOutcomeStatus::Uncertain);
+    assert_eq!(actual.applied, [1]);
+    assert_eq!(actual.unknown, [2]);
+    assert!(actual.failed.is_empty() && actual.not_attempted.is_empty());
+    assert_eq!(actual.targets[0], applied(1));
+    assert_eq!(actual.targets[1].display, 2);
+    assert!(
+        matches!(actual.targets[1].target, WallpapersTargetResult::Unknown {
+            reason: WallpapersTargetFailure::Unknown,
+            ..
+        }),
+        "{:?}",
+        actual.targets[1]
+    );
+    wire.finish();
+}
+
+#[test]
+fn wire_roundtrip_cancelled_before_any_native_call() {
+    let wire = WallpaperWire::disabled();
+    // Host cancellation closes admission while the socket keeps serving.
+    wire.service.begin_shutdown();
+    let params = wire.params(wire.file());
+    let (actual, expected) = wire.roundtrip(&params);
+    assert_eq!(actual, expected);
+    assert_eq!(actual.status, WallpapersOutcomeStatus::Cancelled);
+    assert_eq!(actual.cause, Some(WallpapersOutcomeCause::Cancelled));
+    assert!(actual.targets.is_empty() && actual.applied.is_empty());
+    assert!(wire.desktop.calls().is_empty(), "no native call was issued");
+    wire.finish();
+}
+
+#[test]
+fn wire_roundtrip_different_config_directory_is_refused() {
+    let wire = WallpaperWire::disabled();
+    let other = tempfile::tempdir().expect("other config directory");
+    let mut params = wire.params(wire.file());
+    params.config_directory = other.path().display().to_string();
+    let (actual, expected) = wire.roundtrip(&params);
+    assert_eq!(actual, expected);
+    assert_eq!(actual.status, WallpapersOutcomeStatus::Failure);
+    match &actual.cause {
+        Some(WallpapersOutcomeCause::DifferentConfig { host, requested }) => {
+            assert_ne!(host, requested);
+        }
+        other => panic!("expected DifferentConfig, got {other:?}"),
+    }
+    assert!(actual.targets.is_empty());
+    assert!(wire.desktop.calls().is_empty());
+    wire.finish();
+}
+
+#[test]
+fn wire_roundtrip_no_accepted_configuration() {
+    let wire = WallpaperWire::start("{ \"enabled\": ");
+    let params = wire.params(WallpaperSelection::Random);
+    let (actual, expected) = wire.roundtrip(&params);
+    assert_eq!(actual, expected);
+    assert_eq!(actual.status, WallpapersOutcomeStatus::Failure);
+    assert_eq!(actual.cause, Some(WallpapersOutcomeCause::NoAcceptedConfig));
+    assert!(actual.targets.is_empty());
+    assert!(wire.desktop.calls().is_empty());
+    wire.finish();
+}
+
+#[test]
+fn wire_roundtrip_invalid_explicit_selection_and_source() {
+    let wire = WallpaperWire::disabled();
+    let out_of_range = wire.params(WallpaperSelection::Collection { index: 9 });
+    let (actual, expected) = wire.roundtrip(&out_of_range);
+    assert_eq!(actual, expected);
+    assert_eq!(actual.status, WallpapersOutcomeStatus::Failure);
+    assert!(
+        matches!(
+            actual.cause,
+            Some(WallpapersOutcomeCause::InvalidSelection { .. })
+        ),
+        "{actual:?}"
+    );
+
+    let relative = wire.params(WallpaperSelection::File {
+        path: "relative.png".to_owned(),
+    });
+    let (actual, expected) = wire.roundtrip(&relative);
+    assert_eq!(actual, expected);
+    assert_eq!(actual.status, WallpapersOutcomeStatus::Failure);
+    assert!(actual.cause.is_some() && actual.targets.is_empty());
+
+    let missing = wire.params(WallpaperSelection::File {
+        path: wire.fixture.root().join("absent.png").display().to_string(),
+    });
+    let (actual, expected) = wire.roundtrip(&missing);
+    assert_eq!(actual, expected);
+    assert_eq!(actual.status, WallpapersOutcomeStatus::Failure);
+    assert!(actual.cause.is_some() && actual.targets.is_empty());
+    assert!(wire.desktop.calls().is_empty(), "no refusal reached the desktop");
+    wire.finish();
+}
+
+#[test]
+fn wallpaper_outcomes_leave_the_sdk_wire_error_shape_unchanged() {
+    use stache_sdk::ipc::WireErrorKind;
+
+    let wire = WallpaperWire::disabled();
+    // A genuine wire error from the same route stays `{kind, message}` only.
+    let bad =
+        Request::new("wallpapers", "set", serde_json::json!({ "bogus": 1 })).expect("request");
+    match wire.client.request(&bad).expect("transport") {
+        Response::Error { error } => {
+            assert_eq!(error.kind, WireErrorKind::InvalidParams);
+            let value = serde_json::to_value(&error).expect("wire error");
+            let mut keys: Vec<&str> =
+                value.as_object().expect("object").keys().map(String::as_str).collect();
+            keys.sort_unstable();
+            assert_eq!(keys, ["kind", "message"]);
+        }
+        Response::Ok { data } => panic!("invalid params must be a wire error, got {data}"),
+    }
+    // A handled refusal is Ok data whose top-level keys are the outcome fields.
+    let refused = wire.params(WallpaperSelection::Collection { index: 9 });
+    let request = Request::new("wallpapers", "set", &refused).expect("request");
+    match wire.client.request(&request).expect("transport") {
+        Response::Ok { data } => {
+            let mut keys: Vec<&str> =
+                data.as_object().expect("object").keys().map(String::as_str).collect();
+            keys.sort_unstable();
+            assert_eq!(keys, [
+                "applied",
+                "cause",
+                "failed",
+                "notAttempted",
+                "status",
+                "targets",
+                "unknown"
+            ]);
+        }
+        Response::Error { error } => panic!("a handled refusal became a wire error: {error:?}"),
+    }
+    wire.finish();
+}
+
+#[test]
+fn the_builtin_five_second_client_default_is_unchanged_and_below_the_wallpaper_budget() {
+    assert_eq!(stache_sdk::ipc::IO_TIMEOUT, Duration::from_secs(5));
+    assert!(WALLPAPERS_CLIENT_BUDGET > stache_sdk::ipc::IO_TIMEOUT);
+}
+
+// ---------------------------------------------------------------------------
+// CLI executor against the real socket, real server and real service
+// ---------------------------------------------------------------------------
+
+fn socket_transport() -> Arc<dyn SetTransport> {
+    // One attempt, no retry sleep; the response wait is generous but never
+    // reached because every scenario answers or closes promptly.
+    Arc::new(IpcTransport::with_options(
+        RetryPolicy::single(),
+        Duration::from_secs(30),
+    ))
+}
+
+/// Runs the composed `stache` CLI with the wallpaper contribution.
+///
+/// `local` is the fake desktop a standalone fallback would use; the real
+/// native adapter is never constructed.
+fn run_wallpaper_cli(
+    root: &std::path::Path,
+    catalog: &ConfigCatalog,
+    config_dir: &std::path::Path,
+    local: &FakeDesktop,
+    transport: Arc<dyn SetTransport>,
+    cwd: &std::path::Path,
+    args: &[&str],
+) -> (ExitCode, String, String) {
+    let config_env = ConfigEnvironment {
+        xdg_config_home: None,
+        home: Some(root.to_path_buf()),
+    };
+    let app_env = AppEnvironment {
+        home: Some(root.to_path_buf()),
+        temporary: Some(root.to_path_buf()),
+    };
+    let desktop: Arc<dyn GuardedDesktopBackend> = Arc::new(local.clone());
+    let mut env = WallpapersCliEnv::new(
+        config_env.clone(),
+        app_env.clone(),
+        desktop,
+        Arc::new(|json: &str, _ansi: bool| json.to_owned()),
+        never_cancelled(),
+    );
+    env.transport = transport;
+    let cwd = cwd.to_path_buf();
+    env.current_dir = Arc::new(move || Ok(cwd.clone()));
+    let mut commands = CommandCatalog::new();
+    commands.add(wallpaper_contribution(env)).expect("wallpaper command");
+    let mut command_line: Vec<OsString> = vec!["stache".into(), "-c".into(), config_dir.into()];
+    command_line.push("wallpaper".into());
+    command_line.extend(args.iter().map(OsString::from));
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let code = stache_cli::run_with_io(
+        command_line,
+        catalog,
+        &commands,
+        &CliEnvironment::new(config_env, app_env),
+        false,
+        &mut out,
+        &mut err,
+    );
+    (
+        code,
+        String::from_utf8(out).expect("utf-8 stdout"),
+        String::from_utf8(err).expect("utf-8 stderr"),
+    )
+}
+
+impl WallpaperWire {
+    /// Runs the CLI against this host with a fresh local fake desktop.
+    fn cli(&self, args: &[&str]) -> (ExitCode, String, String, FakeDesktop) {
+        let local = FakeDesktop::with_snapshot(two_display_snapshot());
+        let (code, out, err) = run_wallpaper_cli(
+            self.fixture.root(),
+            &self.fixture.catalog,
+            self.fixture.paths.directory(),
+            &local,
+            socket_transport(),
+            self.fixture.paths.directory(),
+            args,
+        );
+        (code, out, err, local)
+    }
+
+    /// Stops this host and hands back its fixture (and socket path).
+    fn stop(self) -> Fixture {
+        self.harness.handle.request_shutdown();
+        assert!(self.harness.wait_exit());
+        self.harness.wait_teardown();
+        self.fixture
+    }
+}
+
+const SUCCESS_LINE: &str = "Wallpaper set successfully.\n";
+
+#[test]
+fn cli_set_succeeds_over_the_real_socket_while_the_module_is_disabled() {
+    let wire = WallpaperWire::disabled();
+    let image = wire.image.display().to_string();
+    let (code, out, err, local) = wire.cli(&["set", &image]);
+    assert_eq!(
+        (code, out.as_str(), err.as_str()),
+        (ExitCode::SUCCESS, SUCCESS_LINE, "")
+    );
+    assert_eq!(wire.desktop.calls().len(), 2, "the host applied both displays");
+    assert!(local.calls().is_empty(), "no local application");
+    // A bare existing filename in the invocation cwd (the config directory
+    // here) is the actual file and is sent absolute.
+    let (code, out, _, local) = wire.cli(&["set", "wall.png", "--screen", "main"]);
+    assert_eq!((code, out.as_str()), (ExitCode::SUCCESS, SUCCESS_LINE));
+    assert_eq!(wire.desktop.calls().len(), 3);
+    assert!(local.calls().is_empty());
+    let status = wire.harness.handle.status();
+    assert!(
+        status
+            .modules
+            .iter()
+            .any(|module| module.id == "wallpapers" && module.state == ModuleState::Disabled),
+        "set never enables the module"
+    );
+    let service = wire.service.status();
+    assert!(
+        service.session.is_none(),
+        "no rotation session, timer or deadline"
+    );
+    wire.finish();
+}
+
+#[test]
+fn cli_set_works_for_a_paused_module_without_lifecycle_changes() {
+    let wire = WallpaperWire::start("{ \"enabled\": true, \"list\": [\"wall.png\"] }\n");
+    // The enabled interval-zero module applies once on start.
+    wait_for(&wire.harness.handle, "wallpapers running", |status| {
+        status
+            .modules
+            .iter()
+            .any(|module| module.id == "wallpapers" && module.state == ModuleState::Running)
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while wire.desktop.calls().len() < 2 {
+        assert!(Instant::now() < deadline, "the initial job never applied");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    wire.harness.handle.pause("wallpapers");
+    wait_for(&wire.harness.handle, "wallpapers paused", |status| {
+        status
+            .modules
+            .iter()
+            .any(|module| module.id == "wallpapers" && module.state == ModuleState::Paused)
+    });
+    let before = wire.desktop.calls().len();
+    let (code, out, err, local) = wire.cli(&["set", "--random", "--screen", "main"]);
+    assert_eq!(
+        (code, out.as_str(), err.as_str()),
+        (ExitCode::SUCCESS, SUCCESS_LINE, "")
+    );
+    assert_eq!(wire.desktop.calls().len(), before + 1);
+    assert!(local.calls().is_empty());
+    let status = wire.harness.handle.status();
+    assert!(
+        status
+            .modules
+            .iter()
+            .any(|module| module.id == "wallpapers" && module.state == ModuleState::Paused),
+        "set neither resumes nor restarts the module"
+    );
+    assert!(
+        wire.service.status().session.is_none(),
+        "no session, timer or deadline"
+    );
+    wire.finish();
+}
+
+#[test]
+fn cli_refuses_a_different_config_directory_and_accepts_an_alias() {
+    let wire = WallpaperWire::disabled();
+    let image = wire.image.display().to_string();
+    let other = wire.fixture.root().join("other-config");
+    fs::create_dir_all(&other).expect("other config");
+    for directory in [other.clone(), other.join("not-created-yet")] {
+        let local = FakeDesktop::with_snapshot(two_display_snapshot());
+        let (code, out, err) = run_wallpaper_cli(
+            wire.fixture.root(),
+            &wire.fixture.catalog,
+            &directory,
+            &local,
+            socket_transport(),
+            wire.fixture.root(),
+            &["set", &image],
+        );
+        assert_eq!(code, ExitCode::FAILURE);
+        assert_eq!(out, "");
+        assert!(
+            err.starts_with("stache: Wallpaper error: Running host uses config directory \""),
+            "{err}"
+        );
+        assert!(
+            err.ends_with(". Use the same config directory or stop that host.\n"),
+            "{err}"
+        );
+        assert!(
+            local.calls().is_empty(),
+            "a live different-config host never falls back"
+        );
+    }
+    assert!(wire.desktop.calls().is_empty(), "the refusal changed nothing");
+
+    // A symlink alias of the same directory is the same host.
+    let alias = wire.fixture.root().join("alias");
+    std::os::unix::fs::symlink(wire.fixture.paths.directory(), &alias).expect("alias");
+    let local = FakeDesktop::with_snapshot(two_display_snapshot());
+    let (code, out, err) = run_wallpaper_cli(
+        wire.fixture.root(),
+        &wire.fixture.catalog,
+        &alias,
+        &local,
+        socket_transport(),
+        wire.fixture.root(),
+        &["set", &image],
+    );
+    assert_eq!(
+        (code, out.as_str(), err.as_str()),
+        (ExitCode::SUCCESS, SUCCESS_LINE, "")
+    );
+    assert_eq!(wire.desktop.calls().len(), 2);
+    assert!(local.calls().is_empty());
+    wire.finish();
+}
+
+#[test]
+fn cli_reports_no_accepted_config_then_works_after_a_fix_without_restart() {
+    let wire = WallpaperWire::start("{ \"enabled\": ");
+    let (code, out, err, local) = wire.cli(&["set", "--random"]);
+    assert_eq!(code, ExitCode::FAILURE);
+    assert_eq!(out, "");
+    assert_eq!(
+        err,
+        "stache: Wallpaper error: No accepted Wallpapers configuration is available. Fix wallpapers.jsonc and reload, then retry.\n"
+    );
+    assert!(local.calls().is_empty() && wire.desktop.calls().is_empty());
+
+    wire.fixture.write(
+        "wallpapers.jsonc",
+        "{ \"enabled\": false, \"list\": [\"wall.png\"] }\n",
+    );
+    let report = wire.client.reload().expect("reload");
+    assert!(!report.has_failures(), "{report:?}");
+    let (code, out, err, local) = wire.cli(&["set", "WALL"]);
+    assert_eq!(
+        (code, out.as_str(), err.as_str()),
+        (ExitCode::SUCCESS, SUCCESS_LINE, "")
+    );
+    assert_eq!(wire.desktop.calls().len(), 2);
+    assert!(local.calls().is_empty());
+    wire.finish();
+}
+
+#[test]
+fn cli_name_resolves_against_the_last_good_accepted_pool_after_a_rejected_reload() {
+    let wire =
+        WallpaperWire::start("{ \"enabled\": false, \"list\": [\"wall.png\", \"second.png\"] }\n");
+    write_wallpaper_png(&wire.fixture.paths.directory().join("second.png"));
+    // Disk is now malformed; the host keeps its last accepted pool.
+    wire.fixture.write("wallpapers.jsonc", "{ \"list\": [");
+    let report = wire.client.reload().expect("reload");
+    assert!(report.has_failures(), "the malformed file is rejected");
+    // Nothing is a bare file in the cwd called `second`, so it is a name.
+    let (code, out, err, local) = wire.cli(&["set", "Second"]);
+    assert_eq!(
+        (code, out.as_str(), err.as_str()),
+        (ExitCode::SUCCESS, SUCCESS_LINE, "")
+    );
+    assert_eq!(wire.desktop.calls().len(), 2);
+    assert!(
+        local.calls().is_empty(),
+        "the CLI never reread the malformed disk file"
+    );
+
+    let (code, _, err, _) = wire.cli(&["set", "absent-name"]);
+    assert_eq!(code, ExitCode::FAILURE);
+    assert!(err.contains("(invalid-selection)"), "{err}");
+    wire.finish();
+}
+
+#[test]
+fn cli_renders_a_partial_and_an_uncertain_host_outcome() {
+    let wire = WallpaperWire::disabled();
+    let image = wire.image.display().to_string();
+    wire.desktop.set_outcome(
+        DisplayId::new(2),
+        Err(DesktopError::Native {
+            display: DisplayId::new(2),
+            message: "rejected".to_owned(),
+        }),
+    );
+    let (code, out, err, local) = wire.cli(&["set", &image]);
+    assert_eq!(code, ExitCode::FAILURE);
+    assert_eq!(out, "", "never the success line");
+    assert_eq!(
+        err,
+        "stache: Wallpaper error: Wallpaper application partial: applied=[1]; failed=[2]; not-attempted=[]; unknown=[]. Check the desktop before retrying; no automatic retry was attempted.\n"
+    );
+    assert!(local.calls().is_empty());
+
+    wire.desktop.set_outcome(
+        DisplayId::new(2),
+        Err(DesktopError::Unknown { operation: "desktop image set" }),
+    );
+    let (code, out, err, _) = wire.cli(&["set", &image]);
+    assert_eq!((code, out.as_str()), (ExitCode::FAILURE, ""));
+    assert_eq!(
+        err,
+        "stache: Wallpaper error: Wallpaper application uncertain: applied=[1]; failed=[]; not-attempted=[]; unknown=[2]. Check the desktop before retrying; no automatic retry was attempted.\n"
+    );
+    wire.finish();
+}
+
+#[test]
+fn cli_never_falls_back_after_a_host_restart_with_a_different_config() {
+    let wire = WallpaperWire::disabled();
+    let image = wire.image.display().to_string();
+    let first_config = wire.fixture.paths.directory().to_path_buf();
+    let (code, out, _, _) = wire.cli(&["set", &image]);
+    assert_eq!((code, out.as_str()), (ExitCode::SUCCESS, SUCCESS_LINE));
+
+    // Host A stops and host B starts on the same socket with another config
+    // directory, between the first request and the second.
+    let mut fixture = wire.stop();
+    let second_config = fixture.root().join("config-b");
+    fixture.paths = ConfigPaths::new(&second_config);
+    fixture.write("wallpapers.jsonc", "{ \"enabled\": false }\n");
+    let desktop = FakeDesktop::with_snapshot(two_display_snapshot());
+    let backend: Arc<dyn GuardedDesktopBackend> = Arc::new(desktop.clone());
+    let factory = WallpapersFactory::with_service(wallpapers_service(&fixture, backend));
+    let mut harness = plain_harness();
+    harness.start_with_factories(&fixture, ModuleFactories::new().with(factory));
+    harness.wait_ready();
+
+    let local = FakeDesktop::with_snapshot(two_display_snapshot());
+    let (code, out, err) = run_wallpaper_cli(
+        fixture.root(),
+        &fixture.catalog,
+        &first_config,
+        &local,
+        socket_transport(),
+        fixture.root(),
+        &["set", &image],
+    );
+    assert_eq!(code, ExitCode::FAILURE);
+    assert_eq!(out, "");
+    assert!(err.contains("Running host uses config directory"), "{err}");
+    assert!(
+        desktop.calls().is_empty() && local.calls().is_empty(),
+        "zero application anywhere"
+    );
+    harness.handle.request_shutdown();
+    assert!(harness.wait_exit());
+    harness.wait_teardown();
+}
+
+/// A fake peer that accepts exactly one connection and answers with `reply`.
+fn raw_peer(
+    fixture: &Fixture,
+    reply: Option<&'static [u8]>,
+) -> (std::thread::JoinHandle<()>, std::os::unix::net::UnixListener) {
+    use std::io::{BufRead, BufReader, Write};
+
+    let socket = fixture.app.socket_path().expect("socket");
+    fs::create_dir_all(socket.parent().expect("runtime directory")).expect("runtime directory");
+    let listener = std::os::unix::net::UnixListener::bind(&socket).expect("bind fake peer");
+    let observer = listener.try_clone().expect("observer");
+    let handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("one connection");
+        let mut line = String::new();
+        BufReader::new(&mut stream).read_line(&mut line).expect("request line");
+        assert!(line.ends_with('\n'), "a complete request was sent");
+        if let Some(reply) = reply {
+            stream.write_all(reply).expect("reply");
+        }
+        // Dropping the stream closes it: a dropped or truncated response.
+    });
+    (handle, observer)
+}
+
+#[test]
+fn cli_treats_a_dropped_partial_or_malformed_response_as_uncertain_with_no_fallback() {
+    const UNCERTAIN: &str = "stache: Wallpaper error: Wallpaper outcome is unknown after a send or response failure. Check the desktop before retrying; no automatic retry was attempted.\n";
+    let replies: [Option<&'static [u8]>; 4] = [
+        None,
+        Some(br#"{"status":"ok","da"#),
+        Some(b"{\"status\":\"ok\",\"data\":{\"x\":1}}\n"),
+        Some(b"not json at all\n"),
+    ];
+    for reply in replies {
+        let fixture = fixture();
+        write_wallpaper_png(&fixture.root().join("w.png"));
+        let (peer, observer) = raw_peer(&fixture, reply);
+        let local = FakeDesktop::with_snapshot(two_display_snapshot());
+        let (code, out, err) = run_wallpaper_cli(
+            fixture.root(),
+            &fixture.catalog,
+            fixture.paths.directory(),
+            &local,
+            socket_transport(),
+            fixture.root(),
+            &["set", "w.png"],
+        );
+        peer.join().expect("fake peer");
+        assert_eq!(code, ExitCode::FAILURE, "{reply:?}");
+        assert_eq!(out, "");
+        assert_eq!(err, UNCERTAIN, "{reply:?}");
+        assert!(local.calls().is_empty(), "zero local apply after {reply:?}");
+        assert_eq!(local.guarded_snapshot_reads(), 0);
+        // Exactly one connection: a second attempt would be accepted here.
+        observer.set_nonblocking(true).expect("nonblocking");
+        assert!(
+            matches!(observer.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+            "no retry connection"
+        );
+    }
+}
+
+#[test]
+fn cli_absent_socket_applies_once_locally_and_a_later_host_initial_job_may_override_it() {
+    // The documented race: no socket exists while a desktop instance is still
+    // starting, so the CLI applies once locally. The host then runs its normal
+    // initial job and its image is the last one set. No coordination exists.
+    let fixture = fixture();
+    fixture.write(
+        "wallpapers.jsonc",
+        "{ \"enabled\": true, \"list\": [\"pool.png\"] }\n",
+    );
+    let pool = fixture.paths.directory().join("pool.png");
+    write_wallpaper_png(&pool);
+    // A distinct source image so the two cache outputs differ.
+    let cli_image = fixture.root().join("cli.png");
+    let pixels = image::RgbImage::from_fn(8, 8, |_, _| image::Rgb([200, 10, 10]));
+    pixels
+        .write_with_encoder(image::codecs::png::PngEncoder::new(
+            fs::File::create(&cli_image).expect("cli image"),
+        ))
+        .expect("encode");
+
+    let shared = FakeDesktop::with_snapshot(wallpaper_snapshot());
+    let (code, out, err) = run_wallpaper_cli(
+        fixture.root(),
+        &fixture.catalog,
+        fixture.paths.directory(),
+        &shared,
+        socket_transport(),
+        fixture.root(),
+        &["set", "cli.png"],
+    );
+    assert_eq!(
+        (code, out.as_str(), err.as_str()),
+        (ExitCode::SUCCESS, SUCCESS_LINE, "")
+    );
+    let local_calls = shared.calls();
+    assert_eq!(local_calls.len(), 1, "exactly one local mutation");
+
+    let backend: Arc<dyn GuardedDesktopBackend> = Arc::new(shared.clone());
+    let factory = WallpapersFactory::with_service(wallpapers_service(&fixture, backend));
+    let mut harness = plain_harness();
+    harness.start_with_factories(&fixture, ModuleFactories::new().with(factory));
+    harness.wait_ready();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while shared.calls().len() < 2 {
+        assert!(Instant::now() < deadline, "the host's initial job never ran");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let calls = shared.calls();
+    assert_eq!(calls.len(), 2);
+    assert_ne!(
+        calls[0].image, calls[1].image,
+        "the host initial image overrode the CLI image"
+    );
+    harness.handle.request_shutdown();
+    assert!(harness.wait_exit());
+    harness.wait_teardown();
+}
+
+struct ManualRuntimeClock(Mutex<Instant>);
+
+impl ManualRuntimeClock {
+    fn advance(&self, by: Duration) { *self.0.lock().expect("clock") += by; }
+}
+
+impl RuntimeClock for ManualRuntimeClock {
+    fn now(&self) -> Instant { *self.0.lock().expect("clock") }
+}
+
+/// Blocks its first `prepare`, then behaves like the real processor.
+struct FirstCallBlocks {
+    entered: Mutex<Option<mpsc::Sender<()>>>,
+    release: Mutex<Option<mpsc::Receiver<()>>>,
+}
+
+impl Processor for FirstCallBlocks {
+    fn prepare(
+        &self,
+        plan: &[stache_wallpapers::PlannedTarget],
+        paths: &AppPaths,
+        cancel: &stache_sdk::CancellationToken,
+    ) -> Result<stache_wallpapers::Prepared, stache_wallpapers::PrepareError> {
+        let entered = self.entered.lock().expect("entered").take();
+        if let Some(entered) = entered {
+            let _ = entered.send(());
+            let release = self.release.lock().expect("release").take();
+            if let Some(release) = release {
+                let _ = release.recv();
+            }
+        }
+        RealProcessor.prepare(plan, paths, cancel)
+    }
+}
+
+#[test]
+fn cli_deadline_expiry_while_queued_round_trips_over_the_real_socket_with_fake_time() {
+    let fixture = fixture();
+    fixture.write(
+        "wallpapers.jsonc",
+        "{ \"enabled\": false, \"list\": [\"wall.png\"] }\n",
+    );
+    let image = fixture.paths.directory().join("wall.png");
+    write_wallpaper_png(&image);
+    let desktop = FakeDesktop::with_snapshot(two_display_snapshot());
+    let backend: Arc<dyn GuardedDesktopBackend> = Arc::new(desktop.clone());
+    let clock = Arc::new(ManualRuntimeClock(Mutex::new(Instant::now())));
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let service = WallpapersService::new(ServiceConfig {
+        paths: fixture.app.clone(),
+        source: SourceContext::new(fixture.paths.directory(), Some(fixture.root().to_path_buf())),
+        backend,
+        clock: Arc::<ManualRuntimeClock>::clone(&clock),
+        random: Arc::new(SystemRandom),
+        processor: Arc::new(FirstCallBlocks {
+            entered: Mutex::new(Some(entered_tx)),
+            release: Mutex::new(Some(release_rx)),
+        }),
+    })
+    .expect("service");
+    let factory = WallpapersFactory::with_service(Arc::clone(&service));
+    let mut harness = plain_harness();
+    harness.start_with_factories(&fixture, ModuleFactories::new().with(factory));
+    harness.wait_ready();
+
+    // Job one occupies the coordinator inside the processor.
+    let params = WallpapersSetParams {
+        config_directory: fixture.paths.directory().display().to_string(),
+        selection: WallpaperSelection::File {
+            path: image.display().to_string(),
+        },
+        screen: WallpaperScreen::All,
+    };
+    let first = {
+        let service = Arc::clone(&service);
+        std::thread::spawn(move || service.set(&params))
+    };
+    entered_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("job one entered the processor");
+
+    // The CLI request queues behind it.
+    let cli = {
+        let local = FakeDesktop::with_snapshot(two_display_snapshot());
+        let local_check = local.clone();
+        let config = fixture.paths.directory().to_path_buf();
+        let root = fixture.root().to_path_buf();
+        let catalog = fixture.catalog.clone();
+        let handle = std::thread::spawn(move || {
+            run_wallpaper_cli(&root, &catalog, &config, &local, socket_transport(), &root, &[
+                "set", "--random",
+            ])
+        });
+        (handle, local_check)
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !service.status().queued {
+        assert!(Instant::now() < deadline, "the CLI request never queued");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // Jump past the server budget on the fake clock, then let job one finish.
+    clock.advance(stache_wallpapers::WALLPAPERS_SERVER_BUDGET + Duration::from_secs(1));
+    release_tx.send(()).expect("release job one");
+    let (code, out, err) = cli.0.join().expect("cli thread");
+    let _ = first.join().expect("job one");
+    assert_eq!(code, ExitCode::FAILURE);
+    assert_eq!(out, "");
+    assert_eq!(
+        err,
+        "stache: Wallpaper error: Wallpaper deadline expired before native application; no native change was issued. Retry when ready.\n"
+    );
+    assert!(cli.1.calls().is_empty(), "no fallback");
+    assert!(desktop.calls().is_empty(), "no native issuance after expiry");
+    harness.handle.request_shutdown();
+    assert!(harness.wait_exit());
+    harness.wait_teardown();
+}
+
+/// Advances the fake clock inside the processor, as a slow cold job would.
+struct SlowProcessor {
+    clock: Arc<ManualRuntimeClock>,
+    by: Duration,
+}
+
+impl Processor for SlowProcessor {
+    fn prepare(
+        &self,
+        plan: &[stache_wallpapers::PlannedTarget],
+        paths: &AppPaths,
+        cancel: &stache_sdk::CancellationToken,
+    ) -> Result<stache_wallpapers::Prepared, stache_wallpapers::PrepareError> {
+        self.clock.advance(self.by);
+        RealProcessor.prepare(plan, paths, cancel)
+    }
+}
+
+/// Advances the fake clock during each native set, then defers to the fake.
+struct ClockAdvancingDesktop {
+    inner: FakeDesktop,
+    clock: Arc<ManualRuntimeClock>,
+    by: Duration,
+}
+
+impl DesktopBackend for ClockAdvancingDesktop {
+    fn snapshot(&self) -> Result<DisplaySnapshot, DesktopError> { self.inner.snapshot() }
+
+    fn set_image(
+        &self,
+        display: DisplayId,
+        expected: &DisplayEntry,
+        image: &std::path::Path,
+    ) -> Result<(), DesktopError> {
+        self.inner.set_image(display, expected, image)
+    }
+}
+
+impl GuardedDesktopBackend for ClockAdvancingDesktop {
+    fn snapshot_guarded(
+        &self,
+        operation: &DesktopOperation,
+    ) -> Result<DisplaySnapshot, DesktopError> {
+        self.inner.snapshot_guarded(operation)
+    }
+
+    fn set_image_guarded(
+        &self,
+        operation: &DesktopOperation,
+        display: DisplayId,
+        expected: &DisplayEntry,
+        image: &std::path::Path,
+    ) -> Result<(), DesktopError> {
+        // The call is issued first; the deadline passes while it completes,
+        // so the next display's guard observes the expiry.
+        let result = self.inner.set_image_guarded(operation, display, expected, image);
+        self.clock.advance(self.by);
+        result
+    }
+}
+
+/// Runs `set <image>` over the real socket against a host whose service uses
+/// a fake clock, a custom processor and a custom desktop.
+fn cli_set_with_fake_time(
+    make: impl FnOnce(
+        &Arc<ManualRuntimeClock>,
+        &FakeDesktop,
+    ) -> (Arc<dyn Processor>, Arc<dyn GuardedDesktopBackend>),
+) -> (ExitCode, String, String, FakeDesktop, FakeDesktop) {
+    let fixture = fixture();
+    fixture.write(
+        "wallpapers.jsonc",
+        "{ \"enabled\": false, \"list\": [\"wall.png\"] }\n",
+    );
+    let image = fixture.paths.directory().join("wall.png");
+    write_wallpaper_png(&image);
+    let desktop = FakeDesktop::with_snapshot(two_display_snapshot());
+    let clock = Arc::new(ManualRuntimeClock(Mutex::new(Instant::now())));
+    let (processor, backend) = make(&clock, &desktop);
+    let service = WallpapersService::new(ServiceConfig {
+        paths: fixture.app.clone(),
+        source: SourceContext::new(fixture.paths.directory(), Some(fixture.root().to_path_buf())),
+        backend,
+        clock: Arc::<ManualRuntimeClock>::clone(&clock),
+        random: Arc::new(SystemRandom),
+        processor,
+    })
+    .expect("service");
+    let factory = WallpapersFactory::with_service(Arc::clone(&service));
+    let mut harness = plain_harness();
+    harness.start_with_factories(&fixture, ModuleFactories::new().with(factory));
+    harness.wait_ready();
+    let local = FakeDesktop::with_snapshot(two_display_snapshot());
+    let image = image.display().to_string();
+    let (code, out, err) = run_wallpaper_cli(
+        fixture.root(),
+        &fixture.catalog,
+        fixture.paths.directory(),
+        &local,
+        socket_transport(),
+        fixture.paths.directory(),
+        &["set", &image],
+    );
+    harness.handle.request_shutdown();
+    assert!(harness.wait_exit());
+    harness.wait_teardown();
+    (code, out, err, local, desktop)
+}
+
+#[test]
+fn cli_cold_job_beyond_five_seconds_succeeds_over_the_real_socket() {
+    let (code, out, err, local, desktop) = cli_set_with_fake_time(|clock, desktop| {
+        let processor: Arc<dyn Processor> = Arc::new(SlowProcessor {
+            clock: Arc::clone(clock),
+            by: Duration::from_secs(30),
+        });
+        let backend: Arc<dyn GuardedDesktopBackend> = Arc::new(desktop.clone());
+        (processor, backend)
+    });
+    assert_eq!(
+        (code, out.as_str(), err.as_str()),
+        (ExitCode::SUCCESS, SUCCESS_LINE, "")
+    );
+    assert_eq!(desktop.calls().len(), 2, "the host applied both displays");
+    assert!(local.calls().is_empty(), "no local application");
+}
+
+#[test]
+fn cli_deadline_passing_during_native_issuance_is_not_reported_as_a_clean_success() {
+    let (code, out, err, local, desktop) = cli_set_with_fake_time(|clock, desktop| {
+        let processor: Arc<dyn Processor> = Arc::new(RealProcessor);
+        let backend: Arc<dyn GuardedDesktopBackend> = Arc::new(ClockAdvancingDesktop {
+            inner: desktop.clone(),
+            clock: Arc::clone(clock),
+            by: stache_wallpapers::WALLPAPERS_SERVER_BUDGET + Duration::from_secs(1),
+        });
+        (processor, backend)
+    });
+    assert_eq!(code, ExitCode::FAILURE);
+    assert_eq!(out, "");
+    // Display 1 was issued and applied; the deadline passed during that call,
+    // so display 2 was refused before issuance.
+    assert_eq!(
+        err,
+        "stache: Wallpaper error: Wallpaper application partial: applied=[1]; failed=[]; \
+         not-attempted=[2]; unknown=[]. Check the desktop before retrying; no automatic retry \
+         was attempted.\n"
+    );
+    assert_eq!(
+        desktop.calls().len(),
+        1,
+        "exactly one native call was issued on the host"
+    );
+    assert!(local.calls().is_empty(), "never a local fallback");
 }

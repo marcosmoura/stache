@@ -68,8 +68,9 @@ get separate branches/specs; tiling comes last in the overall planning order.
   Cancellation cannot undo an OS request already issued; stale completions may
   not alter successor state or issue further requests.
 - Replace the legacy all-screen setter with the public per-display native API:
-  no Automation prompt or required Accessibility permission. Space coverage is
-  an empirical verification item, never an unproved “every Space” promise.
+  no Automation prompt or required Accessibility permission. Stache does not
+  support macOS Spaces; native Space coverage is neither functionality, future
+  work nor a verification gate. Tiling's app-level virtual workspaces are unrelated.
 - Shared cache operations coordinate across host, CLI and `cache clear` using
   SDK/AppPaths leases outside the deletable cache root. No process-global
   `OnceLock`, speculative eviction knobs or new persistent-storage scheme.
@@ -102,10 +103,10 @@ dependencies; none is a separate tests/docs-only tail. All remain draft.
 
 | Part                                | Summary                                                            | Status |
 | ----------------------------------- | ------------------------------------------------------------------ | ------ |
-| [01](01-config-sources.md)          | Config/catalog/migration, source pool and accepted watch           | draft  |
-| [02](02-native-processing-cache.md) | Native compile proof, processing and coordinated cache             | draft  |
-| [03](03-runtime.md)                 | Lifecycle, apply coordinator, production factory and typed set IPC | draft  |
-| [04](04-cli-integration.md)         | Existing CLI contribution, safe routing and integration contracts  | draft  |
+| [01](01-config-sources.md)          | Config/catalog/migration, source pool and accepted watch           | done   |
+| [02](02-native-processing-cache.md) | Native compile proof, processing and coordinated cache             | done   |
+| [03](03-runtime.md)                 | Lifecycle, apply coordinator, production factory and typed set IPC | done   |
+| [04](04-cli-integration.md)         | Existing CLI contribution, safe routing and integration contracts  | done   |
 
 Acceptance ownership: Part 01 owns WP01-01–WP01-05; Part 02 owns WP02-01–WP02-05;
 Part 03 owns WP03-01–WP03-05; Part 04 owns WP04-01–WP04-06. Each ID labels one
@@ -139,4 +140,7 @@ with warnings denied. Regenerate schemas/bindings through the shared Rust
 generators when their inputs change. Final integration also runs
 `bun run tauri:build`. All automatic tests use fakes and disposable paths;
 they never change a real desktop. Real desktop checks require explicit approval
-for **each run** and report untested displays/Spaces as gaps.
+for **each run** and report untested display configurations as gaps. The approved
+November 5, 2026 single-display setter/removal/restoration observation and its
+limits are recorded in [Part 02](02-native-processing-cache.md#notes); it does not
+authorize Part 03.

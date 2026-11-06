@@ -20,6 +20,7 @@ pub mod shutdown;
 pub mod smoke;
 pub mod startup;
 pub mod tray;
+pub mod wallpapers;
 pub mod windows;
 
 use std::cell::RefCell;
@@ -57,6 +58,7 @@ use crate::shutdown::{
     TerminalDriver, TerminalProgress, exit_request_action, report_terminate_install_failure,
 };
 use crate::startup::ProcessCommands;
+use crate::wallpapers::WallpapersFactory;
 use crate::windows::{NativeWindows, TauriWindowHost, WindowsOwner};
 
 thread_local! {
@@ -340,6 +342,7 @@ fn run_with(
 ) -> Result<(), String> {
     let environment = AppEnvironment::from_env();
     let app_paths = AppPaths::resolve(&environment).map_err(|error| error.to_string())?;
+    let wallpapers_home = environment.home;
     let instance = match InstanceLock::acquire(&app_paths) {
         Ok(instance) => instance,
         Err(InstanceError::AlreadyRunning { .. }) => return Ok(()),
@@ -411,8 +414,18 @@ fn run_with(
             });
             // The production factories take the last executor clone: modules
             // dispatch native work through it and never retain a second one.
+            // Wallpapers needs the identity paths, configuration directory and
+            // home, which only the composition root holds.
+            let wallpapers = WallpapersFactory::new(
+                app_paths.clone(),
+                config_paths.directory(),
+                wallpapers_home,
+                Arc::clone(&main_thread),
+            )
+            .map_err(|error| format!("cannot create the Wallpapers factory: {error}"))?;
             let factories =
-                ModuleFactories::production(Arc::clone(&main_thread), setup_power_owner);
+                ModuleFactories::production(Arc::clone(&main_thread), setup_power_owner)
+                    .with(wallpapers);
             let services = HostServices {
                 logger: Arc::clone(&logger),
                 log_filter: filter,
@@ -645,7 +658,7 @@ where
     E: Write,
 {
     let args: Vec<OsString> = args.into_iter().collect();
-    let commands = commands::catalog();
+    let commands = commands::catalog_for(environment);
     let matches = match stache_cli::commands::compose(&commands).try_get_matches_from(&args) {
         Ok(matches) => matches,
         Err(error) => {
@@ -687,15 +700,7 @@ where
             return ExitCode::FAILURE;
         }
     };
-    stache_cli::run_with_io(
-        args,
-        &configurations,
-        &commands::catalog(),
-        environment,
-        ansi,
-        out,
-        err,
-    )
+    stache_cli::run_with_io(args, &configurations, &commands, environment, ansi, out, err)
 }
 
 #[cfg(test)]

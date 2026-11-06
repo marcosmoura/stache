@@ -7,6 +7,7 @@ use stache_keep_awake::KeepAwakeConfig;
 use stache_notunes::NoTunesConfig;
 use stache_proxy_audio::ProxyAudioConfig;
 use stache_sdk::{CatalogError, ConfigCatalog, GlobalConfig};
+use stache_wallpapers::WallpapersConfig;
 
 /// Registers every configuration type owned by Stache Next.
 ///
@@ -19,5 +20,6 @@ pub fn catalog() -> Result<ConfigCatalog, CatalogError> {
     catalog.register::<KeepAwakeConfig>(KeepAwakeConfig::ID)?;
     catalog.register::<NoTunesConfig>(NoTunesConfig::ID)?;
     catalog.register::<ProxyAudioConfig>(ProxyAudioConfig::ID)?;
+    catalog.register::<WallpapersConfig>(WallpapersConfig::ID)?;
     Ok(catalog)
 }

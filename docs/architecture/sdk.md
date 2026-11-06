@@ -83,6 +83,70 @@ requires an executable file with an execute bit before starting the module.
 GUI-launched apps get a minimal `PATH`, so a module must declare only executables
 the host can resolve; lookup policy beyond `PATH` belongs to part 6.
 
+## Accepted configuration
+
+Every slot owns one accepted-configuration cell, separate from its lifecycle
+lock and published snapshot. `Registry::accepted_watch(handle)` returns a typed
+`AcceptedWatch<C>`; the configuration type comes from the handle and is checked
+against the registered module's type, so a same-identifier handle for another
+registry cannot read the wrong type (`RegistryError::ConfigTypeMismatch`).
+
+- `read()` returns `AcceptedConfig { revision, config }` or `None`. Both fields
+  come from one lock acquisition, so they always match. The accessor takes no
+  module, lifecycle or reload lock and never reads disk.
+- `wait_for_change(seen_revision, timeout, token)` returns `Changed`, `TimedOut`,
+  `Cancelled` or `Closed`, treating an absent configuration as revision zero.
+  The check and sleep use the same cell lock, so publication between them cannot
+  be missed; spurious wakes reread the authoritative pair. Precedence is
+  cancellation, close, change, timeout. A timeout that overflows `Instant`
+  becomes an unbounded wait rather than a panic or a busy loop.
+- A listener on the runtime's token takes the cell lock and wakes waiters, so
+  cancellation cannot be lost between the flag check and sleeping. The listener
+  guard deregisters on return, so repeated waits do not accumulate listeners.
+- `on_change(seen_revision, listener)` returns an `AcceptedSubscription` and
+  runs the wake-only listener after a later publication, or once immediately
+  when the cell already moved past `seen_revision` or closed. The check and the
+  weak listener registration share the cell lock, so a publication between a
+  caller's read and subscription cannot be missed. Callbacks run after the
+  publication state and listener locks are released, may read the new pair, and
+  are retired when the subscription drops. A callback must only wake a wait; it
+  must not read disk or run module code.
+- Slot invalidation, including `Registry::shutdown` and the teardown stages,
+  closes the cell and wakes every waiter and change subscription; the last pair
+  stays readable.
+
+Publication happens only on acceptance. Registration with an accepted
+configuration publishes revision `1`; `register_rejected`, an invalid initial
+configuration, rejected validation, a failed reconfigure, a failed pre-commit
+quiesce, deleted files and unchanged reloads publish nothing. A changed reload
+publishes immediately after the registry assigns the candidate and increments
+the revision, before a disabling quiesce or a start attempt, so a configuration
+committed despite a later start or stop error is visible. The old pair stays
+readable for the whole `Module::reconfigure` call. `FactoryContext` exposes the
+same watch to factory socket handlers.
+
+## Cache leases
+
+`CacheLease` coordinates cooperating Stache Next processes that touch the
+identity cache. It locks `runtime/cache.lock` (see [ipc.md](ipc.md)), a private
+`0600` owned regular file outside the cache root, so deleting and recreating the
+cache keeps one lock identity. `shared` covers processing, publication, reads
+and apply; `exclusive` covers whole-root `cache clear`. A held shared lease is
+never upgraded in place: drop it and acquire again before critical work.
+
+`LeaseWait` carries a budget, a `CancellationToken` and an injected `LeaseClock`.
+Acquisition polls one open file description with `try_lock`/`try_lock_shared` in
+private ten-millisecond slices; cancellation wakes the sleep immediately and no
+other lock is held while waiting. A bounded wait returns `Busy` at expiry and
+`Cancelled` when the token fires, both without mutation. `verify` rechecks the
+path and runtime directory against the held `dev`/`ino` and returns `Replaced`
+or `Unsafe` instead of continuing under a split identity. Dropping a lease
+releases the kernel lock and removes nothing; no participant unlinks the lock,
+including clear and shutdown.
+
+This is advisory coordination among cooperating processes, not protection
+against OS or temporary-directory cleaners, or malicious same-UID mutation.
+
 ## Threads
 
 - Every module has its own lock. The registry's map lock is never held while a
@@ -102,6 +166,9 @@ the host can resolve; lookup policy beyond `PATH` belongs to part 6.
   no module or native code runs while it is held.
 - Each runtime owns a `WorkerGroup` and a `CancellationToken`. Modules receive
   only a `WorkerHandle`, which spawns named workers and cannot stop or join them.
+  A token listener registered with `on_cancel` runs once after the token's own
+  lock is released; the returned `CancelListener` deregisters on drop, and a
+  listener registered after cancellation runs immediately.
 - Stop order is: cancel the token, call `Module::stop` (unregister native
   callbacks), then join workers. A stopped group rejects new spawns. On a failed
   configure/start the same cleanup runs immediately; `needs_stop` stays set only
@@ -117,6 +184,13 @@ the host can resolve; lookup policy beyond `PATH` belongs to part 6.
   one at a time, each on an abandonable carrier bounded by `min(2 s, remaining)`.
   A hung module is named `module:<id>` and abandoned with the locks it took, and
   the next module still stops.
+- Module factories belong to the app composition root, not the SDK. The app
+  teardown stages retain every supplied factory, run its non-blocking
+  `begin_shutdown` before registry invalidation, and run its bounded
+  `finish_shutdown` drain in reverse registration order only after every module
+  stop attempt. A factory-owned service therefore stays strongly owned through
+  `Module::stop`, and a stalled drain keeps its factory alive while being named
+  `factory:<id>`.
 - `cancel_and_join` must not be called from one of that group's own workers.
   Registry operations that join run on the caller's thread, so the host calls
   disable/pause/reload/shutdown off the main thread.
@@ -298,10 +372,10 @@ fn main() {
 Shipped here: registry, lifecycle, threading, events, logging, permissions,
 errors, descriptors, window capabilities, the safe Accessibility/main-thread
 adapters, file-backed configuration (catalog, store, watcher, comment-preserving
-edits, templates and schemas), identity paths/instance lock and the socket
-protocol/router/client/server. The Tauri composition root, tray, permission
-polling, shutdown coordinator and test window are described in
-[overview.md](overview.md) and [ui.md](ui.md); the CLI composition is in
-[ipc.md](ipc.md). The proxyAudio runtime is in
+edits, templates and schemas), the typed accepted-configuration watch, identity
+paths/instance lock, cache leases and the socket protocol/router/client/server. The Tauri
+composition root, tray, permission polling, shutdown coordinator and test window
+are described in [overview.md](overview.md) and [ui.md](ui.md); the CLI
+composition is in [ipc.md](ipc.md). The proxyAudio runtime is in
 [proxy-audio.md](../features/proxy-audio.md); the typed React client and test
 window are in [ui.md](ui.md).

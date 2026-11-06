@@ -283,14 +283,37 @@ fn ipc_handlers(
 ```
 
 The context wraps a private registry and store and exposes only
-`module_snapshot(id)` and `diagnostic(id)`: published lifecycle metadata and the
-held file diagnostic. It offers no mutable registry or store, no configuration
+`module_snapshot(id)`, `diagnostic(id)` and `accepted_watch(handle)`: published
+lifecycle metadata, the held file diagnostic and the typed accepted
+configuration cell. It offers no mutable registry or store, no configuration
 apply or write and no disk access, so a handler cannot start, stop or reconfigure
 a module while composing a response. Use it for a read-only app-owned status
 envelope such as Keep Awake's; all policy and runtime ownership stay in the
 module. See [keep-awake.md](../features/keep-awake.md) for that contract.
 Existing factories keep their registration and runtime behavior; only their
 handler signature gains the context.
+
+`accepted_watch` returns `AcceptedWatch<C>` for the exact configuration type the
+module registered. `read()` is coherent and disk-free; `wait_for_change` supplies
+a bounded, cancellable revision wait:
+
+```rust
+let watch = context.accepted_watch(handle)?;
+if let Some(accepted) = watch.read() {
+    let revision = accepted.revision;
+    let config = accepted.config.as_ref();
+}
+```
+
+A later part uses that pair instead of a module-local cache or current disk when
+answering a request. A handle from another registry with the same identifier is
+rejected with `RegistryError::ConfigTypeMismatch`. See
+[config.md](../architecture/config.md#accepted-configuration).
+
+A configuration-only module such as Wallpapers part 1 can be registered in the
+catalog without a factory or `Module`: the watcher and `reload_all` skip its
+unbound file, `core.status` marks it valid but not active and no warning storm
+or startup failure results. Add the runtime only when a later part needs it.
 
 ## Pilot example: proxyAudio
 
@@ -311,10 +334,12 @@ with a native watcher, a CLI command and a socket method:
   read-only `list` method.
 - `src/crates/app/src/host.rs` has one `ModuleFactory` that registers the module
   and returns its `ipc_handlers(context)`, both over one shared backend;
-  `ModuleFactories::production(main_thread, power_owner)` is the composition root
-  used by `run_with`; `power_owner` is the composition root's shared Keep Awake
-  assertion owner. `src/crates/app/src/bindings.rs` exports the listing DTOs, not a
-  Tauri command, because the pilot has no UI.
+  `ModuleFactories::production(main_thread, power_owner)` is the base list used
+  by `run_with`, which then adds `WallpapersFactory` with `.with(...)` because
+  that factory needs the identity paths, configuration directory and home;
+  `power_owner` is the composition root's shared Keep Awake assertion owner.
+  `src/crates/app/src/bindings.rs` exports the listing DTOs, not a Tauri
+  command, because the pilot has no UI.
 
 Read [features/proxy-audio.md](../features/proxy-audio.md) for the selection
 rules and invariants. The same split applies to a new module: policy and tests in

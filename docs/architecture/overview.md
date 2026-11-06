@@ -13,9 +13,10 @@ Read when changing the shipped foundation boundaries.
   protocol/router/client/server; no Tauri dependency. See [sdk.md](sdk.md), [config.md](config.md)
   and [ipc.md](ipc.md).
 - `src/crates/macos`: safe Accessibility trust, application-activation, main-thread, `CoreAudio`,
-  display and application-observation/control adapters, plus the owned Keep Awake assertion,
-  lock-probe and observation adapters; constructing them acquires no assertion. It is the only
-  crate containing project-authored unsafe code; public functions are safe.
+  display, application-observation/control and per-display desktop-image adapters, plus the owned
+  Keep Awake assertion, lock-probe and observation adapters; constructing them acquires no
+  assertion. It is the only crate containing project-authored unsafe code; public functions are
+  safe.
 - `src/crates/modules/proxy-audio`: the proxyAudio pilot — authoritative configuration, priority
   policy, `CoreAudio` watcher, `audio list` command and read-only `proxyAudio.list` handler. See
   [proxy-audio.md](../features/proxy-audio.md).
@@ -28,6 +29,12 @@ Read when changing the shipped foundation boundaries.
   module's published runtime status. It owns no socket handler: the app composes
   the read-only `keepAwake.status` envelope from the module snapshot reader. See
   [keep-awake.md](../features/keep-awake.md).
+- `src/crates/modules/wallpapers`: authoritative `wallpapers.jsonc`
+  configuration, schema, template, migration, shared pool/explicit-file source
+  resolution, the processing/cache/apply library, a host-lifetime coordinator
+  and one wakeable rotation timer. The app's `WallpapersFactory` mounts it and
+  contributes the typed `wallpapers.set` handler; the CLI command remains
+  planned. See [wallpapers.md](../features/wallpapers.md).
 - `src/crates/cli`: built-in `config`/`cache`/`reload`/`schema`/`completions` implementation and
   command composition; it imports the SDK, never the app or a module crate.
 - `src/ui/src/shell/components/Shell`: development/test-only React surface with colocated test,
@@ -51,19 +58,27 @@ webviews=N`, which the release measurement reads; see
 `ModuleFactories::production(main_thread, power_owner)` registers the proxyAudio pilot over one
 `CoreAudio` backend, the noTunes blocker over one `stache_macos::ApplicationControl` built from
 the same host main-thread executor, and the Keep Awake module over the host main-thread
-executor's lock-observation installer and the composition root's one `AssertionOwner`. That
-owner is also registered as the teardown `power-assertion` acknowledgement, so the module and
-the slot share one ledger. The pilot's factory also contributes the read-only `proxyAudio.list`
+executor's lock-observation installer and the composition root's one `AssertionOwner`; the
+composition root then adds `WallpapersFactory`, because only it holds the identity paths,
+configuration directory and home. That owner is also registered as the teardown
+`power-assertion` acknowledgement, so the module and the slot share one ledger. The pilot's factory also contributes the read-only `proxyAudio.list`
 handler to the same socket router, so the CLI and socket enumerate through the same listing
 service; the blocker contributes no command or socket handler, and Keep Awake contributes
 `keepAwake.status`. That handler receives a clone of the app's `FactoryContext`, whose private
 registry and store handles expose only the published `module_snapshot(id)` and held
 `diagnostic(id)`. It copies the runtime cell from `KeepAwakeSnapshot::read()` and composes the
-app-owned envelope without mutable registry/store or disk access. Registration creates no
+app-owned envelope without mutable registry/store or disk access. `WallpapersFactory`
+contributes `wallpapers.set` and installs the module's typed accepted watch through
+`host::register_module_observed` before registry start. Registration creates no
 listener or assertion and installs no observer; each module starts only from an accepted
-`enabled: true` configuration. See
-[proxy-audio.md](../features/proxy-audio.md), [notunes.md](../features/notunes.md) and
-[keep-awake.md](../features/keep-awake.md).
+`enabled: true` configuration. Every factory keeps the default acknowledged no-op
+shutdown hooks except Wallpapers, which overrides `begin_shutdown` to close its
+host service admission and wake waits without joining, and `finish_shutdown` to
+drain after module stop; both hooks are generic, and the host retains the factory
+handles independently of the runner. See
+[proxy-audio.md](../features/proxy-audio.md), [notunes.md](../features/notunes.md),
+[keep-awake.md](../features/keep-awake.md) and
+[wallpapers.md](../features/wallpapers.md).
 
 Tray **Enable** is a config-backed edit: plan, validate, prepare and sync the replacement, recheck
 for an external change immediately before the atomic rename, then apply once. A missing target is
@@ -94,17 +109,19 @@ total and the cause, and a later one shortens it to 250 ms from that request wit
 the total. A dedicated `stache-teardown` thread stores exactly one outcome (`Clean`, `Partial` or
 `Uncertain`) in memory, makes one bounded record attempt through a non-blocking channel, using
 50 ms reserved inside that total, and dispatches one terminal action. The coordinator runs the
-ordered stages itself rather than the host worker: invalidate every module and native handle
+ordered stages itself rather than the host worker: close factory admission and wake
+factory-owned host-service waits, invalidate every module and native handle
 without waiting on the lifecycle or a slot lock, reap the config watcher, permission ticker,
 startup job and socket acceptance while observing the host worker inside the same stage budget,
-stop the registry in reverse start order one module at a time, run native cleanup in the approved
+stop the registry in reverse start order one module at a time, then drain factory-owned
+services in reverse registration order, run native cleanup in the approved
 order, store the outcome with its bounded record and one terminal status, close the signal
 bridge, open the exit gate and run the terminal action. Every wait is capped at
 `min(2 s, remaining)` and wakes on escalation within 10 ms, so a hung owner is named and
 abandoned at its bound while the next stage still runs.
 
 Each owner has a stable record name: `host-worker`, `watcher`, `permission-ticker`,
-`startup-job`, `module:<id>`, `power-assertion`, `socket`, `activation`, `tray` and `windows`.
+`startup-job`, `module:<id>`, `factory:<id>`, `power-assertion`, `socket`, `activation`, `tray` and `windows`.
 A registered native owner is released by its own completion answer; a dispatch is never an
 acknowledgement, so `Clean` is reported only when every owner proved that it released its
 resource. The activation observer, the tray item and the tracked windows are removed by their
@@ -156,5 +173,6 @@ and SIGINT delivery; the opt-in harness covers SIGTERM and the WebKit surface. T
 runtime ships in [Foundation part 06](../specs/2026-11-02-foundation/06-proxy-audio.md); only its
 comparative measurements and manual hardware checks remain open.
 
-`stache-sdk`, `stache-cli`, `stache-keep-awake`, `stache-proxy-audio`, `stache-notunes` and
-`stache-app` forbid unsafe code; `stache-macos` documents every unsafe block.
+`stache-sdk`, `stache-cli`, `stache-keep-awake`, `stache-proxy-audio`, `stache-notunes`,
+`stache-wallpapers` and `stache-app` forbid unsafe code; `stache-macos` documents every unsafe
+block.

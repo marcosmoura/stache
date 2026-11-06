@@ -571,6 +571,302 @@ export type StatusChanged_Serialize = {
 	status: HostStatus_Serialize,
 };
 
+/**  Wallpaper cycling mode. */
+export type WallpaperMode =
+/**  Select a random wallpaper each time. */
+"random" |
+/**  Cycle through wallpapers in order. */
+"sequential";
+
+/**  Which displays one request should address. */
+export type WallpaperScreen =
+/**  Every display in the native snapshot. */
+"all" |
+/**  Entry zero of the native snapshot, the primary screen. */
+"main" |
+/**
+ *  A one-based display index. Zero keeps the legacy primary alias and is
+ *  treated as [`WallpaperScreen::Main`].
+ */
+{ index: {
+	/**  The requested one-based index (`0` means primary). */
+	index: number,
+} };
+
+/**  Which wallpaper one request should use. */
+export type WallpaperSelection =
+/**
+ *  One explicit absolute image file.
+ *
+ *  The path is literal: it is not trimmed, expanded from `~`, resolved
+ *  against the host's working directory or looked up in the configured
+ *  pool.
+ */
+{ kind: "file";
+/**  An absolute path to an existing supported image file. */
+path: string } |
+/**
+ *  One zero-based index into the accepted pool order.
+ *
+ *  The pool is the one produced by [`crate::resolve_pool`] from the
+ *  accepted configuration, including duplicate entries and the
+ *  configuration-directory base. `0` is the first entry.
+ */
+{ kind: "collection";
+/**  Zero-based pool position. */
+index: number } |
+/**
+ *  One entry of the accepted pool found by file name or file stem.
+ *
+ *  The host matches the untrimmed token case-insensitively against each
+ *  accepted pool entry's file name or file stem, in pool order, and the
+ *  first matching entry wins ([`crate::find_pool_entry`]). A miss is a typed
+ *  `InvalidSelection`. Otherwise it behaves exactly like
+ *  [`WallpaperSelection::Collection`] for the matched position.
+ */
+{ kind: "name";
+/**  The file name or stem to look up. */
+name: string } |
+/**  A random entry drawn independently for every addressed display. */
+{ kind: "random" };
+
+/**
+ *  Wallpaper source selection, rotation timing and image effects.
+ *
+ *  Defaults are disabled with no sources. A nonempty `path` replaces `list`
+ *  entirely, including when that directory is invalid. Configured source
+ *  strings are trimmed; paths are resolved relative to the configuration
+ *  directory, never the process working directory.
+ */
+export type WallpapersConfig = WallpapersConfig_Serialize | WallpapersConfig_Deserialize;
+
+/**
+ *  Wallpaper source selection, rotation timing and image effects.
+ *
+ *  Defaults are disabled with no sources. A nonempty `path` replaces `list`
+ *  entirely, including when that directory is invalid. Configured source
+ *  strings are trimmed; paths are resolved relative to the configuration
+ *  directory, never the process working directory.
+ */
+export type WallpapersConfig_Deserialize = {
+	/**  Whether Wallpapers should run. */
+	enabled?: boolean,
+	/**
+	 *  Directory containing wallpaper images.
+	 *  If specified, all image files in this directory are used and the `list`
+	 *  field is ignored.
+	 */
+	path?: string,
+	/**  Wallpaper filenames to use. If `path` is specified, this list is ignored. */
+	list?: string[],
+	/**
+	 *  Time in seconds between wallpaper changes. Zero changes only once, when
+	 *  rotation starts.
+	 *
+	 *  The Rust field and schema are `u64`; the generated TypeScript uses
+	 *  `number`, which loses precision above 2^53.
+	 */
+	interval?: number,
+	/**  Wallpaper selection mode: random or sequential. */
+	mode?: WallpaperMode,
+	/**  Radius in pixels for rounded corners. */
+	radius?: number,
+	/**  Blur level in pixels for the Gaussian blur effect. */
+	blur?: number,
+};
+
+/**
+ *  Wallpaper source selection, rotation timing and image effects.
+ *
+ *  Defaults are disabled with no sources. A nonempty `path` replaces `list`
+ *  entirely, including when that directory is invalid. Configured source
+ *  strings are trimmed; paths are resolved relative to the configuration
+ *  directory, never the process working directory.
+ */
+export type WallpapersConfig_Serialize = {
+	/**  Whether Wallpapers should run. */
+	enabled: boolean,
+	/**
+	 *  Directory containing wallpaper images.
+	 *  If specified, all image files in this directory are used and the `list`
+	 *  field is ignored.
+	 */
+	path: string,
+	/**  Wallpaper filenames to use. If `path` is specified, this list is ignored. */
+	list: string[],
+	/**
+	 *  Time in seconds between wallpaper changes. Zero changes only once, when
+	 *  rotation starts.
+	 *
+	 *  The Rust field and schema are `u64`; the generated TypeScript uses
+	 *  `number`, which loses precision above 2^53.
+	 */
+	interval: number,
+	/**  Wallpaper selection mode: random or sequential. */
+	mode: WallpaperMode,
+	/**  Radius in pixels for rounded corners. */
+	radius: number,
+	/**  Blur level in pixels for the Gaussian blur effect. */
+	blur: number,
+};
+
+/**  Why an outcome is not a full success. */
+export type WallpapersOutcomeCause =
+/**  The client named a different configuration directory. */
+{ kind: "differentConfig";
+/**  The server's canonical accepted configuration directory. */
+host: string;
+/**  The client's canonical requested directory. */
+requested: string } |
+/**  No accepted configuration exists (initial malformed or rejected file). */
+{ kind: "noAcceptedConfig" } |
+/**  One job was executing and one was already queued. */
+{ kind: "queueFull" } |
+/**  The request's absolute monotonic deadline expired. */
+{ kind: "deadlineExpired" } |
+/**  A caller or host cancellation was observed. */
+{ kind: "cancelled" } |
+/**  The selector, explicit path or collection index is invalid. */
+{ kind: "invalidSelection";
+/**  The actionable reason. */
+message: string } |
+/**  The accepted source pool could not be resolved or was empty. */
+{ kind: "source";
+/**  The actionable reason. */
+message: string } |
+/**  Reading, decoding, resizing or publishing one output failed. */
+{ kind: "processing";
+/**  The actionable reason. */
+message: string } |
+/**  A native desktop operation failed or was refused. */
+{ kind: "native";
+/**  The actionable reason. */
+message: string } |
+/**
+ *  Required host state, such as the rotation coordinator thread, is
+ *  unavailable.
+ */
+{ kind: "unavailable";
+/**  The actionable reason. */
+message: string };
+
+/**  The overall outcome of one handled request. */
+export type WallpapersOutcomeStatus =
+/**  Every addressed display received the image. */
+"fullSuccess" |
+/**  Some displays were applied and at least one failed or was skipped. */
+"partial" |
+/**  No display was applied and the failure is known. */
+"failure" |
+/**
+ *  Work was refused before a native change was issued, or was cancelled
+ *  before every native change. No native effect is implied.
+ */
+"cancelled" |
+/**  A native call was issued but its result cannot be known here. */
+"uncertain";
+
+/**  A complete typed operation outcome carried inside `Response::Ok`. */
+export type WallpapersSetOutcome = WallpapersSetOutcome_Serialize | WallpapersSetOutcome_Deserialize;
+
+/**  A complete typed operation outcome carried inside `Response::Ok`. */
+export type WallpapersSetOutcome_Deserialize = {
+	/**  Overall status. */
+	status: WallpapersOutcomeStatus,
+	/**  Cause when the status is not [`WallpapersOutcomeStatus::FullSuccess`]. */
+	cause?: WallpapersOutcomeCause | null,
+	/**  Displays whose native call returned success. */
+	applied: number[],
+	/**  Displays whose native call returned a known failure. */
+	failed: number[],
+	/**  Displays for which no native call was made. */
+	notAttempted: number[],
+	/**  Displays whose native call result is unknown. */
+	unknown: number[],
+	/**  One entry per addressed display, in operation order. */
+	targets: WallpapersTargetOutcome[],
+};
+
+/**  A complete typed operation outcome carried inside `Response::Ok`. */
+export type WallpapersSetOutcome_Serialize = {
+	/**  Overall status. */
+	status: WallpapersOutcomeStatus,
+	/**  Cause when the status is not [`WallpapersOutcomeStatus::FullSuccess`]. */
+	cause?: WallpapersOutcomeCause,
+	/**  Displays whose native call returned success. */
+	applied: number[],
+	/**  Displays whose native call returned a known failure. */
+	failed: number[],
+	/**  Displays for which no native call was made. */
+	notAttempted: number[],
+	/**  Displays whose native call result is unknown. */
+	unknown: number[],
+	/**  One entry per addressed display, in operation order. */
+	targets: WallpapersTargetOutcome[],
+};
+
+/**  Parameters for `wallpapers.set`. */
+export type WallpapersSetParams = {
+	/**
+	 *  The client's canonical configuration directory.
+	 *
+	 *  The server canonicalizes this value and its own accepted identity before
+	 *  any work. An existing symlink alias or a not-yet-created suffix resolves
+	 *  through its existing ancestors.
+	 */
+	configDirectory: string,
+	/**  The image to apply. */
+	selection: WallpaperSelection,
+	/**  The displays to address. */
+	screen: WallpaperScreen,
+};
+
+/**  A typed per-target failure category. */
+export type WallpapersTargetFailure =
+/**  The native setter rejected the image. */
+"native" |
+/**  The native dispatch acknowledgement timed out before the call. */
+"timeout" |
+/**  Cancellation was observed before the call. */
+"cancelled" |
+/**  The request deadline passed before the call. */
+"expired" |
+/**  The accepted configuration changed before the call. */
+"stale" |
+/**  A call was issued and its result is unknown. */
+"unknown" |
+/**  Reading, decoding or publishing an output failed. */
+"processing" |
+/**  Any other typed native failure. */
+"other";
+
+/**  The recorded result for one display identity. */
+export type WallpapersTargetOutcome = {
+	/**  The stable native display identity as an unsigned 32-bit number. */
+	display: number,
+	/**  What happened to this display. */
+	target: WallpapersTargetResult,
+};
+
+/**  The recorded result for one addressed display. */
+export type WallpapersTargetResult =
+/**  The native call returned success. */
+{ result: "applied" } |
+/**  The native call returned a known failure. */
+{ result: "failed";
+/**  The typed failure category. */
+reason: WallpapersTargetFailure;
+/**  The actionable reason. */
+message: string } |
+/**  No native call was made for this display. */
+{ result: "notAttempted" } |
+/**  A native call was issued and its result is unknown. */
+{ result: "unknown";
+/**  The typed failure category. */
+reason: WallpapersTargetFailure;
+/**  The actionable reason. */
+message: string };
+
 /* Tauri Specta runtime */
 type EventEmit<T> = [T] extends [null] ? () => Promise<void> : (payload: T) => Promise<void>;
 

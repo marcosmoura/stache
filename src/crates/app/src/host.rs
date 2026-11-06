@@ -36,12 +36,12 @@ use stache_sdk::shutdown::{
     CANCELLATION_QUANTUM, OWNER_WAIT_BUDGET, ShutdownWait, wait_for_finish,
 };
 use stache_sdk::{
-    CancellationToken, ChangeSet, ConfigCatalog, ConfigFileId, ConfigPaths, ConfigStore,
-    ConfigStoreError, ConfigWatcher, EventBus, Initial, LogFilter, Logger, MainThreadExecutor,
-    Module, ModuleConfig, ModuleHandle, ModuleId, ModuleSnapshot, ModuleStatus, PathEntry,
-    Permission, PermissionProvider, PermissionStatus, Registry, RegistryError, ReloadOutcome,
-    WatchError, WindowBackend, WindowError, WindowKey, WindowKind, WindowRequest, WindowSize,
-    inspect_paths,
+    AcceptedWatch, CancellationToken, ChangeSet, ConfigCatalog, ConfigFileId, ConfigPaths,
+    ConfigStore, ConfigStoreError, ConfigWatcher, EventBus, Initial, LogFilter, Logger,
+    MainThreadExecutor, Module, ModuleConfig, ModuleHandle, ModuleId, ModuleSnapshot, ModuleStatus,
+    PathEntry, Permission, PermissionProvider, PermissionStatus, Registry, RegistryError,
+    RegistryResult, ReloadOutcome, WatchError, WindowBackend, WindowError, WindowKey, WindowKind,
+    WindowRequest, WindowSize, inspect_paths,
 };
 
 use crate::bindings::{HostStatus, ModuleStatusView, config_file_view};
@@ -161,9 +161,10 @@ impl<C: ModuleConfig> ModuleControl for ModuleHandle<C> {
 /// Read-only views a module factory may use while building socket handlers.
 ///
 /// The context holds the same registry and configuration store the host already
-/// owns and exposes only published snapshots and held diagnostics. It never
-/// exposes the mutable registry or store, reads disk or applies configuration,
-/// so a handler built from it observes state instead of changing it.
+/// owns and exposes only published snapshots, held diagnostics and typed
+/// accepted-configuration watches. It never exposes the mutable registry or
+/// store, reads disk or applies configuration, so a handler built from it
+/// observes state instead of changing it.
 #[derive(Clone)]
 pub struct FactoryContext {
     registry: Arc<Registry>,
@@ -191,6 +192,22 @@ impl FactoryContext {
     pub fn diagnostic(&self, id: ModuleId) -> Option<stache_sdk::config::ConfigDiagnostic> {
         self.store.diagnostic(ConfigFileId::module(id))
     }
+
+    /// A typed view over one registered module's accepted configuration.
+    ///
+    /// The watch reads the published `(revision, configuration)` pair without
+    /// touching disk or waiting for module lifecycle work; a handler can use it
+    /// to answer with the exact accepted configuration a sibling host applied.
+    ///
+    /// # Errors
+    /// Returns a typed registry error for a stale handle or a handle whose
+    /// configuration type differs from the registered module's.
+    pub fn accepted_watch<C: ModuleConfig>(
+        &self,
+        handle: ModuleHandle<C>,
+    ) -> RegistryResult<AcceptedWatch<C>> {
+        self.registry.accepted_watch(handle)
+    }
 }
 
 /// One module's registration in the composition root.
@@ -214,10 +231,31 @@ pub trait ModuleFactory: Send + Sync {
     ///
     /// The default is empty; a module that has a socket surface returns its
     /// module name and handler here. The context carries only read-only
-    /// published registry snapshots and held configuration diagnostics.
+    /// published registry snapshots, held configuration diagnostics and typed
+    /// accepted-configuration watches.
     fn ipc_handlers(&self, _context: &FactoryContext) -> Vec<(&'static str, Arc<dyn IpcHandler>)> {
         Vec::new()
     }
+
+    /// Stage 1: closes admission and wakes every host-service wait.
+    ///
+    /// Called once for every supplied factory, including one whose registration
+    /// never completed, before the monitor cells close and the registry is
+    /// invalidated. Must not join, perform filesystem or native work, or take a
+    /// contended lifecycle or registry lock. The default is a no-op.
+    fn begin_shutdown(&self) {}
+
+    /// Stage 3: drains factory-owned work after the registry stopped modules.
+    ///
+    /// Called once in reverse registration order, on an abandonable carrier
+    /// bounded by `wait`. `Ok(true)` means the factory drained within its
+    /// bound, `Ok(false)` means it did not acknowledge, and `Err` is a failed
+    /// drain. The default is an acknowledged no-op, so existing factories keep
+    /// their behavior.
+    ///
+    /// # Errors
+    /// Returns the factory's text diagnostic when its drain failed.
+    fn finish_shutdown(&self, _wait: &dyn ShutdownWait) -> Result<bool, String> { Ok(true) }
 }
 
 /// Registers one module from its catalog initial state and binds its config.
@@ -233,12 +271,37 @@ where
     M: Module,
     M::Config: Default + DeserializeOwned,
 {
+    register_module_observed(registry, store, module, |_, _| Ok(()))
+}
+
+/// Registers one module and observes its typed registration before binding.
+///
+/// The observer runs after the module was accepted or rejected and before its
+/// file is bound to the store, so a factory can install the typed accepted
+/// watch while registration is still the only writer and before `start_all`.
+/// It receives the typed handle; a failed observation stops registration with
+/// its host error.
+///
+/// # Errors
+/// Returns a typed store, registry or observer failure.
+pub fn register_module_observed<M, F>(
+    registry: &Registry,
+    store: &ConfigStore,
+    module: M,
+    observe: F,
+) -> Result<Arc<dyn ModuleControl>, HostError>
+where
+    M: Module,
+    M::Config: Default + DeserializeOwned,
+    F: FnOnce(&Registry, ModuleHandle<M::Config>) -> Result<(), HostError>,
+{
     let id = module.descriptor().id;
     let handle = match store.initial::<M::Config>(id)? {
         Initial::Default(config) | Initial::Loaded(config) => registry.register(module, config)?,
         Initial::Invalid(diagnostic) => registry
             .register_rejected(module, stache_sdk::ConfigDiagnostic::new(diagnostic.message))?,
     };
+    observe(registry, handle)?;
     store.bind(handle)?;
     Ok(Arc::new(handle))
 }
@@ -370,10 +433,13 @@ impl ModuleFactories {
     #[must_use]
     pub const fn new() -> Self { Self { entries: Vec::new() } }
 
-    /// Creates the production list: the proxyAudio pilot, the noTunes blocker and
-    /// Keep Awake.
+    /// Creates the base production list: the proxyAudio pilot, the noTunes
+    /// blocker and Keep Awake.
     ///
-    /// Registration only creates the modules and their read-only handlers; it
+    /// The app composition root adds the Wallpapers factory with
+    /// [`crate::wallpapers::WallpapersFactory`] because that factory needs the
+    /// identity paths, configuration directory and home. Registration only
+    /// creates the modules and their read-only handlers; it
     /// starts no listener, installs no application or lock observer and acquires
     /// no power assertion. Starting depends on the accepted configuration. Every
     /// factory shares the host's main-thread executor; no module keeps a second
@@ -727,10 +793,94 @@ impl MonitorCells {
     }
 }
 
+/// The factory hooks the teardown stages retain.
+///
+/// The stage driver keeps its own strong factory handles: the runner drops
+/// `HostSettings` when it finishes, but stage 1 must still reach every supplied
+/// factory and stage 3 must drain factory-owned services after the registry
+/// stopped modules. Invocation flags are atomics, so a repeated stage call does
+/// not run a hook twice and no lock is held while a hook runs.
+struct FactoryHooks {
+    factories: Vec<Arc<dyn ModuleFactory>>,
+    begun: AtomicBool,
+    finished: AtomicBool,
+    begin_failures: Mutex<Vec<String>>,
+}
+
+impl FactoryHooks {
+    fn new(factories: Vec<Arc<dyn ModuleFactory>>) -> Self {
+        Self {
+            factories,
+            begun: AtomicBool::new(false),
+            finished: AtomicBool::new(false),
+            begin_failures: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn name(factory: &dyn ModuleFactory) -> String { format!("factory:{}", factory.id().as_str()) }
+
+    /// Runs every begin hook once, containing a panic instead of losing the
+    /// coordinator thread.
+    fn begin(&self) {
+        if self.begun.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        for factory in &self.factories {
+            let name = Self::name(factory.as_ref());
+            let begun =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| factory.begin_shutdown()));
+            if begun.is_err() {
+                self.begin_failures.lock().unwrap_or_else(PoisonError::into_inner).push(name);
+            }
+        }
+    }
+
+    /// Drains every factory once, in reverse registration order, on a bounded
+    /// carrier that retains its factory when the wait is abandoned.
+    fn finish(&self, wait: &Arc<dyn ShutdownWait>) -> StageReport {
+        if self.finished.swap(true, Ordering::SeqCst) {
+            return StageReport::default();
+        }
+        let mut report = StageReport {
+            failed: std::mem::take(
+                &mut *self.begin_failures.lock().unwrap_or_else(PoisonError::into_inner),
+            ),
+            unacknowledged: Vec::new(),
+        };
+        for factory in self.factories.iter().rev() {
+            let name = Self::name(factory.as_ref());
+            let worker = Arc::clone(factory);
+            let worker_wait = Arc::clone(wait);
+            let carrier = thread::Builder::new()
+                .name(format!("stache-finish-{}", factory.id().as_str()))
+                .spawn(move || worker.finish_shutdown(worker_wait.as_ref()));
+            match carrier {
+                Ok(handle) => {
+                    if wait_for_finish(wait.as_ref(), &|| handle.is_finished()) {
+                        match handle.join() {
+                            Ok(Ok(true)) => {}
+                            Ok(Ok(false)) => report.unacknowledged.push(name),
+                            Ok(Err(_)) | Err(_) => report.failed.push(name),
+                        }
+                    } else {
+                        // The detached carrier keeps its factory alive until the
+                        // hook returns, so a stalled drain never loses its
+                        // service state.
+                        report.unacknowledged.push(name);
+                    }
+                }
+                Err(_) => report.failed.push(name),
+            }
+        }
+        report
+    }
+}
+
 /// The production teardown stages over the shared host pieces.
 pub struct HostStages {
     registry: Arc<Registry>,
     monitors: Arc<MonitorCells>,
+    hooks: FactoryHooks,
     setup_failed: Arc<AtomicBool>,
     finished: Arc<Finished>,
     status: Arc<Mutex<HostStatus>>,
@@ -770,6 +920,9 @@ impl HostStages {
 
 impl TeardownStages for HostStages {
     fn invalidate(&self) {
+        // Factory cancellation runs first: a host-service wait must wake before
+        // the monitor cells close and before the registry refuses work.
+        self.hooks.begin();
         // Close the monitor cells first so a job that finishes starting after
         // this point is handed back to the runner instead of installed into a
         // cell the stage driver already emptied.
@@ -832,6 +985,12 @@ impl TeardownStages for HostStages {
                 Err(_) => report.failed.push(name),
             }
         }
+        // Factory-owned services drain only after every module stop attempt,
+        // so a module still inside `stop` never loses the service it may wait
+        // on. Reverse registration order mirrors the registry's reverse stop.
+        let hooks = self.hooks.finish(&wait);
+        report.failed.extend(hooks.failed);
+        report.unacknowledged.extend(hooks.unacknowledged);
         report
     }
 
@@ -903,9 +1062,11 @@ impl HostDriver {
         ));
         let monitors = Arc::new(MonitorCells::default());
         let setup_failed = Arc::new(AtomicBool::new(false));
+        let hooks = FactoryHooks::new(settings.factories.entries().to_vec());
         self.handle.teardown.install_stages(Arc::new(HostStages {
             registry: Arc::clone(&registry),
             monitors: Arc::clone(&monitors),
+            hooks,
             setup_failed: Arc::clone(&setup_failed),
             finished: Arc::clone(&self.handle.finished),
             status: Arc::clone(&self.handle.status),
@@ -1879,6 +2040,7 @@ mod tests {
         gate: Option<Arc<StopGate>>,
         start_gate: Option<Arc<StopGate>>,
         worker_gate: Option<Arc<StopGate>>,
+        events: Option<Arc<Mutex<Vec<String>>>>,
     }
 
     impl StageModule {
@@ -1890,6 +2052,7 @@ mod tests {
                 gate: None,
                 start_gate: None,
                 worker_gate: None,
+                events: None,
             }
         }
     }
@@ -1917,6 +2080,12 @@ mod tests {
         }
 
         fn start(&mut self, ctx: &stache_sdk::ModuleContext) -> stache_sdk::ModuleResult<()> {
+            if let Some(events) = &self.events {
+                let events = Arc::clone(events);
+                ctx.invalidation().on_invalidate(Arc::new(move || {
+                    events.lock().unwrap_or_else(PoisonError::into_inner).push("invalidate".into());
+                }));
+            }
             if let Some(gate) = &self.start_gate {
                 gate.wait();
             }
@@ -1938,6 +2107,12 @@ mod tests {
 
         fn stop(&mut self, ctx: &stache_sdk::ModuleContext) -> stache_sdk::ModuleResult<()> {
             self.stops.fetch_add(1, Ordering::SeqCst);
+            if let Some(events) = &self.events {
+                events
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(format!("stop:{}", self.id.as_str()));
+            }
             if let Some(gate) = &self.gate {
                 gate.wait();
             }
@@ -1996,11 +2171,243 @@ mod tests {
         HostStages {
             registry,
             monitors,
+            hooks: FactoryHooks::new(Vec::new()),
             setup_failed: Arc::new(AtomicBool::new(false)),
             finished,
             status: Arc::new(Mutex::new(HostStatus::default())),
             ui: Arc::new(QuietUi),
         }
+    }
+
+    fn stages_over_hooks(
+        registry: Arc<Registry>,
+        factories: Vec<Arc<dyn ModuleFactory>>,
+    ) -> HostStages {
+        let mut stages = stages_over(registry);
+        stages.hooks = FactoryHooks::new(factories);
+        stages
+    }
+
+    fn event_log(events: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
+        events.lock().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
+    struct HookFactory {
+        id: &'static str,
+        events: Arc<Mutex<Vec<String>>>,
+        finish_gate: Option<Arc<StopGate>>,
+        finish_entered: Option<Arc<Mutex<Option<mpsc::Sender<()>>>>>,
+    }
+
+    impl HookFactory {
+        fn new(id: &'static str, events: &Arc<Mutex<Vec<String>>>) -> Self {
+            Self {
+                id,
+                events: Arc::clone(events),
+                finish_gate: None,
+                finish_entered: None,
+            }
+        }
+
+        fn push(&self, event: &str) {
+            self.events
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(event.to_owned());
+        }
+    }
+
+    impl ModuleFactory for HookFactory {
+        fn id(&self) -> ModuleId { ModuleId::new(self.id) }
+
+        fn register(
+            &self,
+            _: &Registry,
+            _: &ConfigStore,
+        ) -> Result<Arc<dyn ModuleControl>, HostError> {
+            Err(HostError::Thread(
+                "the hook factory registers no module".to_owned(),
+            ))
+        }
+
+        fn begin_shutdown(&self) { self.push("begin"); }
+
+        fn finish_shutdown(&self, _: &dyn ShutdownWait) -> Result<bool, String> {
+            if let Some(entered) = &self.finish_entered {
+                let sender = entered.lock().unwrap_or_else(PoisonError::into_inner).take();
+                if let Some(sender) = sender {
+                    let _ = sender.send(());
+                }
+            }
+            if let Some(gate) = &self.finish_gate {
+                gate.wait();
+            }
+            self.push("finish");
+            Ok(true)
+        }
+    }
+
+    struct IdleFactory;
+
+    impl ModuleFactory for IdleFactory {
+        fn id(&self) -> ModuleId { ModuleId::new("idle") }
+
+        fn register(
+            &self,
+            _: &Registry,
+            _: &ConfigStore,
+        ) -> Result<Arc<dyn ModuleControl>, HostError> {
+            Err(HostError::Thread(
+                "the idle factory registers no module".to_owned(),
+            ))
+        }
+    }
+
+    struct PanickingFactory;
+
+    impl ModuleFactory for PanickingFactory {
+        fn id(&self) -> ModuleId { ModuleId::new("panic") }
+
+        fn register(
+            &self,
+            _: &Registry,
+            _: &ConfigStore,
+        ) -> Result<Arc<dyn ModuleControl>, HostError> {
+            Err(HostError::Thread(
+                "the panicking factory registers no module".to_owned(),
+            ))
+        }
+
+        fn begin_shutdown(&self) {
+            panic!("injected begin-shutdown panic");
+        }
+    }
+
+    #[test]
+    fn factory_hooks_bracket_invalidation_and_module_stop() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let stops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let registry = stage_registry(vec![StageModule {
+            events: Some(Arc::clone(&events)),
+            ..StageModule::new("one", &stops)
+        }]);
+        let factory = HookFactory::new("one", &events);
+        let stages = stages_over_hooks(registry, vec![Arc::new(factory)]);
+
+        stages.invalidate();
+        let report = stages.stop_registry(AdvancingWait::new());
+
+        assert!(report.failed.is_empty(), "{report:?}");
+        assert!(report.unacknowledged.is_empty(), "{report:?}");
+        assert_eq!(event_log(&events), ["begin", "invalidate", "stop:one", "finish"]);
+    }
+
+    #[test]
+    fn a_repeated_stage_call_does_not_repeat_a_factory_hook() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let factory = HookFactory::new("one", &events);
+        let stages = stages_over_hooks(stage_registry(Vec::new()), vec![Arc::new(factory)]);
+
+        stages.invalidate();
+        stages.invalidate();
+        stages.stop_registry(AdvancingWait::new());
+        stages.stop_registry(AdvancingWait::new());
+
+        let events = event_log(&events);
+        assert_eq!(events.iter().filter(|event| *event == "begin").count(), 1);
+        assert_eq!(events.iter().filter(|event| *event == "finish").count(), 1);
+    }
+
+    #[test]
+    fn a_stalled_factory_drain_is_unacknowledged_and_keeps_its_owner() {
+        let gate = StopGate::new();
+        let entered = Arc::new(Mutex::new(None));
+        let (sender, receiver) = mpsc::channel();
+        *entered.lock().unwrap_or_else(PoisonError::into_inner) = Some(sender);
+        let factory = Arc::new(HookFactory {
+            finish_gate: Some(Arc::clone(&gate)),
+            finish_entered: Some(Arc::clone(&entered)),
+            ..HookFactory::new("hung", &Arc::new(Mutex::new(Vec::new())))
+        });
+        let retained = Arc::downgrade(&factory);
+        let shared: Arc<dyn ModuleFactory> = factory.clone();
+        let stages = stages_over_hooks(stage_registry(Vec::new()), vec![shared]);
+
+        let report = stages.stop_registry(Arc::new(ExpiredWait { now: std::time::Instant::now() }));
+        receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the drain carrier entered");
+
+        assert_eq!(report.unacknowledged, vec!["factory:hung".to_owned()]);
+        assert!(report.failed.is_empty(), "{report:?}");
+
+        drop(stages);
+        drop(factory);
+        assert!(
+            retained.upgrade().is_some(),
+            "a stalled drain must retain its factory and service"
+        );
+        gate.open();
+        eventually("the stalled drain must release its factory", || {
+            retained.upgrade().is_none()
+        });
+    }
+
+    #[test]
+    fn a_stalled_module_stop_does_not_destroy_the_factory_service() {
+        let gate = StopGate::new();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let stops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let registry = stage_registry(vec![StageModule {
+            gate: Some(Arc::clone(&gate)),
+            events: Some(Arc::clone(&events)),
+            ..StageModule::new("slow", &stops)
+        }]);
+        let factory = Arc::new(HookFactory::new("hook", &events));
+        let retained = Arc::downgrade(&factory);
+        let stages = stages_over_hooks(registry, vec![factory]);
+        stages.invalidate();
+
+        let stopping = thread::spawn(move || stages.stop_registry(AdvancingWait::new()));
+        eventually("the module stop must be in flight", || {
+            event_log(&events).iter().any(|event| event == "stop:slow")
+        });
+        assert!(
+            retained.upgrade().is_some(),
+            "the factory must outlive a stalled module stop"
+        );
+        assert!(
+            !event_log(&events).iter().any(|event| event == "finish"),
+            "the factory must not drain before the module stop returns"
+        );
+
+        gate.open();
+        let report = stopping.join().expect("the stopping thread");
+        assert!(report.failed.is_empty(), "{report:?}");
+        assert!(report.unacknowledged.is_empty(), "{report:?}");
+        let events = event_log(&events);
+        let stop = events.iter().position(|event| event == "stop:slow").expect("stop");
+        let finish = events.iter().position(|event| event == "finish").expect("finish");
+        assert!(stop < finish, "{events:?}");
+    }
+
+    #[test]
+    fn a_begin_hook_panic_is_named_without_losing_the_stage() {
+        let stages =
+            stages_over_hooks(stage_registry(Vec::new()), vec![Arc::new(PanickingFactory)]);
+        stages.invalidate();
+
+        let report = stages.stop_registry(AdvancingWait::new());
+
+        assert_eq!(report.failed, vec!["factory:panic".to_owned()]);
+        assert!(report.unacknowledged.is_empty(), "{report:?}");
+    }
+
+    #[test]
+    fn an_idle_factory_keeps_the_default_acknowledged_no_op_hooks() {
+        let wait = ExpiredWait { now: std::time::Instant::now() };
+        IdleFactory.begin_shutdown();
+        assert_eq!(IdleFactory.finish_shutdown(&wait), Ok(true));
     }
 
     #[test]

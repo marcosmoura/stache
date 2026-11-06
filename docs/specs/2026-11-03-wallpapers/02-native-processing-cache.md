@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 02 — Native processing and cache
@@ -155,6 +155,33 @@ failure identity reports and late completion suppression.
 
 ## Notes
 
-Space coverage and cache-file ownership after clear require later explicitly
-authorized desktop observation. No automated test, including a “smoke test”,
-may call a real setter or restore an image. Unverified behavior remains a gap.
+Stache does not support macOS Spaces. Native Space coverage is not a test,
+verification gate or future functionality; Tiling's app-level virtual workspaces
+are unrelated. No automated test, including a “smoke test”, may call a real
+setter or restore an image. Each real desktop run requires explicit approval.
+
+### Verification evidence — November 5, 2026
+
+- Automated checks exercise real `NSScreen` resolution/recheck with simulated
+  expected geometry/scale mismatches, measure a cap of four workers, and prove
+  cross-process busy results at write/sync/publish and batch-processing pauses.
+  No automated test calls the real setter; simulated mismatches are not physical
+  hotplug evidence.
+- An approved standalone process ran on its main thread with one attached native
+  display: id `3`, 2560×1440 points and pixels, scale `1`.
+  `NativeDesktop::set_image` returned `Ok` in about 1.75 ms for a generated RGB8
+  magenta PNG in a disposable temporary directory. The user visually confirmed
+  solid magenta. Immediate `NSWorkspace.desktopImageURLForScreen` readback still
+  showed the old URL: immediate URL readback is not reliable evidence of visual
+  completion.
+- Only that probe image was deleted. The user confirmed magenta remained
+  visible. This simulated cache-file loss, not actual `cache clear` integration;
+  no real cache was touched and no long-term persistence was established.
+- Restoration via the recorded original URL and exact AppKit options returned
+  `Ok`. Immediate readback still showed the probe URL, but the user visually
+  confirmed the original restored. The probe exited `0`. This does not establish
+  perfect restoration of dynamic wallpaper or any stronger native guarantee.
+- Logout/restart, long-term persistence, physical hotplug, multi-display behavior
+  and actual cache-clear desktop behavior were not checked. Those observations
+  remain unverified; OS ownership/persistence after removal is system-dependent.
+  This evidence changes no part status and does not authorize Part 03.

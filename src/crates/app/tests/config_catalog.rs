@@ -8,6 +8,7 @@ use stache_keep_awake::KeepAwakeConfig;
 use stache_notunes::NoTunesConfig;
 use stache_proxy_audio::ProxyAudioConfig;
 use stache_sdk::{CommandCatalog, ConfigCatalog, GlobalConfig};
+use stache_wallpapers::WallpapersConfig;
 
 const LEGACY: &str = include_str!("fixtures/legacy-config.jsonc");
 
@@ -17,7 +18,13 @@ fn catalog() -> ConfigCatalog { stache_app::catalog::catalog().expect("catalog")
 fn the_catalog_owns_the_global_and_module_files() {
     let catalog = catalog();
     let ids: Vec<&str> = catalog.ids().map(stache_sdk::ModuleId::as_str).collect();
-    assert_eq!(ids, ["global", "keepAwake", "notunes", "proxyAudio"]);
+    assert_eq!(ids, [
+        "global",
+        "keepAwake",
+        "notunes",
+        "proxyAudio",
+        "wallpapers"
+    ]);
     assert_eq!(
         catalog.file_name(GlobalConfig::ID).as_deref(),
         Some("global.jsonc")
@@ -33,6 +40,10 @@ fn the_catalog_owns_the_global_and_module_files() {
     assert_eq!(
         catalog.file_name(ProxyAudioConfig::ID).as_deref(),
         Some("proxyAudio.jsonc")
+    );
+    assert_eq!(
+        catalog.file_name(WallpapersConfig::ID).as_deref(),
+        Some("wallpapers.jsonc")
     );
 }
 
@@ -161,10 +172,16 @@ fn migration_converts_the_legacy_fixture_into_valid_typed_files() {
         .expect("migrated notunes validates");
     let decoded: NoTunesConfig = serde_json::from_str(&notunes).expect("typed notunes");
     assert_eq!(decoded.target_app.as_deref(), Some("com.spotify.client"));
+    let wallpapers_path = destination.join("wallpapers.jsonc");
+    let wallpapers = fs::read_to_string(&wallpapers_path).expect("wallpapers");
+    catalog
+        .inspect(WallpapersConfig::ID, &wallpapers_path, &wallpapers)
+        .expect("migrated wallpapers validates");
+    let decoded: WallpapersConfig = serde_json::from_str(&wallpapers).expect("typed wallpapers");
+    assert!(!decoded.enabled, "migration never enables Wallpapers");
     for name in [
         "bar.jsonc",
         "commandQuit.jsonc",
-        "wallpapers.jsonc",
         "keybindings.jsonc",
         "menuAnywhere.jsonc",
         "tiling.jsonc",
@@ -175,7 +192,9 @@ fn migration_converts_the_legacy_fixture_into_valid_typed_files() {
 
     let out = String::from_utf8(out).expect("stdout");
     assert!(out.contains("validated notunes -> notunes.jsonc"));
+    assert!(out.contains("validated wallpapers -> wallpapers.jsonc"));
     assert!(!out.contains("copied notunes"));
+    assert!(!out.contains("copied wallpapers"));
     assert!(out.contains("warning: dropped widgets (not ported)"));
     assert!(out.contains("warning: unknown key `futureKey` was not migrated"));
 }
@@ -441,6 +460,209 @@ fn run_path(directory: &std::path::Path) -> (ExitCode, String, String) {
         "config".into(),
         "path".into(),
     ];
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let code = stache_cli::run_with_io(
+        args,
+        &catalog(),
+        &CommandCatalog::new(),
+        &stache_cli::CliEnvironment::default(),
+        false,
+        &mut out,
+        &mut err,
+    );
+    (
+        code,
+        String::from_utf8(out).expect("stdout"),
+        String::from_utf8(err).expect("stderr"),
+    )
+}
+
+#[test]
+fn wallpapers_migration_preserves_values_and_warns_about_relative_sources() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let source = root.path().join("legacy.jsonc");
+    let destination = root.path().join("config");
+    fs::write(
+        &source,
+        r#"{ "wallpapers": { "enabled": true, "path": "images", "list": ["~/a.jpg"], "interval": 30, "mode": "sequential" } }"#,
+    )
+    .expect("source");
+    let (code, out, err) = migrate(&source, &destination, false);
+    assert_eq!(code, ExitCode::SUCCESS, "{err}");
+    assert!(
+        out.contains(
+            "warning: wallpapers `path` value `images` is relative; the migrated file resolves it under the configuration directory"
+        ),
+        "{out}"
+    );
+    assert!(!out.contains("copied wallpapers"), "{out}");
+
+    let written = fs::read_to_string(destination.join("wallpapers.jsonc")).expect("wallpapers");
+    let decoded: WallpapersConfig = serde_json::from_str(&written).expect("typed wallpapers");
+    assert!(decoded.enabled);
+    assert_eq!(decoded.path, "images", "the relative text is preserved");
+    assert_eq!(decoded.list, ["~/a.jpg"]);
+    assert_eq!(decoded.interval, 30);
+    assert_eq!(decoded.mode, stache_wallpapers::WallpaperMode::Sequential);
+}
+
+#[test]
+fn absent_wallpapers_section_receives_the_disabled_template() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let source = root.path().join("legacy.jsonc");
+    let destination = root.path().join("config");
+    fs::write(&source, "{}").expect("source");
+    let (code, out, err) = migrate(&source, &destination, false);
+    assert_eq!(code, ExitCode::SUCCESS, "{err}");
+    let written = fs::read_to_string(destination.join("wallpapers.jsonc")).expect("wallpapers");
+    assert_eq!(
+        written,
+        catalog().template(WallpapersConfig::ID).expect("wallpapers template")
+    );
+    let (decoded, warnings) = catalog()
+        .decode_typed::<WallpapersConfig>(
+            WallpapersConfig::ID,
+            &destination.join("wallpapers.jsonc"),
+            &written,
+        )
+        .expect("typed wallpapers");
+    assert!(warnings.is_empty());
+    assert!(!decoded.enabled);
+    assert!(
+        out.contains("emitted default template wallpapers.jsonc (disabled)"),
+        "{out}"
+    );
+}
+
+#[test]
+fn wallpapers_force_preserves_the_existing_file_mode() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir().expect("temp dir");
+    let source = root.path().join("legacy.jsonc");
+    let destination = root.path().join("config");
+    fs::create_dir_all(&destination).expect("destination");
+    fs::write(&source, "{}").expect("source");
+    let existing = destination.join("wallpapers.jsonc");
+    fs::write(&existing, "{ \"sentinel\": true }\n").expect("sentinel");
+    fs::set_permissions(&existing, fs::Permissions::from_mode(0o640)).expect("mode");
+
+    let (code, _out, err) = migrate(&source, &destination, true);
+    assert_eq!(code, ExitCode::SUCCESS, "{err}");
+    assert_ne!(
+        fs::read_to_string(&existing).expect("replaced"),
+        "{ \"sentinel\": true }\n"
+    );
+    assert_eq!(
+        fs::metadata(&existing).expect("metadata").permissions().mode() & 0o777,
+        0o640
+    );
+}
+
+#[test]
+fn wallpapers_is_catalogued_without_a_runtime_and_ignored_by_unbound_reloads() {
+    use std::sync::Arc;
+
+    use stache_app::bindings::{ConfigFileState, config_file_view};
+    use stache_sdk::{
+        ChangeSet, ConfigFileId, ConfigPaths, ConfigStore, ConfigStoreError, DiscardLogger,
+        EventBus, LogFilter, MainThreadExecutor, Permission, PermissionError, PermissionProvider,
+        PermissionStatus, Registry, ThreadError, UnavailableWindows, inspect_paths,
+    };
+
+    struct NoExecutor;
+
+    impl MainThreadExecutor for NoExecutor {
+        fn is_main_thread(&self) -> bool { false }
+
+        fn execute(&self, _: Box<dyn FnOnce() + Send + 'static>) -> Result<(), ThreadError> {
+            Ok(())
+        }
+    }
+
+    struct AllowAll;
+
+    impl PermissionProvider for AllowAll {
+        fn status(&self, _: Permission) -> PermissionStatus { PermissionStatus::Granted }
+
+        fn request(&self, _: Permission) -> Result<PermissionStatus, PermissionError> {
+            Ok(PermissionStatus::Granted)
+        }
+    }
+
+    let root = tempfile::tempdir().expect("temp dir");
+    let directory = root.path().join("config");
+    fs::create_dir_all(&directory).expect("config");
+    fs::write(
+        directory.join("wallpapers.jsonc"),
+        r#"{ "enabled": true, "path": "images" }"#,
+    )
+    .expect("wallpapers");
+
+    let registry = Arc::new(Registry::new(
+        Arc::new(DiscardLogger),
+        Arc::new(EventBus::new()),
+        Arc::new(NoExecutor),
+        Arc::new(AllowAll),
+        Arc::new(UnavailableWindows),
+    ));
+    let store = ConfigStore::new(
+        Arc::clone(&registry),
+        catalog(),
+        ConfigPaths::new(&directory),
+        Arc::new(LogFilter::default()),
+    );
+
+    let report = inspect_paths(store.catalog(), store.paths());
+    let entry = report
+        .entries
+        .iter()
+        .find(|entry| entry.file == ConfigFileId::module(WallpapersConfig::ID))
+        .expect("wallpapers is a catalog file");
+    assert_eq!(entry.state, stache_sdk::PathState::Valid);
+    let view = config_file_view(entry, &store);
+    assert_eq!(view.state, ConfigFileState::Valid);
+    assert!(!view.active, "an unbound module never marks its file active");
+    assert!(view.diagnostic.is_none());
+
+    assert!(
+        store
+            .reload_all()
+            .iter()
+            .all(|outcome| outcome.file != ConfigFileId::module(WallpapersConfig::ID)),
+        "reload_all skips a catalog entry without a bound module"
+    );
+    assert!(
+        store.diagnostic(ConfigFileId::module(WallpapersConfig::ID)).is_none(),
+        "an unbound file produces no warning storm"
+    );
+    let mut changes = ChangeSet::default();
+    changes.files.insert(ConfigFileId::module(WallpapersConfig::ID));
+    assert!(
+        store.apply(&changes).is_empty(),
+        "a watcher batch for an unbound module is a no-op"
+    );
+    assert!(matches!(
+        store.reload_one(WallpapersConfig::ID),
+        Err(ConfigStoreError::Unbound { .. })
+    ));
+    assert!(
+        registry.snapshots().is_empty(),
+        "no Wallpapers runtime is registered"
+    );
+
+    let (code, out, err) = run_path(&directory);
+    assert_eq!(code, ExitCode::SUCCESS, "{err}");
+    assert!(out.contains("  wallpapers.jsonc (exists, offline)\n"), "{out}");
+
+    let (code, out, err) = run_args(&["stache", "schema", "wallpapers"]);
+    assert_eq!(code, ExitCode::SUCCESS, "{err}");
+    assert!(out.contains("/schemas/wallpapers.schema.json"), "{out}");
+}
+
+fn run_args(arguments: &[&str]) -> (ExitCode, String, String) {
+    let args: Vec<OsString> = arguments.iter().map(OsString::from).collect();
     let mut out = Vec::new();
     let mut err = Vec::new();
     let code = stache_cli::run_with_io(

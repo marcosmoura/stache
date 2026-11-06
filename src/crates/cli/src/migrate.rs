@@ -18,10 +18,9 @@ use stache_sdk::{ConfigCatalog, GlobalConfig, LoggingConfig, ModuleId, StartupCo
 
 use crate::{MigrateArgs, fail, write_atomic};
 
-const UNPORTED: [&str; 6] = [
+const UNPORTED: [&str; 5] = [
     "bar",
     "commandQuit",
-    "wallpapers",
     "keybindings",
     "menuAnywhere",
     "tiling",

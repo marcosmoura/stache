@@ -66,10 +66,12 @@ per-display APIs, no private/System Events fallback, config-relative sources,
 literal invocation-CWD CLI files, no image restoration, legacy flags/text/exits
 and bounded atomic cache coordination remain approved decisions.
 
-Documentation checks do not prove native ownership, performance, Space coverage,
+Documentation checks do not prove native ownership, performance,
 power assertion behavior, watch/factory API compilation or shutdown feasibility.
 Those remain implementation-part gates with fake tests and real processing
 measurements; all real native application/restoration requires each-run approval.
+Stache does not support macOS Spaces; native Space coverage is not a Wallpapers
+implementation or verification gate.
 This remediation runs no build or desktop tests and changes no implementation,
 generated files, part status, git index or history. Parent independently validates
 the combined branches before any implementation approval/acceptance claim.

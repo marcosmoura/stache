@@ -32,6 +32,7 @@ use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use crate::config::accepted::{AcceptedCell, AcceptedWatch};
 use crate::context::ModuleContext;
 use crate::error::{
     ErrorCategory, ModuleError, ModuleResult, Operation, RegistryError, RegistryResult,
@@ -62,6 +63,10 @@ impl<C> ModuleHandle<C> {
     /// The module identifier behind this handle.
     #[must_use]
     pub const fn id(&self) -> ModuleId { self.id }
+
+    /// Builds an unregistered handle for the wrong-type test.
+    #[cfg(test)]
+    pub(crate) fn for_test(id: ModuleId) -> Self { Self { id, marker: PhantomData } }
 }
 
 impl<C> Copy for ModuleHandle<C> {}
@@ -208,7 +213,7 @@ impl Runtime {
 
 /// Logical, lock-free invalidation shared with one module.
 ///
-/// Each [`ModuleSlot`] owns one handle for its whole lifetime and the registry
+/// Each module slot owns one handle for its whole lifetime and the registry
 /// retains it outside the slot state lock and outside `lifecycle`, so
 /// [`Registry::invalidate`] can fire it while a start or stop holds either
 /// lock. Firing is logical only: queued native work drops, already-issued work
@@ -306,6 +311,8 @@ struct ModuleSlot {
     meta: Mutex<SlotMeta>,
     /// Logical invalidation shared with every runtime of this module.
     invalidation: ModuleInvalidation,
+    /// The last accepted configuration pair, readable without any other lock.
+    accepted: Arc<AcceptedCell>,
 }
 
 /// Stop metadata for one slot, kept outside the slot state lock.
@@ -369,6 +376,7 @@ impl Drop for SlotState<'_> {
 /// The initial state computed by a registration entry point.
 struct Registration {
     config: Option<Box<dyn ErasedConfig>>,
+    published: Option<Arc<dyn Any + Send + Sync>>,
     enabled: bool,
     revision: u64,
     status: ModuleStatus,
@@ -376,9 +384,14 @@ struct Registration {
 }
 
 impl Registration {
-    fn configured(config: Box<dyn ErasedConfig>, enabled: bool) -> Self {
+    fn configured(
+        config: Box<dyn ErasedConfig>,
+        published: Arc<dyn Any + Send + Sync>,
+        enabled: bool,
+    ) -> Self {
         Self {
             config: Some(config),
+            published: Some(published),
             enabled,
             revision: 1,
             status: if enabled {
@@ -393,6 +406,7 @@ impl Registration {
     fn rejected(enabled: bool, diagnostic: ConfigDiagnostic) -> Self {
         Self {
             config: None,
+            published: None,
             enabled,
             revision: 0,
             status: ModuleStatus::Stopped,
@@ -485,7 +499,10 @@ impl Registry {
     ) -> RegistryResult<ModuleHandle<M::Config>> {
         let enabled = config.enabled();
         let initial = match config.validate() {
-            Ok(()) => Registration::configured(Box::new(ConfigBox(config)), enabled),
+            Ok(()) => {
+                let published: Arc<dyn Any + Send + Sync> = Arc::new(config.clone());
+                Registration::configured(Box::new(ConfigBox(config)), published, enabled)
+            }
             Err(error) => Registration::rejected(enabled, ConfigDiagnostic::from_error(&error)),
         };
         self.register_module(module, initial)
@@ -526,25 +543,45 @@ impl Registry {
             slots.iter().map(|slot| slot.descriptor).collect();
         descriptors.push(descriptor);
         dependencies::check_registration(&descriptors)?;
+        let Registration {
+            config,
+            published: accepted_config,
+            enabled,
+            revision,
+            status,
+            diagnostic,
+        } = initial;
         let state = ModuleState {
             module: Box::new(ModuleAdapter { module, id }),
-            config: initial.config,
-            enabled: initial.enabled,
+            config,
+            enabled,
             paused: false,
-            revision: initial.revision,
-            status: initial.status,
-            diagnostic: initial.diagnostic,
+            revision,
+            status,
+            diagnostic,
             runtime: None,
             needs_stop: false,
         };
         let published = Mutex::new(state.snapshot(id));
+        let accepted = Arc::new(AcceptedCell::new(
+            std::any::TypeId::of::<M::Config>(),
+            std::any::type_name::<M::Config>(),
+        ));
+        if let Some(accepted_config) = accepted_config {
+            accepted.publish(revision, accepted_config);
+        }
         let slot = Arc::new(ModuleSlot {
             descriptor,
             state: Mutex::new(state),
             published,
             meta: Mutex::new(SlotMeta::default()),
             invalidation: ModuleInvalidation::new(),
+            accepted: Arc::clone(&accepted),
         });
+        {
+            let cell = Arc::clone(&accepted);
+            slot.invalidation.on_invalidate(Arc::new(move || cell.close()));
+        }
         slots.push(Arc::clone(&slot));
         // A shutdown that started while this registration held the slots lock
         // must not leave a module behind: remove it and invalidate its handle
@@ -808,6 +845,7 @@ impl Registry {
                 message: error.message().to_owned(),
             });
         }
+        let published: Arc<dyn Any + Send + Sync> = Arc::new(config.clone());
         let candidate: Box<dyn ErasedConfig> = Box::new(ConfigBox(config));
         let enabled = candidate.enabled();
         let mut guard = slot.lock_state();
@@ -849,6 +887,10 @@ impl Registry {
             }
             state.config = Some(candidate);
             state.revision += 1;
+            // Publish the coherent pair before any later stop work, so a
+            // configuration committed despite a start or stop error is visible
+            // and readers never wait on module or native cleanup.
+            slot.accepted.publish(state.revision, published);
         }
         if !state.enabled && enabled {
             state.paused = false;
@@ -876,6 +918,34 @@ impl Registry {
             ReloadStatus::Applied { revision: state.revision }
         } else {
             ReloadStatus::Unchanged
+        })
+    }
+
+    /// Returns a typed view over this module's accepted configuration.
+    ///
+    /// The watch reads the last published `(revision, configuration)` pair
+    /// without taking a module, lifecycle or reload lock, calling module code or
+    /// reading disk. `read` returns `None` while no configuration was ever
+    /// accepted, and `wait_for_change` supplies a bounded, cancellable wait.
+    ///
+    /// The handle's configuration type is checked against the type the module
+    /// registered. Handles only carry an identifier, so a handle from another
+    /// registry with the same identifier is rejected instead of exposing a
+    /// different type's configuration.
+    ///
+    /// # Errors
+    /// Returns [`RegistryError::UnknownModule`] for a stale handle, or
+    /// [`RegistryError::ConfigTypeMismatch`] when the handle's type differs from
+    /// the registered module's configuration type.
+    pub fn accepted_watch<C: ModuleConfig>(
+        &self,
+        handle: ModuleHandle<C>,
+    ) -> RegistryResult<AcceptedWatch<C>> {
+        let slot = self.slot(handle)?;
+        AcceptedCell::watch(&slot.accepted).map_err(|mismatch| RegistryError::ConfigTypeMismatch {
+            id: slot.descriptor.id,
+            expected: mismatch.expected,
+            registered: mismatch.registered,
         })
     }
 

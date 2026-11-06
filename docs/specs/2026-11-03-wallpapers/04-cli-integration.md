@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 04 — CLI and integration
@@ -145,18 +145,18 @@ owns the DTO schema; these strings are display adapters only, not a new protocol
 
 ## Acceptance criteria
 
-- [ ] WP04-01: Composed command tree/help/completions contain exactly the intended legacy
+- [x] WP04-01: Composed command tree/help/completions contain exactly the intended legacy
       wallpaper surface, with source-derived static/TTY output/status goldens.
-- [ ] WP04-02: Enabled false and paused explicit set succeed without lifecycle/timer
+- [x] WP04-02: Enabled false and paused explicit set succeed without lifecycle/timer
       changes; list/generate-all remain local and never apply images.
-- [ ] WP04-03: Same-dir routing uses Part 03's proven finite cold-request budget;
+- [x] WP04-03: Same-dir routing uses Part 03's proven finite cold-request budget;
       server refusal and absent-only fallback pass tests, with zero duplicate
       local calls after any uncertain-response/send case.
-- [ ] WP04-04: Actual file and collection name precedence, invocation-CWD resolution,
+- [x] WP04-04: Actual file and collection name precedence, invocation-CWD resolution,
       malformed-source handling and pre-work screen checks are documented/tested.
-- [ ] WP04-05: Completed partial-image generate-all exits 0 with accurate results;
+- [x] WP04-05: Completed partial-image generate-all exits 0 with accurate results;
       top-level failure/cancellation exits nonzero and cleans up resources.
-- [ ] WP04-06: Shared generated Rust bindings/schema checks, crate/full gates, Rustdoc
+- [x] WP04-06: Shared generated Rust bindings/schema checks, crate/full gates, Rustdoc
       warnings denied and `bun run tauri:build` pass. Feature docs accurately
       distinguish shipped work from any unverified native observation.
 
@@ -188,12 +188,68 @@ absent startup followed by a host initial job overriding the lone local apply.
 
 ## Authorized manual verification
 
-Only after explicit **each-run** approval: record macOS version, display identity,
-pixel geometry/scales, active/inactive Spaces and separate-Spaces setting;
-capture before/after desktop-image URLs per target. Exercise public native
+Only after explicit **each-run** approval: record macOS version, display identity
+and pixel geometry/scales; capture before/after desktop-image URLs per target
+and visual confirmation. Immediate URL readback is not reliable evidence of
+visual completion. Stache does not support macOS Spaces; native Space coverage
+is not functionality, future work or a verification gate. Exercise public native
 per-display set, mixed HiDPI, primary targeting, pause/disable and cache-clear
 behavior. Restoration also needs authorization and the captured exact original
-URLs; it is never an automated test/CI cleanup action. Record which Spaces
-actually changed and what was not testable. Do not claim universal Space
-coverage, lasting OS retention of deleted cache URLs or rollback of partial
-application. A declined manual run remains a visible verification gap.
+URLs and exact AppKit options; it is never an automated test/CI cleanup action.
+Record what was not testable. Do not claim perfect dynamic-wallpaper restoration,
+lasting OS retention of deleted cache URLs or rollback of partial application.
+A declined manual run remains a visible verification gap.
+
+## Notes
+
+Implementation adaptations, decided before coding:
+
+- **Name selection.** The shipped Part 03 DTO had only `Collection { index }`.
+  Resolving a name against the client's current disk pool could address a
+  different entry than the host's accepted or last-good pool. With user
+  approval, `WallpaperSelection::Name { name }` was added as an additive
+  variant. The host resolves it against its accepted pool with the same shared
+  lookup that standalone uses, and it commits like a collection selection.
+  `Collection { index }` is unchanged.
+- **Standalone threading.** Standalone `set` does not use `WallpapersService`.
+  Its coordinator thread dispatches native work to the main queue, and no run
+  loop drains that queue in the CLI process. Instead, standalone runs the
+  snapshot, `prepare_plan` and `apply_guarded` on the process main thread over
+  `NativeDesktop` with the inline `MainThread` executor, which is Part 02's
+  standalone proof. It uses the same processor, pipeline and effects as the host.
+- **Executor environment.** `CliExecutor::execute` receives no environment.
+  The composition root injects config discovery, identity paths, the
+  invocation CWD, the IPC transport and the standalone services. `--config` is
+  read from clap's propagated global argument, and the SDK trait is unchanged.
+- **No probe.** `set` sends `wallpapers.set` directly. The server enforces
+  config identity on every mutation, so no separate `core.status` probe is
+  needed, and the restart test covers a host replaced between two requests.
+
+### Verification evidence — November 6, 2026
+
+- All gates passed: lint, format, generated, `bun run test` (1302 Rust tests
+  including 11 real-socket CLI-to-host tests, plus Vitest), Rustdoc with
+  warnings denied, doc tests and `bun run tauri:build`.
+- Multi-display release timing is recorded in the feature reference: three
+  synthetic displays had a median of 4,382 ms. The budgets are unchanged.
+- `QueueFull` cannot be reached over the socket because the handler always
+  passes a finite deadline, so it is covered by the adapter golden only.
+  Expiry while queued is covered over the real socket with fake time. The cold
+  job longer than five seconds, and expiry after native issuance, remain
+  covered by Part 03 service tests, not by CLI routing.
+- The independent review found no blocker or major issue. Minor findings are
+  listed for the user to decide on.
+- Not verified: real desktop application through the CLI, physical
+  multi-display or mixed-HiDPI, physical hotplug, and actual cache-clear
+  desktop behavior. Each needs explicit per-run approval.
+
+### Review fixes — November 6, 2026
+
+Minor review findings 1–5 and 7 are fixed. The category-tag style stays mixed
+on purpose: cause tags are kebab-case and wire kinds are camelCase.
+
+Follow-up for the user to decide: when the coordinator stops after native
+issuance, the outcome is now `uncertain`. Dropping the reply sender still does
+not wake a waiting manual caller, though. That caller wakes only on its
+deadline, a shutdown or a host cancel. Release builds abort on panic, so this
+matters in debug builds only, and no isolated test exists for it.

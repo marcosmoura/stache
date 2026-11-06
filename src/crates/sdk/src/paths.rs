@@ -17,6 +17,9 @@ pub const IDENTITY: &str = "com.marcosmoura.stache.next";
 /// Socket file name inside the runtime directory.
 pub const SOCKET_FILE_NAME: &str = "ipc";
 
+/// Cache lease file name inside the runtime directory.
+pub const CACHE_LEASE_FILE_NAME: &str = "cache.lock";
+
 /// Maximum socket path length in bytes on macOS.
 ///
 /// `sun_path` holds 104 bytes including the terminating NUL, so a path of 103
@@ -106,6 +109,13 @@ impl AppPaths {
         let path = self.runtime.join(SOCKET_FILE_NAME);
         socket_path_within_limit(path)
     }
+
+    /// The cross-process cache lease path.
+    ///
+    /// It lives in the runtime directory, outside the deletable cache root, so
+    /// clearing and recreating the cache keeps the same lock identity.
+    #[must_use]
+    pub fn cache_lease_path(&self) -> PathBuf { self.runtime.join(CACHE_LEASE_FILE_NAME) }
 }
 
 fn resolve_anchor(path: &Path) -> Result<PathBuf, AppPathError> {
@@ -227,6 +237,17 @@ mod tests {
             paths.socket_path().expect("socket"),
             root.join("com.marcosmoura.stache.next").join("ipc")
         );
+    }
+
+    #[test]
+    fn the_cache_lease_lives_outside_the_cache_root() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let paths = AppPaths::resolve(&environment(root.path(), root.path())).expect("resolve");
+        assert_eq!(
+            paths.cache_lease_path(),
+            paths.runtime_directory().join(CACHE_LEASE_FILE_NAME)
+        );
+        assert!(!paths.cache_lease_path().starts_with(paths.cache_directory()));
     }
 
     #[test]

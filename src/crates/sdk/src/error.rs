@@ -210,6 +210,15 @@ pub enum RegistryError {
         /// The cycle in declaration order, starting and ending with the same module.
         cycle: Vec<ModuleId>,
     },
+    /// The handle's configuration type differs from the registered module's.
+    ConfigTypeMismatch {
+        /// The module whose registered configuration type was requested.
+        id: ModuleId,
+        /// The type name requested through the handle.
+        expected: &'static str,
+        /// The type name the module registered.
+        registered: &'static str,
+    },
     /// A configuration failed validation and was not applied.
     InvalidConfig {
         /// The module that rejected the candidate.
@@ -250,6 +259,10 @@ impl fmt::Display for RegistryError {
                 let path: Vec<&str> = cycle.iter().map(|id| id.as_str()).collect();
                 write!(f, "service dependency cycle: {}", path.join(" -> "))
             }
+            Self::ConfigTypeMismatch { id, expected, registered } => write!(
+                f,
+                "module `{id}` was registered with `{registered}`, not the requested `{expected}`"
+            ),
             Self::InvalidConfig { module, message } => {
                 write!(f, "module `{module}` rejected its configuration: {message}")
             }

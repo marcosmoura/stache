@@ -6,6 +6,7 @@
 //! lifecycle; it never starts modules itself and keeps rejection diagnostics
 //! separate from the registry status.
 
+pub mod accepted;
 pub mod catalog;
 pub mod diagnostics;
 pub mod edit;
@@ -17,6 +18,7 @@ pub mod store;
 pub mod template;
 pub mod watcher;
 
+pub use accepted::{AcceptedConfig, AcceptedSubscription, AcceptedWait, AcceptedWatch};
 pub use catalog::{CatalogError, ConfigCatalog, DecodedConfig};
 pub use diagnostics::{ConfigDiagnostic, ConfigFileId, DiagnosticKind, SourceLocation};
 pub use edit::{ConfigEdit, ConfigEditError, set_enabled};

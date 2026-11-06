@@ -32,6 +32,17 @@ fn the_shared_builder_exports_commands_events_and_config_types_without_a_host() 
         "export type AudioDeviceInfo",
         "export type AudioListKind",
         "export type AudioListParams",
+        "export type WallpapersConfig",
+        "export type WallpaperMode",
+        "export type WallpapersSetParams",
+        "export type WallpaperSelection",
+        "export type WallpaperScreen",
+        "export type WallpapersSetOutcome",
+        "export type WallpapersOutcomeStatus",
+        "export type WallpapersOutcomeCause",
+        "export type WallpapersTargetFailure",
+        "export type WallpapersTargetOutcome",
+        "export type WallpapersTargetResult",
     ] {
         assert!(bindings.contains(expected), "missing {expected}");
     }

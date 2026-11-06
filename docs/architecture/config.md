@@ -23,6 +23,7 @@ Each file is its own catalog document, named after the exact identifier:
   keepAwake.jsonc    KeepAwakeConfig
   notunes.jsonc      NoTunesConfig
   proxyAudio.jsonc   ProxyAudioConfig
+  wallpapers.jsonc   WallpapersConfig
 ```
 
 The loader reads only `global.jsonc` and registered IDs. Legacy
@@ -42,6 +43,14 @@ registration and configuration acquire nothing. A rejected parse, type, I/O or
 deleted file keeps the last accepted revision and live lease and records a
 diagnostic; identical last-good bytes clear it without lease churn. See
 [keep-awake.md](../features/keep-awake.md).
+
+`wallpapers.jsonc` is registered for configuration, schema, template and
+migration but has no runtime in this release: nothing binds it, so the watcher
+and `reload_all` skip it and `core.status` shows it valid but not active.
+`WallpapersConfig::validate` is structural only. Source resolution is a separate
+shared API that resolves the trimmed `path` or `list` against the configuration
+directory and injected home, and an explicit CLI file against the invocation
+CWD. See [wallpapers.md](../features/wallpapers.md).
 
 ## Parsing
 
@@ -127,6 +136,37 @@ and reaps only the child it spawned directly, and does not start later commands.
 Readiness, tray actions and Quit never wait for a long-lived command. A second
 instance, CLI invocation and every reload skip it.
 
+## Accepted configuration
+
+Every registered module has one accepted-configuration cell separate from its
+lifecycle state. `Registry::accepted_watch(handle)` returns a typed
+`AcceptedWatch<C>`; its configuration type is fixed by the handle and checked
+against the registered type, so a handle from another registry with the same
+identifier fails with `RegistryError::ConfigTypeMismatch`.
+
+`read()` returns the last `AcceptedConfig { revision, config }` pair or `None`.
+Both fields come from one lock and the accessor takes no module, lifecycle or
+reload lock and never reads disk, so a reader cannot observe a mixed pair or
+wait for module work. `wait_for_change(seen_revision, timeout, token)` returns
+`Changed`, `TimedOut`, `Cancelled` or `Closed`; an absent configuration is
+revision zero. The check and sleep share the cell lock, so publication between
+them cannot be lost. Registry invalidation, including shutdown and teardown,
+closes the cell and wakes waiters while leaving the last pair readable.
+
+Registration publishes a validated configuration at revision `1`; a never
+existing default-valid file therefore reads as accepted defaults. Invalid,
+rejected or malformed initial configuration publishes nothing. A reload
+publishes immediately after the registry assigns `state.config` and increments
+the revision, before a disabling quiesce or start attempt, so a committed
+configuration stays visible even when a later start or stop fails. Rejected
+validation, a failed reconfigure, a failed pre-commit quiesce, deleted files and
+unchanged reloads publish nothing. The old pair stays readable throughout
+`Module::reconfigure`.
+
+`FactoryContext::accepted_watch` exposes the same handle to factory socket
+handlers without exposing the mutable registry or store. See
+[sdk.md](sdk.md#accepted-configuration).
+
 ## Diagnostics
 
 `ConfigDiagnostic` carries the file ID, path, category (I/O, parse, type,
@@ -147,7 +187,7 @@ unchanged save is still a no-op instead of re-decoding forever.
 stache config init [-f] [-p DIR] [--stdout]
 stache config path
 stache config migrate [--from FILE] [-f]
-stache schema [global|keepAwake|notunes|proxyAudio]
+stache schema [global|keepAwake|notunes|proxyAudio|wallpapers]
 ```
 
 The commands run from the single `stache` binary. From a checkout use
@@ -184,8 +224,9 @@ not that a host accepted it.
 styles keys, strings, numbers and literals only when stdout is a terminal; see
 [ipc.md](ipc.md#output).
 
-`schema` defaults to the global schema; `schema keepAwake`, `schema proxyAudio`
-and `schema notunes` print those registered module schemas. Unknown IDs fail.
+`schema` defaults to the global schema; `schema keepAwake`, `schema proxyAudio`,
+`schema notunes` and `schema wallpapers` print those registered module schemas.
+Unknown IDs fail.
 
 ## Migration
 
@@ -199,8 +240,8 @@ destination, migration refuses even with `--force`.
 
 `execOnStartup` and a `logging` section are converted into `global.jsonc`.
 Every registered module section is decoded and validated by the catalog's
-authoritative type: `keepAwake`, `proxyAudio` and `notunes` today. A type may
-also translate legacy spellings first through
+authoritative type: `keepAwake`, `proxyAudio`, `notunes` and `wallpapers` today.
+A type may also translate legacy spellings first through
 `ModuleConfig::migrate_legacy_section`, which migration calls before decoding and
 writing; that hook is the only place a configuration type knows about values the
 running configuration rejects.
@@ -208,21 +249,24 @@ running configuration rejects.
 identifier and to drop an explicit block-only value. A legacy section that was
 enabled and had no `targetApp` used to mean Spotify; the migrated file now blocks
 without launching anything, and the hook returns a migration warning that names
-that change. `bar`, `commandQuit`,
-`wallpapers`, `keybindings`, `menuAnywhere` and `tiling` are copied verbatim as
-same-ID `.jsonc` files; the loader does not register or activate them. Legacy
-`widgets` are dropped with a warning. Unknown root keys warn, and unknown keys
-inside a registered module section are reported while the section is still
-validated and copied into its `.jsonc` file, where the typed configuration
-ignores them. A missing registered module section is emitted as the same
-commented template as `config init`, reported generically as
-`emitted default template <file>` with ` (disabled)` when the registered default
-is disabled; absent unported sections create no file. `keepAwake` therefore
-always migrates disabled, whether the legacy `bar` section was enabled, disabled
-or absent. Legacy has no Keep Awake setting, so migration never creates or
-infers a separate enable flag and never treats Bar consent as Keep Awake
-consent. Collision and `--force` rules match `init`. Every validation, copy,
-drop and warning is printed.
+that change. `wallpapers` uses it to preserve a bare relative `path` or list
+entry while warning that the new base is the destination configuration
+directory, not the unrecoverable legacy working directory; absolute and
+home-anchored values are silent. `bar`, `commandQuit`, `keybindings`,
+`menuAnywhere` and `tiling` are copied verbatim as same-ID `.jsonc` files; the
+loader does not register or activate them. Legacy `widgets` are dropped with a
+warning. Unknown root keys warn, and unknown keys inside a registered module
+section are reported while the section is still validated and copied into its
+`.jsonc` file, where the typed configuration ignores them. A missing registered
+module section is emitted as the same commented template as `config init`,
+reported generically as `emitted default template <file>` with ` (disabled)`
+when the registered default is disabled; absent unported sections create no
+file. `keepAwake` therefore always migrates disabled, whether the legacy `bar`
+section was enabled, disabled or absent. `wallpapers` likewise always migrates
+disabled; no legacy consent is inferred. Legacy has no Keep Awake setting, so
+migration never creates or infers a separate enable flag and never treats Bar
+consent as Keep Awake consent. Collision and `--force` rules match `init`. Every
+validation, copy, drop and warning is printed.
 
 This is a breaking layout change: the new loader never reads the legacy single
 file, so run `config migrate` once (or `config init`) after switching.
@@ -238,11 +282,11 @@ bun run generate-schema -- --check
 ```
 
 The `generate-schema` binary writes `schemas/global.schema.json`,
-`schemas/keepAwake.schema.json`, `schemas/notunes.schema.json` and
-`schemas/proxyAudio.schema.json` deterministically; `--check` writes nothing and
-exits non-zero on missing or stale files. Templates are generated from the
-serialized `Default` plus schema descriptions, so there is no second
-hand-maintained file.
+`schemas/keepAwake.schema.json`, `schemas/notunes.schema.json`,
+`schemas/proxyAudio.schema.json` and `schemas/wallpapers.schema.json`
+deterministically; `--check` writes nothing and exits non-zero on missing or
+stale files. Templates are generated from the serialized `Default` plus schema
+descriptions, so there is no second hand-maintained file.
 
 Tests use temporary directories and injected `ConfigEnvironment` values; no
 test reads the real home or changes an environment variable.

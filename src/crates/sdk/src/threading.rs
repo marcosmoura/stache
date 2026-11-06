@@ -6,6 +6,7 @@
 //! join it themselves. Main-thread dispatch runs inline on the main thread and
 //! never blocks the caller while waiting for the main thread.
 
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -27,6 +28,13 @@ pub struct CancellationToken {
 struct CancelInner {
     cancelled: Mutex<bool>,
     signal: Condvar,
+    listeners: Mutex<Vec<CancelEntry>>,
+    next_listener: AtomicU64,
+}
+
+struct CancelEntry {
+    id: u64,
+    listener: Arc<dyn Fn() + Send + Sync>,
 }
 
 impl CancellationToken {
@@ -35,12 +43,29 @@ impl CancellationToken {
     pub fn new() -> Self { Self::default() }
 
     /// Cancels the token and wakes every waiter. Repeated calls are no-ops.
+    ///
+    /// Registered [`CancellationToken::on_cancel`] listeners run after the
+    /// token's cancellation lock has been released, so a listener may take
+    /// another lock without deadlocking against the canceller.
     pub fn cancel(&self) {
-        let mut cancelled = lock(&self.inner.cancelled);
-        if !*cancelled {
-            *cancelled = true;
-            drop(cancelled);
-            self.inner.signal.notify_all();
+        let (listeners, changed) = {
+            // The listener lock is taken before the flag so registration and
+            // cancellation cannot interleave into a lost listener.
+            let mut listeners = lock(&self.inner.listeners);
+            let mut cancelled = lock(&self.inner.cancelled);
+            if *cancelled {
+                (Vec::new(), false)
+            } else {
+                *cancelled = true;
+                (std::mem::take(&mut *listeners), true)
+            }
+        };
+        if !changed {
+            return;
+        }
+        self.inner.signal.notify_all();
+        for entry in listeners {
+            run_cancel_listener(&entry.listener);
         }
     }
 
@@ -61,6 +86,52 @@ impl CancellationToken {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         *cancelled
     }
+
+    /// Registers a listener that runs once when the token is cancelled.
+    ///
+    /// The returned guard removes the listener when dropped, so a repeated
+    /// waiter does not accumulate registrations. A token that is already
+    /// cancelled runs the listener immediately, before this call returns.
+    pub fn on_cancel(&self, listener: Arc<dyn Fn() + Send + Sync>) -> CancelListener {
+        let id = self.inner.next_listener.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        {
+            // Both locks are needed to decide between "store" and "run now"
+            // without racing `cancel`.
+            let mut listeners = lock(&self.inner.listeners);
+            let cancelled = lock(&self.inner.cancelled);
+            if !*cancelled {
+                listeners.push(CancelEntry { id, listener });
+                return CancelListener {
+                    inner: Arc::clone(&self.inner),
+                    id,
+                };
+            }
+        }
+        run_cancel_listener(&listener);
+        CancelListener {
+            inner: Arc::clone(&self.inner),
+            id,
+        }
+    }
+
+    /// The number of listeners still registered. Test-only introspection.
+    #[cfg(test)]
+    pub(crate) fn listener_count(&self) -> usize { lock(&self.inner.listeners).len() }
+}
+
+fn run_cancel_listener(listener: &Arc<dyn Fn() + Send + Sync>) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| listener()));
+}
+
+/// Removes a [`CancellationToken::on_cancel`] listener when dropped.
+#[must_use = "dropping the guard removes the listener immediately"]
+pub struct CancelListener {
+    inner: Arc<CancelInner>,
+    id: u64,
+}
+
+impl Drop for CancelListener {
+    fn drop(&mut self) { lock(&self.inner.listeners).retain(|entry| entry.id != self.id); }
 }
 
 /// A failure to schedule background or main-thread work.
@@ -303,6 +374,89 @@ mod tests {
     use std::sync::mpsc;
 
     use super::*;
+
+    #[test]
+    fn on_cancel_runs_once_and_removes_its_listener() {
+        let token = CancellationToken::new();
+        let count = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&count);
+        let guard = token.on_cancel(Arc::new(move || {
+            observed.fetch_add(1, Ordering::SeqCst);
+        }));
+        assert_eq!(token.listener_count(), 1);
+        token.cancel();
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        assert_eq!(token.listener_count(), 0);
+        drop(guard);
+        token.cancel();
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn dropping_the_guard_deregisters_the_listener() {
+        let token = CancellationToken::new();
+        let count = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&count);
+        let guard = token.on_cancel(Arc::new(move || {
+            observed.fetch_add(1, Ordering::SeqCst);
+        }));
+        drop(guard);
+        assert_eq!(token.listener_count(), 0);
+        token.cancel();
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn an_already_cancelled_token_runs_a_new_listener_immediately() {
+        let token = CancellationToken::new();
+        token.cancel();
+        let count = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&count);
+        let guard = token.on_cancel(Arc::new(move || {
+            observed.fetch_add(1, Ordering::SeqCst);
+        }));
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        assert_eq!(token.listener_count(), 0);
+        drop(guard);
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_panicking_listener_does_not_stop_the_others() {
+        let token = CancellationToken::new();
+        let count = Arc::new(AtomicUsize::new(0));
+        let _panic = token.on_cancel(Arc::new(|| panic!("expected listener panic")));
+        let observed = Arc::clone(&count);
+        let _counted = token.on_cancel(Arc::new(move || {
+            observed.fetch_add(1, Ordering::SeqCst);
+        }));
+        token.cancel();
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_listener_can_read_the_token_without_deadlocking() {
+        let token = CancellationToken::new();
+        let listener_token = token.clone();
+        let observed = Arc::new(AtomicBool::new(false));
+        let seen = Arc::clone(&observed);
+        let _guard = token.on_cancel(Arc::new(move || {
+            seen.store(listener_token.is_cancelled(), Ordering::SeqCst);
+        }));
+        token.cancel();
+        assert!(observed.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn listeners_can_be_registered_and_dropped_without_accumulating() {
+        let token = CancellationToken::new();
+        for _ in 0..20 {
+            let guard = token.on_cancel(Arc::new(|| {}));
+            assert_eq!(token.listener_count(), 1);
+            drop(guard);
+            assert_eq!(token.listener_count(), 0);
+        }
+    }
 
     #[test]
     fn cancel_flips_the_flag_and_repeated_cancel_is_harmless() {

@@ -9,6 +9,7 @@ members = [
     "src/crates/modules/keep-awake",
     "src/crates/modules/notunes",
     "src/crates/modules/proxy-audio",
+    "src/crates/modules/wallpapers",
     "src/crates/sdk",
 ]
 exclude = ["_legacy"]

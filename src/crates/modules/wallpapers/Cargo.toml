@@ -1,0 +1,29 @@
+[package]
+name = "stache-wallpapers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Stache Wallpapers configuration and source resolution"
+readme = "../../../../README.md"
+keywords = ["stache", "wallpapers", "configuration"]
+categories = ["config"]
+
+[dependencies]
+clap = "4.6.7"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
+schemars = "1.2.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.10.9"
+specta = { version = "=2.0.0-rc.26", features = ["derive"] }
+specta-typescript = "=0.0.13"
+stache-macos = { path = "../../macos" }
+stache-sdk = { path = "../../sdk" }
+
+[dev-dependencies]
+stache-macos = { path = "../../macos", features = ["testing"] }
+tempfile = "3.27.0"
+
+[lints]
+workspace = true

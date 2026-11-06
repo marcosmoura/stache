@@ -46,6 +46,7 @@ stache-macos = { path = "../macos" }
 stache-notunes = { path = "../modules/notunes" }
 stache-proxy-audio = { path = "../modules/proxy-audio" }
 stache-sdk = { path = "../sdk" }
+stache-wallpapers = { path = "../modules/wallpapers" }
 tauri = { version = "=2.12.5", default-features = false, features = ["specta", "tray-icon", "wry"] }
 tauri-specta = { version = "=2.0.0-rc.26", features = ["derive", "typescript"] }
 tempfile = "3.27.0"
@@ -54,6 +55,7 @@ tempfile = "3.27.0"
 tauri-build = { version = "=2.7.4", features = [] }
 
 [dev-dependencies]
+image = { version = "0.25.10", default-features = false, features = ["png"] }
 schemars = "1.2.3"
 stache-macos = { path = "../macos", features = ["testing"] }
 

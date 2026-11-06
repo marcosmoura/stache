@@ -26,6 +26,7 @@
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
+pub mod cache_lease;
 pub mod cli;
 pub mod config;
 pub mod context;
@@ -34,6 +35,7 @@ pub mod error;
 pub mod events;
 pub mod instance;
 pub mod ipc;
+mod lockfile;
 pub mod logging;
 pub mod module;
 pub mod paths;
@@ -44,12 +46,14 @@ pub mod status;
 pub mod threading;
 pub mod windows;
 
+pub use cache_lease::{CacheLease, CacheLeaseError, LeaseClock, LeaseWait};
 pub use cli::{CliContribution, CliExecutor, CommandCatalog, CommandCatalogError};
 pub use config::{
-    CatalogError, ChangeSet, ConfigCatalog, ConfigEdit, ConfigEditError, ConfigEnvironment,
-    ConfigFileId, ConfigPaths, ConfigStore, ConfigStoreError, ConfigWatcher, DiagnosticKind,
-    FileOutcome, GlobalConfig, Initial, LoggingConfig, PathEntry, PathError, PathReport, PathState,
-    ReloadOutcome, SourceLocation, StartupCommands, WatchError, inspect_paths, set_enabled,
+    AcceptedConfig, AcceptedSubscription, AcceptedWait, AcceptedWatch, CatalogError, ChangeSet,
+    ConfigCatalog, ConfigEdit, ConfigEditError, ConfigEnvironment, ConfigFileId, ConfigPaths,
+    ConfigStore, ConfigStoreError, ConfigWatcher, DiagnosticKind, FileOutcome, GlobalConfig,
+    Initial, LoggingConfig, PathEntry, PathError, PathReport, PathState, ReloadOutcome,
+    SourceLocation, StartupCommands, WatchError, inspect_paths, set_enabled,
 };
 pub use context::ModuleContext;
 pub use error::{
@@ -60,7 +64,8 @@ pub use instance::{INSTANCE_FILE_NAME, InstanceError, InstanceLock};
 pub use logging::{DiscardLogger, LogFilter, LogLevel, LogRecord, Logger, ScopedLogger};
 pub use module::{Module, ModuleConfig, ModuleDescriptor, ModuleId, ServiceId};
 pub use paths::{
-    AppEnvironment, AppPathError, AppPaths, IDENTITY, MAX_SOCKET_PATH, SOCKET_FILE_NAME,
+    AppEnvironment, AppPathError, AppPaths, CACHE_LEASE_FILE_NAME, IDENTITY, MAX_SOCKET_PATH,
+    SOCKET_FILE_NAME,
 };
 pub use permissions::{Permission, PermissionError, PermissionProvider, PermissionStatus};
 pub use registry::{
@@ -73,7 +78,7 @@ pub use status::{
     ConfigDiagnostic, ModuleFailure, ModuleSnapshot, ModuleStatus, UnavailableReason,
 };
 pub use threading::{
-    CancellationToken, MainThreadExecutor, ThreadError, WorkerGroup, WorkerHandle,
+    CancelListener, CancellationToken, MainThreadExecutor, ThreadError, WorkerGroup, WorkerHandle,
 };
 pub use windows::{
     MAX_WINDOW_DIMENSION, MAX_WINDOW_KEY_LENGTH, OwnedWindow, SurfaceId, UnavailableWindows,

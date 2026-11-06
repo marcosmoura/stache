@@ -17,6 +17,11 @@ use stache_keep_awake::{
 use stache_notunes::NoTunesConfig;
 use stache_proxy_audio::{AudioDeviceInfo, AudioListKind, AudioListParams, ProxyAudioConfig};
 use stache_sdk::{GlobalConfig, IDENTITY, ModuleSnapshot, ModuleStatus, UnavailableReason};
+use stache_wallpapers::{
+    WallpaperMode, WallpaperScreen, WallpaperSelection, WallpapersConfig, WallpapersOutcomeCause,
+    WallpapersOutcomeStatus, WallpapersSetOutcome, WallpapersSetParams, WallpapersTargetFailure,
+    WallpapersTargetOutcome, WallpapersTargetResult,
+};
 use tauri_specta::{Builder, collect_commands, collect_events};
 
 use crate::host::HostState;
@@ -230,12 +235,14 @@ pub fn config_file_view(
 /// Builds the typed command and event collection mounted by the desktop host.
 ///
 /// The config types are exported explicitly; they are the authoritative catalog
-/// types used by `global.jsonc`, `keepAwake.jsonc`, `proxyAudio.jsonc` and
-/// `notunes.jsonc`. The Keep Awake status envelope and its reachable runtime
-/// DTOs are exported from the same collection, so the generated client cannot
-/// mirror them by hand. The pilot's read-only listing DTOs are exported without
-/// a Tauri command: the pilot has no UI and its socket method is not a webview
-/// surface.
+/// types used by `global.jsonc`, `keepAwake.jsonc`, `proxyAudio.jsonc`,
+/// `notunes.jsonc` and `wallpapers.jsonc`. The Keep Awake status envelope and
+/// its reachable runtime DTOs are exported from the same collection, so the
+/// generated client cannot mirror them by hand. The Wallpapers request and
+/// operation-outcome DTOs are exported from the same collection so Part 04's
+/// CLI adapters and any future UI share the wire schema. The pilot's read-only
+/// listing DTOs are exported without a Tauri command: the pilot has no UI and
+/// its socket method is not a webview surface.
 #[must_use]
 pub fn builder() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new()
@@ -255,4 +262,15 @@ pub fn builder() -> Builder<tauri::Wry> {
         .typ::<AudioDeviceInfo>()
         .typ::<AudioListKind>()
         .typ::<AudioListParams>()
+        .typ::<WallpapersConfig>()
+        .typ::<WallpaperMode>()
+        .typ::<WallpapersSetParams>()
+        .typ::<WallpaperSelection>()
+        .typ::<WallpaperScreen>()
+        .typ::<WallpapersSetOutcome>()
+        .typ::<WallpapersOutcomeStatus>()
+        .typ::<WallpapersOutcomeCause>()
+        .typ::<WallpapersTargetFailure>()
+        .typ::<WallpapersTargetOutcome>()
+        .typ::<WallpapersTargetResult>()
 }
