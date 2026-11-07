@@ -16,8 +16,9 @@ use stache_app::bindings::{HostStatus, ModuleState};
 use stache_app::caps_recovery::KeybindingsCapsRecovery;
 use stache_app::hold_to_quit::{HoldToQuitFactory, HudOwner};
 use stache_app::host::{
-    FactoryContext, HostDriver, HostHandle, HostServices, HostSettings, HostUi, ModuleFactories,
-    ModuleFactory, NoTunesFactory, StartupRecovery, new_host, register_module,
+    FactoryContext, HostDriver, HostHandle, HostServices, HostSettings, HostUi,
+    MenuAnywhereFactory, ModuleFactories, ModuleFactory, NoTunesFactory, StartupRecovery, new_host,
+    register_module,
 };
 use stache_app::permissions::PermissionPoll;
 use stache_app::shutdown::{
@@ -39,6 +40,7 @@ use stache_macos::{
     DisplayId, DisplaySnapshot, FakeApplicationBackend, FakeDesktop, GuardedDesktopBackend,
     ManualExecutor,
 };
+use stache_menu_anywhere::test_support::Fakes as MenuFakes;
 use stache_sdk::input::{
     Disposition, InputEventKind, InputService, KeyCode, ModifierFlags, PressStream, RawInput,
     TapKind,
@@ -4429,6 +4431,7 @@ impl HoldHarness {
             flags: ModifierFlags::COMMAND,
             repeat: false,
             timestamp: Duration::ZERO,
+            location: None,
         })
     }
 
@@ -4724,4 +4727,361 @@ fn hq_04_01_the_hud_owner_release_never_waits_on_a_settle_holding_the_retained_l
         assert!(Instant::now() < deadline, "the owner never answered");
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+// ---------------------------------------------------------------------------
+// MenuAnywhere (MA-03-01/06/08): the production factory over fake native services
+// ---------------------------------------------------------------------------
+
+/// A host harness whose production-composed `MenuAnywhere` runs over fakes: the
+/// shared input service has a fake tap, applications are fakes, the menu stack
+/// is the real control over the Part 02 fakes and nothing reaches the machine.
+struct MenuHarness {
+    harness: Harness,
+    fakes: MenuFakes,
+}
+
+impl MenuHarness {
+    fn new(permissions: Arc<FakePermissions>) -> Self {
+        let fakes = MenuFakes::new();
+        let mut harness = Harness::new(
+            permissions,
+            fakes.apps_executor.clone(),
+            Arc::new(FakeCommands::default()),
+            Arc::new(RecordingWindows::default()),
+        );
+        harness.input = Some(Arc::clone(&fakes.input));
+        Self { harness, fakes }
+    }
+
+    fn start(&mut self, fixture: &Fixture) {
+        let factories = ModuleFactories::new()
+            .with(TestFactory {
+                counters: Arc::clone(&self.harness.counters),
+                permission: false,
+                gate: None,
+                configure_gate: None,
+            })
+            .with(MenuAnywhereFactory::new(self.fakes.runtime.clone()));
+        self.harness.start_with_factories(fixture, factories);
+    }
+
+    fn view(&self) -> Option<stache_app::bindings::ModuleStatusView> {
+        self.harness
+            .handle
+            .status()
+            .modules
+            .into_iter()
+            .find(|module| module.id == "menuAnywhere")
+    }
+
+    fn state(&self) -> Option<ModuleState> { self.view().map(|module| module.state) }
+
+    fn wait_state(&self, state: ModuleState) {
+        wait_for(
+            &self.harness.handle,
+            &format!("menuAnywhere {state:?}"),
+            |status| status.modules.iter().any(|m| m.id == "menuAnywhere" && m.state == state),
+        );
+    }
+
+    fn chord(&self, kind: InputEventKind) -> Disposition {
+        self.fakes.input.dispatch(TapKind::Suppressing, RawInput {
+            kind,
+            stream: PressStream::Button(stache_sdk::input::MouseButton(1)),
+            flags: ModifierFlags::CONTROL | ModifierFlags::COMMAND,
+            repeat: false,
+            timestamp: Duration::ZERO,
+            location: Some(stache_sdk::input::InputPoint { x: 100.0, y: 100.0 }),
+        })
+    }
+
+    fn shutdown(&self) {
+        self.harness.handle.request_shutdown();
+        assert!(self.harness.wait_exit());
+    }
+}
+
+#[test]
+fn ma_03_06_enable_writes_jsonc_runs_the_trigger_and_pause_writes_nothing() {
+    let fixture = fixture();
+    let source = "{\n  // Keep this comment.\n  \"enabled\": false,\n  \"modifiers\": [\"control\", \"command\"]\n}\n";
+    fixture.write("menuAnywhere.jsonc", source);
+    let mut menu = MenuHarness::new(FakePermissions::new(PermissionStatus::Granted));
+    menu.start(&fixture);
+    menu.harness.wait_ready();
+    // Default-disabled and inert: no observer, thread, tap or menu exists.
+    assert_eq!(menu.state(), Some(ModuleState::Disabled));
+    assert_eq!(menu.fakes.apps.observations(), 0);
+    assert_eq!(menu.fakes.menu.opens(), 0);
+    assert!(menu.fakes.tap.submitted().is_empty());
+    assert_eq!(menu.chord(InputEventKind::MouseDown), Disposition::Pass);
+
+    menu.harness.handle.set_enabled("menuAnywhere", true);
+    menu.wait_state(ModuleState::Running);
+    let edited = fixture.read("menuAnywhere.jsonc");
+    assert!(edited.contains("// Keep this comment."));
+    assert!(edited.contains("\"enabled\": true"));
+    assert_eq!(menu.fakes.apps.activation_observers(), 1);
+    assert_eq!(menu.fakes.menu.opens(), 1);
+    assert_eq!(menu.fakes.menu.ax.call_count(), 0, "no read until a trigger");
+
+    let rows = stache_app::tray::rows(&menu.harness.handle.status());
+    assert_eq!(tray_row(&rows, "enable:menuAnywhere").checked, Some(true));
+    assert_eq!(tray_row(&rows, "pause:menuAnywhere").label, "Pause menuAnywhere");
+
+    menu.harness.handle.pause("menuAnywhere");
+    menu.wait_state(ModuleState::Paused);
+    assert_eq!(
+        fixture.read("menuAnywhere.jsonc"),
+        edited,
+        "pause is session-only"
+    );
+    assert_eq!(menu.fakes.apps.activation_observers(), 0);
+    assert_eq!(menu.chord(InputEventKind::MouseDown), Disposition::Pass);
+    menu.harness.handle.resume("menuAnywhere");
+    menu.wait_state(ModuleState::Running);
+    menu.shutdown();
+}
+
+#[test]
+fn ma_03_06_permission_only_checks_and_only_the_explicit_tray_request_prompts() {
+    let fixture = fixture();
+    fixture.write("menuAnywhere.jsonc", "{ \"enabled\": true }\n");
+    let permissions = FakePermissions::new(PermissionStatus::Denied);
+    let mut menu = MenuHarness::new(permissions.clone());
+    menu.start(&fixture);
+    menu.harness.wait_ready();
+    menu.wait_state(ModuleState::WaitingForPermission);
+    assert_eq!(menu.fakes.menu.opens(), 0, "nothing starts while waiting");
+    assert_eq!(menu.fakes.apps.observations(), 0);
+    assert_eq!(
+        permissions.requests.load(Ordering::SeqCst),
+        0,
+        "startup only checks"
+    );
+
+    // Reload, activation-style refresh and polling only check.
+    fixture.write(
+        "menuAnywhere.jsonc",
+        "{ \"enabled\": true, \"modifiers\": [\"shift\"] }\n",
+    );
+    let revision = menu.view().expect("view").revision;
+    wait_for(&menu.harness.handle, "the reloaded revision", |status| {
+        status.modules.iter().any(|m| m.id == "menuAnywhere" && m.revision != revision)
+    });
+    menu.harness.handle.refresh_permissions();
+    assert_eq!(menu.state(), Some(ModuleState::WaitingForPermission));
+    assert_eq!(permissions.requests.load(Ordering::SeqCst), 0);
+
+    // Only the explicit tray request reaches the provider's `request`.
+    menu.harness.handle.request_permission();
+    wait_until_true("the explicit request", || {
+        permissions.requests.load(Ordering::SeqCst) == 1
+    });
+
+    permissions.set(PermissionStatus::Granted);
+    menu.wait_state(ModuleState::Running);
+    permissions.set(PermissionStatus::Denied);
+    menu.wait_state(ModuleState::WaitingForPermission);
+    assert_eq!(
+        menu.fakes.apps.activation_observers(),
+        0,
+        "revocation releases everything"
+    );
+    permissions.set(PermissionStatus::Granted);
+    menu.wait_state(ModuleState::Running);
+    assert_eq!(
+        permissions.requests.load(Ordering::SeqCst),
+        1,
+        "enable, reload, polling, activation, revocation and recovery only check"
+    );
+    menu.shutdown();
+}
+
+#[test]
+fn ma_03_06_a_disabled_to_enabled_file_edit_only_checks_permission() {
+    let fixture = fixture();
+    fixture.write("menuAnywhere.jsonc", "{ \"enabled\": false }\n");
+    let permissions = FakePermissions::new(PermissionStatus::Denied);
+    let mut menu = MenuHarness::new(permissions.clone());
+    menu.start(&fixture);
+    menu.harness.wait_ready();
+    assert_eq!(menu.state(), Some(ModuleState::Disabled));
+    let revision = menu.view().expect("view").revision;
+
+    fixture.write("menuAnywhere.jsonc", "{ \"enabled\": true }\n");
+    wait_for(&menu.harness.handle, "the enabled revision", |status| {
+        status.modules.iter().any(|m| m.id == "menuAnywhere" && m.revision != revision)
+    });
+    menu.wait_state(ModuleState::WaitingForPermission);
+    assert_eq!(
+        permissions.requests.load(Ordering::SeqCst),
+        0,
+        "enabling through the file only checks and never prompts"
+    );
+    assert_eq!(menu.fakes.menu.opens(), 0, "nothing starts while waiting");
+    menu.shutdown();
+}
+
+fn wait_until_true(what: &str, condition: impl Fn() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !condition() {
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn ma_03_06_a_malformed_deleted_then_repaired_file_keeps_the_runtime_and_clears_the_diagnostic() {
+    let fixture = fixture();
+    fixture.write("menuAnywhere.jsonc", "{ \"enabled\": true }\n");
+    let mut menu = MenuHarness::new(FakePermissions::new(PermissionStatus::Granted));
+    menu.start(&fixture);
+    menu.harness.wait_ready();
+    menu.wait_state(ModuleState::Running);
+    let revision = menu.view().expect("view").revision;
+
+    fixture.write("menuAnywhere.jsonc", "{ \"enabled\": ");
+    wait_for(&menu.harness.handle, "a diagnostic", |status| {
+        status.modules.iter().any(|m| m.id == "menuAnywhere" && m.diagnostic.is_some())
+    });
+    assert_eq!(
+        menu.state(),
+        Some(ModuleState::Running),
+        "the last good state keeps running"
+    );
+    assert_eq!(
+        menu.view().expect("view").revision,
+        revision,
+        "the accepted revision is retained"
+    );
+    assert_eq!(menu.fakes.apps.activation_observers(), 1);
+
+    std::fs::remove_file(fixture.paths.directory().join("menuAnywhere.jsonc")).expect("delete");
+    wait_for(&menu.harness.handle, "a deletion diagnostic", |status| {
+        status.modules.iter().any(|m| m.id == "menuAnywhere" && m.diagnostic.is_some())
+    });
+    assert_eq!(menu.state(), Some(ModuleState::Running));
+
+    fixture.write(
+        "menuAnywhere.jsonc",
+        "{ \"enabled\": true, \"modifiers\": [\"shift\"] }\n",
+    );
+    wait_for(&menu.harness.handle, "the repaired file", |status| {
+        status
+            .modules
+            .iter()
+            .any(|m| m.id == "menuAnywhere" && m.diagnostic.is_none() && m.revision != revision)
+    });
+    assert_eq!(menu.state(), Some(ModuleState::Running));
+    menu.shutdown();
+}
+
+#[test]
+fn ma_03_06_a_start_failure_is_failed_with_full_rollback_and_retry_recovers() {
+    let fixture = fixture();
+    fixture.write("menuAnywhere.jsonc", "{ \"enabled\": true }\n");
+    let mut menu = MenuHarness::new(FakePermissions::new(PermissionStatus::Granted));
+    menu.fakes.menu.fail_next_open();
+    menu.start(&fixture);
+    menu.harness.wait_ready();
+    menu.wait_state(ModuleState::Failed);
+    let view = menu.view().expect("view");
+    assert!(
+        view.detail.as_deref().is_some_and(|d| d.contains("start")),
+        "{view:?}"
+    );
+    assert_eq!(menu.fakes.apps.activation_observers(), 0, "full rollback");
+    assert!(!menu.fakes.tap.is_live(TapKind::Suppressing));
+    let rows = stache_app::tray::rows(&menu.harness.handle.status());
+    assert!(
+        rows.iter()
+            .any(|row| matches!(row, TrayRow::Item(item) if item.id == "retry:menuAnywhere"))
+    );
+    menu.harness.handle.retry("menuAnywhere");
+    menu.wait_state(ModuleState::Running);
+    menu.shutdown();
+}
+
+#[test]
+fn ma_03_06_an_unhealthy_running_module_is_projected_unavailable_with_its_reason() {
+    let fixture = fixture();
+    fixture.write("menuAnywhere.jsonc", "{ \"enabled\": true }\n");
+    let mut menu = MenuHarness::new(FakePermissions::new(PermissionStatus::Granted));
+    menu.start(&fixture);
+    menu.harness.wait_ready();
+    menu.wait_state(ModuleState::Running);
+    menu.fakes.runtime.mark_degraded("the input subscription became inert");
+    // The detail is read from the runtime at each host publication, so the next
+    // publication carries it.
+    wait_until_true("the degraded projection", || {
+        menu.harness.handle.refresh_permissions();
+        menu.state() == Some(ModuleState::Unavailable)
+    });
+    let view = menu.view().expect("view");
+    assert!(
+        view.detail.as_deref().is_some_and(|d| d.contains("inert")),
+        "{view:?}"
+    );
+    menu.shutdown();
+}
+
+#[test]
+fn ma_03_08_supported_host_shutdown_with_an_open_menu_cancels_it_and_exits() {
+    let fixture = fixture();
+    fixture.write("menuAnywhere.jsonc", "{ \"enabled\": true }\n");
+    let mut menu = MenuHarness::new(FakePermissions::new(PermissionStatus::Granted));
+    menu.start(&fixture);
+    menu.harness.wait_ready();
+    menu.wait_state(ModuleState::Running);
+    let app = {
+        let key = menu.fakes.apps.add_running_with_pid("com.example.editor", 4242);
+        menu.fakes.apps.set_name(key, Some("com.example.editor"));
+        let _ = menu.fakes.apps.activate(key);
+        key
+    };
+    let _ = app;
+    assert_eq!(menu.chord(InputEventKind::MouseDown), Disposition::Suppress);
+    assert_eq!(menu.chord(InputEventKind::MouseUp), Disposition::Suppress);
+    wait_until_true("a tracking menu", || {
+        menu.fakes
+            .menu
+            .presenter
+            .tracked()
+            .last()
+            .is_some_and(|id| menu.fakes.menu.presenter.is_tracking(*id))
+    });
+    let id = *menu.fakes.menu.presenter.tracked().last().expect("tracked");
+    let started = Instant::now();
+    menu.shutdown();
+    assert!(started.elapsed() < Duration::from_secs(8), "responsive shutdown");
+    wait_until_true("the modal menu to be removed", || {
+        menu.fakes.menu.presenter.removed().contains(&id)
+    });
+    wait_until_true("retained elements to be released", || {
+        menu.fakes.menu.ax.counts().live() == 0
+    });
+    wait_until_true("the observer to be removed", || {
+        menu.fakes.apps.activation_observers() == 0
+    });
+}
+
+#[test]
+fn ma_03_06_a_missing_shared_input_service_is_projected_unavailable_not_failed() {
+    let fixture = fixture();
+    fixture.write("menuAnywhere.jsonc", "{ \"enabled\": true }\n");
+    let mut menu = MenuHarness::new(FakePermissions::new(PermissionStatus::Granted));
+    menu.harness.input = None;
+    menu.start(&fixture);
+    menu.harness.wait_ready();
+    menu.wait_state(ModuleState::Unavailable);
+    let view = menu.view().expect("view");
+    assert!(
+        view.detail.as_deref().is_some_and(|d| d.contains("shared input service")),
+        "{view:?}"
+    );
+    assert_eq!(menu.fakes.menu.opens(), 0, "nothing was acquired");
+    assert_eq!(menu.fakes.apps.observations(), 0);
+    menu.shutdown();
 }

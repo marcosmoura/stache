@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 03 — Runtime and host integration
@@ -41,6 +41,8 @@ Use one bounded request slot and one atomic busy reservation; queued, reading, p
 
 Each trigger captures one coherent `{typed config/filter, accepted revision, runtime generation, permission/service health, trigger time, Quartz point}`. Do not publish separate atomics that can mix new flags with an old revision. Stage and validate fallible subscription/filter replacement without side effects, then publish at registry acceptance; rejected prepare/reconfigure leaves the previous filter and revision intact. A callback during staging may use the previous accepted tuple but may not use a candidate presented as accepted.
 
+Implementation note (2026-11-07): the shared-service subscription uses a fixed, config-independent prefilter (`MouseDown`, buttons 1 and 2, any modifiers). The published tuple's exact matcher is the filter, so "filter replacement" here means publishing a new tuple; no `Subscription::set_filter` runs on reload.
+
 **Compile/test gate:** inspect the landed registry's `reconfigure` → accepted snapshot/revision publication ordering. Existing `reconfigure` returns before the registry publishes the revision; simply reading `snapshot()` inside it is not acceptance coherence. The canonical contract shared by all rewrites is:
 
 > Accepted-config publication contract (canonical, shared by all rewrites): the
@@ -77,14 +79,14 @@ Ensure the host remains dispatch-capable until registry reverse-stop and exact m
 
 ## Acceptance criteria
 
-- [ ] **MA-03-01** Rebased runtime consumes the landed host input service (including inherited finite subscribe/unsubscribe gates), Hold-to-Quit frontmost identity and Part 02-owned exact activation; production factory adds MenuAnywhere inertly without losing noTunes/proxyAudio or later consumers; one tap owner remains.
-- [ ] **MA-03-02** Filter tables prove exact event/button/flag matching, including `[]`, mismatched right/left and other buttons >2; priority/overlap/re-enable behavior is exercised with a shared-service fake.
-- [ ] **MA-03-03** Admission tests prove suppression/pass rules, one reservation, Coalesced busy drops, bounded queue pressure/disconnect handling and callback purity; no queue growth, click replay or stuck busy state.
-- [ ] **MA-03-04** Barriers prove config/revision acceptance coherence across staged/rejected/unchanged/paused/disabled reload and callbacks racing publication; prior captured presentations remain valid only across enabled reconfigure.
-- [ ] **MA-03-05** Trigger/capture timing is reported honestly; identity staleness at capture/show/action, self target, PID reuse and delayed dispatch never retarget an existing presentation or issue abandoned work.
-- [ ] **MA-03-06** Fake host/registry integration proves inherited user-prompt-only metadata (no request on startup/enable/reload/tick/activation; explicit tray request only), correct permission/service/lifecycle states, transactional failed-start rollback, repairable file diagnostics and recovery without overriding disabled/paused intent.
-- [ ] **MA-03-07** Stop/disable/pause/permission loss invalidate immediately; exact tracking/AX cleanup acknowledges or reports pending failure, selected resources survive in-flight press, and late results cannot mutate a successor.
-- [ ] **MA-03-08** Supported host shutdown remains responsive, dispatches modal cancellation and joins owners without deadlock; default tests perform no native effects; approved manual gates and lasting behavior docs match observed results.
+- [x] **MA-03-01** Rebased runtime consumes the landed host input service (including inherited finite subscribe/unsubscribe gates), Hold-to-Quit frontmost identity and Part 02-owned exact activation; production factory adds MenuAnywhere inertly without losing noTunes/proxyAudio or later consumers; one tap owner remains.
+- [x] **MA-03-02** Filter tables prove exact event/button/flag matching, including `[]`, mismatched right/left and other buttons >2; priority/overlap/re-enable behavior is exercised with a shared-service fake.
+- [x] **MA-03-03** Admission tests prove suppression/pass rules, one reservation, Coalesced busy drops, bounded queue pressure/disconnect handling and callback purity; no queue growth, click replay or stuck busy state.
+- [x] **MA-03-04** Barriers prove config/revision acceptance coherence across staged/rejected/unchanged/paused/disabled reload and callbacks racing publication; prior captured presentations remain valid only across enabled reconfigure.
+- [x] **MA-03-05** Trigger/capture timing is reported honestly; identity staleness at capture/show/action, self target, PID reuse and delayed dispatch never retarget an existing presentation or issue abandoned work.
+- [x] **MA-03-06** Fake host/registry integration proves inherited user-prompt-only metadata (no request on startup/enable/reload/tick/activation; explicit tray request only), correct permission/service/lifecycle states, transactional failed-start rollback, repairable file diagnostics and recovery without overriding disabled/paused intent.
+- [x] **MA-03-07** Stop/disable/pause/permission loss invalidate immediately; exact tracking/AX cleanup acknowledges or reports pending failure, selected resources survive in-flight press, and late results cannot mutate a successor.
+- [x] **MA-03-08** Supported host shutdown remains responsive, dispatches modal cancellation and joins owners without deadlock; default tests perform no native effects; approved manual gates and lasting behavior docs match observed results.
 
 ## Tests and validation
 
@@ -106,3 +108,12 @@ After Part 02 gates, ask approval for each run's temporary Next config, exact la
 4. Switch frontmost between trigger processing/read/show and action; terminate/relaunch only the owned test target with approval. Verify capture-time semantics, stale show drop, exact captured-target action and no fallback to the newly frontmost app. Record timestamps/outcomes; stop the launched processes and remove only owned temp files.
 
 No system-changing run occurs during this docs-only task. Each part stays draft until separately approved, implemented and verified by the orchestrator.
+
+## Gate evidence
+
+Runs of 2026-11-07/08 on `feat/menu-anywhere` (after `7fb0ea2`), user present, `bun run tauri:dev` with `XDG_CONFIG_HOME=/tmp/claude/stache-ma-gate` (all other modules disabled; the real user config untouched).
+
+| Check                                                                                              | Result               | Evidence                                                                                                                                                                                                                             |
+| -------------------------------------------------------------------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1 enable, chord, pass-through                                                                      | Pass                 | Enabling through the temp file took effect without restart; control+command right-click showed the frontmost app's menu at the click; an extra Shift, a plain right click and a middle click passed through; a harmless item worked. |
+| 2–4 busy coalescing, enabled reconfigure, pause/disable during tracking, staleness, supported quit | Pass (user-reported) | The user ran the remaining checks and reported all of them working; individual timings were not recorded.                                                                                                                            |

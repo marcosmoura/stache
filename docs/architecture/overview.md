@@ -23,9 +23,21 @@ Read when changing the shipped foundation boundaries.
   frontmost snapshot (and an additive listener, `watch_frontmost_observed`, told about every
   activation and publication), a main exact-instance frontmost preflight, a separately named
   graceful `terminate` request (the force-terminating `terminate` that noTunes uses is unchanged)
-  under a typed per-press authorization, and a best-effort display hint from public window
-  geometry; it never uses Accessibility or Screen Recording. Hold-to-Quit and the host frontmost
-  publisher consume it. It is the only crate containing project-authored unsafe code; public
+  under a typed per-press authorization, a separately named exact-instance activation
+  (`activate_exact`: `NSRunningApplication activateWithOptions:` on the retained instance, under a
+  typed cancellable authorization with an optional deadline; never by path, frontmost or retry),
+  and a best-effort display hint from public window geometry; the applications adapter itself
+  never uses Accessibility or Screen Recording. Hold-to-Quit and the host frontmost publisher
+  consume it. The `menu` adapter is a dedicated AX owner thread that reads a target's menu bar
+  into a pure `Send` snapshot (0.5 s per-element timeout, 1.5 s deadline, 4096 nodes, depth 16,
+  all-or-nothing) and keeps actionable leaves retained per presentation. On top of it sit a
+  main-thread `NSMenu` presenter (main-local native state keyed by presentation, tokens only), pure
+  Quartz-to-AppKit geometry anchored on the primary display, a run-loop dispatcher
+  (`CFRunLoopPerformBlock` in the common modes) so `cancelTracking` runs during menu tracking,
+  exact-instance invocation (activation, then `AXPress` under a one-shot gate with leased
+  elements) and a `MenuControl` with acknowledged cancellation and cleanup that reports
+  `cleanupPending` honestly. It has no module runtime, input subscription or enabled behavior yet,
+  and its native behavior is verified only by the opt-in `menu-native-check` harness. It is the only crate containing project-authored unsafe code; public
   functions are safe.
 - `src/crates/modules/proxy-audio`: the proxyAudio pilot — authoritative configuration, priority
   policy, `CoreAudio` watcher, `audio list` command and read-only `proxyAudio.list` handler. See
@@ -39,6 +51,14 @@ Read when changing the shipped foundation boundaries.
   allocation-free input callback over the shared service, one worker, the HUD owner (`HudHost`)
   and an injected host frontmost lease. The app's `hold_to_quit.rs` is its factory and teardown
   owners. See [hold-to-quit.md](../features/hold-to-quit.md).
+- `src/crates/modules/menu-anywhere`: the MenuAnywhere module — authoritative `menuAnywhere.jsonc`
+  (`enabled`, `modifiers`, `mouseButton`), schema, template and migration, plus `MenuAnywhereRuntime`: a
+  pure-decision input callback over the shared service (one published tuple, one busy reservation, a
+  one-slot queue), a trigger worker that captures the exact frontmost instance and drives the
+  `stache-macos` `menu` adapter, and a config worker that publishes the accepted trigger after the
+  registry's accepted revision. Native objects stay behind the `MenuHost` seam. The app's
+  `MenuAnywhereFactory` (in `host.rs`, appended to `ModuleFactories::production`) registers it.
+  See [menu-anywhere.md](../features/menu-anywhere.md).
 - `src/crates/modules/keybindings`: the Keybindings module — `keybindings.jsonc`
   configuration with legacy-map migration, shortcut planning, the bounded command
   dispatcher, Caps Lock ownership, and the `KeybindingsRuntime` lifecycle with its
@@ -164,7 +184,7 @@ The composition root creates exactly one `InputService` over `stache_macos::MacI
 and attaches it to the registry through `HostDriver::with_input_service`; host fixtures keep
 the inert default. The Keybindings dispatcher's reservations are the service's work budget,
 and the host reserves generic priorities (`input_priority`: Hold-to-Quit > MenuAnywhere >
-Keybindings), of which Hold-to-Quit and Keybindings are used today. The backend owns one lazily started thread,
+Keybindings), all three of which subscribe. The backend owns one lazily started thread,
 `stache-input-owner`, with its own run loop: the event-tap ports, run-loop sources and the
 run loop itself live in a `!Send` struct created on that thread and never leave it. Only the
 256-request control queue, a signal-only wake handle and the `Arc<InputService>` cross
@@ -302,6 +322,6 @@ and SIGINT delivery; the opt-in harness covers SIGTERM and the WebKit surface. T
 runtime ships in [Foundation part 06](../specs/2026-11-02-foundation/06-proxy-audio.md); only its
 comparative measurements and manual hardware checks remain open.
 
-`stache-sdk`, `stache-cli`, `stache-hold-to-quit`, `stache-keep-awake`, `stache-keybindings`,
+`stache-sdk`, `stache-cli`, `stache-hold-to-quit`, `stache-keep-awake`, `stache-keybindings`, `stache-menu-anywhere`,
 `stache-proxy-audio`, `stache-notunes`, `stache-wallpapers` and `stache-app` forbid unsafe code;
 `stache-macos` documents every unsafe block.

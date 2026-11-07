@@ -6,6 +6,7 @@
 use stache_hold_to_quit::CommandQuitConfig;
 use stache_keep_awake::KeepAwakeConfig;
 use stache_keybindings::KeybindingsConfig;
+use stache_menu_anywhere::MenuAnywhereConfig;
 use stache_notunes::NoTunesConfig;
 use stache_proxy_audio::ProxyAudioConfig;
 use stache_sdk::{CatalogError, ConfigCatalog, GlobalConfig};
@@ -22,6 +23,7 @@ pub fn catalog() -> Result<ConfigCatalog, CatalogError> {
     catalog.register::<CommandQuitConfig>(CommandQuitConfig::ID)?;
     catalog.register::<KeepAwakeConfig>(KeepAwakeConfig::ID)?;
     catalog.register::<KeybindingsConfig>(KeybindingsConfig::ID)?;
+    catalog.register::<MenuAnywhereConfig>(MenuAnywhereConfig::ID)?;
     catalog.register::<NoTunesConfig>(NoTunesConfig::ID)?;
     catalog.register::<ProxyAudioConfig>(ProxyAudioConfig::ID)?;
     catalog.register::<WallpapersConfig>(WallpapersConfig::ID)?;

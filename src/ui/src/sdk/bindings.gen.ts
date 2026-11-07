@@ -655,6 +655,80 @@ export type MatchStrategy =
 /**  Case-sensitive regular expression. */
 "regex";
 
+/**
+ *  Summon the frontmost application's menu bar at the cursor.
+ *
+ *  This configuration is inert: no runtime consumes it yet.
+ */
+export type MenuAnywhereConfig = MenuAnywhereConfig_Serialize | MenuAnywhereConfig_Deserialize;
+
+/**
+ *  Summon the frontmost application's menu bar at the cursor.
+ *
+ *  This configuration is inert: no runtime consumes it yet.
+ */
+export type MenuAnywhereConfig_Deserialize = {
+	/**  Whether the feature should run. */
+	enabled?: boolean,
+	/**
+	 *  Modifiers that must be held exactly while clicking: any of "control",
+	 *  "option", "command" and "shift". Duplicates count once.
+	 *
+	 *  CAUTION: `[]` is valid and captures every unmodified matching click
+	 *  system-wide while enabled.
+	 */
+	modifiers?: MenuAnywhereModifier[],
+	/**
+	 *  The mouse button that summons the menu: "rightClick" or "middleClick".
+	 *  "middleClick" means button number 2 only, not back or forward buttons.
+	 */
+	mouseButton?: MenuAnywhereMouseButton,
+};
+
+/**
+ *  Summon the frontmost application's menu bar at the cursor.
+ *
+ *  This configuration is inert: no runtime consumes it yet.
+ */
+export type MenuAnywhereConfig_Serialize = {
+	/**  Whether the feature should run. */
+	enabled: boolean,
+	/**
+	 *  Modifiers that must be held exactly while clicking: any of "control",
+	 *  "option", "command" and "shift". Duplicates count once.
+	 *
+	 *  CAUTION: `[]` is valid and captures every unmodified matching click
+	 *  system-wide while enabled.
+	 */
+	modifiers: MenuAnywhereModifier[],
+	/**
+	 *  The mouse button that summons the menu: "rightClick" or "middleClick".
+	 *  "middleClick" means button number 2 only, not back or forward buttons.
+	 */
+	mouseButton: MenuAnywhereMouseButton,
+};
+
+/**  A keyboard modifier that must be held while clicking. */
+export type MenuAnywhereModifier =
+/**  The Control key. */
+"control" |
+/**  The Option (Alt) key. */
+"option" |
+/**  The Command key. */
+"command" |
+/**  The Shift key. */
+"shift";
+
+/**  The mouse button that summons the menu. */
+export type MenuAnywhereMouseButton =
+/**  The secondary (right) button. */
+"rightClick" |
+/**
+ *  The middle button, button number 2 only. Other extra buttons such as
+ *  back and forward never match.
+ */
+"middleClick";
+
 /**  Observed lifecycle state of one module, without SDK-only payloads. */
 export type ModuleState =
 /**  Configured but not started. */

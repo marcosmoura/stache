@@ -127,6 +127,7 @@ fn raw(kind: InputEventKind, stream: PressStream, flags: ModifierFlags, repeat: 
         flags,
         repeat,
         timestamp: Duration::ZERO,
+        location: None,
     }
 }
 

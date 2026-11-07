@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use stache_sdk::{MainThreadExecutor, ThreadError};
 
+use super::activation::{ActivationAuthorization, ActivationOutcome};
 use super::display::{DisplayHint, ScreenRecord, WindowRecord, select_display};
 use super::frontmost::{
     ActivationSink, FrontmostApplication, FrontmostPreflight, defer_activation, preflight_on_main,
@@ -270,6 +271,13 @@ struct FakeState {
     graceful_commit_barrier: Mutex<Option<Arc<FakeBarrier>>>,
     graceful_after_issue_barrier: Mutex<Option<Arc<FakeBarrier>>>,
     graceful_issuance_barrier: Mutex<Option<Arc<FakeBarrier>>>,
+    exact_activation_requests: Mutex<Vec<FakeAppKey>>,
+    exact_activation_attempts: AtomicUsize,
+    refuse_exact_activation: AtomicBool,
+    exact_activation_preflight_barrier: Mutex<Option<Arc<FakeBarrier>>>,
+    exact_activation_commit_barrier: Mutex<Option<Arc<FakeBarrier>>>,
+    exact_activation_issuance_barrier: Mutex<Option<Arc<FakeBarrier>>>,
+    exact_activation_after_issue_barrier: Mutex<Option<Arc<FakeBarrier>>>,
     display: Mutex<FakeDisplay>,
     display_queries: AtomicUsize,
 }
@@ -785,6 +793,61 @@ impl FakeApplicationBackend {
         barrier
     }
 
+    /// The exact-instance activation requests the backend sent. Recorded
+    /// independently of open, force and graceful termination, and of the
+    /// frontmost-changing [`FakeApplicationBackend::activate`] fixture.
+    #[must_use]
+    pub fn exact_activation_requests(&self) -> Vec<FakeAppKey> {
+        lock(&self.state.exact_activation_requests).clone()
+    }
+
+    /// The number of exact activation attempts reaching the backend, including
+    /// stale, cancelled and expired ones.
+    #[must_use]
+    pub fn exact_activation_attempts(&self) -> usize {
+        self.state.exact_activation_attempts.load(Ordering::SeqCst)
+    }
+
+    /// Makes every exact activation return `false` from the fake native call.
+    pub fn refuse_exact_activation(&self) {
+        self.state.refuse_exact_activation.store(true, Ordering::SeqCst);
+    }
+
+    /// Parks the next exact activation before its native preflight.
+    #[must_use]
+    pub fn block_next_activation(&self) -> Arc<FakeBarrier> {
+        let barrier = Arc::new(FakeBarrier::default());
+        *lock(&self.state.exact_activation_preflight_barrier) = Some(Arc::clone(&barrier));
+        barrier
+    }
+
+    /// Parks the next exact activation after preflight and immediately before
+    /// the permit and authorization commit (still cancellable).
+    #[must_use]
+    pub fn block_next_activation_before_commit(&self) -> Arc<FakeBarrier> {
+        let barrier = Arc::new(FakeBarrier::default());
+        *lock(&self.state.exact_activation_commit_barrier) = Some(Arc::clone(&barrier));
+        barrier
+    }
+
+    /// Parks the next exact activation inside the irreversible send, after the
+    /// authorization committed and before it is recorded.
+    #[must_use]
+    pub fn block_next_activation_issuance(&self) -> Arc<FakeBarrier> {
+        let barrier = Arc::new(FakeBarrier::default());
+        *lock(&self.state.exact_activation_issuance_barrier) = Some(Arc::clone(&barrier));
+        barrier
+    }
+
+    /// Parks the next exact activation after the send committed and before the
+    /// backend returns.
+    #[must_use]
+    pub fn block_next_activation_after_issue(&self) -> Arc<FakeBarrier> {
+        let barrier = Arc::new(FakeBarrier::default());
+        *lock(&self.state.exact_activation_after_issue_barrier) = Some(Arc::clone(&barrier));
+        barrier
+    }
+
     /// Sets the fake window list (front to back); `None` models an unavailable
     /// `CGWindowListCopyWindowInfo` result.
     pub fn set_windows(&self, windows: Option<Vec<WindowRecord>>) {
@@ -1013,6 +1076,7 @@ impl ApplicationBackend for FakeApplicationBackend {
                     bundle_identifier: application.bundle_id.clone(),
                     name: application.name.clone(),
                     is_current_process: current == Some(key),
+                    pid: Some(application.pid),
                 })
             })
         };
@@ -1077,6 +1141,62 @@ impl ApplicationBackend for FakeApplicationBackend {
             return Ok(GracefulOutcome::Stale);
         };
         let after = lock(&self.state.graceful_after_issue_barrier).take();
+        if let Some(barrier) = after {
+            barrier.enter();
+        }
+        Ok(outcome)
+    }
+
+    fn request_activate(
+        &self,
+        handle: BackendHandle,
+        application: ApplicationId,
+        authorization: &ActivationAuthorization,
+        permit: IssuancePermit<'_>,
+    ) -> Result<ActivationOutcome, ApplicationError> {
+        self.state.exact_activation_attempts.fetch_add(1, Ordering::SeqCst);
+        let barrier = lock(&self.state.exact_activation_preflight_barrier).take();
+        if let Some(barrier) = barrier {
+            barrier.enter();
+        }
+        if !self.is_running(handle, application)? {
+            return Ok(ActivationOutcome::Stale);
+        }
+        let key = {
+            let observations = lock(&self.state.observations);
+            observations
+                .get(&handle)
+                .and_then(|observation| observation.applications.get(&application.token).copied())
+        };
+        let Some(key) = key else {
+            return Ok(ActivationOutcome::Stale);
+        };
+        // Preflight is complete; this barrier is still cancellable.
+        let barrier = lock(&self.state.exact_activation_commit_barrier).take();
+        if let Some(barrier) = barrier {
+            barrier.enter();
+        }
+        let issuance_barrier = lock(&self.state.exact_activation_issuance_barrier).take();
+        let Some(outcome) = permit.issue(|| {
+            if authorization.is_expired() {
+                return ActivationOutcome::ExpiredBeforeSend;
+            }
+            if !authorization.commit_send() {
+                return ActivationOutcome::Cancelled;
+            }
+            if let Some(barrier) = issuance_barrier {
+                barrier.enter();
+            }
+            lock(&self.state.exact_activation_requests).push(key);
+            if self.state.refuse_exact_activation.load(Ordering::SeqCst) {
+                ActivationOutcome::Refused
+            } else {
+                ActivationOutcome::Requested
+            }
+        }) else {
+            return Ok(ActivationOutcome::Stale);
+        };
+        let after = lock(&self.state.exact_activation_after_issue_barrier).take();
         if let Some(barrier) = after {
             barrier.enter();
         }

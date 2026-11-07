@@ -23,6 +23,7 @@ Each file is its own catalog document, named after the exact identifier:
   commandQuit.jsonc  CommandQuitConfig
   keepAwake.jsonc    KeepAwakeConfig
   keybindings.jsonc  KeybindingsConfig
+  menuAnywhere.jsonc MenuAnywhereConfig
   notunes.jsonc      NoTunesConfig
   proxyAudio.jsonc   ProxyAudioConfig
   wallpapers.jsonc   WallpapersConfig
@@ -51,6 +52,24 @@ wraps the whole legacy map as `bindings` and sets `enabled` from map
 nonemptiness, even when every command is blank; a legacy shortcut literally named
 `enabled` or `bindings` is a binding, never the new envelope. A missing legacy
 section emits the disabled template. See [keybindings.md](../features/keybindings.md).
+
+`menuAnywhere.jsonc` backs the MenuAnywhere runtime: the host registers it
+through `MenuAnywhereFactory`, so the file is bound, watched and reloaded like
+any module file. Registration is inert (including an enabled file); only an
+accepted `enabled: true` with Accessibility granted starts the module, and the
+runtime is documented as implemented but with native behavior unverified.
+`MenuAnywhereConfig` has `enabled` (default `false`), `modifiers` (default
+`["control", "command"]`; `control|option|command|shift`) and `mouseButton`
+(default `"rightClick"`; `rightClick|middleClick`); `{}` uses the per-field
+defaults, unknown keys warn, and unknown enum spellings, wrong types, `null`
+fields and non-object roots are rejected with field paths. Empty `modifiers`
+(`[]`) is valid and captures unmodified matching clicks system-wide while
+enabled; the schema description and template comment
+say so. Duplicates are valid, preserved in the file and count once. The crate
+also provides a pure four-bit `ModifierMask` whose equality matching ignores
+unrelated flags such as Caps Lock. `middleClick` means button number 2 only, so
+back and forward buttons never match. See
+[menu-anywhere.md](../features/menu-anywhere.md).
 
 `keepAwake.jsonc` is registered for configuration, schema, template and
 migration, with only `enabled` (default `false`). It backs the shipped Keep
@@ -227,7 +246,7 @@ unchanged save is still a no-op instead of re-decoding forever.
 stache config init [-f] [-p DIR] [--stdout]
 stache config path
 stache config migrate [--from FILE] [-f]
-stache schema [global|commandQuit|keepAwake|keybindings|notunes|proxyAudio|wallpapers]
+stache schema [global|commandQuit|keepAwake|keybindings|menuAnywhere|notunes|proxyAudio|wallpapers]
 ```
 
 The commands run from the single `stache` binary. From a checkout use
@@ -264,7 +283,8 @@ not that a host accepted it.
 styles keys, strings, numbers and literals only when stdout is a terminal; see
 [ipc.md](ipc.md#output).
 
-`schema` defaults to the global schema; `schema commandQuit`, `schema keepAwake`, `schema proxyAudio`,
+`schema` defaults to the global schema; `schema commandQuit`, `schema keepAwake`, `schema menuAnywhere`,
+`schema proxyAudio`,
 `schema notunes` and `schema wallpapers` print those registered module schemas.
 Unknown IDs fail.
 
@@ -280,7 +300,7 @@ destination, migration refuses even with `--force`.
 
 `execOnStartup` and a `logging` section are converted into `global.jsonc`.
 Every registered module section is decoded and validated by the catalog's
-authoritative type: `commandQuit`, `keepAwake`, `keybindings`, `proxyAudio`, `notunes` and
+authoritative type: `commandQuit`, `keepAwake`, `keybindings`, `menuAnywhere`, `proxyAudio`, `notunes` and
 `wallpapers` today. A type may also translate legacy spellings first through
 `ModuleConfig::migrate_legacy_section`, which migration calls before decoding and
 writing; that hook is the only place a configuration type knows about values the
@@ -296,8 +316,9 @@ directory, not the unrecoverable legacy working directory; absolute and
 home-anchored values are silent. `commandQuit` is decoded through its typed
 configuration like the others: a valid section keeps its `enabled` and
 `holdDuration`, an invalid one fails migration and an absent one receives the
-disabled default template. `bar`,
-`menuAnywhere` and `tiling` are copied verbatim as same-ID `.jsonc` files; the
+disabled default template. `menuAnywhere` keeps the default hook: it is
+validated generically and its `[]` modifiers and `middleClick` are written
+unchanged. `bar` and `tiling` are copied verbatim as same-ID `.jsonc` files; the
 loader does not register or activate them. Legacy `widgets` are dropped with a
 warning. Unknown root keys warn, and unknown keys inside a registered module
 section are reported while the section is still validated and copied into its
@@ -327,7 +348,7 @@ bun run generate-schema -- --check
 
 The `generate-schema` binary writes `schemas/global.schema.json`,
 `schemas/commandQuit.schema.json`, `schemas/keepAwake.schema.json`, `schemas/keybindings.schema.json`,
-`schemas/notunes.schema.json`, `schemas/proxyAudio.schema.json` and
+`schemas/menuAnywhere.schema.json`, `schemas/notunes.schema.json`, `schemas/proxyAudio.schema.json` and
 `schemas/wallpapers.schema.json` deterministically; `--check` writes nothing and
 exits non-zero on missing or stale files. Templates are generated from the
 serialized `Default` plus schema descriptions, so there is no second

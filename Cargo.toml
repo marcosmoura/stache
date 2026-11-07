@@ -9,6 +9,7 @@ members = [
     "src/crates/modules/hold-to-quit",
     "src/crates/modules/keep-awake",
     "src/crates/modules/keybindings",
+    "src/crates/modules/menu-anywhere",
     "src/crates/modules/notunes",
     "src/crates/modules/proxy-audio",
     "src/crates/modules/wallpapers",

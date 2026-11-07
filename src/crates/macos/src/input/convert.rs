@@ -7,11 +7,11 @@ use std::time::Duration;
 
 use objc2_core_graphics::{CGEventFlags, CGEventType};
 use stache_sdk::input::{
-    InputEventKind, KeyCode, ModifierFlags, MouseButton, PressStream, RawInput,
+    InputEventKind, InputPoint, KeyCode, ModifierFlags, MouseButton, PressStream, RawInput,
 };
 
 /// The plain values the callback reads from one `CGEvent`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EventFields {
     /// `CGEventGetType` (or the callback's `type` argument).
     pub event_type: u32,
@@ -25,10 +25,12 @@ pub struct EventFields {
     pub flags: u64,
     /// `CGEventGetTimestamp` (nanoseconds).
     pub timestamp_ns: u64,
+    /// `CGEventGetLocation` in Quartz global coordinates.
+    pub location: (f64, f64),
 }
 
 /// What one callback invocation means.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Classified {
     /// A routable input event.
     Input(RawInput),
@@ -73,6 +75,18 @@ pub fn modifier_flags(flags: u64) -> ModifierFlags {
         .fold(ModifierFlags::NONE, |mask, (_, sdk)| mask | sdk)
 }
 
+/// Whether a mouse event type and its button number describe the same button.
+///
+/// `LeftMouse*` is button 0, `RightMouse*` is button 1 and `OtherMouse*` is any
+/// button from 2 up (middle, back, forward and beyond).
+const fn native_button_agrees(event_type: CGEventType, button: u32) -> bool {
+    match event_type {
+        CGEventType::LeftMouseDown | CGEventType::LeftMouseUp => button == 0,
+        CGEventType::RightMouseDown | CGEventType::RightMouseUp => button == 1,
+        _ => button >= 2,
+    }
+}
+
 /// Classifies one callback invocation.
 pub fn classify(fields: EventFields) -> Classified {
     let kind_type = CGEventType(fields.event_type);
@@ -97,6 +111,14 @@ pub fn classify(fields: EventFields) -> Classified {
         let Ok(button) = u32::try_from(fields.button) else {
             return Classified::Ignore;
         };
+        // The SDK event carries the button number but not the native event
+        // type, so the adapter is where a type/button contradiction is
+        // rejected: left is button 0, right is button 1 and other is 2 or more.
+        // A mismatched (malformed or synthetic) event is never routed and
+        // passes untouched, so a consumer can match on the button number alone.
+        if !native_button_agrees(kind_type, button) {
+            return Classified::Ignore;
+        }
         PressStream::Button(MouseButton(button))
     } else {
         let Ok(code) = u16::try_from(fields.key_code) else {
@@ -110,5 +132,10 @@ pub fn classify(fields: EventFields) -> Classified {
         flags: modifier_flags(fields.flags),
         repeat: kind == InputEventKind::KeyDown && fields.autorepeat != 0,
         timestamp: Duration::from_nanos(fields.timestamp_ns),
+        // Mouse events carry their own Quartz point; keyboard events none.
+        location: is_mouse.then_some(InputPoint {
+            x: fields.location.0,
+            y: fields.location.1,
+        }),
     })
 }

@@ -2,11 +2,13 @@
 
 use std::ffi::OsString;
 use std::fs;
+use std::path::Path;
 use std::process::ExitCode;
 
 use stache_hold_to_quit::{CommandQuitConfig, HudAnimation, HudPosition};
 use stache_keep_awake::KeepAwakeConfig;
 use stache_keybindings::KeybindingsConfig;
+use stache_menu_anywhere::MenuAnywhereConfig;
 use stache_notunes::NoTunesConfig;
 use stache_proxy_audio::ProxyAudioConfig;
 use stache_sdk::{CommandCatalog, ConfigCatalog, GlobalConfig};
@@ -25,6 +27,7 @@ fn the_catalog_owns_the_global_and_module_files() {
         "commandQuit",
         "keepAwake",
         "keybindings",
+        "menuAnywhere",
         "notunes",
         "proxyAudio",
         "wallpapers"
@@ -44,6 +47,10 @@ fn the_catalog_owns_the_global_and_module_files() {
     assert_eq!(
         catalog.file_name(KeybindingsConfig::ID).as_deref(),
         Some("keybindings.jsonc")
+    );
+    assert_eq!(
+        catalog.file_name(MenuAnywhereConfig::ID).as_deref(),
+        Some("menuAnywhere.jsonc")
     );
     assert_eq!(
         catalog.file_name(NoTunesConfig::ID).as_deref(),
@@ -134,12 +141,56 @@ fn templates_come_from_the_typed_defaults() {
     let keybindings = catalog.template(KeybindingsConfig::ID).expect("keybindings template");
     assert!(keybindings.contains("\"enabled\": false"), "{keybindings}");
     assert!(keybindings.contains("\"bindings\": {}"), "{keybindings}");
+    let menu = catalog.template(MenuAnywhereConfig::ID).expect("menuAnywhere template");
+    assert!(menu.contains("\"enabled\": false"), "{menu}");
+    assert!(menu.contains("\"modifiers\": ["), "{menu}");
+    assert!(menu.contains("\"mouseButton\": \"rightClick\""), "{menu}");
+    assert!(
+        menu.contains("system-wide"),
+        "the empty-modifiers caution reaches the template: {menu}"
+    );
+    assert!(menu.contains("button number 2 only"), "{menu}");
     let notunes = catalog.template(NoTunesConfig::ID).expect("notunes template");
     assert!(notunes.contains("\"enabled\": false"));
     assert!(!notunes.contains("targetApp"), "{notunes}");
     let pilot = catalog.template(ProxyAudioConfig::ID).expect("pilot template");
     assert!(pilot.contains("\"enabled\": false"));
     assert!(pilot.contains("\"input\": []"));
+}
+
+/// The legacy fixture's `commandQuit` section keeps its keys and gains defaults.
+fn assert_migrated_command_quit_keeps_legacy_keys(catalog: &ConfigCatalog, destination: &Path) {
+    let command_quit_path = destination.join("commandQuit.jsonc");
+    let command_quit = fs::read_to_string(&command_quit_path).expect("commandQuit");
+    catalog
+        .inspect(CommandQuitConfig::ID, &command_quit_path, &command_quit)
+        .expect("migrated commandQuit validates");
+    let decoded: CommandQuitConfig =
+        serde_json::from_str(&command_quit).expect("typed commandQuit");
+    assert!(decoded.enabled);
+    assert_eq!(decoded.hold_duration, 1500);
+    assert!(
+        !command_quit.contains("dismissDelay"),
+        "migration copies only legacy keys, so the file has no dismissDelay"
+    );
+    assert_eq!(
+        decoded.dismiss_delay, 1500,
+        "a legacy file has no dismissDelay, so the default applies"
+    );
+    assert!(!command_quit.contains("position") && !command_quit.contains("animation"));
+    assert_eq!(decoded.position, HudPosition::Bottom);
+    assert_eq!(decoded.animation, HudAnimation::Fade);
+}
+
+/// The legacy fixture's `menuAnywhere` section migrates to a valid, disabled file.
+fn assert_migrated_menu_anywhere_is_disabled(catalog: &ConfigCatalog, destination: &Path) {
+    let menu_path = destination.join("menuAnywhere.jsonc");
+    let menu = fs::read_to_string(&menu_path).expect("menuAnywhere");
+    catalog
+        .inspect(MenuAnywhereConfig::ID, &menu_path, &menu)
+        .expect("migrated menuAnywhere validates");
+    let decoded: MenuAnywhereConfig = serde_json::from_str(&menu).expect("typed menuAnywhere");
+    assert!(!decoded.enabled);
 }
 
 #[test]
@@ -194,29 +245,11 @@ fn migration_converts_the_legacy_fixture_into_valid_typed_files() {
         .expect("migrated wallpapers validates");
     let decoded: WallpapersConfig = serde_json::from_str(&wallpapers).expect("typed wallpapers");
     assert!(!decoded.enabled, "migration never enables Wallpapers");
-    let command_quit_path = destination.join("commandQuit.jsonc");
-    let command_quit = fs::read_to_string(&command_quit_path).expect("commandQuit");
-    catalog
-        .inspect(CommandQuitConfig::ID, &command_quit_path, &command_quit)
-        .expect("migrated commandQuit validates");
-    let decoded: CommandQuitConfig =
-        serde_json::from_str(&command_quit).expect("typed commandQuit");
-    assert!(decoded.enabled);
-    assert_eq!(decoded.hold_duration, 1500);
-    assert!(
-        !command_quit.contains("dismissDelay"),
-        "migration copies only legacy keys, so the file has no dismissDelay"
-    );
-    assert_eq!(
-        decoded.dismiss_delay, 1500,
-        "a legacy file has no dismissDelay, so the default applies"
-    );
-    assert!(!command_quit.contains("position") && !command_quit.contains("animation"));
-    assert_eq!(decoded.position, HudPosition::Bottom);
-    assert_eq!(decoded.animation, HudAnimation::Fade);
-    for name in ["bar.jsonc", "menuAnywhere.jsonc", "tiling.jsonc"] {
+    assert_migrated_command_quit_keeps_legacy_keys(&catalog, &destination);
+    for name in ["bar.jsonc", "tiling.jsonc"] {
         assert!(destination.join(name).exists(), "{name}");
     }
+    assert_migrated_menu_anywhere_is_disabled(&catalog, &destination);
     let keybindings_path = destination.join("keybindings.jsonc");
     let keybindings = fs::read_to_string(&keybindings_path).expect("keybindings");
     catalog
@@ -231,6 +264,11 @@ fn migration_converts_the_legacy_fixture_into_valid_typed_files() {
 
     let out = String::from_utf8(out).expect("stdout");
     assert!(out.contains("validated notunes -> notunes.jsonc"));
+    assert!(
+        out.contains("validated menuAnywhere -> menuAnywhere.jsonc"),
+        "{out}"
+    );
+    assert!(!out.contains("copied menuAnywhere"));
     assert!(out.contains("validated wallpapers -> wallpapers.jsonc"));
     assert!(out.contains("validated keybindings -> keybindings.jsonc"));
     assert!(!out.contains("copied keybindings"));
@@ -238,7 +276,7 @@ fn migration_converts_the_legacy_fixture_into_valid_typed_files() {
     assert!(!out.contains("copied wallpapers"));
     assert!(out.contains("validated commandQuit -> commandQuit.jsonc"));
     assert!(!out.contains("copied commandQuit"));
-    for unported in ["bar", "menuAnywhere", "tiling"] {
+    for unported in ["bar", "tiling"] {
         assert!(
             out.contains(&format!("copied {unported} -> {unported}.jsonc")),
             "{unported}"
@@ -871,7 +909,11 @@ fn production_registers_the_audio_pilot_the_blocker_and_keep_awake() {
     let production =
         ModuleFactories::production(Arc::new(NoExecutor), stache_macos::AssertionOwner::system());
     let ids: Vec<&str> = production.entries().iter().map(|factory| factory.id().as_str()).collect();
-    assert_eq!(ids, ["proxyAudio", "notunes", "keepAwake"]);
+    assert_eq!(
+        ids,
+        ["proxyAudio", "notunes", "keepAwake", "menuAnywhere"],
+        "existing factories keep their order and MenuAnywhere is appended"
+    );
 }
 
 #[test]
@@ -1113,4 +1155,292 @@ fn construction_runs_no_commands_and_the_schema_describes_string_or_array_values
     let kinds = &schema["$defs"]["StartupCommands"]["anyOf"];
     assert_eq!(kinds[0]["type"], "string");
     assert_eq!(kinds[1]["type"], "array");
+}
+
+#[test]
+fn the_menu_anywhere_schema_describes_the_three_fields_and_the_caution() {
+    let rendered = catalog().schema_json(MenuAnywhereConfig::ID).expect("schema").expect("render");
+    assert!(rendered.contains("/schemas/menuAnywhere.schema.json"));
+    let schema: serde_json::Value = serde_json::from_str(&rendered).expect("schema JSON");
+    let properties = schema["properties"].as_object().expect("properties");
+    let mut names: Vec<&str> = properties.keys().map(String::as_str).collect();
+    names.sort_unstable();
+    assert_eq!(names, ["enabled", "modifiers", "mouseButton"]);
+    assert_eq!(schema["properties"]["enabled"]["default"], false);
+    assert_eq!(
+        schema["properties"]["modifiers"]["default"],
+        serde_json::json!(["control", "command"])
+    );
+    assert_eq!(schema["properties"]["mouseButton"]["default"], "rightClick");
+    assert_eq!(schema["properties"]["modifiers"]["type"], "array");
+    let description = schema["properties"]["modifiers"]["description"].as_str().expect("text");
+    assert!(
+        description.contains("`[]`") && description.contains("system-wide"),
+        "{description}"
+    );
+    for spelling in [
+        "control",
+        "option",
+        "command",
+        "shift",
+        "rightClick",
+        "middleClick",
+    ] {
+        assert!(
+            rendered.contains(&format!("\"{spelling}\"")),
+            "{spelling}: {rendered}"
+        );
+    }
+}
+
+#[test]
+fn menu_anywhere_schema_and_template_generation_is_deterministic() {
+    let first = catalog();
+    let second = catalog();
+    assert_eq!(
+        first.schema_json(MenuAnywhereConfig::ID).expect("schema").expect("render"),
+        second.schema_json(MenuAnywhereConfig::ID).expect("schema").expect("render")
+    );
+    assert_eq!(
+        first.template(MenuAnywhereConfig::ID),
+        second.template(MenuAnywhereConfig::ID)
+    );
+}
+
+#[test]
+fn menu_anywhere_migration_accepts_empty_modifiers_and_middle_click_unchanged() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let source = root.path().join("legacy.jsonc");
+    let destination = root.path().join("new");
+    let section = r#"{ "enabled": true, "modifiers": [], "mouseButton": "middleClick" }"#;
+    fs::write(&source, format!(r#"{{ "menuAnywhere": {section} }}"#)).expect("source");
+    let (code, out, err) = migrate(&source, &destination, false);
+    assert_eq!(code, ExitCode::SUCCESS, "{err}");
+    assert!(
+        out.contains("validated menuAnywhere -> menuAnywhere.jsonc"),
+        "{out}"
+    );
+    let written = fs::read_to_string(destination.join("menuAnywhere.jsonc")).expect("written");
+    let decoded: MenuAnywhereConfig = serde_json::from_str(&written).expect("typed");
+    assert!(decoded.enabled && decoded.modifiers.is_empty());
+    assert_eq!(
+        decoded.mouse_button,
+        stache_menu_anywhere::MenuAnywhereMouseButton::MiddleClick
+    );
+
+    let duplicates = root.path().join("duplicates.jsonc");
+    let other = root.path().join("other");
+    fs::write(
+        &duplicates,
+        r#"{ "menuAnywhere": { "modifiers": ["shift", "shift"] } }"#,
+    )
+    .expect("source");
+    let (code, _out, err) = migrate(&duplicates, &other, false);
+    assert_eq!(code, ExitCode::SUCCESS, "{err}");
+    let written = fs::read_to_string(other.join("menuAnywhere.jsonc")).expect("written");
+    let decoded: MenuAnywhereConfig = serde_json::from_str(&written).expect("typed");
+    assert_eq!(
+        decoded.modifiers.len(),
+        2,
+        "duplicates are preserved, not normalized"
+    );
+}
+
+#[test]
+fn menu_anywhere_migration_warns_about_unknown_keys_and_preserves_them() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let source = root.path().join("legacy.jsonc");
+    let destination = root.path().join("new");
+    fs::write(
+        &source,
+        r#"{ "menuAnywhere": { "enabled": false, "preset": "wide" } }"#,
+    )
+    .expect("source");
+    let (code, out, err) = migrate(&source, &destination, false);
+    assert_eq!(code, ExitCode::SUCCESS, "{err}");
+    assert!(
+        out.contains(
+            "warning: unknown menuAnywhere key `preset` is preserved in menuAnywhere.jsonc and ignored by the typed configuration"
+        ),
+        "{out}"
+    );
+    let written = fs::read_to_string(destination.join("menuAnywhere.jsonc")).expect("written");
+    assert!(written.contains("\"preset\""), "{written}");
+}
+
+#[test]
+fn an_absent_menu_anywhere_section_receives_the_same_template_as_init() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let source = root.path().join("legacy.jsonc");
+    let destination = root.path().join("new");
+    fs::write(&source, "{}").expect("source");
+    let (code, out, err) = migrate(&source, &destination, false);
+    assert_eq!(code, ExitCode::SUCCESS, "{err}");
+    assert!(
+        out.contains("emitted default template menuAnywhere.jsonc (disabled)"),
+        "{out}"
+    );
+    assert_eq!(
+        fs::read_to_string(destination.join("menuAnywhere.jsonc")).expect("menuAnywhere"),
+        catalog().template(MenuAnywhereConfig::ID).expect("template")
+    );
+}
+
+#[test]
+fn an_invalid_menu_anywhere_section_aborts_before_writing_anything() {
+    for invalid in [
+        r#"{ "modifiers": ["hyper"] }"#,
+        r#"{ "modifiers": "command" }"#,
+        r#"{ "modifiers": null }"#,
+        r#"{ "mouseButton": "leftClick" }"#,
+        r#"{ "enabled": 1 }"#,
+        r"[]",
+        r"null",
+        r#""command""#,
+    ] {
+        let root = tempfile::tempdir().expect("temp dir");
+        let source = root.path().join("legacy.jsonc");
+        let destination = root.path().join("new");
+        let contents = format!(r#"{{ "execOnStartup": ["one"], "menuAnywhere": {invalid} }}"#);
+        fs::write(&source, &contents).expect("source");
+        let (code, out, err) = migrate(&source, &destination, false);
+        assert_eq!(code, ExitCode::FAILURE, "{invalid}");
+        assert!(err.contains("cannot convert menuAnywhere"), "{invalid}: {err}");
+        assert!(out.is_empty(), "{invalid}: {out}");
+        assert!(!destination.exists(), "{invalid}: nothing may be written");
+        assert_eq!(fs::read_to_string(&source).expect("source"), contents);
+    }
+}
+
+#[test]
+fn menu_anywhere_migration_preflights_collisions_honors_force_and_refuses_the_source() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let source = root.path().join("legacy.jsonc");
+    let destination = root.path().join("new");
+    let contents = r#"{ "menuAnywhere": { "enabled": true } }"#;
+    fs::write(&source, contents).expect("source");
+    let (code, _out, err) = migrate(&source, &destination, false);
+    assert_eq!(code, ExitCode::SUCCESS, "{err}");
+
+    let target = destination.join("menuAnywhere.jsonc");
+    fs::write(&target, "{ \"sentinel\": true }\n").expect("sentinel");
+    fs::write(destination.join("notes.txt"), "keep me").expect("unrelated");
+    let (code, _out, err) = migrate(&source, &destination, false);
+    assert_eq!(code, ExitCode::FAILURE);
+    assert!(err.contains("menuAnywhere.jsonc"), "{err}");
+    assert_eq!(
+        fs::read_to_string(&target).expect("kept"),
+        "{ \"sentinel\": true }\n"
+    );
+    let (code, _out, err) = migrate(&source, &destination, true);
+    assert_eq!(code, ExitCode::SUCCESS, "{err}");
+    assert_ne!(
+        fs::read_to_string(&target).expect("forced"),
+        "{ \"sentinel\": true }\n"
+    );
+    assert_eq!(
+        fs::read_to_string(destination.join("notes.txt")).expect("kept"),
+        "keep me"
+    );
+    assert_eq!(fs::read_to_string(&source).expect("source"), contents);
+
+    let same = root.path().join("menuAnywhere.jsonc");
+    let same_contents = r#"{ "menuAnywhere": { "enabled": true } }"#;
+    fs::write(&same, same_contents).expect("source");
+    for force in [false, true] {
+        let (code, _out, err) = migrate(&same, root.path(), force);
+        assert_eq!(code, ExitCode::FAILURE, "force={force}");
+        assert!(err.contains("is also a migration destination"), "{err}");
+        assert_eq!(fs::read_to_string(&same).expect("source"), same_contents);
+    }
+}
+
+#[test]
+fn menu_anywhere_is_catalogued_inert_and_never_marked_active_while_unbound() {
+    use std::sync::Arc;
+
+    use stache_app::bindings::{ConfigFileState, config_file_view};
+    use stache_sdk::{
+        ChangeSet, ConfigFileId, ConfigPaths, ConfigStore, ConfigStoreError, DiscardLogger,
+        EventBus, LogFilter, MainThreadExecutor, Permission, PermissionError, PermissionProvider,
+        PermissionStatus, Registry, ThreadError, UnavailableWindows, inspect_paths,
+    };
+
+    struct NoExecutor;
+
+    impl MainThreadExecutor for NoExecutor {
+        fn is_main_thread(&self) -> bool { false }
+
+        fn execute(&self, _: Box<dyn FnOnce() + Send + 'static>) -> Result<(), ThreadError> {
+            Ok(())
+        }
+    }
+
+    struct AllowAll;
+
+    impl PermissionProvider for AllowAll {
+        fn status(&self, _: Permission) -> PermissionStatus { PermissionStatus::Granted }
+
+        fn request(&self, _: Permission) -> Result<PermissionStatus, PermissionError> {
+            Ok(PermissionStatus::Granted)
+        }
+    }
+
+    let root = tempfile::tempdir().expect("temp dir");
+    let directory = root.path().join("config");
+    fs::create_dir_all(&directory).expect("config");
+    fs::write(
+        directory.join("menuAnywhere.jsonc"),
+        r#"{ "enabled": true, "modifiers": [] }"#,
+    )
+    .expect("menuAnywhere");
+
+    let registry = Arc::new(Registry::new(
+        Arc::new(DiscardLogger),
+        Arc::new(EventBus::new()),
+        Arc::new(NoExecutor),
+        Arc::new(AllowAll),
+        Arc::new(UnavailableWindows),
+    ));
+    let store = ConfigStore::new(
+        Arc::clone(&registry),
+        catalog(),
+        ConfigPaths::new(&directory),
+        Arc::new(LogFilter::default()),
+    );
+    let file = ConfigFileId::module(MenuAnywhereConfig::ID);
+
+    let report = inspect_paths(store.catalog(), store.paths());
+    let entry = report
+        .entries
+        .iter()
+        .find(|entry| entry.file == file)
+        .expect("menuAnywhere is a catalog file");
+    assert_eq!(entry.state, stache_sdk::PathState::Valid);
+    let view = config_file_view(entry, &store);
+    assert_eq!(view.state, ConfigFileState::Valid);
+    assert!(!view.active, "an unbound module never marks its file active");
+    assert!(view.diagnostic.is_none());
+
+    assert!(store.reload_all().iter().all(|outcome| outcome.file != file));
+    assert!(store.diagnostic(file).is_none());
+    let mut changes = ChangeSet::default();
+    changes.files.insert(file);
+    assert!(store.apply(&changes).is_empty());
+    assert!(matches!(
+        store.reload_one(MenuAnywhereConfig::ID),
+        Err(ConfigStoreError::Unbound { .. })
+    ));
+    assert!(
+        registry.snapshots().is_empty(),
+        "no MenuAnywhere runtime is registered"
+    );
+
+    let (code, out, err) = run_path(&directory);
+    assert_eq!(code, ExitCode::SUCCESS, "{err}");
+    assert!(out.contains("  menuAnywhere.jsonc (exists, offline)\n"), "{out}");
+
+    let (code, out, err) = run_args(&["stache", "schema", "menuAnywhere"]);
+    assert_eq!(code, ExitCode::SUCCESS, "{err}");
+    assert!(out.contains("/schemas/menuAnywhere.schema.json"), "{out}");
 }

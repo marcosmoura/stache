@@ -632,6 +632,7 @@ impl Rig {
             flags,
             repeat,
             timestamp: Duration::ZERO,
+            location: None,
         })
     }
 

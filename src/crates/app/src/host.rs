@@ -25,7 +25,11 @@ use stache_keep_awake::{KeepAwakeConfig, KeepAwakeModule, KeepAwakeSnapshot};
 use stache_keybindings::{KeybindingsConfig, KeybindingsRuntime};
 use stache_macos::audio::{AudioBackend, CoreAudioBackend};
 use stache_macos::{
-    ApplicationControl, AssertionOwner, LockObservationInstaller, LockProbe, SystemLockProbe,
+    ACKNOWLEDGEMENT_BUDGET, ApplicationControl, AssertionOwner, LockObservationInstaller,
+    LockProbe, SystemLockProbe,
+};
+use stache_menu_anywhere::{
+    HEALTH_INTERVAL, MenuAnywhereConfig, MenuAnywhereParts, MenuAnywhereRuntime, SystemMenuHost,
 };
 use stache_notunes::{NoTunesConfig, NoTunesModule};
 use stache_proxy_audio::{AudioIpc, ProxyAudioConfig, ProxyAudioModule};
@@ -49,16 +53,14 @@ use stache_sdk::{
 /// Host-assigned generic input priorities.
 ///
 /// Hold-to-Quit > `MenuAnywhere` > Keybindings. The SDK knows no module
-/// identity. Keybindings and Hold-to-Quit subscribe today; `MenuAnywhere` is
-/// reserved for a later part.
+/// identity. Keybindings, Hold-to-Quit and `MenuAnywhere` subscribe.
 pub mod input_priority {
     use super::InputPriority;
 
     /// Hold-to-Quit, the highest input priority. Its HID reservation yields an
     /// overlapping lower-priority Carbon hotkey, such as a Keybindings `Cmd+Q`.
     pub const HOLD_TO_QUIT: InputPriority = InputPriority { level: 300, tie_break: 0 };
-    /// Reserved for `MenuAnywhere`.
-    #[allow(dead_code, reason = "reserved for the MenuAnywhere part")]
+    /// `MenuAnywhere`, between Hold-to-Quit and Keybindings.
     pub const MENU_ANYWHERE: InputPriority = InputPriority { level: 200, tie_break: 0 };
     /// Reserved for Keybindings, the lowest input priority.
     pub const KEYBINDINGS: InputPriority = InputPriority { level: 100, tie_break: 0 };
@@ -380,6 +382,96 @@ impl ModuleFactory for NoTunesFactory {
     }
 }
 
+/// Registers the `MenuAnywhere` module over its host-lifetime runtime service.
+///
+/// Construction and registration are inert, including an enabled file: the
+/// application control, the native menu host and the runtime create no
+/// observer, thread, tap, read or menu until the enabled module starts, and a
+/// read happens only on a trigger. Registration installs the typed
+/// accepted-configuration watch before the registry starts modules. The factory
+/// has no socket surface, CLI command or window: the one runtime detail, an
+/// unhealthy running module, travels on the generic [`ModuleStatusView`].
+///
+/// The runtime owns its own application observation (it shares no control with
+/// Hold-to-Quit or noTunes). A stop that could not prove its cleanup keeps the
+/// exact native owners inside the runtime; [`ModuleFactory::finish_shutdown`]
+/// retries them once the registry has stopped every module.
+pub struct MenuAnywhereFactory {
+    runtime: MenuAnywhereRuntime,
+}
+
+impl MenuAnywhereFactory {
+    /// Wraps the one host-lifetime runtime service.
+    #[must_use]
+    pub const fn new(runtime: MenuAnywhereRuntime) -> Self { Self { runtime } }
+
+    /// The production factory over the system Accessibility, `NSMenu`, geometry
+    /// and application adapters. Nothing native is created.
+    #[must_use]
+    pub fn system(main_thread: Arc<dyn MainThreadExecutor>) -> Self {
+        Self::new(MenuAnywhereRuntime::new(MenuAnywhereParts {
+            applications: ApplicationControl::system(main_thread),
+            menu: Arc::new(SystemMenuHost),
+            priority: input_priority::MENU_ANYWHERE,
+            health_interval: HEALTH_INTERVAL,
+            acknowledgement: ACKNOWLEDGEMENT_BUDGET,
+        }))
+    }
+}
+
+impl ModuleFactory for MenuAnywhereFactory {
+    fn id(&self) -> ModuleId { MenuAnywhereConfig::ID }
+
+    fn register(
+        &self,
+        registry: &Registry,
+        store: &ConfigStore,
+    ) -> Result<Arc<dyn ModuleControl>, HostError> {
+        let runtime = self.runtime.clone();
+        register_module_observed(registry, store, runtime.module(), move |registry, handle| {
+            runtime.install_accepted_watch(registry.accepted_watch(handle)?);
+            Ok(())
+        })
+    }
+
+    /// A running module whose input subscription or worker is no longer healthy
+    /// is reported `unavailable` with the reason; a start that failed because
+    /// the shared input service is missing is `unavailable` too, and an
+    /// unacknowledged tap removal is shown as pending detail. The registry
+    /// lifecycle itself is never rewritten by a read or action error.
+    fn project_status(&self, view: &mut ModuleStatusView) -> bool {
+        if view.id != MenuAnywhereConfig::ID.as_str() {
+            return false;
+        }
+        if view.state == crate::bindings::ModuleState::Running
+            && let Some(detail) = self.runtime.health_detail()
+        {
+            view.state = crate::bindings::ModuleState::Unavailable;
+            view.detail = Some(detail);
+        } else if view.state == crate::bindings::ModuleState::Failed
+            && let Some(detail) = self.runtime.missing_service_detail()
+        {
+            // A missing or failed shared input service is a missing
+            // prerequisite, not a module failure.
+            view.state = crate::bindings::ModuleState::Unavailable;
+            view.detail = Some(detail);
+        } else if view.state != crate::bindings::ModuleState::Running
+            && view.detail.is_none()
+            && let Some(detail) = self.runtime.health_detail()
+        {
+            // An unacknowledged tap removal stays visible after the stop.
+            view.detail = Some(detail);
+        }
+        true
+    }
+
+    fn begin_shutdown(&self) { self.runtime.begin_shutdown(); }
+
+    fn finish_shutdown(&self, _wait: &dyn ShutdownWait) -> Result<bool, String> {
+        Ok(self.runtime.finish_shutdown())
+    }
+}
+
 /// Registers the Keep Awake runtime and its read-only status handler over one
 /// shared runtime cell.
 ///
@@ -533,7 +625,7 @@ impl ModuleFactories {
     pub const fn new() -> Self { Self { entries: Vec::new() } }
 
     /// Creates the base production list: the proxyAudio pilot, the noTunes
-    /// blocker and Keep Awake.
+    /// blocker, Keep Awake and `MenuAnywhere`.
     ///
     /// The app composition root adds the Wallpapers factory with
     /// [`crate::wallpapers::WallpapersFactory`] because that factory needs the
@@ -556,8 +648,9 @@ impl ModuleFactories {
             .with(KeepAwakeFactory::new(
                 owner,
                 Arc::new(SystemLockProbe),
-                LockObservationInstaller::system(main_thread),
+                LockObservationInstaller::system(Arc::clone(&main_thread)),
             ))
+            .with(MenuAnywhereFactory::system(main_thread))
     }
 
     /// Adds one factory.
@@ -2228,8 +2321,9 @@ mod tests {
                 stache_proxy_audio::ProxyAudioConfig::ID,
                 stache_notunes::NoTunesConfig::ID,
                 stache_keep_awake::KeepAwakeConfig::ID,
+                stache_menu_anywhere::MenuAnywhereConfig::ID,
             ],
-            "production registers the audio pilot, the blocker and then Keep Awake"
+            "production registers the audio pilot, the blocker, Keep Awake and MenuAnywhere"
         );
 
         for factory in factories.entries() {

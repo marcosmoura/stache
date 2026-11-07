@@ -94,19 +94,21 @@ use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObjectProtocol, ProtocolObject};
 use objc2_app_kit::{
-    NSRunningApplication, NSScreen, NSWorkspace, NSWorkspaceApplicationKey,
-    NSWorkspaceDidActivateApplicationNotification, NSWorkspaceOpenConfiguration,
-    NSWorkspaceWillLaunchApplicationNotification,
+    NSApplicationActivationOptions, NSRunningApplication, NSScreen, NSWorkspace,
+    NSWorkspaceApplicationKey, NSWorkspaceDidActivateApplicationNotification,
+    NSWorkspaceOpenConfiguration, NSWorkspaceWillLaunchApplicationNotification,
 };
 use objc2_foundation::{
     NSBundle, NSError, NSNotification, NSNotificationCenter, NSOperationQueue, NSString, NSURL,
 };
 use stache_sdk::{CancellationToken, MainThreadExecutor, ThreadError};
 
+pub mod activation;
 pub mod display;
 pub mod frontmost;
 pub mod graceful;
 
+pub use activation::{ActivationAuthorization, ActivationCancel, ActivationOutcome};
 pub use display::{
     DisplayHint, DisplayRect, DisplaySource, ScreenRecord, WindowRecord, appkit_rect_from_cg,
     select_display,
@@ -476,6 +478,31 @@ pub trait ApplicationBackend: Send + Sync {
         _authorization: &PressAuthorization,
         _permit: IssuancePermit<'_>,
     ) -> Result<GracefulOutcome, ApplicationError> {
+        Err(ApplicationError::Unavailable)
+    }
+
+    /// Activates the exact retained instance through `permit`.
+    ///
+    /// The backend resolves the retained instance and validates liveness and
+    /// owner generation first (not running or foreign is
+    /// [`ActivationOutcome::Stale`]). It must call [`IssuancePermit::issue`] at
+    /// the exact native activation site and, inside that closure, check
+    /// [`ActivationAuthorization::is_expired`] (returning
+    /// [`ActivationOutcome::ExpiredBeforeSend`]) and then
+    /// [`ActivationAuthorization::commit_send`] (returning
+    /// [`ActivationOutcome::Cancelled`] on failure). It returns
+    /// [`ActivationOutcome::Stale`] when the permit returns `None`. It never
+    /// activates any other instance and never opens by path.
+    ///
+    /// # Errors
+    /// Returns [`ApplicationError::NotMainThread`] off-main.
+    fn request_activate(
+        &self,
+        _handle: BackendHandle,
+        _application: ApplicationId,
+        _authorization: &ActivationAuthorization,
+        _permit: IssuancePermit<'_>,
+    ) -> Result<ActivationOutcome, ApplicationError> {
         Err(ApplicationError::Unavailable)
     }
 
@@ -2308,6 +2335,7 @@ impl ApplicationBackend for SystemApplicationBackend {
             bundle_identifier: application.bundleIdentifier().map(|id| id.to_string()),
             name: application.localizedName().map(|name| name.to_string()),
             is_current_process,
+            pid: Some(application.processIdentifier()),
         }))
     }
 
@@ -2342,6 +2370,43 @@ impl ApplicationBackend for SystemApplicationBackend {
             }
         }) else {
             return Ok(GracefulOutcome::Stale);
+        };
+        Ok(outcome)
+    }
+
+    fn request_activate(
+        &self,
+        handle: BackendHandle,
+        application: ApplicationId,
+        authorization: &ActivationAuthorization,
+        permit: IssuancePermit<'_>,
+    ) -> Result<ActivationOutcome, ApplicationError> {
+        let _main = require_main()?;
+        // Preflight is outside the gate and immediately before the permit: the
+        // exact retained instance of the current generation must still be live.
+        if !self.is_running(handle, application)? {
+            return Ok(ActivationOutcome::Stale);
+        }
+        let Some(current) = Self::retained_instance(handle, application) else {
+            return Ok(ActivationOutcome::Stale);
+        };
+        let Some(outcome) = permit.issue(|| {
+            if authorization.is_expired() {
+                return ActivationOutcome::ExpiredBeforeSend;
+            }
+            // One-shot ordering with a concurrent cancel: whichever CAS wins.
+            if !authorization.commit_send() {
+                return ActivationOutcome::Cancelled;
+            }
+            // Non-deprecated public activation of exactly this instance; see
+            // the `activation` module documentation for the SDK evidence.
+            if current.activateWithOptions(NSApplicationActivationOptions::empty()) {
+                ActivationOutcome::Requested
+            } else {
+                ActivationOutcome::Refused
+            }
+        }) else {
+            return Ok(ActivationOutcome::Stale);
         };
         Ok(outcome)
     }
@@ -2452,3 +2517,6 @@ mod frontmost_tests;
 
 #[cfg(test)]
 mod graceful_tests;
+
+#[cfg(test)]
+mod activation_tests;

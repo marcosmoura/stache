@@ -143,6 +143,7 @@ fn hq_04_02_the_decision_table_fails_open_on_every_disagreement() {
         name: None,
         is_current_process: false,
         is_finder: false,
+        pid: None,
     };
     let known = |bundle: &str, bits: u32| {
         FrontmostState::Known(FrontmostApp {
@@ -938,6 +939,7 @@ fn hq_04_04_new_presses_pass_between_reconfigure_and_the_matching_publication() 
             flags: ModifierFlags::COMMAND,
             repeat: false,
             timestamp: Duration::ZERO,
+            location: None,
         });
         *slot.lock().expect("slot") = Some(down);
     })));
@@ -990,6 +992,7 @@ fn hq_04_04_an_older_adoption_cannot_reopen_acceptance_while_a_newer_candidate_i
             flags: ModifierFlags::COMMAND,
             repeat: false,
             timestamp: Duration::ZERO,
+            location: None,
         });
         *slot.lock().expect("slot") = Some(down);
     })));

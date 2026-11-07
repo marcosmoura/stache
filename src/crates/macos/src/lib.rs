@@ -18,6 +18,7 @@ pub mod input;
 pub mod keep_awake;
 pub mod keyboard_layout;
 pub mod main_thread;
+pub mod menu;
 pub mod termination;
 
 pub use accessibility::{AccessibilityPermission, is_trusted, request_trust};
@@ -63,6 +64,10 @@ pub use keep_awake::{
     SystemAssertionBackend, SystemLockObservationBackend, SystemLockProbe,
 };
 pub use main_thread::{MainThread, is_main_thread, run_on_main};
+pub use menu::{
+    ActionToken, AxOwner, MenuItemKind, MenuItemSnapshot, MenuReadOutcome, MenuReleaseOutcome,
+    MenuSnapshot, MenuTarget, PresentationId, ReadRequest, TargetCheck, TargetValidator,
+};
 #[cfg(feature = "test")]
 pub use termination::terminate_after;
 pub use termination::{TerminateAnswer, TerminateError, TerminateObservation, reply_to_terminate};

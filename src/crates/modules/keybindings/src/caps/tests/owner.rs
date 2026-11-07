@@ -183,6 +183,7 @@ fn raw(kind: InputEventKind, key: u16) -> stache_sdk::input::RawInput {
         flags: stache_sdk::input::ModifierFlags::NONE,
         repeat: false,
         timestamp: Duration::ZERO,
+        location: None,
     }
 }
 

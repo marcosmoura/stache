@@ -78,7 +78,8 @@ retry loop beyond the host's poll.
 enable, reload, tick or activation) or `UserOnly` (status checks and polling only;
 `request` happens solely on the explicit tray path, `HostHandle::request_permission`).
 **Every shared-input consumer must declare `PermissionRequirement::shared_input`**
-(user-only), including Keybindings, Hold-to-Quit and MenuAnywhere. When two modules
+(user-only), including Keybindings, Hold-to-Quit and MenuAnywhere (the MenuAnywhere
+runtime consumes it unchanged, with no module-specific prompt hook). When two modules
 need the same permission, a user-only requirement wins the merge.
 
 `start_all` marks the registry started. Before that call, reload only stages a
@@ -298,8 +299,8 @@ The production host attaches one service over the `stache-macos` owner with
 `Registry::with_input_service` (through `HostDriver::with_input_service`), with the Keybindings
 dispatcher's `WorkReservations` as the work capacity (`NoWork` in fixtures and the default), so a tap reservation and
 dispatcher admission are one bounded decision. The native owner thread and every tap are lazy:
-they exist only while an enabled module (today, Keybindings with Caps bindings and a running
-Hold-to-Quit) holds a subscription, or while a deferred removal still swallows a claimed press. No live tap or hotkey exists in this crate.
+they exist only while an enabled module (today, Keybindings with Caps bindings, a running
+Hold-to-Quit and a running MenuAnywhere) holds a subscription, or while a deferred removal still swallows a claimed press. No live tap or hotkey exists in this crate.
 
 ### Accepted configuration and post-commit work
 
@@ -318,8 +319,15 @@ extend the registry contract narrowly instead of weakening `reconfigure`.
 - **Values.** `KeyCode`, exact `MouseButton` numbers (button 2 never matches 3+),
   a named `ModifierFlags` mask, `InputEventKind` (key down/up, `FlagsChanged`,
   mouse down/up) and an immutable `InputEvent` (kind, stream, flags, repeat,
-  timestamp, `PressId`, context snapshot). There is no native pointer, mutation
-  or injection API.
+  timestamp, optional `location`, `PressId`, context snapshot). There is no native
+  pointer, mutation or injection API. `location` is an `InputPoint` (`f64` x and y in
+  Quartz global coordinates) that the tap callback reads from the tapped event as a
+  plain field; it is `None` for keyboard events. The macOS adapter maps left, right and
+  other mouse events to one mouse kind with the native button number and drops any
+  event whose type contradicts its button (left 0, right 1, other 2 or more), so a
+  consumer can match on the button number alone. A consumer that needs the click
+  point (MenuAnywhere) copies the event's `location` in its callback instead of
+  sampling the pointer later.
 - **Filters.** `InputFilter` has a kind set, key/button `Selector`s and a
   `ModifierMatch` (`Any`, `Exact`, `AllOf`; Caps Lock is ignored by `Exact`). A
   `FlagsChanged` event for a key the filter names always passes the modifier

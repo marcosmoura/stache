@@ -162,6 +162,28 @@ fn schema_is_piped_as_plain_json() {
     assert_eq!(value["properties"]["enabled"]["default"], false);
     assert!(value["properties"]["bindings"]["additionalProperties"].is_object());
 
+    let output = workspace.run(&["schema", "menuAnywhere"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let value: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("menuAnywhere schema JSON");
+    assert!(
+        value["$id"]
+            .as_str()
+            .is_some_and(|id| id.ends_with("/schemas/menuAnywhere.schema.json"))
+    );
+    assert_eq!(value["properties"]["enabled"]["default"], false);
+    assert_eq!(value["properties"]["mouseButton"]["default"], "rightClick");
+    assert_eq!(
+        value["properties"]["modifiers"]["default"],
+        serde_json::json!(["control", "command"])
+    );
+    assert!(
+        value["properties"]["modifiers"]["description"]
+            .as_str()
+            .is_some_and(|text| text.contains("system-wide"))
+    );
+    assert_no_desktop(&workspace);
+
     let output = workspace.run(&["schema", "notunes"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let body = stdout(&output);
@@ -325,6 +347,7 @@ fn config_path_uses_the_explicit_directory() {
     assert!(body.contains("  global.jsonc\n"), "{body}");
     assert!(body.contains("  keepAwake.jsonc\n"), "{body}");
     assert!(body.contains("  keybindings.jsonc\n"), "{body}");
+    assert!(body.contains("  menuAnywhere.jsonc\n"), "{body}");
     assert!(body.contains("  notunes.jsonc\n"), "{body}");
     assert!(body.contains("  proxyAudio.jsonc\n"), "{body}");
     assert_no_desktop(&workspace);
@@ -358,6 +381,10 @@ fn config_init_writes_the_registered_templates() {
         std::fs::read_to_string(directory.join("keybindings.jsonc")).expect("keybindings");
     assert!(keybindings.contains("\"enabled\": false"), "{keybindings}");
     assert!(keybindings.contains("\"bindings\": {}"), "{keybindings}");
+    let menu_anywhere =
+        std::fs::read_to_string(directory.join("menuAnywhere.jsonc")).expect("menuAnywhere");
+    assert!(menu_anywhere.contains("\"enabled\": false"), "{menu_anywhere}");
+    assert!(menu_anywhere.contains("system-wide"), "{menu_anywhere}");
     let notunes = std::fs::read_to_string(directory.join("notunes.jsonc")).expect("notunes");
     assert!(notunes.contains("\"enabled\": false"), "{notunes}");
     assert!(!notunes.contains("targetApp"), "{notunes}");

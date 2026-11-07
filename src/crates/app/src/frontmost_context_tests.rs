@@ -202,6 +202,7 @@ fn confirmed_snapshot(generation: u64, epoch: u64) -> FrontmostSnapshot {
         name: None,
         is_current_process: false,
         is_finder: false,
+        pid: None,
     }
 }
 

@@ -2178,6 +2178,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a180dd8642fa45cdb7dd721cd4c11b1cadd4929ce112ebd8b9f5803cc79d536"
 dependencies = [
  "bitflags 2.13.2",
+ "block2",
  "dispatch2",
  "objc2",
 ]
@@ -3284,6 +3285,7 @@ dependencies = [
  "stache-keep-awake",
  "stache-keybindings",
  "stache-macos",
+ "stache-menu-anywhere",
  "stache-notunes",
  "stache-proxy-audio",
  "stache-sdk",
@@ -3366,6 +3368,18 @@ dependencies = [
  "serde_json",
  "stache-sdk",
  "tempfile",
+]
+
+[[package]]
+name = "stache-menu-anywhere"
+version = "0.25.0"
+dependencies = [
+ "schemars 1.2.3",
+ "serde",
+ "serde_json",
+ "specta",
+ "stache-macos",
+ "stache-sdk",
 ]
 
 [[package]]

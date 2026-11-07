@@ -1,0 +1,72 @@
+{
+  "$id": "https://raw.githubusercontent.com/marcosmoura/stache/main/schemas/menuAnywhere.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MenuAnywhereConfig",
+  "description": "Summon the frontmost application's menu bar at the cursor.\n\nThis configuration is inert: no runtime consumes it yet.",
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "description": "Whether the feature should run.",
+      "type": "boolean",
+      "default": false
+    },
+    "modifiers": {
+      "description": "Modifiers that must be held exactly while clicking: any of \"control\",\n\"option\", \"command\" and \"shift\". Duplicates count once.\n\nCAUTION: `[]` is valid and captures every unmodified matching click\nsystem-wide while enabled.",
+      "type": "array",
+      "default": [
+        "control",
+        "command"
+      ],
+      "items": {
+        "$ref": "#/$defs/MenuAnywhereModifier"
+      }
+    },
+    "mouseButton": {
+      "description": "The mouse button that summons the menu: \"rightClick\" or \"middleClick\".\n\"middleClick\" means button number 2 only, not back or forward buttons.",
+      "$ref": "#/$defs/MenuAnywhereMouseButton",
+      "default": "rightClick"
+    }
+  },
+  "$defs": {
+    "MenuAnywhereModifier": {
+      "description": "A keyboard modifier that must be held while clicking.",
+      "oneOf": [
+        {
+          "description": "The Control key.",
+          "type": "string",
+          "const": "control"
+        },
+        {
+          "description": "The Option (Alt) key.",
+          "type": "string",
+          "const": "option"
+        },
+        {
+          "description": "The Command key.",
+          "type": "string",
+          "const": "command"
+        },
+        {
+          "description": "The Shift key.",
+          "type": "string",
+          "const": "shift"
+        }
+      ]
+    },
+    "MenuAnywhereMouseButton": {
+      "description": "The mouse button that summons the menu.",
+      "oneOf": [
+        {
+          "description": "The secondary (right) button.",
+          "type": "string",
+          "const": "rightClick"
+        },
+        {
+          "description": "The middle button, button number 2 only. Other extra buttons such as\nback and forward never match.",
+          "type": "string",
+          "const": "middleClick"
+        }
+      ]
+    }
+  }
+}

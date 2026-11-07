@@ -281,9 +281,12 @@ fn read_fields(event_type: CGEventType, event: &CGEvent) -> EventFields {
             button: 0,
             flags: 0,
             timestamp_ns: 0,
+            location: (0.0, 0.0),
         };
     }
     let field = |field| CGEvent::integer_value_field(Some(event), field);
+    // A plain field read of the tapped event's own point, no allocation.
+    let point = CGEvent::location(Some(event));
     EventFields {
         event_type: event_type.0,
         key_code: field(CGEventField::KeyboardEventKeycode),
@@ -291,6 +294,7 @@ fn read_fields(event_type: CGEventType, event: &CGEvent) -> EventFields {
         button: field(CGEventField::MouseEventButtonNumber),
         flags: CGEvent::flags(Some(event)).0,
         timestamp_ns: CGEvent::timestamp(Some(event)),
+        location: (point.x, point.y),
     }
 }
 

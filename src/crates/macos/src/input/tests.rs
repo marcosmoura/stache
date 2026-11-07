@@ -281,6 +281,7 @@ fn fields(event_type: CGEventType) -> EventFields {
         button: 0,
         flags: 0,
         timestamp_ns: 0,
+        location: (0.0, 0.0),
     }
 }
 
@@ -363,6 +364,28 @@ fn mouse_buttons_zero_one_two_and_three_stay_exact() {
 }
 
 #[test]
+fn a_mouse_event_type_that_contradicts_its_button_number_is_never_routed() {
+    let mismatched = [
+        (CGEventType::LeftMouseDown, 1),
+        (CGEventType::LeftMouseDown, 2),
+        (CGEventType::LeftMouseUp, 1),
+        (CGEventType::RightMouseDown, 0),
+        (CGEventType::RightMouseDown, 2),
+        (CGEventType::RightMouseUp, 2),
+        (CGEventType::OtherMouseDown, 0),
+        (CGEventType::OtherMouseDown, 1),
+        (CGEventType::OtherMouseUp, 1),
+    ];
+    for (event_type, button) in mismatched {
+        assert_eq!(
+            classify(EventFields { button, ..fields(event_type) }),
+            Classified::Ignore,
+            "{event_type:?} with button {button}"
+        );
+    }
+}
+
+#[test]
 fn tap_disabled_unknown_and_out_of_range_values_never_become_input() {
     assert_eq!(
         classify(fields(CGEventType::TapDisabledByTimeout)),
@@ -440,3 +463,22 @@ fn the_event_mask_covers_keys_flags_and_all_mouse_buttons_only() {
 
 #[allow(dead_code)]
 fn service_type_is_shareable(_: &InputService) {}
+
+#[test]
+fn mouse_events_carry_their_quartz_point_and_keys_carry_none() {
+    let mouse = input(EventFields {
+        button: 1,
+        location: (-120.5, 340.25),
+        ..fields(CGEventType::RightMouseDown)
+    });
+    assert_eq!(
+        mouse.location,
+        Some(stache_sdk::input::InputPoint { x: -120.5, y: 340.25 })
+    );
+    let key = input(EventFields {
+        key_code: 12,
+        location: (9.0, 9.0),
+        ..fields(CGEventType::KeyDown)
+    });
+    assert_eq!(key.location, None);
+}

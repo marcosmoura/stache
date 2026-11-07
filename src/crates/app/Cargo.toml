@@ -29,9 +29,15 @@ name = "generate-bindings"
 path = "src/bin/generate-bindings.rs"
 required-features = ["dev-tools"]
 
+[[bin]]
+name = "menu-native-check"
+path = "src/bin/menu-native-check.rs"
+required-features = ["menu-native-check"]
+
 [features]
 custom-protocol = ["tauri/custom-protocol"]
 dev-tools = []
+menu-native-check = []
 smoke = ["custom-protocol", "stache-macos/test"]
 
 [dependencies]
@@ -45,6 +51,7 @@ stache-hold-to-quit = { path = "../modules/hold-to-quit" }
 stache-keep-awake = { path = "../modules/keep-awake" }
 stache-keybindings = { path = "../modules/keybindings" }
 stache-macos = { path = "../macos" }
+stache-menu-anywhere = { path = "../modules/menu-anywhere" }
 stache-notunes = { path = "../modules/notunes" }
 stache-proxy-audio = { path = "../modules/proxy-audio" }
 stache-sdk = { path = "../sdk" }
@@ -62,6 +69,7 @@ schemars = "1.2.3"
 stache-hold-to-quit = { path = "../modules/hold-to-quit", features = ["testing"] }
 stache-keybindings = { path = "../modules/keybindings", features = ["testing"] }
 stache-macos = { path = "../macos", features = ["testing"] }
+stache-menu-anywhere = { path = "../modules/menu-anywhere", features = ["testing"] }
 
 [lints]
 workspace = true

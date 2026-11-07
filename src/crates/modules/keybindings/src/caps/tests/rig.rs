@@ -117,6 +117,7 @@ impl Rig {
             flags: ModifierFlags::NONE,
             repeat,
             timestamp: std::time::Duration::ZERO,
+            location: None,
         })
     }
 

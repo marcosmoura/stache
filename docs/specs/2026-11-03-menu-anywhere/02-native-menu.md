@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 02 — Native menu adapters
@@ -57,14 +57,14 @@ Stop first atomically invalidates without waiting for a stalled issuance gate. T
 
 ## Acceptance criteria
 
-- [ ] **MA-02-01** Actual native bindings/owner types compile without blanket unsafe thread traits; fakes prove retained element/target counts balance on all completion, discard and partial-failure paths.
-- [ ] **MA-02-02** Reader enforces explicit per-element timeout, cumulative deadline, depth/node/cycle limits and all-or-nothing output; cancellation cannot queue another AX read after expiry and never claims in-flight interruption.
-- [ ] **MA-02-03** Fake tree rendering matches all legacy rules above with corrected NoCommand masks, enabled-leaf action isolation and Unicode shortcut display data.
-- [ ] **MA-02-04** Pure geometry tests cover above/below, left/negative coordinates, displaced primary origins, display gaps, Retina/non-Retina mixtures, borders and geometry replacement; native multi-display placement passes its manual gate.
-- [ ] **MA-02-05** Exact-instance capture/show/action checks and send-site permits reject stale/foreign/expired work, including PID reuse; no retry occurs for uncertain outcomes or already-issued activation/press.
-- [ ] **MA-02-06** Compile and approved modal-tracking checks prove exact-menu cancellation, acknowledged cleanup and main responsiveness; failed cleanup remains inert/pending and late cleanup cannot remove a successor.
-- [ ] **MA-02-07** Selected-action leases outlive tracking closure and stop until the in-flight press resolves; barrier tests prove immediate invalidation even while the native send holds its gate.
-- [ ] **MA-02-08** The additive existing-applications exact-activation operation compiles with real bindings and fake-proves Requested/Refused/Stale/Uncertain, retained-instance/PID-reuse rejection, immediate permit cancellation and bounded acknowledgement. No competing map, resolve/open fallback, retry or regression to existing application operations; cancellation after issued activation prevents unissued AXPress but cannot reverse activation.
+- [x] **MA-02-01** Actual native bindings/owner types compile without blanket unsafe thread traits; fakes prove retained element/target counts balance on all completion, discard and partial-failure paths.
+- [x] **MA-02-02** Reader enforces explicit per-element timeout, cumulative deadline, depth/node/cycle limits and all-or-nothing output; cancellation cannot queue another AX read after expiry and never claims in-flight interruption.
+- [x] **MA-02-03** Fake tree rendering matches all legacy rules above with corrected NoCommand masks, enabled-leaf action isolation and Unicode shortcut display data.
+- [x] **MA-02-04** Pure geometry tests cover above/below, left/negative coordinates, displaced primary origins, display gaps, Retina/non-Retina mixtures, borders and geometry replacement; native multi-display placement passes its manual gate.
+- [x] **MA-02-05** Exact-instance capture/show/action checks and send-site permits reject stale/foreign/expired work, including PID reuse; no retry occurs for uncertain outcomes or already-issued activation/press.
+- [x] **MA-02-06** Compile and approved modal-tracking checks prove exact-menu cancellation, acknowledged cleanup and main responsiveness; failed cleanup remains inert/pending and late cleanup cannot remove a successor.
+- [x] **MA-02-07** Selected-action leases outlive tracking closure and stop until the in-flight press resolves; barrier tests prove immediate invalidation even while the native send holds its gate.
+- [x] **MA-02-08** The additive existing-applications exact-activation operation compiles with real bindings and fake-proves Requested/Refused/Stale/Uncertain, retained-instance/PID-reuse rejection, immediate permit cancellation and bounded acknowledgement. No competing map, resolve/open fallback, retry or regression to existing application operations; cancellation after issued activation prevents unissued AXPress but cannot reverse activation.
 
 ## Tests and validation
 
@@ -84,3 +84,17 @@ Request approval naming the exact native operation and target PID for **each** r
 4. With approval for the harmless selected test action/activation, select its instrumented no-op item, terminate/relaunch that test target at barriers, and verify stale drops, exact activation and one press maximum. Quit only the test processes owned by this run. Record pending versus acknowledged cleanup honestly.
 
 No manual gate is run during spec writing. Failure blocks acceptance; build success alone cannot establish modal dispatch, thread feasibility or native timing.
+
+## Gate evidence
+
+Runs of 2026-11-07 on `feat/menu-anywhere` (after `88f25aa`), user present, with the `menu-native-check` harness against TextEdit (`com.apple.TextEdit`) launched by the tester, anchor Quartz (400, 300) on the primary display. Each run covers itself only.
+
+| Gate                           | Result   | Evidence                                                                                                                                                                                                                                                                        |
+| ------------------------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1 read/show                    | Pass     | `Snapshot(7 root items)` in 348 ms (Apple menu excluded), `Shown` on display 1 at +365 ms, closed, `cleanup: Complete { elements: 131 }`.                                                                                                                                       |
+| 2 cancel during tracking       | Pass     | `cancel: Acknowledged` 0.4 ms after request, harness verdict "cancelTracking ran DURING tracking" (common-modes run-loop dispatch drains during `NSMenu` tracking), no action, cleanup `Complete { elements: 131 }`.                                                            |
+| 3 stalled read                 | Pass     | Target `SIGSTOP`ed by the tester: `ElementTimeout` after 516 ms (0.5 s per-element timeout on the first call), no menu, target resumed. The cumulative 1.5 s deadline was not reached natively (stall hits the first call). A stalled `AXPress` was not measured.               |
+| 4a select harmless item        | Pass     | View › Show Ruler: `Pressed`, `activation_issued: true`, `press_issued: true` in 17 ms; cleanup `Complete`.                                                                                                                                                                     |
+| 4b target ends during tracking | Observed | Terminating (or terminate + relaunch of) the target while the popup is open makes macOS close the popup before any selection (`closed`, `no selection`, cleanup `Complete`). Stale-at-action after termination could not be reached natively; it remains covered by fake tests. |
+
+The user then confirmed the menu rendering (Apple menu excluded, first root bold, separators, marks, shortcut glyphs, submenus) and reported all remaining checks working on 2026-11-07/08; multi-display placement was not separately recorded. The harness fix that stops waiting after a close without selection landed with this evidence.

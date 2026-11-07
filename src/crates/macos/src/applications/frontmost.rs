@@ -64,6 +64,10 @@ pub struct FrontmostApplication {
     /// Whether it is this process, compared by retained-instance equality
     /// against `NSRunningApplication.currentApplication`.
     pub is_current_process: bool,
+    /// Its process identifier, when known. A PID is never identity: it only
+    /// lets a consumer create a native handle (an Accessibility root) for the
+    /// exact `id`, which is validated again before and after use.
+    pub pid: Option<i32>,
 }
 
 /// How a frontmost application is treated by an exemption policy.
@@ -145,6 +149,8 @@ pub struct FrontmostSnapshot {
     pub is_current_process: bool,
     /// Whether it is Finder.
     pub is_finder: bool,
+    /// Its process identifier, when known (see [`FrontmostApplication::pid`]).
+    pub pid: Option<i32>,
 }
 
 impl FrontmostSnapshot {
@@ -158,6 +164,7 @@ impl FrontmostSnapshot {
             name: None,
             is_current_process: false,
             is_finder: false,
+            pid: None,
         }
     }
 
@@ -412,6 +419,7 @@ fn build_snapshot(
         name: front.name.map(Arc::from),
         is_current_process: class == FrontmostClass::CurrentProcess,
         is_finder: class == FrontmostClass::Finder,
+        pid: front.pid,
     }
 }
 

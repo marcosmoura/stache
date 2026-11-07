@@ -631,6 +631,7 @@ fn classify_preflight_is_a_pure_table() {
         bundle_identifier: bundle.map(str::to_owned),
         name: None,
         is_current_process: current,
+        pid: None,
     };
     let _ = a;
     assert_eq!(

@@ -52,8 +52,8 @@ pub use control::{
 };
 pub use diagnostics::{DIAGNOSTIC_CAPACITY, InputCounters, InputDiagnostic};
 pub use event::{
-    Disposition, Epoch, InputEvent, InputEventKind, KeyCode, ModifierFlags, MouseButton, PressId,
-    PressStream, RawInput,
+    Disposition, Epoch, InputEvent, InputEventKind, InputPoint, KeyCode, ModifierFlags,
+    MouseButton, PressId, PressStream, RawInput,
 };
 pub use filter::{FilterError, InputFilter, KindSet, MAX_FILTER_ENTRIES, ModifierMatch, Selector};
 pub use ledger::PRESS_LEDGER_CAPACITY;

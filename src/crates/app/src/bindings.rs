@@ -16,6 +16,7 @@ use stache_keep_awake::{
     KeepAwakeRuntimeStatus, LockObservation, LockState,
 };
 use stache_keybindings::{KeybindingsConfig, KeybindingsRuntimeStatus};
+use stache_menu_anywhere::{MenuAnywhereConfig, MenuAnywhereModifier, MenuAnywhereMouseButton};
 use stache_notunes::NoTunesConfig;
 use stache_proxy_audio::{AudioDeviceInfo, AudioListKind, AudioListParams, ProxyAudioConfig};
 use stache_sdk::{GlobalConfig, IDENTITY, ModuleSnapshot, ModuleStatus, UnavailableReason};
@@ -246,7 +247,7 @@ pub fn config_file_view(
 ///
 /// The config types are exported explicitly; they are the authoritative catalog
 /// types used by `global.jsonc`, `commandQuit.jsonc`, `keepAwake.jsonc`, `keybindings.jsonc`,
-/// `proxyAudio.jsonc`, `notunes.jsonc` and `wallpapers.jsonc`. The Keep Awake status envelope and
+/// `menuAnywhere.jsonc`, /// `proxyAudio.jsonc`, `notunes.jsonc` and `wallpapers.jsonc`. The Keep Awake status envelope and
 /// its reachable runtime DTOs are exported from the same collection, so the
 /// generated client cannot mirror them by hand. The Wallpapers request and
 /// operation-outcome DTOs are exported from the same collection so Part 04's
@@ -270,6 +271,9 @@ pub fn builder() -> Builder<tauri::Wry> {
         .typ::<KeepAwakeConditionKind>()
         .typ::<KeybindingsConfig>()
         .typ::<KeybindingsRuntimeStatus>()
+        .typ::<MenuAnywhereConfig>()
+        .typ::<MenuAnywhereModifier>()
+        .typ::<MenuAnywhereMouseButton>()
         .typ::<NoTunesConfig>()
         .typ::<ProxyAudioConfig>()
         .typ::<AudioDeviceInfo>()

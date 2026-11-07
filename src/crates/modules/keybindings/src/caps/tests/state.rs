@@ -243,6 +243,7 @@ fn raw(kind: InputEventKind, key: u16, repeat: bool) -> RawInput {
         flags: ModifierFlags::NONE,
         repeat,
         timestamp: std::time::Duration::ZERO,
+        location: None,
     }
 }
 

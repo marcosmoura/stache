@@ -345,6 +345,29 @@ depends on the app crate:
   fake time, observes every requested wait and proves cancellation ordering with
   barriers instead of sleeping.
 
+### A second input handler: MenuAnywhere
+
+[MenuAnywhere](../features/menu-anywhere.md) applies the same pattern to a
+**mouse** trigger and adds three rules worth copying:
+
+- The callback reads one immutable `Published` tuple (generation, accepted
+  revision, trigger, permission and service health) through a `try_read` and
+  decides the whole match again. The service prefilter is fixed (`MouseDown`,
+  buttons 1 and 2, any modifiers) and never changes on reload, so a new
+  modifier set can never mix with an old revision. It claims
+  one atomic busy reservation and `try_send`s into a one-slot queue; a busy
+  trigger is consumed and dropped, a full or disconnected queue passes.
+- `reconfigure` only validates and stages. A second worker observes the
+  registry's published accepted pair with a bounded, cancellation-wakeable
+  `AcceptedWatch::wait_for_change` and then publishes the new tuple; the
+  subscription itself is never touched on reload. There is no module-local
+  revision counter.
+- An in-flight presentation's authority is scoped to its run generation and
+  presentation, so an enabled reconfigure never revokes it, while pause,
+  disable, permission loss and stop do. The factory appends to
+  `ModuleFactories::production` (preserving the existing order) and projects a
+  running-but-unhealthy module through `ModuleFactory::project_status`.
+
 ## Pilot example: proxyAudio
 
 The shipping pilot combines the pieces above. It is the reference for a module

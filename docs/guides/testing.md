@@ -113,6 +113,22 @@ observer cleanup, and the Carbon yield in both registration orders. Nothing inst
 a real panel, terminates an application or prompts. Real tap, HUD, display, Space and quit checks are
 manual and need approval for each run (see [the feature](../features/hold-to-quit.md#verification)).
 
+MenuAnywhere tests (`stache-menu-anywhere` `tests.rs`, plus the `ma_03_` cases in the app `host.rs`
+suite and `config_catalog.rs`) use the `testing` feature's `test_support::Rig`/`Fakes`: the shared
+`InputService` over its fake tap (callbacks are driven with `InputService::dispatch`, including
+competing handlers at other priorities and `tap_disabled`/`retry_reenable`), `FakeApplicationBackend`
+with `FakeBarrier`s, the **real** `MenuControl`/`AxOwner` over the Part 02 fakes (`FakeAx` with a hook
+that parks a read or an `AXPress`, `FakePresenter`, `FakeGeometry`, `FakeMainThread` that can pause or
+reject) and the fake `FakeClock`. `Rig::hold(Stage)` parks the worker or the config worker at
+admission, capture, read, show, action, cleanup or just before the config worker publishes the tuple. Cases
+prove the prefilter shape, trigger tables, event-point anchoring, admission and coalescing, acceptance coherence across reload/pause/disable,
+capture timing and staleness, rollback of a failed start, stop with an open menu or a stalled press
+or read, pending cleanup that never touches a successor, and that only the explicit tray request
+reaches the permission provider's `request`. Nothing installs a real tap, reads a real application,
+shows a real menu, activates, presses or prompts; every blocking wait has a timeout. Real tap,
+Accessibility, `NSMenu`, multi-display and quit checks are manual, need approval for each run and are
+**not yet performed** (see [the feature](../features/menu-anywhere.md#verification)).
+
 The Caps Lock remap (`stache-macos` `caps_remap`, `stache-keybindings` `caps`, the host recovery
 step) never runs the real `hidutil` and never touches the real mapping, event taps or Application
 Support. One `World` fake holds the global mapping, the journal file and the lease and numbers
@@ -136,7 +152,7 @@ process and journal identification, saved before/after mapping evidence and veri
 Socket-binding tests (`ipc`, the app `host` integration suites, the config watcher) cannot run in
 a sandbox that forbids local binds; run them unsandboxed.
 
-`cargo doc -p stache-sdk -p stache-macos -p stache-keep-awake -p stache-keybindings -p stache-hold-to-quit -p stache-app -p stache-proxy-audio -p stache-notunes -p stache-cli --no-deps`
+`cargo doc -p stache-sdk -p stache-macos -p stache-keep-awake -p stache-keybindings -p stache-hold-to-quit -p stache-menu-anywhere -p stache-app -p stache-proxy-audio -p stache-notunes -p stache-cli --no-deps`
 builds their public docs; pass `RUSTDOCFLAGS='-D warnings'` in validation.
 The shared command runner is tested over an injected process factory, child handles and
 a fake clock (poll quantum, 2 s cleanup transfer, 64-slot exhaustion, captured deadline

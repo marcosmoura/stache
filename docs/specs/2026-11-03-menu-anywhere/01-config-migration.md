@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 01 — Configuration and migration
@@ -33,10 +33,10 @@ Catalog registration is inert: standalone `schema`, `config init/path/migrate` m
 
 ## Acceptance criteria
 
-- [ ] **MA-01-01** Defaults, camelCase roundtrip, all enum spellings, empty/duplicate modifiers and normalized four-bit equality match the contract; invalid types/enums retain field diagnostics.
-- [ ] **MA-01-02** Production catalog/template/schema/bindings expose the same type and caution; deterministic generation checks pass without removing any prior module exports.
-- [ ] **MA-01-03** Migration validates MenuAnywhere generically, preserves unknown keys with warnings, creates the missing-section default, and rejects bad sections before any write; source bytes, collisions and unrelated files are preserved.
-- [ ] **MA-01-04** Config commands and registration remain inert, with no MenuAnywhere factory/subscription/native effects and no unbound-file active marker; noTunes/proxyAudio regression tests pass.
+- [x] **MA-01-01** Defaults, camelCase roundtrip, all enum spellings, empty/duplicate modifiers and normalized four-bit equality match the contract; invalid types/enums retain field diagnostics.
+- [x] **MA-01-02** Production catalog/template/schema/bindings expose the same type and caution; deterministic generation checks pass without removing any prior module exports.
+- [x] **MA-01-03** Migration validates MenuAnywhere generically, preserves unknown keys with warnings, creates the missing-section default, and rejects bad sections before any write; source bytes, collisions and unrelated files are preserved.
+- [x] **MA-01-04** Config commands and registration remain inert, with no MenuAnywhere factory/subscription/native effects and no unbound-file active marker; noTunes/proxyAudio regression tests pass.
 
 ## Tests and validation
 

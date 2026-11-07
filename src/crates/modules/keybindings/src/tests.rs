@@ -130,6 +130,7 @@ fn raw(kind: InputEventKind, key: u16) -> RawInput {
         flags: ModifierFlags::NONE,
         repeat: false,
         timestamp: Duration::ZERO,
+        location: None,
     }
 }
 

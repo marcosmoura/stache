@@ -148,9 +148,19 @@ pub struct PressId {
     pub epoch: Epoch,
 }
 
+/// A point in Quartz global display coordinates (origin at the top-left of the
+/// main display, y growing downward).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InputPoint {
+    /// Horizontal coordinate.
+    pub x: f64,
+    /// Vertical coordinate.
+    pub y: f64,
+}
+
 /// What the native owner reports for one event, before the router adds the
 /// press identity and context snapshot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RawInput {
     /// Event kind.
     pub kind: InputEventKind,
@@ -162,6 +172,8 @@ pub struct RawInput {
     pub repeat: bool,
     /// Event time as a monotonic offset.
     pub timestamp: Duration,
+    /// Event location in Quartz global coordinates; `None` for keyboard events.
+    pub location: Option<InputPoint>,
 }
 
 impl RawInput {
@@ -183,6 +195,7 @@ pub struct InputEvent {
     flags: ModifierFlags,
     repeat: bool,
     timestamp: Duration,
+    location: Option<InputPoint>,
     press: PressId,
     context: Arc<ContextSnapshot>,
 }
@@ -195,6 +208,7 @@ impl InputEvent {
             flags: raw.flags,
             repeat: raw.repeat,
             timestamp: raw.timestamp,
+            location: raw.location,
             press: PressId { stream: raw.stream, epoch },
             context,
         }
@@ -219,6 +233,11 @@ impl InputEvent {
     /// Monotonic event time.
     #[must_use]
     pub const fn timestamp(&self) -> Duration { self.timestamp }
+
+    /// The event's own Quartz location, captured by the native callback. `None`
+    /// for keyboard events.
+    #[must_use]
+    pub const fn location(&self) -> Option<InputPoint> { self.location }
 
     /// Physical-press identity.
     #[must_use]

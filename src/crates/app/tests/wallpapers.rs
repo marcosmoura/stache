@@ -359,5 +359,11 @@ fn the_production_composition_registers_wallpapers_by_id() {
             .expect("inert wallpapers factory"),
         );
     let ids: Vec<&str> = factories.entries().iter().map(|factory| factory.id().as_str()).collect();
-    assert_eq!(ids, ["proxyAudio", "notunes", "keepAwake", "wallpapers"]);
+    assert_eq!(ids, [
+        "proxyAudio",
+        "notunes",
+        "keepAwake",
+        "menuAnywhere",
+        "wallpapers"
+    ]);
 }

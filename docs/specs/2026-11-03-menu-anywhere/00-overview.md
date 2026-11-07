@@ -40,9 +40,9 @@ Before each part, rebase onto current `main`. [Keep Awake](../2026-11-03-keep-aw
 
 | Part                         | Summary                                                                  | Status |
 | ---------------------------- | ------------------------------------------------------------------------ | ------ |
-| [01](01-config-migration.md) | Typed config, catalog, schema, bindings and typed migration              | draft  |
-| [02](02-native-menu.md)      | AX snapshot reader, NSMenu presenter, exact-instance invocation; gate    | draft  |
-| [03](03-runtime.md)          | Module runtime on the shared input service, factory, status and teardown | draft  |
+| [01](01-config-migration.md) | Typed config, catalog, schema, bindings and typed migration              | done   |
+| [02](02-native-menu.md)      | AX snapshot reader, NSMenu presenter, exact-instance invocation; gate    | done   |
+| [03](03-runtime.md)          | Module runtime on the shared input service, factory, status and teardown | done   |
 
 Part 02 depends on Part 01 only for crate placement and the landed Hold-to-Quit Part 03 frontmost extension; Part 02 itself supplies and tests exact-instance activation. Part 03 depends on 01, 02 and the landed input service with its prompt-policy/subscription gates. Each part builds, tests and commits on its own. Unfinished parts block merge.
 
