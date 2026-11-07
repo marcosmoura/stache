@@ -1,0 +1,40 @@
+{
+  "$id": "https://raw.githubusercontent.com/marcosmoura/stache/main/schemas/keybindings.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "KeybindingsConfig",
+  "description": "Global shortcuts that run commands.\n\nValidation is deliberately shape-only: a malformed shortcut spelling is a\nlater per-entry planning diagnostic, never a rejection of the whole file.",
+  "type": "object",
+  "properties": {
+    "bindings": {
+      "description": "Shortcut to command mapping. Each value is one command string or an\nordered list of commands that run sequentially and stop at the first\nfailure.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/StartupCommands"
+      },
+      "default": {}
+    },
+    "enabled": {
+      "description": "Whether the shortcuts should be active.",
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "$defs": {
+    "StartupCommands": {
+      "description": "Startup commands, accepted as one string or an ordered list.",
+      "anyOf": [
+        {
+          "description": "One command.",
+          "type": "string"
+        },
+        {
+          "description": "Commands executed sequentially.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      ]
+    }
+  }
+}

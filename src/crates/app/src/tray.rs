@@ -323,6 +323,7 @@ mod tests {
             revision: "1".to_owned(),
             detail: None,
             diagnostic: None,
+            keybindings: None,
         }
     }
 

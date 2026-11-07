@@ -146,6 +146,51 @@ export type AudioListParams_Serialize = {
 	kind: AudioListKind,
 };
 
+/**  How a binding is delivered. */
+export type BindingRoute =
+/**  A physical chord through the Carbon hotkey adapter. */
+"ordinary" |
+/**  A `§` chord resolved from the keyboard layout. */
+"section" |
+/**  A `CapsLock+<key>` chord through the shared input tap. */
+"caps";
+
+/**  The outcome of one binding. */
+export type BindingState =
+/**  Registered and routed. */
+"active" |
+/**  Not registered; `detail` says why. */
+"rejected" |
+/**  Accepted but not registered yet (for example the runtime is waiting). */
+"pending";
+
+/**  One configured binding and what happened to it. */
+export type BindingStatus = BindingStatus_Serialize | BindingStatus_Deserialize;
+
+/**  One configured binding and what happened to it. */
+export type BindingStatus_Deserialize = {
+	/**  The shortcut as configured. */
+	shortcut: string,
+	/**  The route, when the spelling parsed. */
+	route?: BindingRoute | null,
+	/**  The outcome. */
+	state: BindingState,
+	/**  The reason for a rejection or a note such as a replaced duplicate. */
+	detail?: string | null,
+};
+
+/**  One configured binding and what happened to it. */
+export type BindingStatus_Serialize = {
+	/**  The shortcut as configured. */
+	shortcut: string,
+	/**  The route, when the spelling parsed. */
+	route: BindingRoute | null,
+	/**  The outcome. */
+	state: BindingState,
+	/**  The reason for a rejection or a note such as a replaced duplicate. */
+	detail: string | null,
+};
+
 /**  The local state of one catalog file. */
 export type ConfigFileState =
 /**  The file is absent. */
@@ -188,6 +233,43 @@ export type ConfigFileView_Serialize = {
 	diagnostic: string | null,
 	/**  Unknown keys in an otherwise valid file. */
 	warnings: string[],
+};
+
+/**  Dispatch counters, copied from atomics. */
+export type DispatchStatus = {
+	/**  The current dispatcher generation, as a decimal string. */
+	generation: string,
+	/**  Sequences running now. */
+	active: number,
+	/**  Sequences waiting for a slot. */
+	waiting: number,
+	/**  Reservations held by the input router. */
+	reserved: number,
+	/**  Submissions refused because the dispatcher was full. */
+	overflowDrops: number,
+	/**  Submissions refused because retained child ownership blocked dispatch. */
+	blockedDrops: number,
+	/**  Submissions refused as stale. */
+	staleDrops: number,
+	/**  Waiting sequences discarded by invalidation. */
+	discarded: number,
+	/**  Sequences that completed every step. */
+	completed: number,
+	/**  Sequences that stopped at a failing step. */
+	failed: number,
+	/**  Sequences stopped by cancellation. */
+	cancelled: number,
+	/**
+	 *  Presses refused between a publication and its observation, or from a
+	 *  revision the runtime has not adopted.
+	 */
+	windowDrops: number,
+	/**  Presses whose route was unknown (retired or not yet adopted). */
+	unrouted: number,
+	/**  Accepted presses the dispatcher refused: lost invocations, never run late. */
+	lost: number,
+	/**  Presses handed to the dispatcher. */
+	submitted: number,
 };
 
 /**
@@ -350,6 +432,115 @@ export type KeepAwakeStatus_Serialize = {
 	runtime: KeepAwakeRuntimeStatus,
 };
 
+/**
+ *  Global shortcuts that run commands.
+ *
+ *  Validation is deliberately shape-only: a malformed shortcut spelling is a
+ *  later per-entry planning diagnostic, never a rejection of the whole file.
+ */
+export type KeybindingsConfig = KeybindingsConfig_Serialize | KeybindingsConfig_Deserialize;
+
+/**
+ *  Global shortcuts that run commands.
+ *
+ *  Validation is deliberately shape-only: a malformed shortcut spelling is a
+ *  later per-entry planning diagnostic, never a rejection of the whole file.
+ */
+export type KeybindingsConfig_Deserialize = {
+	/**  Whether the shortcuts should be active. */
+	enabled?: boolean,
+	/**
+	 *  Shortcut to command mapping. Each value is one command string or an
+	 *  ordered list of commands that run sequentially and stop at the first
+	 *  failure.
+	 */
+	bindings?: { [key in string]: StartupCommands },
+};
+
+/**
+ *  Global shortcuts that run commands.
+ *
+ *  Validation is deliberately shape-only: a malformed shortcut spelling is a
+ *  later per-entry planning diagnostic, never a rejection of the whole file.
+ */
+export type KeybindingsConfig_Serialize = {
+	/**  Whether the shortcuts should be active. */
+	enabled: boolean,
+	/**
+	 *  Shortcut to command mapping. Each value is one command string or an
+	 *  ordered list of commands that run sequentially and stop at the first
+	 *  failure.
+	 */
+	bindings: { [key in string]: StartupCommands },
+};
+
+/**  The module's single runtime observation. */
+export type KeybindingsRuntimeStatus = KeybindingsRuntimeStatus_Serialize | KeybindingsRuntimeStatus_Deserialize;
+
+/**  The module's single runtime observation. */
+export type KeybindingsRuntimeStatus_Deserialize = {
+	/**
+	 *  The accepted revision the runtime has adopted, as an exact decimal
+	 *  string; `"0"` while none is adopted.
+	 */
+	revision: string,
+	/**  Whether any shortcut is owned. */
+	state: RuntimeState,
+	/**  Active bindings. */
+	active: number,
+	/**  Bindings that are not active. */
+	rejected: number,
+	/**  Per-binding outcomes, capped at [`MAX_BINDING_STATUSES`]. */
+	bindings: BindingStatus_Deserialize[],
+	/**  Bindings beyond the cap. */
+	bindingsOmitted: number,
+	/**  The shared tap. */
+	tap: TapState,
+	/**  The Caps remap. */
+	remap: RemapStatus_Deserialize,
+	/**  Dispatch counters. */
+	dispatch: DispatchStatus,
+	/**  Retained cleanup. */
+	retained: RetainedStatus,
+	/**
+	 *  Recent runtime diagnostics, oldest first. This is not the rejected-file
+	 *  channel: that stays `ModuleStatusView::diagnostic`.
+	 */
+	diagnostics: string[],
+};
+
+/**  The module's single runtime observation. */
+export type KeybindingsRuntimeStatus_Serialize = {
+	/**
+	 *  The accepted revision the runtime has adopted, as an exact decimal
+	 *  string; `"0"` while none is adopted.
+	 */
+	revision: string,
+	/**  Whether any shortcut is owned. */
+	state: RuntimeState,
+	/**  Active bindings. */
+	active: number,
+	/**  Bindings that are not active. */
+	rejected: number,
+	/**  Per-binding outcomes, capped at [`MAX_BINDING_STATUSES`]. */
+	bindings: BindingStatus_Serialize[],
+	/**  Bindings beyond the cap. */
+	bindingsOmitted: number,
+	/**  The shared tap. */
+	tap: TapState,
+	/**  The Caps remap. */
+	remap: RemapStatus_Serialize,
+	/**  Dispatch counters. */
+	dispatch: DispatchStatus,
+	/**  Retained cleanup. */
+	retained: RetainedStatus,
+	/**
+	 *  Recent runtime diagnostics, oldest first. This is not the rejected-file
+	 *  channel: that stays `ModuleStatusView::diagnostic`.
+	 */
+	diagnostics: string[],
+};
+
 /**  How the runtime learns about lock changes. */
 export type LockObservation =
 /**  No observation is installed. */
@@ -469,6 +660,14 @@ export type ModuleStatusView_Deserialize = {
 	detail?: string | null,
 	/**  Diagnostic for the most recently rejected configuration. */
 	diagnostic?: string | null,
+	/**
+	 *  Keybindings runtime details, present only on the `keybindings` module.
+	 *
+	 *  It is the module's separately published runtime observation, overlaid by
+	 *  the host. It never replaces `diagnostic`, which stays the rejected-file
+	 *  channel, and it is absent from the wire for every other module.
+	 */
+	keybindings?: KeybindingsRuntimeStatus_Deserialize | null,
 };
 
 /**
@@ -497,6 +696,14 @@ export type ModuleStatusView_Serialize = {
 	detail: string | null,
 	/**  Diagnostic for the most recently rejected configuration. */
 	diagnostic: string | null,
+	/**
+	 *  Keybindings runtime details, present only on the `keybindings` module.
+	 *
+	 *  It is the module's separately published runtime observation, overlaid by
+	 *  the host. It never replaces `diagnostic`, which stays the rejected-file
+	 *  channel, and it is absent from the wire for every other module.
+	 */
+	keybindings?: KeybindingsRuntimeStatus_Serialize,
 };
 
 /**  Automatic Apple Music and iTunes blocking. */
@@ -549,6 +756,68 @@ export type ProxyAudioConfig_Serialize = {
 	output: AudioDevicePriority_Serialize[],
 };
 
+/**  The phase of the global Caps Lock remap. */
+export type RemapPhase =
+/**
+ *  Nothing is owned (a blocked or refused remap also reports this, with a
+ *  `detail`).
+ */
+"inactive" |
+/**  A remap write is in progress. */
+"applying" |
+/**  The remap is applied and verified. */
+"owned" |
+/**  Restoration did not complete; our mapping may still exist. */
+"cleanupPending" |
+/**  A native write may have happened and is unverified. */
+"uncertain" |
+/**  Caps Lock is mapped by someone else; nothing of theirs was changed. */
+"ownershipLost";
+
+/**  The Caps remap observation. */
+export type RemapStatus = RemapStatus_Serialize | RemapStatus_Deserialize;
+
+/**  The Caps remap observation. */
+export type RemapStatus_Deserialize = {
+	/**  The phase. */
+	phase: RemapPhase,
+	/**  Why, for any phase other than inactive-and-clean. */
+	detail?: string | null,
+	/**  Physical Caps Lock may send F18 to applications. */
+	f18Exposed: boolean,
+};
+
+/**  The Caps remap observation. */
+export type RemapStatus_Serialize = {
+	/**  The phase. */
+	phase: RemapPhase,
+	/**  Why, for any phase other than inactive-and-clean. */
+	detail: string | null,
+	/**  Physical Caps Lock may send F18 to applications. */
+	f18Exposed: boolean,
+};
+
+/**  Retained ownership that is bounded and visible. */
+export type RetainedStatus = {
+	/**  Native hotkey IDs that stay registered but inert, awaiting cleanup. */
+	hotkeyIds: number[],
+	/**  The Carbon handler or layout observer could not be removed. */
+	carbonHandlerPending: boolean,
+	/**  Child processes the command reaper still owns. */
+	children: number,
+	/**  A Caps restore is unresolved. */
+	capsCleanup: boolean,
+};
+
+/**  Whether the runtime currently owns any shortcut. */
+export type RuntimeState =
+/**  Nothing is registered: stopped, disabled, paused, waiting or an empty map. */
+"inactive" |
+/**  Every requested binding is active. */
+"active" |
+/**  Some requested bindings are active, rejected or pending cleanup. */
+"degraded";
+
 /**  Startup commands, accepted as one string or an ordered list. */
 export type StartupCommands =
 /**  One command. */
@@ -570,6 +839,21 @@ export type StatusChanged_Serialize = {
 	/**  The new status. */
 	status: HostStatus_Serialize,
 };
+
+/**  The shared tap as this module needs it. */
+export type TapState =
+/**  No Caps binding is accepted, so no tap is used. */
+"notRequired" |
+/**  Installed, enabled and acknowledged. */
+"ready" |
+/**  The suppressing tap has no native resources. */
+"absent" |
+/**  The OS disabled the tap and a re-enable is pending. */
+"disabled" |
+/**  Re-enabling failed. */
+"reenableFailed" |
+/**  A failed action left inert resources awaiting cleanup. */
+"retained";
 
 /**  Wallpaper cycling mode. */
 export type WallpaperMode =

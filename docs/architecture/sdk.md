@@ -42,11 +42,44 @@ joins the workers it owns.
 | Reload enabling before `start_all`  | `true`  | no      | Snapshot only; status `Stopped`                    |
 | Reload enabling after `start_all`   | `true`  | no      | Start attempted from `Stopped`/`Disabled`/`Failed` |
 | Reload while blocked                | `true`  | no      | Keeps `WaitingForPermission`/`Unavailable`         |
+| Reload newly needing a missing perm | `true`  | no      | Accepted; stops, then `WaitingForPermission`       |
+| Reload dropping the waited perm     | `true`  | no      | Leaves the wait and starts                         |
 | Permission granted                  | `true`  | no      | Waiting modules start                              |
 | Permission denied                   | `true`  | no      | Declaring modules stop, then wait                  |
 | `service_failed`                    | `true`  | no      | Transitive dependents become `Unavailable`         |
 | `service_recovered`                 | `true`  | no      | Unavailable dependents are retried                 |
 | `shutdown`                          | any     | any     | Resources stopped; later starts are refused        |
+
+### Permission requirements and prompt policy
+
+`ModuleDescriptor::permissions` stays the static list. A module may also override
+`Module::required_permissions(&self, &Config) -> Vec<PermissionRequirement>` to
+compute its needs from a typed configuration; the default maps the descriptor list
+to `PermissionRequirement::automatic`, so existing modules are unchanged. The
+registry stores the result for the accepted configuration (at registration and on
+every committed reload), uses it for the fresh nonprompting `status` check on
+start, for revocation (`on_permission_change` stops only running modules whose
+accepted requirements include the permission) and exposes the merged set of
+enabled, non-paused modules through `Registry::permission_requirements()`. The
+function must be pure and cheap: it runs under the module lock and never touches
+the platform.
+
+A reload of a running module whose candidate needs a permission that is not
+granted does not call `reconfigure`: the candidate is accepted (revision
+published), the whole runtime stops and the module reports
+`WaitingForPermission`. A grant starts it with the accepted configuration. A
+reload of a waiting module that no longer requires the waited permission releases
+the wait and starts. `Module::reconfigure` keeps its rejection guarantee because
+it is only called when its requirements are satisfied. A trusted start that fails
+is `Failed`, never `WaitingForPermission`; nothing caches a grant and there is no
+retry loop beyond the host's poll.
+
+`PromptPolicy` is `Automatic` (the host may request once per session on startup,
+enable, reload, tick or activation) or `UserOnly` (status checks and polling only;
+`request` happens solely on the explicit tray path, `HostHandle::request_permission`).
+**Every shared-input consumer must declare `PermissionRequirement::shared_input`**
+(user-only), including Keybindings, Hold-to-Quit and MenuAnywhere. When two modules
+need the same permission, a user-only requirement wins the merge.
 
 `start_all` marks the registry started. Before that call, reload only stages a
 candidate so bootstrap can register every module without starting early. After
@@ -147,6 +180,22 @@ including clear and shutdown.
 This is advisory coordination among cooperating processes, not protection
 against OS or temporary-directory cleaners, or malicious same-UID mutation.
 
+## Durable storage
+
+`stache_sdk::durable` is the identity's durable counterpart of the runtime lock, added for the
+Keybindings Caps journal. `AppPaths::application_support_directory()` resolves
+`~/Library/Application Support/com.marcosmoura.stache.next` (a different root from the cache,
+the runtime directory, the user-selected configuration directory and the legacy identity;
+resolving it creates nothing, and tests inject `HOME`). `prepare_directory` creates a named `0700`
+subdirectory (`keybindings`); `existing_directory` inspects without creating. `DurableLease` is an
+exclusive advisory lock on a private lock file there, built on the same `lockfile` open/verify and
+`LeaseWait`/`LeaseClock` as cache leases (ten-millisecond slices, `Busy`/`Cancelled` without
+mutation, `verify` against the held inode and directory, never unlinked). `write_atomic` writes a
+temporary `0600` sibling with no-follow exclusive create, syncs it, renames it over the target and
+syncs the directory; `read_file` refuses links, loose modes, foreign owners, extra hard links and
+oversize files; `remove_file` syncs the directory. The SDK knows no module: callers pick the
+subdirectory and names.
+
 ## Threads
 
 - Every module has its own lock. The registry's map lock is never held while a
@@ -238,6 +287,114 @@ main thread without waiting. The launch path creates no window; only an explicit
 developer action requests the `test` surface. A queued creation rechecks its live
 reservation before touching AppKit, so a concurrent close or owner release wins
 and a failed native creation removes the reservation for a later retry.
+
+## Shared input (inert contract)
+
+`stache_sdk::input` is the platform-independent half of the shared input service
+(Keybindings part 02). It ships **idle**. `Registry::new` attaches
+`InputService::unavailable()`, so fixtures get an `InputCapability` whose
+subscriptions fail with `InputError::Unavailable` without calling any backend.
+The production host attaches one service over the `stache-macos` owner with
+`Registry::with_input_service` (through `HostDriver::with_input_service`), with the Keybindings
+dispatcher's `WorkReservations` as the work capacity (`NoWork` in fixtures and the default), so a tap reservation and
+dispatcher admission are one bounded decision. The native owner thread and every tap are lazy:
+they exist only while an enabled module (today, Keybindings with Caps bindings) holds a
+subscription. No live tap or hotkey exists in this crate.
+
+### Accepted configuration and post-commit work
+
+The registry calls `Module::reconfigure(candidate)` **before** it publishes the candidate through
+the accepted cell, and publishes only when `reconfigure` succeeded; a rejected candidate publishes
+nothing. A module with resources that cannot be flipped inertly (a global Caps remap, native
+registrations) therefore follows the canonical contract: stage inert resources in `reconfigure`
+(failure rejects the candidate), observe the published `(revision, config)` through its
+`AcceptedWatch`, and only then flip. Everything after publication is an accepted configuration with a
+module-published degraded or cleanup outcome, never a rejection. Keybindings (`runtime.rs`) is the
+reference: its coordinator worker waits on the watch, and every press compares its route's revision
+with the cell's current one, so nothing executes between publication and observation. No generic
+post-commit API was needed; if a future module needs a typed registry-level post-commit outcome,
+extend the registry contract narrowly instead of weakening `reconfigure`.
+
+- **Values.** `KeyCode`, exact `MouseButton` numbers (button 2 never matches 3+),
+  a named `ModifierFlags` mask, `InputEventKind` (key down/up, `FlagsChanged`,
+  mouse down/up) and an immutable `InputEvent` (kind, stream, flags, repeat,
+  timestamp, `PressId`, context snapshot). There is no native pointer, mutation
+  or injection API.
+- **Filters.** `InputFilter` has a kind set, key/button `Selector`s and a
+  `ModifierMatch` (`Any`, `Exact`, `AllOf`; Caps Lock is ignored by `Exact`). A
+  `FlagsChanged` event for a key the filter names always passes the modifier
+  comparison, so a modifier release still arrives.
+- **Context.** The host publishes versioned immutable `ContextSnapshot`s through
+  a `ContextPublisher`; frontmost state is `Known` (bundle id plus opaque
+  exemption bits), `Unknown` or `Stale`. The tap reads the snapshot with
+  `try_read`; a busy read fails open as `Unknown` and is counted.
+- **Subscriptions.** `InputHandler` (suppressing) returns `Disposition` and gets a
+  `CallbackScope` that can only take the work slot reserved for the press and
+  change one per-press word. `InputObserver` (passive) returns nothing and runs on
+  the separate listen-only tap, so it cannot suppress or reorder. `InputPriority`
+  is a generic `(level, tie_break)`; the SDK knows no module IDs. Higher priority
+  runs first, ties fall back to registration order, the first suppressor wins and
+  lower handlers never see a suppressed event. Overlaps (including equal-priority
+  ties) are recorded as `InputDiagnostic::Overlap`. `SubscriptionId` is scoped by
+  service identity, tap generation and revision; foreign and stale IDs are
+  rejected.
+- **Press ledger.** A service-owned ledger bounded at 1,024 entries records the
+  first-down disposition and suppressing owner until the up. Logical
+  unsubscribe, reload or a priority change make the owner inert but leave a
+  tombstone that still consumes repeat and up. A passed down never acquires a
+  suppressor mid-press and orphan releases pass. Exhaustion fails open with a
+  counter; nothing is evicted. A first down that cannot reserve required work
+  (`WorkRequirement::Reserve`) fails open for the whole press; empty-command
+  capture uses `WorkRequirement::None`, needing a ledger entry but no slot.
+- **Work reservation.** `WorkReservations::try_reserve`/`release` is the
+  non-blocking contract the Keybindings dispatcher implements. Overflow is a
+  counter, never deferred execution. There is no second queue.
+- **Tap lifecycle.** `InputBackend::submit` queues `ControlRequest`s
+  (`Install`, `Enable`, `Remove` per `TapKind::{Suppressing, ListenOnly}`) for one
+  native owner; `ControlQueue` is the 256-request reject-on-full queue the owner
+  drains. The suppressing tap installs on the first suppressing subscription and
+  is removed after the last unsubscribe is acknowledged; the listen-only tap
+  exists only for passive subscribers, and passive-only use never creates the
+  suppressing tap. Readiness is published only after the `Enable` acknowledgement.
+  Acknowledgements wait up to `ACKNOWLEDGEMENT_BUDGET` (2 s) in
+  `CANCELLATION_QUANTUM` (10 ms) slices on an injectable `InputClock`; both equal
+  the `stache-macos::applications` constants. A cancelled or timed-out queued
+  `Install`/`Enable` is revoked so the owner never acts on it late; a timed-out
+  `Remove` stays queued. A failed or timed-out action leaves the tap `Retained`
+  with the reason, never a false success; `retry_cleanup` and
+  `retry_reenable` (bounded at `MAX_RETRY_ATTEMPTS`) are explicit.
+- **Tap disabled.** `InputService::tap_disabled` cancels armed per-press state
+  (`InputHandler::on_cancel`), clears the ledger, advances the `Epoch`, never
+  synthesizes releases, records a `Discontinuity` and submits one re-enable whose
+  result shows in `tap_status` (`Disabled`, `Ready` or `ReenableFailed`).
+- **Reservation registry.** `ReservationRegistry` holds normalized physical
+  `Chord`s and declarative HID filters with `Carbon`/`Hid` backend, opaque
+  owner/generation/revision and priority. Cross-backend overlaps are recorded as
+  conflicts. A HID claim with strictly higher priority makes every overlapping
+  Carbon reservation _yield_: `dispatchable(id)` is then false (it also fails
+  closed for stale IDs) and `yielded_to(id)` names the claimant. Yields are
+  derived, not stored by callers: they are re-derived on every register, update,
+  remove, `set_active` (pause) and `release_owner`, so they persist across
+  reclaims of either side and are restored when the claimant is removed, paused,
+  replaced or moved off the chord. `yield_to(reservation, claimant)` is the
+  explicit, idempotent, validated form: it rejects stale/foreign IDs, non-Carbon or
+  non-overlapping pairs and inactive claimants (`NotYieldable`), and a claimant
+  without strictly higher priority (`UnsupportedOverlap`, with a diagnostic).
+  Equal or lower priority overlaps remain recorded conflicts. Yielded and paused
+  pairs are not reported by `conflicts()`. The only claim is that a yielded Carbon
+  reservation does not dispatch; whether a suppressing HID tap already prevents
+  Carbon delivery is an unmeasured gate of Keybindings part 03.
+- **Limits.** The macOS HID tap carries no per-keyboard identity, so a press is a
+  key or button plus an epoch. The 1 ms callback target is soft and measured after
+  the callback returns (the subscriber then becomes inert); arbitrary code cannot
+  be preempted. Panics are contained with `catch_unwind` only in unwind-enabled
+  builds; the release profile uses `panic = "abort"`, so production callbacks must
+  be audited, bounded and non-panicking. Locks on the tap path are `try_lock` only
+  and fail open.
+
+Fakes (`FakeClock`, `FakeBackend`, `CapacityWork`) live in `input::testing`, built
+under `cfg(test)` or the `testing` feature. The macOS owner implementing
+`InputBackend` is described in [overview.md](overview.md#shared-input-owner).
 
 ## Events
 
@@ -367,13 +524,49 @@ fn main() {
 }
 ```
 
+## Commands
+
+`stache_sdk::commands` is the shared direct-process runner. Commands are split with
+the legacy quoting rules (single/double quotes, backslash escapes, empty quoted
+arguments, errors for an unterminated quote or trailing escape) and spawned directly:
+no shell, expansion, pipe or redirect, and the caller's cwd, environment and stdio are
+inherited. A name resolves directly when absolute, otherwise through injected
+`STACHE_EXTRA_PATHS`, `PATH`, `/usr/local/bin`, `/opt/homebrew/bin`,
+`/opt/homebrew/sbin`, `~/.cargo/bin` and `~/.local/bin` in that order (a missing `HOME`
+drops the last two; empty `PATH` components keep their `std::env::split_paths` meaning).
+The exact name `stache` resolves only to the injected running executable, with no
+`PATH` or legacy fallback, and is spawned with `--stache-internal-cli` before its
+original arguments (see [ipc.md](ipc.md)).
+
+`CommandExecutor` has two modes over an injected `ProcessFactory` and `Clock`:
+
+- **Inherited** (`run_sequence`): waits for each step in order and stops at the first
+  parse, resolution, spawn, wait or nonzero-exit failure, reported as a typed
+  `StepFailure`. There is no duration deadline. `execOnStartup` uses it through the
+  app's `ProcessCommands` adapter, which keeps the established `startup command N: ...`
+  wording and treats cancellation as success.
+- **Captured** (`run_captured`): a caller deadline and separate stdout/stderr caps
+  (each at most `MAX_CAPTURE_BYTES`, 1 MiB) with nonblocking streamed draining on the
+  poll quantum. Overflow, timeout and cancellation are typed outcomes; truncated output
+  is never a success, and a timeout never implies the command did not act.
+
+A `SpawnGate` is consulted immediately before process creation so a stale generation,
+revision or cancellation cannot issue a later step. Cancellation kills only the directly
+owned child, polls every 10 ms (`POLL_QUANTUM`) for 2 s (`CANCEL_CLEANUP`), then moves the
+exact handle to the executor's own reaper. The executor owns 64 retained-child slots
+(`RETAINED_SLOTS`); a slot is reserved before each spawn, released on confirmed reap, and
+exhaustion refuses new children instead of dropping a handle. The executor starts no
+thread: retained children are re-signalled and swept on the next use or `sweep()`, and
+a `Retained` outcome never proves termination.
+
 ## Currently shown vs planned
 
 Shipped here: registry, lifecycle, threading, events, logging, permissions,
 errors, descriptors, window capabilities, the safe Accessibility/main-thread
 adapters, file-backed configuration (catalog, store, watcher, comment-preserving
 edits, templates and schemas), the typed accepted-configuration watch, identity
-paths/instance lock, cache leases and the socket protocol/router/client/server. The Tauri
+paths/instance lock, cache leases, durable storage and the socket protocol/router/client/server,
+and the shared input contract with its idle macOS owner. The Tauri
 composition root, tray, permission polling, shutdown coordinator and test window
 are described in [overview.md](overview.md) and [ui.md](ui.md); the CLI
 composition is in [ipc.md](ipc.md). The proxyAudio runtime is in

@@ -9,6 +9,10 @@ readme = "../../../README.md"
 keywords = ["stache", "sdk"]
 categories = ["development-tools"]
 
+[features]
+# Exposes input fakes (`input::testing`) to other crates' tests.
+testing = []
+
 [dependencies]
 clap = { version = "4.6.7", features = ["derive"] }
 jsonc-parser = { version = "0.34.0", features = ["serde"] }

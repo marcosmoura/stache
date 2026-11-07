@@ -8,11 +8,14 @@
 #![forbid(unsafe_code)]
 
 pub mod bindings;
+pub mod caps_recovery;
 pub mod catalog;
 pub mod commands;
 pub mod config_edit;
 pub mod host;
+pub mod input;
 pub mod keep_awake;
+pub mod keybindings;
 pub mod logging;
 pub mod permissions;
 pub mod shutdown;
@@ -46,9 +49,10 @@ use tauri_specta::Event as _;
 
 use crate::bindings::{HostStatus, StatusChanged};
 use crate::host::{
-    HostDriver, HostHandle, HostServices, HostSettings, HostState, HostUi, ModuleFactories,
-    new_host,
+    HostDriver, HostHandle, HostServices, HostSettings, HostState, HostUi, KeybindingsFactory,
+    ModuleFactories, new_host,
 };
+use crate::input::InputTapOwner;
 use crate::keep_awake::PowerAssertionOwner;
 use crate::logging::StderrLogger;
 use crate::permissions::PermissionPoll;
@@ -367,7 +371,19 @@ fn run_with(
         Arc::new(instance.clone()),
         Arc::clone(&logger),
     );
+    // The Keybindings pieces, built once and inert: the bounded dispatcher backs
+    // the one shared input service's work reservations, and the Caps recovery
+    // step shares the runtime's `CapsRemap`. A crash can leave the global Caps
+    // Lock remap behind; the host recovers Next's own journal once per launch,
+    // whatever the module state, and with no journal does nothing and never
+    // starts `hidutil`. No tap or hotkey exists until an enabled module starts.
+    let keybindings = keybindings::compose(&app_paths, Arc::clone(&main_thread));
+    let input_backend = keybindings.backend;
+    let keybindings_runtime = keybindings.runtime;
     let (host, driver) = new_host(Arc::clone(&teardown));
+    let driver = driver
+        .with_input_service(keybindings.input)
+        .with_startup_recovery(Arc::new(keybindings.recovery));
     // The composition root owns one Keep Awake assertion owner for the whole
     // module lifetime. The setup closure moves a clone into the production
     // factory; the original is registered below as the teardown acknowledgement
@@ -425,7 +441,8 @@ fn run_with(
             .map_err(|error| format!("cannot create the Wallpapers factory: {error}"))?;
             let factories =
                 ModuleFactories::production(Arc::clone(&main_thread), setup_power_owner)
-                    .with(wallpapers);
+                    .with(wallpapers)
+                    .with(KeybindingsFactory::new(keybindings_runtime));
             let services = HostServices {
                 logger: Arc::clone(&logger),
                 log_filter: filter,
@@ -433,7 +450,7 @@ fn run_with(
                 main_thread,
                 permissions: Arc::new(AccessibilityPermission),
                 windows: window_backend.clone(),
-                commands: Arc::new(ProcessCommands),
+                commands: Arc::new(ProcessCommands::new()),
                 poll: PermissionPoll::default(),
             };
             let settings = HostSettings {
@@ -519,6 +536,8 @@ fn run_with(
         NativeSlot::PowerAssertion,
         Arc::new(PowerAssertionOwner::new(power_owner)),
     );
+    // The input owner stops any tap and joins its thread off the main thread.
+    teardown.register_owner(NativeSlot::InputTap, Arc::new(InputTapOwner::new(input_backend)));
     // The coordinator exists before the observation and before `run_return`,
     // so no request can arrive without a driver already waiting for it.
     teardown
@@ -659,7 +678,8 @@ where
 {
     let args: Vec<OsString> = args.into_iter().collect();
     let commands = commands::catalog_for(environment);
-    let matches = match stache_cli::commands::compose(&commands).try_get_matches_from(&args) {
+    let mut command = stache_cli::commands::compose(&commands);
+    let matches = match command.try_get_matches_from_mut(&args) {
         Ok(matches) => matches,
         Err(error) => {
             let code = u8::try_from(error.exit_code()).unwrap_or(2);
@@ -671,9 +691,19 @@ where
             return ExitCode::from(code);
         }
     };
-    if stache_cli::mode::is_app_bundle(current_exe)
-        || matches.subcommand_name().is_none()
-        || matches.get_flag("desktop")
+    // A validated re-entered child selects CLI before bundle precedence;
+    // without the flag the ordinary direct/Finder/`--desktop` rules apply.
+    let internal_cli = match stache_cli::mode::internal_cli_requested(&mut command, &matches) {
+        Ok(requested) => requested,
+        Err(error) => {
+            let _ = write!(err, "{error}");
+            return ExitCode::from(u8::try_from(error.exit_code()).unwrap_or(2));
+        }
+    };
+    if !internal_cli
+        && (stache_cli::mode::is_app_bundle(current_exe)
+            || matches.subcommand_name().is_none()
+            || matches.get_flag("desktop"))
     {
         let paths = match ConfigPaths::resolve(
             matches.get_one::<std::path::PathBuf>("config").cloned(),

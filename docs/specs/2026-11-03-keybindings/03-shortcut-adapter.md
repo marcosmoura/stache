@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 03 — Ordinary and section-key adapters
@@ -87,18 +87,18 @@ chords cannot be registered twice just to stage a reload.
 
 ## Acceptance criteria
 
-- [ ] **KB-03-01** — Legacy ordinary parsing/normalization/routing and deterministic
+- [x] **KB-03-01** — Legacy ordinary parsing/normalization/routing and deterministic
       duplicates pass the compatibility corpus, including empty-command bindings.
-- [ ] **KB-03-02** — Real Carbon/TIS ownership and safe Send IDs compile without
+- [x] **KB-03-02** — Real Carbon/TIS ownership and safe Send IDs compile without
       Tauri or invented Send/Sync; foreign/release/stale events never dispatch.
-- [ ] **KB-03-03** — Layout resolution, required modifiers, fallback and collisions
+- [x] **KB-03-03** — Layout resolution, required modifiers, fallback and collisions
       produce deterministic registrations and honest per-binding diagnostics.
-- [ ] **KB-03-04** — Input-source replacement and staged resource reuse reject
+- [x] **KB-03-04** — Input-source replacement and staged resource reuse reject
       stale work without losing or double-registering accepted chords; central
       Carbon reservations match actual routes across commit/layout/removal.
-- [ ] **KB-03-05** — Registration/removal/observer failures retain exact ownership,
+- [x] **KB-03-05** — Registration/removal/observer failures retain exact ownership,
       expose partial/degraded outcomes and separate invalidation from cleanup.
-- [ ] **KB-03-06** — Yielding a Carbon reservation suppresses its dispatch for
+- [x] **KB-03-06** — Yielding a Carbon reservation suppresses its dispatch for
       exactly the yielded lifetime, restores on claimant release/pause/stop/disable/
       reload, keeps unrelated bindings, and cannot double-dispatch one physical press.
 
@@ -130,3 +130,14 @@ suppressing HID tap installed, determine whether a Carbon `RegisterEventHotKey`
 chord still fires; record the exact tap mask, chord, OS build and observed result.
 Mark it unverified if not run. Update SDK/testing
 docs and feature notice only for adapter availability, not shipped activation.
+
+## Gate evidence
+
+- **Suppressing-tap vs Carbon dispatch gate: unverified, not run.** The required
+  measured gate (does a suppressing head-insert HID tap stop Carbon
+  `RegisterEventHotKey` dispatch for the same chord?) has not been run. No tap mask,
+  chord, OS build or observed result is recorded. The yielding primitive ships
+  regardless, and no cross-backend priority is claimed until the gate is measured
+  with approval for that run.
+- Slice B compiles the real Carbon/TIS layer (`SystemNative`, `HotkeyControl::system`)
+  but default tests never register a hotkey, install the handler or read the layout.

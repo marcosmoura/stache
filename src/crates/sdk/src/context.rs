@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use crate::error::{ErrorCategory, ModuleError, ModuleResult};
 use crate::events::EventBus;
+use crate::input::InputCapability;
 use crate::logging::ScopedLogger;
 use crate::module::ModuleId;
 use crate::permissions::PermissionProvider;
@@ -27,6 +28,7 @@ pub struct ModuleContext {
     cancellation: CancellationToken,
     invalidation: ModuleInvalidation,
     windows: WindowCapability,
+    input: InputCapability,
 }
 
 /// Host services shared by every context of one registry.
@@ -35,6 +37,7 @@ pub(crate) struct ContextServices {
     pub main_thread: Arc<dyn MainThreadExecutor>,
     pub permissions: Arc<dyn PermissionProvider>,
     pub windows: WindowCapability,
+    pub input: InputCapability,
 }
 
 impl ModuleContext {
@@ -56,6 +59,7 @@ impl ModuleContext {
             cancellation,
             invalidation,
             windows: services.windows,
+            input: services.input,
         }
     }
 
@@ -129,4 +133,11 @@ impl ModuleContext {
     /// The module's declared window surfaces and the host's window backend.
     #[must_use]
     pub const fn windows(&self) -> &WindowCapability { &self.windows }
+
+    /// The module-scoped input capability backed by the host's shared service.
+    ///
+    /// It is inert (every subscription returns an `Unavailable` error) unless the
+    /// host attached a native owner.
+    #[must_use]
+    pub const fn input(&self) -> &InputCapability { &self.input }
 }

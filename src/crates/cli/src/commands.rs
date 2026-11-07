@@ -38,6 +38,17 @@ struct Cli {
     /// Launch the desktop host.
     #[arg(long, hide = true)]
     desktop: bool,
+    /// Run as a re-entered child of the running app: always select CLI mode.
+    ///
+    /// Hidden, root-only and not repeatable. It exists so a command that runs
+    /// the bare name `stache` re-enters this executable even from a bundle.
+    #[arg(
+        long = "stache-internal-cli",
+        id = crate::mode::INTERNAL_CLI_ID,
+        hide = true,
+        conflicts_with = "desktop"
+    )]
+    internal: bool,
 }
 
 #[derive(Subcommand)]
@@ -152,6 +163,16 @@ mod tests {
     use clap::error::ErrorKind;
 
     use super::*;
+
+    #[test]
+    fn the_internal_flag_is_hidden_and_matches_the_sdk_contract() {
+        assert_eq!(
+            format!("--{}", crate::mode::INTERNAL_CLI_FLAG),
+            stache_sdk::commands::INTERNAL_CLI_FLAG
+        );
+        let help = builtin_command().render_help().to_string();
+        assert!(!help.contains("internal-cli"), "{help}");
+    }
 
     #[test]
     fn the_builtin_tree_registers_only_shipped_commands() {

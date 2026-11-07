@@ -13,8 +13,8 @@ has shipped.
 | Finished                   | [noTunes](specs/2026-11-03-notunes/00-overview.md)                                   | 2/2 done on `main`                  | Configuration/native groundwork and [owned runtime](features/notunes.md) shipped.                           |
 | Finished                   | [Coordinated teardown](specs/2026-11-03-teardown/00-overview.md)                     | 4/4 done on `main`                  | Bounded teardown, native-owner acknowledgements and coordinated restart shipped; verification limits below. |
 | Finished                   | [Keep Awake](specs/2026-11-03-keep-awake/00-overview.md)                             | 2/2 done on `main`                  | Integration verified with fakes and builds; native power/lock gate remains unverified.                      |
-| Specified, not started     | [Wallpapers](specs/2026-11-03-wallpapers/00-overview.md)                             | 4 draft parts                       | Next: `feat/wallpapers`; implementation not authorized.                                                     |
-| Specified, not started     | [Keybindings / Caps Lock / section-key](specs/2026-11-03-keybindings/00-overview.md) | 5 draft parts                       | `feat/keybindings`; establishes shared input service.                                                       |
+| Finished                   | [Wallpapers](specs/2026-11-03-wallpapers/00-overview.md)                             | 4/4 done on `main`                  | Rotation, processing cache and CLI shipped; see [feature](features/wallpapers.md).                          |
+| Finished                   | [Keybindings / Caps Lock / section-key](specs/2026-11-03-keybindings/00-overview.md) | 5/5 done on `main`                  | Runtime and shared input service shipped; real hotkeys, Caps remap and taps unverified.                     |
 | Specified, not started     | [Hold-to-Quit](specs/2026-11-03-hold-to-quit/00-overview.md)                         | 4 draft parts                       | `feat/hold-to-quit`; depends on shared input service.                                                       |
 | Specified, not started     | [MenuAnywhere](specs/2026-11-03-menu-anywhere/00-overview.md)                        | 3 draft parts                       | `feat/menu-anywhere`; depends on shared input service.                                                      |
 | Specified, not started     | [Bar](specs/2026-11-03-bar/00-overview.md)                                           | 8 draft parts                       | `feat/bar`; preserve legacy visual parity.                                                                  |
@@ -27,10 +27,13 @@ Foundation also includes the owned [module SDK](architecture/sdk.md),
 and [typed UI SDK and test window](architecture/ui.md). The [tray](features/tray.md)
 belongs to foundation, not a separate spec; [proxyAudio](features/proxy-audio.md) switches audio devices.
 
-Keep Awake's two completed parts are recorded on `main` after the approved squash merge.
-No part is currently marked `in-progress`. Wallpapers is next, but its specified parts
-are not authorized for implementation. Specified work has only documentation on its
-branches: a draft is not approval. Implement one authorized part at a time.
+Keep Awake and Wallpapers are recorded on `main` after their approved squash merges.
+Keybindings is recorded on `main` after its approved squash merge. It ships the runtime,
+the bounded dispatcher and the shared input service that Hold-to-Quit and MenuAnywhere
+need; the host restores a stale Next-owned Caps remap at startup. Real hotkeys, Caps remap,
+taps and the measured HID-tap-versus-Carbon gate are unverified. Hold-to-Quit is next and
+needs its own approval. Specified work has only documentation on its branches: a draft is not
+approval. Implement one authorized part at a time.
 
 ## Runtime sequence and hard gates
 

@@ -18,13 +18,7 @@ use stache_sdk::{ConfigCatalog, GlobalConfig, LoggingConfig, ModuleId, StartupCo
 
 use crate::{MigrateArgs, fail, write_atomic};
 
-const UNPORTED: [&str; 5] = [
-    "bar",
-    "commandQuit",
-    "keybindings",
-    "menuAnywhere",
-    "tiling",
-];
+const UNPORTED: [&str; 4] = ["bar", "commandQuit", "menuAnywhere", "tiling"];
 
 pub(crate) fn run<W: Write, E: Write>(
     args: &MigrateArgs,

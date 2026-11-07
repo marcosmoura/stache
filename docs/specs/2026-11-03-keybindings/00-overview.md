@@ -111,11 +111,11 @@ main and source-check the facilities that have landed since this draft.
 
 | Part                              | Summary                                                               | Status |
 | --------------------------------- | --------------------------------------------------------------------- | ------ |
-| [01](01-config-command-runner.md) | Config/catalog/migration and shared SDK runner; preserve startup      | draft  |
-| [02](02-shared-input.md)          | Shared input contract, native owner, fakes and ownership gate         | draft  |
-| [03](03-shortcut-adapter.md)      | Ordinary/section parsing, Carbon registration and layout observer     | draft  |
-| [04](04-caps-ownership.md)        | Caps state machine, journal, identity lease and safe remap recovery   | draft  |
-| [05](05-runtime-integration.md)   | Runtime, bounded dispatch, accepted reload, factories and diagnostics | draft  |
+| [01](01-config-command-runner.md) | Config/catalog/migration and shared SDK runner; preserve startup      | done   |
+| [02](02-shared-input.md)          | Shared input contract, native owner, fakes and ownership gate         | done   |
+| [03](03-shortcut-adapter.md)      | Ordinary/section parsing, Carbon registration and layout observer     | done   |
+| [04](04-caps-ownership.md)        | Caps state machine, journal, identity lease and safe remap recovery   | done   |
+| [05](05-runtime-integration.md)   | Runtime, bounded dispatch, accepted reload, factories and diagnostics | done   |
 
 Parts are independently testable/committable in order. Parts 01–04 install no
 production Keybindings runtime. Criteria `KB-NN-MM` belong only to their owning

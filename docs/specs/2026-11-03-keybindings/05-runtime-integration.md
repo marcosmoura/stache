@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 05 — Runtime, accepted reload and host integration
@@ -154,22 +154,22 @@ unrelated shutdown to proceed. Do not claim to fix the separate Cmd-Q/logout gap
 
 ## Acceptance criteria
 
-- [ ] **KB-05-01** — Inert production factory/start/enable/pause/resume/Retry and
+- [x] **KB-05-01** — Inert production factory/start/enable/pause/resume/Retry and
       partial/all-failed registration report actual active resources correctly.
-- [ ] **KB-05-02** — Bounded FIFO dispatcher, overflow/capture behavior and
+- [x] **KB-05-02** — Bounded FIFO dispatcher, overflow/capture behavior and
       generation cancellation/spawn gate honor accepted sequence ownership and
       legacy independent-press concurrency within 16 active / 64 waiting limits.
-- [ ] **KB-05-03** — The canonical accepted-config publication contract is reused
+- [x] **KB-05-03** — The canonical accepted-config publication contract is reused
       or introduced exactly once, prevents stale/half-applied dispatch, preserves
       rejected candidates and reports committed cleanup.
-- [ ] **KB-05-04** — Config-dependent permission/prompt policy keeps ordinary
+- [x] **KB-05-04** — Config-dependent permission/prompt policy keeps ordinary
       shortcuts permission-free, Caps truthful and every shared-input consumer's
       requests explicit-user-only, including downstream HQ/MA.
-- [ ] **KB-05-05** — Published typed runtime details and held file diagnostics
+- [x] **KB-05-05** — Published typed runtime details and held file diagnostics
       coexist, repair independently and survive generated/serde boundaries.
-- [ ] **KB-05-06** — Partial startup, pending restore/reap, shutdown and successor
+- [x] **KB-05-06** — Partial startup, pending restore/reap, shutdown and successor
       generations remain bounded, inert and deadlock-free across actual host paths.
-- [ ] **KB-05-07** — Host-owned Caps startup recovery is composed and exercised
+- [x] **KB-05-07** — Host-owned Caps startup recovery is composed and exercised
       independently of module activation, and a reject/unchanged reload causes no
       cancellation of accepted work.
 
@@ -202,3 +202,31 @@ require each-run approval and verified restoration/unregister; never run them by
 default or use real configured application commands as fixtures. Record manual
 coverage gaps honestly. Materialize feature behavior only after acceptance;
 update SDK/config/overview/testing and additive index/roadmap for shipped facts.
+
+## Gate evidence
+
+- **Automated (2026-11-07):** every KB-05 criterion is covered by fake-backed tests
+  named `kb_05_NN_*` in the keybindings, SDK and app crates, run through the real
+  ConfigStore, Registry and HostDriver. Full native suite (1692 tests), UI (24) and
+  script (6) tests, workspace Clippy, warnings-denied rustdoc, lint, format and
+  deterministic schema and bindings checks passed. The release build compiles with
+  `custom-protocol`.
+- **Accepted-config contract:** reused the `AcceptedWatch` landed by Wallpapers;
+  no second shape and no module-local revision counter. Reconfigure stages inert
+  resources before publication; the runtime flips them only after observing the
+  same revision. Presses in the publication window are dropped and counted, and
+  each sequence is tagged with its accepted revision, so queued or active old work
+  starts no further child once a newer revision is published. A child that had
+  already started is not undone.
+- **Generic SDK additions:** `Module::required_permissions` with
+  `PermissionRequirement`/`PromptPolicy` (shared-input consumers are user-prompt-
+  only) and `WorkReservation::redeem`. The dispatcher's reservations replace
+  `NoWork` as the shared input service's single work budget.
+- **Known limits:** a tap or Carbon callback submits inline and may create a
+  bounded task thread, so the callback is bounded but not allocation-free. A Caps
+  key-set change restores and re-applies the remap. Lifecycle status stays
+  `Running` while runtime details report `degraded`. Every shared-input consumer
+  that reserves work draws from the Keybindings dispatcher budget.
+- **Unverified, not run:** real hotkeys, layout changes, Caps remap, input taps,
+  real user commands and the HID-tap versus Carbon priority gate. Each manual run
+  requires its own approval.

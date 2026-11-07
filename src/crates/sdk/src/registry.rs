@@ -38,9 +38,10 @@ use crate::error::{
     ErrorCategory, ModuleError, ModuleResult, Operation, RegistryError, RegistryResult,
 };
 use crate::events::EventBus;
+use crate::input::{InputCapability, InputService};
 use crate::logging::{Logger, ScopedLogger};
 use crate::module::{Module, ModuleConfig, ModuleDescriptor, ModuleId, ServiceId};
-use crate::permissions::{Permission, PermissionProvider, PermissionStatus};
+use crate::permissions::{Permission, PermissionProvider, PermissionRequirement, PermissionStatus};
 use crate::shutdown::ShutdownWait;
 use crate::status::{
     ConfigDiagnostic, ModuleFailure, ModuleSnapshot, ModuleStatus, UnavailableReason,
@@ -153,6 +154,16 @@ trait ErasedModule: Send {
     fn start(&mut self, ctx: &ModuleContext) -> ModuleResult<()>;
     fn reconfigure(&mut self, config: &dyn ErasedConfig, ctx: &ModuleContext) -> ModuleResult<()>;
     fn stop(&mut self, ctx: &ModuleContext) -> ModuleResult<()>;
+    fn requirements(&self, config: &dyn ErasedConfig) -> Vec<PermissionRequirement>;
+}
+
+/// The descriptor's static permissions with automatic prompting.
+fn static_requirements(descriptor: &ModuleDescriptor) -> Vec<PermissionRequirement> {
+    descriptor
+        .permissions
+        .iter()
+        .map(|&p| PermissionRequirement::automatic(p))
+        .collect()
 }
 
 struct ModuleAdapter<M: Module> {
@@ -189,6 +200,13 @@ impl<M: Module> ErasedModule for ModuleAdapter<M> {
     }
 
     fn stop(&mut self, ctx: &ModuleContext) -> ModuleResult<()> { self.module.stop(ctx) }
+
+    fn requirements(&self, config: &dyn ErasedConfig) -> Vec<PermissionRequirement> {
+        config.as_any().downcast_ref::<M::Config>().map_or_else(
+            || static_requirements(&self.module.descriptor()),
+            |config| self.module.required_permissions(config),
+        )
+    }
 }
 
 /// Workers, windows and cancellation owned by one runtime of one module.
@@ -196,19 +214,37 @@ struct Runtime {
     workers: WorkerGroup,
     cancellation: CancellationToken,
     windows: WindowCapability,
+    input: InputCapability,
 }
 
 impl Runtime {
-    fn new(id: ModuleId, surfaces: &'static [SurfaceId], backend: Arc<dyn WindowBackend>) -> Self {
+    fn new(
+        id: ModuleId,
+        surfaces: &'static [SurfaceId],
+        backend: Arc<dyn WindowBackend>,
+        input: Arc<InputService>,
+    ) -> Self {
         let workers = WorkerGroup::new(id.as_str());
         let cancellation = workers.cancellation();
         let windows = WindowCapability::new(id, surfaces, backend, cancellation.clone());
-        Self { workers, cancellation, windows }
+        let input = InputCapability::new(id, input, cancellation.clone());
+        Self {
+            workers,
+            cancellation,
+            windows,
+            input,
+        }
     }
 
-    fn invalidate_windows(&self) { self.windows.invalidate(); }
+    fn invalidate_windows(&self) {
+        self.windows.invalidate();
+        self.input.invalidate();
+    }
 
-    fn release_windows(&self) { self.windows.release_owner(); }
+    fn release_windows(&self) {
+        self.windows.release_owner();
+        self.input.release_owner();
+    }
 }
 
 /// Logical, lock-free invalidation shared with one module.
@@ -313,6 +349,9 @@ struct ModuleSlot {
     invalidation: ModuleInvalidation,
     /// The last accepted configuration pair, readable without any other lock.
     accepted: Arc<AcceptedCell>,
+    /// Permission requirements of the accepted configuration, readable by the
+    /// host without the state lock.
+    requirements: Mutex<Vec<PermissionRequirement>>,
 }
 
 /// Stop metadata for one slot, kept outside the slot state lock.
@@ -332,6 +371,7 @@ impl ModuleSlot {
     /// module or native code runs while the short published lock is held.
     fn publish(&self, state: &ModuleState) {
         *lock(&self.published) = state.snapshot(self.descriptor.id);
+        lock(&self.requirements).clone_from(&state.requirements);
     }
 
     /// Locks the module state and republishes it when the guard drops.
@@ -425,6 +465,9 @@ struct ModuleState {
     diagnostic: Option<ConfigDiagnostic>,
     runtime: Option<Runtime>,
     needs_stop: bool,
+    /// Permissions required by the accepted configuration (the static
+    /// descriptor list while none was accepted).
+    requirements: Vec<PermissionRequirement>,
 }
 
 impl ModuleState {
@@ -450,6 +493,7 @@ pub struct Registry {
     main_thread: Arc<dyn MainThreadExecutor>,
     permissions: Arc<dyn PermissionProvider>,
     windows: Arc<dyn WindowBackend>,
+    input: Arc<InputService>,
     slots: Mutex<Vec<Arc<ModuleSlot>>>,
     failed_services: Mutex<HashSet<ServiceId>>,
     lifecycle: Mutex<()>,
@@ -474,6 +518,7 @@ impl Registry {
             main_thread,
             permissions,
             windows,
+            input: InputService::unavailable(),
             slots: Mutex::new(Vec::new()),
             failed_services: Mutex::new(HashSet::new()),
             lifecycle: Mutex::new(()),
@@ -481,6 +526,14 @@ impl Registry {
             started: AtomicBool::new(false),
             next_sequence: AtomicU64::new(0),
         }
+    }
+
+    /// Attaches the host's shared input service. Without it, input
+    /// subscriptions return an `Unavailable` error and no native owner is called.
+    #[must_use]
+    pub fn with_input_service(mut self, input: Arc<InputService>) -> Self {
+        self.input = input;
+        self
     }
 
     /// Registers one module and its initial configuration.
@@ -551,8 +604,13 @@ impl Registry {
             status,
             diagnostic,
         } = initial;
+        let adapter = ModuleAdapter { module, id };
+        let requirements = config.as_ref().map_or_else(
+            || static_requirements(&descriptor),
+            |config| adapter.requirements(config.as_ref()),
+        );
         let state = ModuleState {
-            module: Box::new(ModuleAdapter { module, id }),
+            module: Box::new(adapter),
             config,
             enabled,
             paused: false,
@@ -561,8 +619,10 @@ impl Registry {
             diagnostic,
             runtime: None,
             needs_stop: false,
+            requirements,
         };
         let published = Mutex::new(state.snapshot(id));
+        let requirements = Mutex::new(state.requirements.clone());
         let accepted = Arc::new(AcceptedCell::new(
             std::any::TypeId::of::<M::Config>(),
             std::any::type_name::<M::Config>(),
@@ -577,6 +637,7 @@ impl Registry {
             meta: Mutex::new(SlotMeta::default()),
             invalidation: ModuleInvalidation::new(),
             accepted: Arc::clone(&accepted),
+            requirements,
         });
         {
             let cell = Arc::clone(&accepted);
@@ -864,6 +925,15 @@ impl Registry {
         let changed = !unchanged;
         let previous_status = state.status.clone();
         let was_running = previous_status == ModuleStatus::Running;
+        let candidate_requirements = state.module.requirements(candidate.as_ref());
+        // A running module whose candidate newly needs a permission that is not
+        // granted must not adopt it: the whole runtime stops and waits, and the
+        // candidate is still accepted. Fresh, nonprompting status only.
+        let blocked = if !unchanged && enabled && was_running && !state.paused {
+            self.missing_permission(&candidate_requirements)
+        } else {
+            None
+        };
         if !unchanged {
             // A disabling reload only stops; it never asks the module to adopt a
             // configuration it is about to release.
@@ -880,12 +950,15 @@ impl Registry {
                         };
                         self.context(slot, runtime, Operation::Reconfigure)
                     };
-                    state.module.reconfigure(candidate.as_ref(), &ctx)?;
+                    if blocked.is_none() {
+                        state.module.reconfigure(candidate.as_ref(), &ctx)?;
+                    }
                 } else if state.needs_stop {
                     self.quiesce(slot, state)?;
                 }
             }
             state.config = Some(candidate);
+            state.requirements = candidate_requirements;
             state.revision += 1;
             // Publish the coherent pair before any later stop work, so a
             // configuration committed despite a start or stop error is visible
@@ -902,6 +975,10 @@ impl Registry {
             self.quiesce(slot, state)?;
         } else if state.paused {
             state.status = ModuleStatus::Paused;
+        } else if let Some(permission) = blocked {
+            state.status = ModuleStatus::WaitingForPermission(permission);
+            slot.publish(state);
+            self.quiesce(slot, state)?;
         } else if was_running {
             state.status = ModuleStatus::Running;
         } else if matches!(
@@ -910,7 +987,16 @@ impl Registry {
         ) {
             // A reload stages the configuration but does not clear a prerequisite
             // block; the matching recovery event still starts the module.
-            state.status = previous_status;
+            // A permission block whose permission the accepted configuration no
+            // longer requires is released so the start below re-evaluates.
+            state.status = match previous_status {
+                ModuleStatus::WaitingForPermission(permission)
+                    if !state.requirements.iter().any(|r| r.permission() == permission) =>
+                {
+                    ModuleStatus::Stopped
+                }
+                other => other,
+            };
         } else {
             state.status = ModuleStatus::Stopped;
         }
@@ -976,6 +1062,34 @@ impl Registry {
     #[must_use]
     pub fn descriptors(&self) -> Vec<ModuleDescriptor> {
         self.slots_snapshot().iter().map(|slot| slot.descriptor).collect()
+    }
+
+    /// Permissions needed right now by enabled, non-paused modules.
+    ///
+    /// Requirements come from each module's accepted configuration and are
+    /// merged per permission: one user-only requirement makes the merged
+    /// requirement user-only. Reads published data only and never prompts.
+    #[must_use]
+    pub fn permission_requirements(&self) -> Vec<PermissionRequirement> {
+        let mut merged: Vec<PermissionRequirement> = Vec::new();
+        for slot in self.slots_snapshot() {
+            let snapshot = slot.published_snapshot();
+            if !snapshot.enabled || snapshot.paused {
+                continue;
+            }
+            for requirement in lock(&slot.requirements).iter() {
+                match merged.iter_mut().find(|m| m.permission() == requirement.permission()) {
+                    Some(existing)
+                        if existing.may_auto_prompt() && !requirement.may_auto_prompt() =>
+                    {
+                        *existing = *requirement;
+                    }
+                    Some(_) => {}
+                    None => merged.push(*requirement),
+                }
+            }
+        }
+        merged
     }
 
     /// Reports that a service stopped working.
@@ -1170,7 +1284,7 @@ impl Registry {
                     if !guard.enabled
                         || guard.paused
                         || guard.status != ModuleStatus::Running
-                        || !slot.descriptor.permissions.contains(&permission)
+                        || !guard.requirements.iter().any(|r| r.permission() == permission)
                     {
                         continue;
                     }
@@ -1321,11 +1435,9 @@ impl Registry {
                 return Ok(());
             }
         }
-        for &permission in slot.descriptor.permissions {
-            if self.permissions.status(permission) != PermissionStatus::Granted {
-                state.status = ModuleStatus::WaitingForPermission(permission);
-                return Ok(());
-            }
+        if let Some(permission) = self.missing_permission(&state.requirements) {
+            state.status = ModuleStatus::WaitingForPermission(permission);
+            return Ok(());
         }
         for &service in slot.descriptor.requires {
             if !self.service_ready(service) {
@@ -1346,6 +1458,7 @@ impl Registry {
             slot.descriptor.id,
             slot.descriptor.surfaces,
             Arc::clone(&self.windows),
+            Arc::clone(&self.input),
         ));
         state.needs_stop = true;
         match self.configure_and_start(slot, state) {
@@ -1374,6 +1487,15 @@ impl Registry {
                 Err(RegistryError::Module(error))
             }
         }
+    }
+
+    /// The first required permission whose fresh, nonprompting status is not
+    /// granted.
+    fn missing_permission(&self, requirements: &[PermissionRequirement]) -> Option<Permission> {
+        requirements
+            .iter()
+            .map(|requirement| requirement.permission())
+            .find(|&permission| self.permissions.status(permission) != PermissionStatus::Granted)
     }
 
     fn configure_and_start(&self, slot: &ModuleSlot, state: &mut ModuleState) -> ModuleResult<()> {
@@ -1430,6 +1552,7 @@ impl Registry {
                 slot.descriptor.id,
                 slot.descriptor.surfaces,
                 Arc::clone(&self.windows),
+                Arc::clone(&self.input),
             )
         });
         runtime.cancellation.cancel();
@@ -1497,6 +1620,7 @@ impl Registry {
                 main_thread: Arc::clone(&self.main_thread),
                 permissions: Arc::clone(&self.permissions),
                 windows: runtime.windows.clone(),
+                input: runtime.input.clone(),
             },
         )
     }
@@ -1584,12 +1708,14 @@ mod tests {
 
     struct FakePermissions {
         statuses: Mutex<HashMap<Permission, PermissionStatus>>,
+        requests: AtomicUsize,
     }
 
     impl FakePermissions {
         fn new() -> Self {
             Self {
                 statuses: Mutex::new(HashMap::new()),
+                requests: AtomicUsize::new(0),
             }
         }
 
@@ -1607,6 +1733,7 @@ mod tests {
         }
 
         fn request(&self, permission: Permission) -> Result<PermissionStatus, PermissionError> {
+            self.requests.fetch_add(1, Ordering::SeqCst);
             Ok(self.status(permission))
         }
     }
@@ -2097,6 +2224,8 @@ mod tests {
         invalidation_hits: Arc<AtomicUsize>,
         native: Arc<Mutex<Vec<&'static str>>>,
         descriptor_entered: Option<mpsc::Sender<()>>,
+        /// Requirement demanded by configs with `value >= 100`.
+        high_value_requirement: Option<PermissionRequirement>,
     }
 
     impl FakeModule {
@@ -2136,6 +2265,7 @@ mod tests {
                 invalidation_hits: Arc::new(AtomicUsize::new(0)),
                 native: Arc::new(Mutex::new(Vec::new())),
                 descriptor_entered: None,
+                high_value_requirement: None,
             },
             state,
         )
@@ -2155,6 +2285,14 @@ mod tests {
                 permissions: self.permissions,
                 executables: self.executables,
                 surfaces: self.surfaces,
+            }
+        }
+
+        fn required_permissions(&self, config: &FakeConfig) -> Vec<PermissionRequirement> {
+            match self.high_value_requirement {
+                Some(requirement) if config.value >= 100 => vec![requirement],
+                Some(_) => Vec::new(),
+                None => static_requirements(&self.descriptor()),
             }
         }
 
@@ -2789,6 +2927,219 @@ mod tests {
             .on_permission_change(Permission::Accessibility, PermissionStatus::Granted)
             .expect("grant");
         assert_eq!(lock(&state).starts, 1);
+    }
+
+    fn caps_module(
+        harness: &Harness,
+        requirement: PermissionRequirement,
+    ) -> (FakeModule, Arc<Mutex<FakeState>>) {
+        let (mut module, state) = harness.fake("shared-input");
+        module.high_value_requirement = Some(requirement);
+        (module, state)
+    }
+
+    fn input_requirement() -> PermissionRequirement {
+        PermissionRequirement::shared_input(Permission::Accessibility)
+    }
+
+    #[test]
+    fn kb_05_04_static_descriptor_requirements_are_the_default_and_automatic() {
+        let harness = Harness::new();
+        let (mut module, _) = harness.fake("static");
+        module.permissions = &ACCESSIBILITY;
+        let handle = harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        assert_eq!(harness.registry.permission_requirements(), vec![
+            PermissionRequirement::automatic(Permission::Accessibility)
+        ]);
+        harness.registry.pause(handle).expect("pause");
+        assert!(harness.registry.permission_requirements().is_empty());
+        let (plain, _) = harness.fake("plain");
+        harness.registry.register(plain, FakeConfig::on(1)).expect("register");
+        assert!(harness.registry.permission_requirements().is_empty());
+    }
+
+    #[test]
+    fn kb_05_04_ordinary_config_needs_no_permission_and_starts_untrusted() {
+        let harness = Harness::new();
+        harness.permissions.set(Permission::Accessibility, PermissionStatus::Denied);
+        let (module, state) = caps_module(&harness, input_requirement());
+        let handle = harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        assert!(harness.registry.permission_requirements().is_empty());
+        harness.registry.start_all().expect("start");
+        assert_eq!(
+            harness.registry.snapshot(handle).expect("snapshot").status,
+            ModuleStatus::Running
+        );
+        assert_eq!(lock(&state).starts, 1);
+        assert_eq!(harness.permissions.requests.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn kb_05_04_a_required_config_waits_without_trust_and_starts_when_granted() {
+        let harness = Harness::new();
+        harness.permissions.set(Permission::Accessibility, PermissionStatus::Denied);
+        let (module, state) = caps_module(&harness, input_requirement());
+        let handle = harness.registry.register(module, FakeConfig::on(100)).expect("register");
+        assert_eq!(harness.registry.permission_requirements(), vec![
+            input_requirement()
+        ]);
+        harness.registry.start_all().expect("start");
+        assert_eq!(
+            harness.registry.snapshot(handle).expect("snapshot").status,
+            ModuleStatus::WaitingForPermission(Permission::Accessibility)
+        );
+        assert_eq!(lock(&state).starts, 0);
+        harness.permissions.set(Permission::Accessibility, PermissionStatus::Granted);
+        harness
+            .registry
+            .on_permission_change(Permission::Accessibility, PermissionStatus::Granted)
+            .expect("grant");
+        assert_eq!(
+            harness.registry.snapshot(handle).expect("snapshot").status,
+            ModuleStatus::Running
+        );
+        assert_eq!(harness.permissions.requests.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn kb_05_04_ordinary_to_required_without_trust_is_an_accepted_waiting_state() {
+        let harness = Harness::new();
+        harness.permissions.set(Permission::Accessibility, PermissionStatus::Denied);
+        let (module, state) = caps_module(&harness, input_requirement());
+        let handle = harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        harness.registry.start_all().expect("start");
+        let report = harness.registry.reload(handle, FakeConfig::on(100)).expect("reload");
+        assert_eq!(report.status, ReloadStatus::Applied { revision: 2 });
+        assert!(report.start_error.is_none());
+        let snapshot = harness.registry.snapshot(handle).expect("snapshot");
+        assert_eq!(
+            snapshot.status,
+            ModuleStatus::WaitingForPermission(Permission::Accessibility)
+        );
+        assert_eq!(snapshot.revision, 2);
+        assert!(snapshot.diagnostic.is_none());
+        // The runtime was stopped and never asked to adopt the candidate.
+        assert_eq!(lock(&state).stops, 1);
+        assert!(!harness.trace.events().iter().any(|entry| entry.contains("reconfigure")));
+        assert_eq!(harness.registry.permission_requirements(), vec![
+            input_requirement()
+        ]);
+        // Grant starts the module with the accepted candidate.
+        harness.permissions.set(Permission::Accessibility, PermissionStatus::Granted);
+        harness
+            .registry
+            .on_permission_change(Permission::Accessibility, PermissionStatus::Granted)
+            .expect("grant");
+        assert_eq!(
+            harness.registry.snapshot(handle).expect("snapshot").status,
+            ModuleStatus::Running
+        );
+        assert!(harness.trace.events().iter().any(|entry| entry.ends_with("configure.100")));
+        assert_eq!(harness.permissions.requests.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn kb_05_04_ordinary_to_required_with_trust_reconfigures_in_place() {
+        let harness = Harness::new();
+        let (module, state) = caps_module(&harness, input_requirement());
+        let handle = harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        harness.registry.start_all().expect("start");
+        harness.registry.reload(handle, FakeConfig::on(100)).expect("reload");
+        assert_eq!(
+            harness.registry.snapshot(handle).expect("snapshot").status,
+            ModuleStatus::Running
+        );
+        assert_eq!(lock(&state).stops, 0);
+        assert!(harness.trace.events().iter().any(|entry| entry.ends_with("reconfigure.100")));
+    }
+
+    #[test]
+    fn kb_05_04_required_to_none_leaves_waiting_and_starts() {
+        let harness = Harness::new();
+        harness.permissions.set(Permission::Accessibility, PermissionStatus::Denied);
+        let (module, state) = caps_module(&harness, input_requirement());
+        let handle = harness.registry.register(module, FakeConfig::on(100)).expect("register");
+        harness.registry.start_all().expect("start");
+        assert_eq!(
+            harness.registry.snapshot(handle).expect("snapshot").status,
+            ModuleStatus::WaitingForPermission(Permission::Accessibility)
+        );
+        // Still requiring it keeps the wait.
+        harness.registry.reload(handle, FakeConfig::on(101)).expect("reload");
+        assert_eq!(
+            harness.registry.snapshot(handle).expect("snapshot").status,
+            ModuleStatus::WaitingForPermission(Permission::Accessibility)
+        );
+        harness.registry.reload(handle, FakeConfig::on(2)).expect("reload");
+        assert_eq!(
+            harness.registry.snapshot(handle).expect("snapshot").status,
+            ModuleStatus::Running
+        );
+        assert_eq!(lock(&state).starts, 1);
+        assert!(harness.registry.permission_requirements().is_empty());
+        assert_eq!(harness.permissions.requests.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn kb_05_04_revocation_stops_a_required_module_and_ignores_an_ordinary_one() {
+        let harness = Harness::new();
+        let (module, state) = caps_module(&harness, input_requirement());
+        let handle = harness.registry.register(module, FakeConfig::on(100)).expect("register");
+        harness.registry.start_all().expect("start");
+        assert_eq!(
+            harness.registry.snapshot(handle).expect("snapshot").status,
+            ModuleStatus::Running
+        );
+        harness.permissions.set(Permission::Accessibility, PermissionStatus::Denied);
+        harness
+            .registry
+            .on_permission_change(Permission::Accessibility, PermissionStatus::Denied)
+            .expect("revoke");
+        assert_eq!(
+            harness.registry.snapshot(handle).expect("snapshot").status,
+            ModuleStatus::WaitingForPermission(Permission::Accessibility)
+        );
+        assert_eq!(lock(&state).stops, 1);
+        // An ordinary config is unaffected by the same revocation.
+        harness.registry.reload(handle, FakeConfig::on(3)).expect("reload");
+        assert_eq!(
+            harness.registry.snapshot(handle).expect("snapshot").status,
+            ModuleStatus::Running
+        );
+        harness
+            .registry
+            .on_permission_change(Permission::Accessibility, PermissionStatus::Denied)
+            .expect("revoke");
+        assert_eq!(
+            harness.registry.snapshot(handle).expect("snapshot").status,
+            ModuleStatus::Running
+        );
+    }
+
+    #[test]
+    fn kb_05_04_a_trusted_but_failed_start_is_failed_not_waiting() {
+        let harness = Harness::new();
+        let (mut module, _) = caps_module(&harness, input_requirement());
+        module.fail.start = true;
+        let handle = harness.registry.register(module, FakeConfig::on(100)).expect("register");
+        assert!(harness.registry.start_all().is_err());
+        assert!(matches!(
+            harness.registry.snapshot(handle).expect("snapshot").status,
+            ModuleStatus::Failed(_)
+        ));
+    }
+
+    #[test]
+    fn kb_05_04_requirement_merge_prefers_user_only() {
+        let harness = Harness::new();
+        let (mut automatic, _) = harness.fake("automatic");
+        automatic.permissions = &ACCESSIBILITY;
+        harness.registry.register(automatic, FakeConfig::on(1)).expect("register");
+        let (input, _) = caps_module(&harness, input_requirement());
+        harness.registry.register(input, FakeConfig::on(100)).expect("register");
+        assert_eq!(harness.registry.permission_requirements(), vec![
+            input_requirement()
+        ]);
     }
 
     #[test]

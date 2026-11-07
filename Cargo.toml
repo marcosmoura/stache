@@ -7,6 +7,7 @@ members = [
     "src/crates/cli",
     "src/crates/macos",
     "src/crates/modules/keep-awake",
+    "src/crates/modules/keybindings",
     "src/crates/modules/notunes",
     "src/crates/modules/proxy-audio",
     "src/crates/modules/wallpapers",
@@ -19,6 +20,12 @@ version = "0.25.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/marcosmoura/stache"
+
+[workspace.dependencies]
+# Parser only (`HotKey`, `Modifiers`, `Code`); never its native manager.
+global-hotkey = { version = "0.8.0", default-features = false }
+# The `Code` type shared by the parser and the native key table.
+keyboard-types = { version = "0.7.0", default-features = false }
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }

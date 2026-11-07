@@ -57,8 +57,78 @@ three-assertion behavior, notification delivery, manual lock/unlock, resume and
 forced-sleep checks remain **unverified**; they require approval for each run and
 the [spec's power protocol](../specs/2026-11-03-keep-awake/00-overview.md#validation-and-safety).
 
-`cargo doc -p stache-sdk -p stache-macos -p stache-keep-awake -p stache-proxy-audio -p stache-notunes -p stache-cli --no-deps`
+The shared input contract (`stache_sdk::input`) is tested only with fakes: a fake
+clock that advances instead of sleeping, a fake native owner over the real
+256-request control queue (acknowledge, fail, hold, delay, drop or reject
+per request), a capacity-limited work fake, and recording handlers/observers.
+Tests use barriers for simultaneous subscribe/unsubscribe, drive fake time for
+the 2 s acknowledgement, 10 ms quantum and over-1 ms callbacks, and exercise the
+exact 1,024 ledger and 256 queue boundaries. No test creates a real event tap or
+hotkey. The `stache-macos` owner (`input/`) is tested the same way: a fake native
+layer behind the owner's small `NativeInput` trait drives the real queue, thread,
+acknowledgement, cancellation and shutdown logic (cancelled queued install never
+mutates, partial install cleaned by remove, removal failure reported, bounded
+shutdown, all native calls on the named owner thread, no main-thread dispatch), and
+event conversion is a pure function over plain field values. The real
+CoreGraphics layer is compile-checked only (it must stay `!Send`). Live tap
+behavior, Input Monitoring/Accessibility prompts and a real event stream stay
+**unverified**; any manual run needs approval for that run and a cleanup record.
+
+The Carbon hotkey adapter (`stache-macos` `hotkeys/`, `keyboard_layout/`) is tested only with a
+fake Carbon/TIS layer: no test registers a real hotkey, installs a real Carbon handler or
+distributed observer, reads or changes the real keyboard layout, or touches a permission. A
+`ManualExecutor` plays the main thread (inline, or queued so a test interleaves a hint, a stop
+and a drain), and the fake records every native call, scripts an occupied chord, handler-install,
+unregister and observer failures, switches layouts mid-commit and delivers synthetic Carbon events.
+Tests cover per-chord outcomes, staging reuse and rollback, stale layout and generation rejection,
+coalesced refresh hints, queued stale events after ID replacement, central reservation conflicts
+and yield/restore reflected in dispatch, cleanup failure with retained inert guards, and the
+2 s / 10 ms acknowledgement bounds (short real budgets, never a real wait). Real registration,
+real layout switching and real input-source notifications stay **unverified**; a manual run
+needs approval for that run, a harmless owned command and a confirmed unregister.
+
+Keybindings runtime tests (`stache-keybindings` `tests.rs`, `dispatch/tests.rs`, `status.rs` and the
+`host.rs` Keybindings tests) use the `testing` feature's `test_support::Rig`: a pump thread plays the
+main thread (so the thread-local Carbon store and fake handler behave as on main), the Carbon layer is
+`FakeLog`, the tap is the fake input backend over the dispatcher's own reservations, `hidutil`, the
+journal and the lease are the Caps `World`, children are a scripted process factory and time is fake.
+Barriers hold the coordinator between a publication and its adoption (`RuntimeTiming::observed`) to
+prove no press runs in that window; others block the pump to prove stop and status reads are bounded.
+They run the real `Registry`, `ConfigStore` and `Runner` registration/start path. Nothing registers a
+real hotkey, installs a real tap, runs `hidutil` or spawns a real command; real shortcut, layout, Caps
+and process-lifecycle checks are manual and need approval for each run.
+
+The Caps Lock remap (`stache-macos` `caps_remap`, `stache-keybindings` `caps`, the host recovery
+step) never runs the real `hidutil` and never touches the real mapping, event taps or Application
+Support. One `World` fake holds the global mapping, the journal file and the lease and numbers
+every transition (each read, each journal create/fsync/rename/directory-sync/unlink, each native
+write), so a test crashes the process before or after any one and checks that recovery restores the
+exact starting mapping, that the owned mapping never exists without a trusted journal, and that
+an unverified restore never deletes it. Other tests drive the real journal and lease over temporary
+`HOME` roots (symlinked journal or directory, replaced lock inode, loose modes, a busy lease
+expiring on a manual `LeaseClock`, separate identities), the strict `UserKeyMapping` parser over
+a table of malformed shapes, and `/usr/bin/hidutil` through the shared executor with a fake
+process factory and clock (exactly 5 s, exactly 1 MiB / 64 KiB, 2 s cleanup, 64-slot reaper
+saturation, unkillable children). Module tests run the chord state first as a pure table and then
+through the real input service router and press ledger with `FakeBackend` (every key and
+alias, bare tap, repeats, key-up after Caps release, tap loss, reload mid-press), and the owner
+over a fake tap: the remap is applied only after an acknowledged tap, stop invalidates dispatch
+before any restore work, and a failed restore keeps an inert safety-only subscription. The host
+suite runs the recovery step over the fake world (stale journal with the module disabled or its
+config invalid, no journal, foreign mapping, failure reported once without a retry loop). Real
+remap, restart and crash-recovery checks stay **unverified**; each run needs approval, exact
+process and journal identification, saved before/after mapping evidence and verified restoration.
+Socket-binding tests (`ipc`, the app `host` integration suites, the config watcher) cannot run in
+a sandbox that forbids local binds; run them unsandboxed.
+
+`cargo doc -p stache-sdk -p stache-macos -p stache-keep-awake -p stache-keybindings -p stache-proxy-audio -p stache-notunes -p stache-cli --no-deps`
 builds their public docs; pass `RUSTDOCFLAGS='-D warnings'` in validation.
+The shared command runner is tested over an injected process factory, child handles and
+a fake clock (poll quantum, 2 s cleanup transfer, 64-slot exhaustion, captured deadline
+and caps); `app/tests/internal_cli.rs` feeds the runner's rewritten argv through
+`dispatch` with a desktop selector that panics, for standalone and
+`.app/Contents/MacOS/stache` identities. Only a few harmless `/bin/sh` fixtures spawn
+real processes; no test runs a configured command.
 Socket tests use temp directories and temp sockets only; no test reads or writes
 the real cache, runtime, configuration or legacy identity.
 
@@ -88,14 +158,14 @@ the real cache, runtime, configuration or legacy identity.
   never prompt for Accessibility and never change the system default audio device; the real
   main-thread/window smoke test is the opt-in `stache-smoke` harness described below.
   Generator binaries require `dev-tools` and are excluded from the release bundle.
-- `cargo nextest run -p stache-sdk -p stache-cli -p stache-proxy-audio -p stache-notunes -p stache-keep-awake -p stache-macos`
+- `cargo nextest run -p stache-sdk -p stache-cli -p stache-proxy-audio -p stache-notunes -p stache-keep-awake -p stache-keybindings -p stache-macos`
   runs the config/audio/blocker/keep-awake foundation. The proxyAudio lifecycle suite uses a fake backend for
   every listener, worker-spawn, set-default and stop-race failpoint; no test starts a real listener.
   The noTunes suite uses `FakeApplicationBackend` and `ManualExecutor` for every observation, sweep,
   launch, open and stop failpoint; no test observes, terminates or launches a real application.
   The Keep Awake suite uses fake assertion, lock-probe, observation and clock inputs; no test
   acquires real power prevention or interacts with the real screen lock.
-  `cargo doc -p stache-sdk -p stache-macos -p stache-keep-awake -p stache-proxy-audio -p stache-notunes -p stache-cli --no-deps`
+  `cargo doc -p stache-sdk -p stache-macos -p stache-keep-awake -p stache-keybindings -p stache-proxy-audio -p stache-notunes -p stache-cli --no-deps`
   builds their public docs.
 - `generate-schema` writes the committed `schemas/*.schema.json` from the registered types.
   `generate-schema -- --check` writes nothing and fails on missing or stale files; config templates are

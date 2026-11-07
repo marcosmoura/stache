@@ -45,6 +45,15 @@ may not duplicate each other or the built-ins (`cache`, `completions`, `config`,
 `reload`, `schema`). `completions` is generated from the composed tree, so it
 exposes exactly the commands that exist.
 
+A hidden, root-only, nonrepeatable `--stache-internal-cli` flag exists only so the
+shared command runner can re-enter the running executable for the bare command name
+`stache`. It conflicts with `--desktop`, requires a subcommand (otherwise usage exit 2)
+and, after the parser validates the invocation, selects CLI mode before the
+application-bundle precedence, so the same argv works for a standalone binary and
+`Stache Next.app/Contents/MacOS/stache`. Help and version keep parser precedence.
+Without the flag the direct, Finder and `--desktop` rules are unchanged. It is not a
+public command and not an environment switch.
+
 Built-ins are `config init|path|migrate`, `cache clear|path`, `reload`,
 `schema [id]` and `completions --shell|-s`. The proxyAudio pilot contributes
 `audio list`; see [proxy-audio.md](../features/proxy-audio.md).

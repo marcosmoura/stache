@@ -9,9 +9,13 @@ pub mod accessibility;
 pub mod activation;
 pub mod applications;
 pub mod audio;
+pub mod caps_remap;
 pub mod desktop;
 pub mod display;
+pub mod hotkeys;
+pub mod input;
 pub mod keep_awake;
+pub mod keyboard_layout;
 pub mod main_thread;
 pub mod termination;
 
@@ -40,6 +44,7 @@ pub use desktop::{
     SystemDesktopClock,
 };
 pub use display::is_screen_mirroring_active;
+pub use input::MacInputBackend;
 #[cfg(any(test, feature = "testing"))]
 pub use keep_awake::testing::{
     BarrierWait, FakeAssertionBackend, FakeLockObservationBackend, FakeLockProbe, FakeNativeBarrier,

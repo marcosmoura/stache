@@ -18,6 +18,69 @@ impl fmt::Display for Permission {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str("accessibility") }
 }
 
+/// Whether the host may show the platform prompt without a user action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PromptPolicy {
+    /// The host may request once automatically (startup, enable, reload, tick or
+    /// activation) in addition to explicit user requests. This is the default
+    /// for ordinary modules.
+    Automatic,
+    /// The host may check and poll the status but must request only from an
+    /// explicit user action such as the tray. Mandatory for every shared-input
+    /// consumer.
+    UserOnly,
+}
+
+/// One permission a module currently needs and how it may be requested.
+///
+/// A module computes its requirements from its accepted or candidate typed
+/// configuration through `Module::required_permissions`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PermissionRequirement {
+    permission: Permission,
+    prompt: PromptPolicy,
+}
+
+impl PermissionRequirement {
+    /// A requirement the host may prompt for once automatically.
+    #[must_use]
+    pub const fn automatic(permission: Permission) -> Self {
+        Self {
+            permission,
+            prompt: PromptPolicy::Automatic,
+        }
+    }
+
+    /// A requirement the host may request only from an explicit user action.
+    #[must_use]
+    pub const fn user_only(permission: Permission) -> Self {
+        Self {
+            permission,
+            prompt: PromptPolicy::UserOnly,
+        }
+    }
+
+    /// A requirement of a shared-input consumer.
+    ///
+    /// Every module that depends on the shared input service (Keybindings,
+    /// Hold-to-Quit, `MenuAnywhere`) must declare its input permission through
+    /// this constructor so the host never prompts automatically.
+    #[must_use]
+    pub const fn shared_input(permission: Permission) -> Self { Self::user_only(permission) }
+
+    /// The required permission.
+    #[must_use]
+    pub const fn permission(self) -> Permission { self.permission }
+
+    /// The prompt policy.
+    #[must_use]
+    pub const fn prompt(self) -> PromptPolicy { self.prompt }
+
+    /// Whether the host may request this permission without a user action.
+    #[must_use]
+    pub const fn may_auto_prompt(self) -> bool { matches!(self.prompt, PromptPolicy::Automatic) }
+}
+
 /// The state reported by a [`PermissionProvider`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PermissionStatus {

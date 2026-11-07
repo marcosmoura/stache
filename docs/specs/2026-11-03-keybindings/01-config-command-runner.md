@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 01 — Configuration and shared command runner
@@ -107,21 +107,21 @@ capture; no shell interpolation in either mode.
 
 ## Acceptance criteria
 
-- [ ] **KB-01-01** — Catalog, defaults, schema/template and exported config agree;
+- [x] **KB-01-01** — Catalog, defaults, schema/template and exported config agree;
       construction performs no native registration, command or runtime work.
-- [ ] **KB-01-02** — Migration wraps maps correctly, preserves source/value order,
+- [x] **KB-01-02** — Migration wraps maps correctly, preserves value order (keys are written in lexical order),
       validates types before writes and preserves all existing module conversions.
-- [ ] **KB-01-03** — Extracted parser/resolver passes compatibility vectors and
+- [x] **KB-01-03** — Extracted parser/resolver passes compatibility vectors and
       resolves bare `stache` only to the injected running Next executable.
-- [ ] **KB-01-04** — Startup retains exact failure formatting, once-only timing,
+- [x] **KB-01-04** — Startup retains exact failure formatting, once-only timing,
       sequential failure/cancellation semantics, and inherited process context.
-- [ ] **KB-01-05** — Spawn/cancel races cannot issue a stale later step; direct
+- [x] **KB-01-05** — Spawn/cancel races cannot issue a stale later step; direct
       children are reaped or retained with truthful bounded-cleanup diagnostics,
       without blocking main or unrelated teardown indefinitely.
-- [ ] **KB-01-06** — Internal CLI rewriting and validated mode selection compile
+- [x] **KB-01-06** — Internal CLI rewriting and validated mode selection compile
       and execute CLI-only in standalone/packaged invocation contracts, preserving
       ordinary bundle precedence and rejecting invalid requests without desktop work.
-- [ ] **KB-01-07** — Captured mode enforces deadline, separate output caps and
+- [x] **KB-01-07** — Captured mode enforces deadline, separate output caps and
       cancellation with typed overflow/timeout outcomes, while the legacy
       inherited-stdio sequential mode and `execOnStartup` behavior stay unchanged;
       retained children are owned per runner instance.

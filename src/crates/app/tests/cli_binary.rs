@@ -150,6 +150,18 @@ fn schema_is_piped_as_plain_json() {
     assert_eq!(value["properties"]["enabled"]["type"], "boolean");
     assert_eq!(value["properties"]["enabled"]["default"], false);
 
+    let output = workspace.run(&["schema", "keybindings"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let value: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("keybindings schema JSON");
+    assert!(
+        value["$id"]
+            .as_str()
+            .is_some_and(|id| id.ends_with("/schemas/keybindings.schema.json"))
+    );
+    assert_eq!(value["properties"]["enabled"]["default"], false);
+    assert!(value["properties"]["bindings"]["additionalProperties"].is_object());
+
     let output = workspace.run(&["schema", "notunes"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let body = stdout(&output);
@@ -312,6 +324,7 @@ fn config_path_uses_the_explicit_directory() {
     assert!(body.starts_with(&format!("{}\n", directory.display())), "{body}");
     assert!(body.contains("  global.jsonc\n"), "{body}");
     assert!(body.contains("  keepAwake.jsonc\n"), "{body}");
+    assert!(body.contains("  keybindings.jsonc\n"), "{body}");
     assert!(body.contains("  notunes.jsonc\n"), "{body}");
     assert!(body.contains("  proxyAudio.jsonc\n"), "{body}");
     assert_no_desktop(&workspace);
@@ -328,6 +341,10 @@ fn config_init_writes_the_registered_templates() {
     let keep_awake = std::fs::read_to_string(directory.join("keepAwake.jsonc")).expect("keepAwake");
     assert!(keep_awake.contains("\"enabled\": false"), "{keep_awake}");
     assert!(!keep_awake.contains("duration"), "{keep_awake}");
+    let keybindings =
+        std::fs::read_to_string(directory.join("keybindings.jsonc")).expect("keybindings");
+    assert!(keybindings.contains("\"enabled\": false"), "{keybindings}");
+    assert!(keybindings.contains("\"bindings\": {}"), "{keybindings}");
     let notunes = std::fs::read_to_string(directory.join("notunes.jsonc")).expect("notunes");
     assert!(notunes.contains("\"enabled\": false"), "{notunes}");
     assert!(!notunes.contains("targetApp"), "{notunes}");
@@ -445,4 +462,28 @@ fn a_missing_path_shaped_wallpaper_argument_never_reaches_the_desktop_or_socket(
         stderr(&output)
     );
     assert_no_desktop(&workspace);
+}
+
+#[test]
+fn the_internal_cli_flag_runs_the_cli_only_and_rejects_invalid_requests() {
+    let workspace = Workspace::new();
+    let output = workspace.run(&["--stache-internal-cli", "schema", "keybindings"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stdout(&output).contains("keybindings.schema.json"));
+    assert_no_desktop(&workspace);
+
+    for arguments in [
+        &["--stache-internal-cli"][..],
+        &["--stache-internal-cli", "--desktop", "schema"],
+        &["--stache-internal-cli", "tiling"],
+    ] {
+        let output = workspace.run(arguments);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{arguments:?}: {}",
+            stderr(&output)
+        );
+        assert_no_desktop(&workspace);
+    }
 }

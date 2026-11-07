@@ -5,6 +5,7 @@ use std::fs;
 use std::process::ExitCode;
 
 use stache_keep_awake::KeepAwakeConfig;
+use stache_keybindings::KeybindingsConfig;
 use stache_notunes::NoTunesConfig;
 use stache_proxy_audio::ProxyAudioConfig;
 use stache_sdk::{CommandCatalog, ConfigCatalog, GlobalConfig};
@@ -21,6 +22,7 @@ fn the_catalog_owns_the_global_and_module_files() {
     assert_eq!(ids, [
         "global",
         "keepAwake",
+        "keybindings",
         "notunes",
         "proxyAudio",
         "wallpapers"
@@ -32,6 +34,10 @@ fn the_catalog_owns_the_global_and_module_files() {
     assert_eq!(
         catalog.file_name(KeepAwakeConfig::ID).as_deref(),
         Some("keepAwake.jsonc")
+    );
+    assert_eq!(
+        catalog.file_name(KeybindingsConfig::ID).as_deref(),
+        Some("keybindings.jsonc")
     );
     assert_eq!(
         catalog.file_name(NoTunesConfig::ID).as_deref(),
@@ -119,6 +125,9 @@ fn templates_come_from_the_typed_defaults() {
     let keep_awake = catalog.template(KeepAwakeConfig::ID).expect("keepAwake template");
     assert!(keep_awake.contains("\"enabled\": false"), "{keep_awake}");
     assert!(!keep_awake.contains("duration"), "{keep_awake}");
+    let keybindings = catalog.template(KeybindingsConfig::ID).expect("keybindings template");
+    assert!(keybindings.contains("\"enabled\": false"), "{keybindings}");
+    assert!(keybindings.contains("\"bindings\": {}"), "{keybindings}");
     let notunes = catalog.template(NoTunesConfig::ID).expect("notunes template");
     assert!(notunes.contains("\"enabled\": false"));
     assert!(!notunes.contains("targetApp"), "{notunes}");
@@ -182,17 +191,28 @@ fn migration_converts_the_legacy_fixture_into_valid_typed_files() {
     for name in [
         "bar.jsonc",
         "commandQuit.jsonc",
-        "keybindings.jsonc",
         "menuAnywhere.jsonc",
         "tiling.jsonc",
     ] {
         assert!(destination.join(name).exists(), "{name}");
     }
+    let keybindings_path = destination.join("keybindings.jsonc");
+    let keybindings = fs::read_to_string(&keybindings_path).expect("keybindings");
+    catalog
+        .inspect(KeybindingsConfig::ID, &keybindings_path, &keybindings)
+        .expect("migrated keybindings validates");
+    let decoded: KeybindingsConfig = serde_json::from_str(&keybindings).expect("typed keybindings");
+    assert!(decoded.enabled, "a nonempty legacy map enables the new file");
+    assert_eq!(decoded.bindings["Command+Control+R"].commands(), [
+        "stache reload"
+    ]);
     assert!(!destination.join("widgets.jsonc").exists());
 
     let out = String::from_utf8(out).expect("stdout");
     assert!(out.contains("validated notunes -> notunes.jsonc"));
     assert!(out.contains("validated wallpapers -> wallpapers.jsonc"));
+    assert!(out.contains("validated keybindings -> keybindings.jsonc"));
+    assert!(!out.contains("copied keybindings"));
     assert!(!out.contains("copied notunes"));
     assert!(!out.contains("copied wallpapers"));
     assert!(out.contains("warning: dropped widgets (not ported)"));
@@ -805,4 +825,142 @@ fn an_enabled_keep_awake_file_is_bound_but_stays_stopped_with_production_factori
                 && entry.state == stache_sdk::PathState::Valid),
         "catalog commands still discover the file"
     );
+}
+
+fn migrated_keybindings(section: &str) -> KeybindingsConfig {
+    let root = tempfile::tempdir().expect("temp dir");
+    let source = root.path().join("legacy.jsonc");
+    let destination = root.path().join("config");
+    fs::write(&source, format!(r#"{{ "keybindings": {section} }}"#)).expect("source");
+    let (code, out, err) = migrate(&source, &destination, false);
+    assert_eq!(code, ExitCode::SUCCESS, "{section}: {err}");
+    assert!(
+        out.contains("validated keybindings -> keybindings.jsonc"),
+        "{out}"
+    );
+    let path = destination.join("keybindings.jsonc");
+    let text = fs::read_to_string(&path).expect("keybindings");
+    catalog().inspect(KeybindingsConfig::ID, &path, &text).expect("validates");
+    serde_json::from_str(&text).expect("typed keybindings")
+}
+
+#[test]
+fn keybindings_migration_wraps_every_legacy_map_shape() {
+    let populated =
+        migrated_keybindings(r#"{ "Command+K": "open -a Terminal", "Control+J": ["a", "b"] }"#);
+    assert!(populated.enabled);
+    assert_eq!(populated.bindings.len(), 2);
+    assert_eq!(populated.bindings["Control+J"].commands(), ["a", "b"]);
+
+    let empty = migrated_keybindings("{}");
+    assert!(!empty.enabled);
+    assert!(empty.bindings.is_empty());
+
+    let blank_only = migrated_keybindings(r#"{ "Command+K": "", "Command+J": ["  "] }"#);
+    assert!(
+        blank_only.enabled,
+        "a nonempty map of blank commands is still enabled"
+    );
+    assert!(blank_only.bindings["Command+K"].is_empty());
+
+    let reserved = migrated_keybindings(r#"{ "enabled": "echo on", "bindings": ["echo a"] }"#);
+    assert!(reserved.enabled);
+    assert_eq!(reserved.bindings["enabled"].commands(), ["echo on"]);
+    assert_eq!(reserved.bindings["bindings"].commands(), ["echo a"]);
+}
+
+#[test]
+fn keybindings_migration_rejects_invalid_shapes_before_writing_anything() {
+    for invalid in [
+        r#"{ "Command+K": 1 }"#,
+        r#"{ "Command+K": ["ok", 2] }"#,
+        r#"{ "Command+K": null }"#,
+        r#"{ "Command+K": { "run": "x" } }"#,
+        "[]",
+        r#""Command+K""#,
+        "3",
+        "null",
+    ] {
+        let root = tempfile::tempdir().expect("temp dir");
+        let source = root.path().join("legacy.jsonc");
+        let destination = root.path().join("config");
+        fs::write(&source, format!(r#"{{ "keybindings": {invalid} }}"#)).expect("source");
+        let (code, _out, err) = migrate(&source, &destination, false);
+        assert_eq!(code, ExitCode::FAILURE, "{invalid}: {err}");
+        assert!(err.contains("cannot convert keybindings"), "{invalid}: {err}");
+        assert!(!destination.exists(), "{invalid}");
+    }
+}
+
+#[test]
+fn keybindings_migration_preflights_collisions_and_honors_force() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let source = root.path().join("legacy.jsonc");
+    let destination = root.path().join("config");
+    fs::write(&source, r#"{ "keybindings": { "Command+K": "x" } }"#).expect("source");
+    let (code, _out, err) = migrate(&source, &destination, false);
+    assert_eq!(code, ExitCode::SUCCESS, "{err}");
+
+    let path = destination.join("keybindings.jsonc");
+    fs::write(&path, "{ \"sentinel\": true }\n").expect("sentinel");
+    let (code, _out, err) = migrate(&source, &destination, false);
+    assert_eq!(code, ExitCode::FAILURE);
+    assert!(err.contains("refusing to overwrite existing files"), "{err}");
+    assert_eq!(
+        fs::read_to_string(&path).expect("kept"),
+        "{ \"sentinel\": true }\n"
+    );
+
+    let (code, _out, err) = migrate(&source, &destination, true);
+    assert_eq!(code, ExitCode::SUCCESS, "{err}");
+    assert!(fs::read_to_string(&path).expect("forced").contains("Command+K"));
+}
+
+#[test]
+fn keybindings_migration_refuses_a_source_that_is_a_destination() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let destination = root.path().join("config");
+    fs::create_dir_all(&destination).expect("directory");
+    let source = destination.join("keybindings.jsonc");
+    fs::write(&source, r#"{ "keybindings": { "Command+K": "x" } }"#).expect("source");
+    let (code, _out, err) = migrate(&source, &destination, true);
+    assert_eq!(code, ExitCode::FAILURE);
+    assert!(err.contains("source") || err.contains("destination"), "{err}");
+    assert_eq!(
+        fs::read_to_string(&source).expect("source"),
+        r#"{ "keybindings": { "Command+K": "x" } }"#
+    );
+}
+
+#[test]
+fn an_absent_keybindings_section_receives_the_disabled_template() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let source = root.path().join("legacy.jsonc");
+    let destination = root.path().join("config");
+    fs::write(&source, "{}").expect("source");
+    let (code, out, err) = migrate(&source, &destination, false);
+    assert_eq!(code, ExitCode::SUCCESS, "{err}");
+    assert!(
+        out.contains("emitted default template keybindings.jsonc (disabled)"),
+        "{out}"
+    );
+    assert_eq!(
+        fs::read_to_string(destination.join("keybindings.jsonc")).expect("keybindings"),
+        catalog().template(KeybindingsConfig::ID).expect("keybindings template")
+    );
+}
+
+#[test]
+fn construction_runs_no_commands_and_the_schema_describes_string_or_array_values() {
+    let rendered = catalog().schema_json(KeybindingsConfig::ID).expect("schema").expect("render");
+    assert!(rendered.contains("/schemas/keybindings.schema.json"));
+    let schema: serde_json::Value = serde_json::from_str(&rendered).expect("schema JSON");
+    assert_eq!(schema["properties"]["enabled"]["default"], false);
+    assert_eq!(
+        schema["properties"]["bindings"]["default"],
+        serde_json::json!({})
+    );
+    let kinds = &schema["$defs"]["StartupCommands"]["anyOf"];
+    assert_eq!(kinds[0]["type"], "string");
+    assert_eq!(kinds[1]["type"], "array");
 }

@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 02 — Shared input service and native ownership gate
@@ -118,22 +118,22 @@ only bounded cleanup ownership, and reports why the tap has not physically close
 
 ## Acceptance criteria
 
-- [ ] **KB-02-01** — One lazy host service/tap, safe owner confinement and exact
+- [x] **KB-02-01** — One lazy host service/tap, safe owner confinement and exact
       readiness/partial-install cleanup compile with real types, not fake Send.
-- [ ] **KB-02-02** — Filters/snapshots support flagsChanged/modifier release and
+- [x] **KB-02-02** — Filters/snapshots support flagsChanged/modifier release and
       exact button 2, with explicit unknown context/device limitations.
-- [ ] **KB-02-03** — Generic priorities, overlap diagnostics, reservation overflow
+- [x] **KB-02-03** — Generic priorities, overlap diagnostics, reservation overflow
       and callback restrictions implement deterministic HID first suppression;
       the central cross-backend registry diagnoses/rejects unsupported overlaps.
-- [ ] **KB-02-04** — Press ownership survives cancellation/reload/unsubscribe and
+- [x] **KB-02-04** — Press ownership survives cancellation/reload/unsubscribe and
       priority races; disable epochs cancel actions before re-enable honestly.
-- [ ] **KB-02-05** — Panic/slow handling states build-policy limits; logical
+- [x] **KB-02-05** — Panic/slow handling states build-policy limits; logical
       invalidation is immediate and cleanup timeouts retain inert owned resources.
-- [ ] **KB-02-06** — A listen-only observation tap exists only for passive
+- [x] **KB-02-06** — A listen-only observation tap exists only for passive
       subscribers, cannot suppress/intercept/inject or alter priority, and closes
       when the last passive subscriber unsubscribes; the suppressing tap is never
       created for passive-only use.
-- [ ] **KB-02-07** — The generic non-blocking work-reservation contract and fake
+- [x] **KB-02-07** — The generic non-blocking work-reservation contract and fake
       are proven standalone (part 02 builds and tests without part 05).
 
 ## Tests and gates

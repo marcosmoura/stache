@@ -21,6 +21,7 @@ Each file is its own catalog document, named after the exact identifier:
 ~/.config/stache/
   global.jsonc       GlobalConfig
   keepAwake.jsonc    KeepAwakeConfig
+  keybindings.jsonc  KeybindingsConfig
   notunes.jsonc      NoTunesConfig
   proxyAudio.jsonc   ProxyAudioConfig
   wallpapers.jsonc   WallpapersConfig
@@ -34,6 +35,21 @@ and backs the shipped blocker runtime: enabling it installs application
 observation and terminates Apple Music/iTunes. Catalog support alone starts no
 module, creates no webview and installs no native observation; see
 [notunes.md](../features/notunes.md).
+
+`keybindings.jsonc` is registered for configuration, schema, template and
+migration and drives the Keybindings module (see [keybindings.md](../features/keybindings.md)).
+An accepted reload is observed by the module through its accepted-config watch: a rejected or
+unchanged file changes nothing and cancels no running command, an accepted changed file
+invalidates the old dispatcher generation. `KeybindingsConfig`
+has `enabled` (default `false`) and `bindings` (default `{}`), a map from a
+shortcut string to one command string or an ordered list of strings (the same
+wire shape as `execOnStartup`). Validation is shape-only: non-string values and
+array elements are rejected with field paths, while a malformed shortcut spelling
+is not a file rejection (planning diagnoses it per entry in the module's runtime status). Migration
+wraps the whole legacy map as `bindings` and sets `enabled` from map
+nonemptiness, even when every command is blank; a legacy shortcut literally named
+`enabled` or `bindings` is a binding, never the new envelope. A missing legacy
+section emits the disabled template. See [keybindings.md](../features/keybindings.md).
 
 `keepAwake.jsonc` is registered for configuration, schema, template and
 migration, with only `enabled` (default `false`). It backs the shipped Keep
@@ -132,7 +148,11 @@ are live. `execOnStartup` is read once by the desktop host, never by config
 loading, reload or CLI. The host starts it once after initial setup (after
 registry start, socket and watcher) on its own owned thread, sequentially with
 legacy quoting rules, stopping at the first failure; shutdown cancels it, kills
-and reaps only the child it spawned directly, and does not start later commands.
+only the child it spawned directly and does not start later commands. A child not
+confirmed gone within 2 s is retained by the runner with a `stache: startup:`
+stderr diagnostic instead of being waited for indefinitely. The exact bare name
+`stache` runs the running Stache Next executable (re-entered with the hidden
+`--stache-internal-cli` flag), never a `stache` found on `PATH` or the legacy app.
 Readiness, tray actions and Quit never wait for a long-lived command. A second
 instance, CLI invocation and every reload skip it.
 
@@ -187,7 +207,7 @@ unchanged save is still a no-op instead of re-decoding forever.
 stache config init [-f] [-p DIR] [--stdout]
 stache config path
 stache config migrate [--from FILE] [-f]
-stache schema [global|keepAwake|notunes|proxyAudio|wallpapers]
+stache schema [global|keepAwake|keybindings|notunes|proxyAudio|wallpapers]
 ```
 
 The commands run from the single `stache` binary. From a checkout use
@@ -240,8 +260,8 @@ destination, migration refuses even with `--force`.
 
 `execOnStartup` and a `logging` section are converted into `global.jsonc`.
 Every registered module section is decoded and validated by the catalog's
-authoritative type: `keepAwake`, `proxyAudio`, `notunes` and `wallpapers` today.
-A type may also translate legacy spellings first through
+authoritative type: `keepAwake`, `keybindings`, `proxyAudio`, `notunes` and
+`wallpapers` today. A type may also translate legacy spellings first through
 `ModuleConfig::migrate_legacy_section`, which migration calls before decoding and
 writing; that hook is the only place a configuration type knows about values the
 running configuration rejects.
@@ -249,10 +269,11 @@ running configuration rejects.
 identifier and to drop an explicit block-only value. A legacy section that was
 enabled and had no `targetApp` used to mean Spotify; the migrated file now blocks
 without launching anything, and the hook returns a migration warning that names
-that change. `wallpapers` uses it to preserve a bare relative `path` or list
+that change. `keybindings` uses it to wrap the legacy shortcut map into
+`{ enabled, bindings }`. `wallpapers` uses it to preserve a bare relative `path` or list
 entry while warning that the new base is the destination configuration
 directory, not the unrecoverable legacy working directory; absolute and
-home-anchored values are silent. `bar`, `commandQuit`, `keybindings`,
+home-anchored values are silent. `bar`, `commandQuit`,
 `menuAnywhere` and `tiling` are copied verbatim as same-ID `.jsonc` files; the
 loader does not register or activate them. Legacy `widgets` are dropped with a
 warning. Unknown root keys warn, and unknown keys inside a registered module
@@ -282,11 +303,12 @@ bun run generate-schema -- --check
 ```
 
 The `generate-schema` binary writes `schemas/global.schema.json`,
-`schemas/keepAwake.schema.json`, `schemas/notunes.schema.json`,
-`schemas/proxyAudio.schema.json` and `schemas/wallpapers.schema.json`
-deterministically; `--check` writes nothing and exits non-zero on missing or
-stale files. Templates are generated from the serialized `Default` plus schema
-descriptions, so there is no second hand-maintained file.
+`schemas/keepAwake.schema.json`, `schemas/keybindings.schema.json`,
+`schemas/notunes.schema.json`, `schemas/proxyAudio.schema.json` and
+`schemas/wallpapers.schema.json` deterministically; `--check` writes nothing and
+exits non-zero on missing or stale files. Templates are generated from the
+serialized `Default` plus schema descriptions, so there is no second
+hand-maintained file.
 
 Tests use temporary directories and injected `ConfigEnvironment` values; no
 test reads the real home or changes an environment variable.

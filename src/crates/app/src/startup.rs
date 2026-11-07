@@ -10,14 +10,11 @@
 //! host readiness, tray actions or shutdown. Cancellation kills only the child
 //! this job spawned directly, waits for it, and stops before the next command.
 
-use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
 
 use stache_sdk::CancellationToken;
+use stache_sdk::commands::{CommandEnvironment, CommandExecutor, SequenceOutcome, StepFailure};
 use stache_sdk::shutdown::{ShutdownWait, wait_for_finish};
 
 /// Executes the configured startup commands.
@@ -89,192 +86,69 @@ impl StartupJob {
     }
 }
 
-/// Spawns each command as a child process and waits for it.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct ProcessCommands;
+/// Spawns each command as a direct child process and waits for it.
+///
+/// Parsing, resolution, the cancellation-aware wait loop and bounded child
+/// ownership live in [`stache_sdk::commands`]; this adapter owns only the
+/// startup-specific failure wording and the rule that cancellation is not a
+/// failure.
+#[derive(Debug)]
+pub struct ProcessCommands {
+    executor: CommandExecutor,
+}
+
+impl ProcessCommands {
+    /// A runner over real processes with the process environment.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::with_executor(CommandExecutor::new(CommandEnvironment::from_env()))
+    }
+
+    /// A runner over an injected executor.
+    #[must_use]
+    pub fn with_executor(executor: CommandExecutor) -> Self {
+        Self {
+            executor: executor.with_diagnostics(|line| eprintln!("stache: startup: {line}")),
+        }
+    }
+}
+
+impl Default for ProcessCommands {
+    fn default() -> Self { Self::new() }
+}
 
 impl CommandRunner for ProcessCommands {
     fn run(&self, commands: &[String], cancel: &CancellationToken) -> Result<(), String> {
-        let total = commands.len();
-        for (index, command) in commands.iter().enumerate() {
-            if cancel.is_cancelled() {
-                return Ok(());
+        match self.executor.run_sequence(commands, cancel, cancel) {
+            SequenceOutcome::Completed | SequenceOutcome::Cancelled(_) => Ok(()),
+            SequenceOutcome::Failed { index, total, failure, .. } => {
+                Err(format_failure(index + 1, total, &failure))
             }
-            let parts = split_command(command)
-                .map_err(|error| format!("startup command {}: {error}", index + 1))?;
-            let Some((binary, arguments)) = parts.split_first() else {
-                return Err(format!("startup command {} is empty", index + 1));
-            };
-            let path = resolve_binary(binary)
-                .map_err(|error| format!("startup command {}: {error}", index + 1))?;
-            let mut child = Command::new(&path)
-                .args(arguments)
-                .spawn()
-                .map_err(|error| format!("startup command {} could not run: {error}", index + 1))?;
-            loop {
-                if cancel.is_cancelled() {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Ok(());
-                }
-                match child.try_wait() {
-                    Ok(Some(status)) => {
-                        if !status.success() {
-                            return Err(format!(
-                                "startup command {}/{total} exited with {status}",
-                                index + 1
-                            ));
-                        }
-                        break;
-                    }
-                    Ok(None) => {
-                        let _ = cancel.wait(Duration::from_millis(20));
-                    }
-                    Err(error) => {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        return Err(format!(
-                            "startup command {} could not be waited for: {error}",
-                            index + 1
-                        ));
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
-/// Why a command line could not be split.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CommandParseError {
-    /// A quote was opened and never closed.
-    UnterminatedQuote(char),
-    /// A backslash ended the command.
-    TrailingEscape,
-}
-
-impl std::fmt::Display for CommandParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::UnterminatedQuote(quote) => write!(f, "unterminated {quote} quote"),
-            Self::TrailingEscape => f.write_str("trailing escape character"),
         }
     }
 }
 
-impl std::error::Error for CommandParseError {}
-
-/// Splits one command into arguments using the legacy quoting rules.
-///
-/// # Errors
-/// Returns a parse error for an unterminated quote or trailing escape.
-pub fn split_command(command: &str) -> Result<Vec<String>, CommandParseError> {
-    let mut parts = Vec::new();
-    let mut current = String::new();
-    let mut quote = None;
-    let mut escaped = false;
-    let mut has_token = false;
-
-    for character in command.chars() {
-        if escaped {
-            current.push(character);
-            escaped = false;
-            has_token = true;
-            continue;
+/// Renders one failed startup step with the established wording.
+fn format_failure(step: usize, total: usize, failure: &StepFailure) -> String {
+    match failure {
+        StepFailure::Empty => format!("startup command {step} is empty"),
+        StepFailure::Parse(_) | StepFailure::Resolve(_) | StepFailure::Capacity => {
+            format!("startup command {step}: {failure}")
         }
-        if let Some(active_quote) = quote {
-            if character == active_quote {
-                quote = None;
-            } else if active_quote == '"' && character == '\\' {
-                escaped = true;
-            } else {
-                current.push(character);
-            }
-            has_token = true;
-            continue;
+        StepFailure::Spawn(_) | StepFailure::Wait(_) => {
+            format!("startup command {step} {failure}")
         }
-        match character {
-            '\'' | '"' => {
-                quote = Some(character);
-                has_token = true;
-            }
-            '\\' => {
-                escaped = true;
-                has_token = true;
-            }
-            character if character.is_whitespace() => {
-                if has_token {
-                    parts.push(std::mem::take(&mut current));
-                    has_token = false;
-                }
-            }
-            _ => {
-                current.push(character);
-                has_token = true;
-            }
-        }
+        StepFailure::Exit(status) => format!("startup command {step}/{total} exited with {status}"),
     }
-
-    if escaped {
-        return Err(CommandParseError::TrailingEscape);
-    }
-    if let Some(active_quote) = quote {
-        return Err(CommandParseError::UnterminatedQuote(active_quote));
-    }
-    if has_token {
-        parts.push(current);
-    }
-    Ok(parts)
-}
-
-/// Resolves an absolute or `PATH`-named executable, including common macOS
-/// user installation directories that a GUI launch does not inherit.
-fn resolve_binary(binary: &str) -> Result<PathBuf, String> {
-    if binary.is_empty() {
-        return Err("binary name cannot be empty".to_owned());
-    }
-    let candidate = Path::new(binary);
-    if candidate.is_absolute() {
-        return if is_executable(candidate) {
-            Ok(candidate.to_path_buf())
-        } else {
-            Err(format!("{} is not executable", candidate.display()))
-        };
-    }
-    let mut directories: Vec<PathBuf> = Vec::new();
-    if let Some(extra) = std::env::var_os("STACHE_EXTRA_PATHS") {
-        directories.extend(std::env::split_paths(&extra));
-    }
-    if let Some(path) = std::env::var_os("PATH") {
-        directories.extend(std::env::split_paths(&path));
-    }
-    directories.extend([
-        PathBuf::from("/usr/local/bin"),
-        PathBuf::from("/opt/homebrew/bin"),
-        PathBuf::from("/opt/homebrew/sbin"),
-    ]);
-    if let Some(home) = std::env::var_os("HOME") {
-        let home = PathBuf::from(home);
-        directories.push(home.join(".cargo/bin"));
-        directories.push(home.join(".local/bin"));
-    }
-    for directory in directories {
-        let candidate = directory.join(binary);
-        if is_executable(&candidate) {
-            return Ok(candidate);
-        }
-    }
-    Err(format!("`{binary}` was not found on PATH"))
-}
-
-fn is_executable(path: &Path) -> bool {
-    path.metadata()
-        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::process::Command;
+    use std::time::Duration;
+
+    use stache_sdk::commands::{CommandParseError, split_command};
+
     use super::*;
 
     #[test]
@@ -301,7 +175,7 @@ mod tests {
 
     #[test]
     fn commands_run_in_order_and_stop_at_the_first_failure() {
-        let runner = ProcessCommands;
+        let runner = ProcessCommands::new();
         let cancel = CancellationToken::new();
         assert!(runner.run(&["/usr/bin/true".to_owned()], &cancel).is_ok());
         let error = runner
@@ -320,7 +194,7 @@ mod tests {
 
     #[test]
     fn cancellation_kills_only_the_owned_child_and_stops_the_sequence() {
-        let runner = ProcessCommands;
+        let runner = ProcessCommands::new();
         let cancel = CancellationToken::new();
         let root = tempfile::tempdir().expect("temp dir");
         let marker = root.path().join("started");
@@ -353,7 +227,7 @@ mod tests {
 
     #[test]
     fn cancellation_leaves_an_unrelated_process_running() {
-        let runner = ProcessCommands;
+        let runner = ProcessCommands::new();
         let cancel = CancellationToken::new();
         let root = tempfile::tempdir().expect("temp dir");
         let marker = root.path().join("started");
@@ -386,8 +260,48 @@ mod tests {
     }
 
     #[test]
-    fn absolute_paths_are_not_searched_on_path() {
-        assert!(resolve_binary("/usr/bin/true").is_ok());
-        assert!(resolve_binary("/usr/bin/definitely-missing").is_err());
+    fn failures_keep_the_established_startup_wording() {
+        let runner = ProcessCommands::new();
+        let cancel = CancellationToken::new();
+        let run = |commands: &[&str]| {
+            let commands: Vec<String> = commands.iter().map(|c| (*c).to_owned()).collect();
+            runner.run(&commands, &cancel).expect_err("fails")
+        };
+        assert_eq!(run(&["\"open"]), "startup command 1: unterminated \" quote");
+        assert_eq!(run(&["open \\"]), "startup command 1: trailing escape character");
+        assert_eq!(
+            run(&["/usr/bin/true", "'' x"]),
+            "startup command 2: binary name cannot be empty"
+        );
+        assert_eq!(
+            run(&["/usr/bin/definitely-missing"]),
+            "startup command 1: /usr/bin/definitely-missing is not executable"
+        );
+        assert_eq!(
+            run(&["definitely-missing-stache-binary"]),
+            "startup command 1: `definitely-missing-stache-binary` was not found on PATH"
+        );
+        assert!(
+            run(&["/usr/bin/true", "/usr/bin/false"])
+                .starts_with("startup command 2/2 exited with ")
+        );
+    }
+
+    #[test]
+    fn spawn_and_wait_failures_use_the_could_not_wording() {
+        let spawn = StepFailure::Spawn("denied".to_owned());
+        assert_eq!(
+            format_failure(3, 4, &spawn),
+            "startup command 3 could not run: denied"
+        );
+        let wait = StepFailure::Wait("broken".to_owned());
+        assert_eq!(
+            format_failure(3, 4, &wait),
+            "startup command 3 could not be waited for: broken"
+        );
+        assert_eq!(
+            format_failure(1, 1, &StepFailure::Empty),
+            "startup command 1 is empty"
+        );
     }
 }

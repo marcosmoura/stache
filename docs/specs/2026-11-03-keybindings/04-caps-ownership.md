@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 04 — Caps state, durable journal and remap ownership
@@ -107,19 +107,19 @@ acquisition until resolved, without blocking unrelated module teardown.
 
 ## Acceptance criteria
 
-- [ ] **KB-04-01** — Parser/state preserves legacy discrete-press, bare-tap,
+- [x] **KB-04-01** — Parser/state preserves legacy discrete-press, bare-tap,
       repeat/unbound/key-up behavior and documents real F18/global-keyboard limits.
-- [ ] **KB-04-02** — Tap-before-remap, foreign-map refusal and strict bounded
+- [x] **KB-04-02** — Tap-before-remap, foreign-map refusal and strict bounded
       hidutil parsing prevent unacknowledged or unowned remap acquisition.
-- [ ] **KB-04-03** — Durable journal-before-write and verify-before-retire survive
+- [x] **KB-04-03** — Durable journal-before-write and verify-before-retire survive
       every apply/restore crash boundary and recover only Next-owned state.
-- [ ] **KB-04-04** — Identity-wide coordination preserves unrelated/external
+- [x] **KB-04-04** — Identity-wide coordination preserves unrelated/external
       mappings, fails safely on path replacement and states non-CAS limitations.
-- [ ] **KB-04-05** — All administrative waits/output are bounded; uncertain
+- [x] **KB-04-05** — All administrative waits/output are bounded; uncertain
       children/mutations/journals remain owned with no false cleanup success.
-- [ ] **KB-04-06** — Stop immediately invalidates dispatch; retained safety-only
+- [x] **KB-04-06** — Stop immediately invalidates dispatch; retained safety-only
       cleanup or unavailable-tap F18 exposure is truthful and cannot run commands.
-- [ ] **KB-04-07** — Host startup recovery restores a stale Next-owned journal
+- [x] **KB-04-07** — Host startup recovery restores a stale Next-owned journal
       mapping exactly once regardless of module enabled state/config validity,
       refuses foreign mappings, is a no-op without a journal, and reports failure
       without blocking startup or retrying in a loop.
@@ -150,3 +150,17 @@ for **each run**, exact Next process/journal identification, saved before/after
 mapping evidence, no competing legacy/foreign remap, and restoration verification.
 If unavailable, record unverified, not passed. Update testing/architecture docs
 and notice for recovery/adapter facts only; runtime still not shipped.
+
+## Gate evidence
+
+- **Automated:** all KB-04 criteria are covered by fake-backed tests named
+  `kb_04_NN_*` in the keybindings, macOS, SDK and app crates, including the six
+  `caps_recovery` host integration tests. Full native suite (1618 tests), UI (24)
+  and script (6) tests, lint and format checks passed on 2026-11-07.
+- **Real `hidutil` remap, restart and crash recovery: unverified, not run.** Each
+  manual run needs its own approval; no before/after mapping evidence is recorded.
+- **Deviation:** the strict `UserKeyMapping` parser refuses quoted numeric values,
+  which the legacy parser accepted, and fails closed instead.
+- **Handoff to Part 05:** tap-loss cleanup is caller-driven. The runtime must poll
+  `CapsOwner::check_tap` from its bounded watch, because the input service only
+  cancels presses that were held when the tap was lost.

@@ -13,9 +13,10 @@ use std::time::{Duration, Instant};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use stache_app::bindings::{HostStatus, ModuleState};
+use stache_app::caps_recovery::KeybindingsCapsRecovery;
 use stache_app::host::{
     FactoryContext, HostDriver, HostHandle, HostServices, HostSettings, HostUi, ModuleFactories,
-    ModuleFactory, NoTunesFactory, new_host, register_module,
+    ModuleFactory, NoTunesFactory, StartupRecovery, new_host, register_module,
 };
 use stache_app::permissions::PermissionPoll;
 use stache_app::shutdown::{
@@ -684,6 +685,7 @@ struct Harness {
     commands: Arc<dyn CommandRunner>,
     main: Arc<dyn MainThreadExecutor>,
     windows: Arc<dyn WindowBackend>,
+    recovery: Option<Arc<dyn StartupRecovery>>,
 }
 
 impl Harness {
@@ -720,6 +722,7 @@ impl Harness {
             commands,
             main,
             windows,
+            recovery: None,
         }
     }
 
@@ -747,7 +750,10 @@ impl Harness {
     }
 
     fn start_with_factories(&mut self, fixture: &Fixture, factories: ModuleFactories) {
-        let driver = self.driver.take().expect("driver");
+        let mut driver = self.driver.take().expect("driver");
+        if let Some(recovery) = self.recovery.take() {
+            driver = driver.with_startup_recovery(recovery);
+        }
         let permissions: Arc<dyn PermissionProvider> = self.permissions.clone();
         let commands: Arc<dyn CommandRunner> = self.commands.clone();
         let services = HostServices {
@@ -1123,7 +1129,7 @@ fn a_blocking_startup_command_does_not_delay_ready_controls_or_shutdown() {
     let mut harness = Harness::new(
         FakePermissions::new(PermissionStatus::Granted),
         Arc::new(InlineMain),
-        Arc::new(stache_app::startup::ProcessCommands),
+        Arc::new(stache_app::startup::ProcessCommands::new()),
         windows.clone(),
     );
     let started = Instant::now();
@@ -4166,4 +4172,185 @@ fn cli_deadline_passing_during_native_issuance_is_not_reported_as_a_clean_succes
         "exactly one native call was issued on the host"
     );
     assert!(local.calls().is_empty(), "never a local fallback");
+}
+
+// ---- KB-04-07: host startup recovery of a stale Caps remap ----
+
+mod caps_recovery {
+    use stache_keybindings::caps::CapsRecoveryStep;
+    use stache_macos::caps_remap::testing::{SetFault, World};
+    use stache_macos::caps_remap::{CAPS_LOCK_USAGE, Mapping, OWNED};
+
+    use super::*;
+
+    const KEY_A: Mapping = Mapping { src: 100, dst: 200 };
+
+    /// Counts runs so a retry loop would be visible.
+    struct Counting {
+        inner: KeybindingsCapsRecovery,
+        runs: Arc<AtomicUsize>,
+    }
+
+    impl StartupRecovery for Counting {
+        fn name(&self) -> &'static str { self.inner.name() }
+
+        fn run(&self, cancel: &stache_sdk::CancellationToken) -> Option<String> {
+            self.runs.fetch_add(1, Ordering::SeqCst);
+            self.inner.run(cancel)
+        }
+    }
+
+    fn stale(initial: Vec<Mapping>) -> World {
+        let world = World::new(initial);
+        world.remap().apply(&stache_sdk::CancellationToken::new()).expect("apply");
+        world.restart();
+        world
+    }
+
+    fn harness_with(world: &World) -> (Harness, Arc<AtomicUsize>) {
+        let runs = Arc::new(AtomicUsize::new(0));
+        let mut harness = plain_harness();
+        harness.recovery = Some(Arc::new(Counting {
+            inner: KeybindingsCapsRecovery::new(CapsRecoveryStep::new(Arc::new(world.remap()))),
+            runs: Arc::clone(&runs),
+        }));
+        (harness, runs)
+    }
+
+    fn wait_restored(world: &World) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while world.journal().is_some() {
+            assert!(Instant::now() < deadline, "recovery never retired the journal");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn kb_04_07_a_stale_journal_is_restored_once_while_the_keybindings_module_is_disabled() {
+        let fixture = fixture();
+        fixture.write("keybindings.jsonc", "{ \"enabled\": false, \"bindings\": {} }\n");
+        let world = stale(vec![KEY_A]);
+        let (mut harness, runs) = harness_with(&world);
+        harness.start(&fixture, false, None);
+        harness.wait_ready();
+        wait_restored(&world);
+        assert_eq!(world.mappings(), vec![KEY_A]);
+        assert_eq!(world.sets(), 2, "the stale apply plus exactly one restore");
+        std::thread::sleep(Duration::from_millis(150));
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            harness.handle.status().error,
+            None,
+            "a successful recovery is quiet"
+        );
+        harness.handle.request_shutdown();
+        assert!(harness.wait_exit());
+    }
+
+    #[test]
+    fn kb_04_07_an_invalid_keybindings_config_does_not_block_recovery_or_startup() {
+        let fixture = fixture();
+        fixture.write("keybindings.jsonc", "{ \"enabled\": tru");
+        let world = stale(vec![KEY_A]);
+        let (mut harness, _runs) = harness_with(&world);
+        harness.start(&fixture, false, None);
+        harness.wait_ready();
+        wait_restored(&world);
+        assert_eq!(world.mappings(), vec![KEY_A]);
+        harness.handle.request_shutdown();
+        assert!(harness.wait_exit());
+    }
+
+    #[test]
+    fn kb_04_07_without_a_journal_recovery_is_a_no_op_that_touches_nothing() {
+        for existing in [vec![KEY_A], vec![OWNED], vec![Mapping {
+            src: CAPS_LOCK_USAGE,
+            dst: 0x7_0000_00E0,
+        }]] {
+            // A fresh identity per host: one launch per fixture, as in production.
+            let fixture = fixture();
+            let world = World::new(existing.clone());
+            let (mut harness, runs) = harness_with(&world);
+            harness.start(&fixture, false, None);
+            harness.wait_ready();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while runs.load(Ordering::SeqCst) == 0 {
+                assert!(Instant::now() < deadline, "the step never ran");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            std::thread::sleep(Duration::from_millis(50));
+            assert_eq!((world.acquisitions(), world.gets(), world.sets()), (0, 0, 0));
+            assert_eq!(world.mappings(), existing);
+            assert_eq!(harness.handle.status().error, None);
+            harness.handle.request_shutdown();
+            assert!(harness.wait_exit());
+        }
+    }
+
+    #[test]
+    fn kb_04_07_a_foreign_mapping_under_our_journal_is_refused_with_a_diagnostic() {
+        let fixture = fixture();
+        let world = stale(vec![KEY_A]);
+        let foreign = Mapping {
+            src: CAPS_LOCK_USAGE,
+            dst: 0x7_0000_00E0,
+        };
+        world.external_mappings(vec![KEY_A, foreign]);
+        let (mut harness, _runs) = harness_with(&world);
+        harness.start(&fixture, false, None);
+        harness.wait_ready();
+        wait_for(&harness.handle, "refusal diagnostic", |status| {
+            status.error.as_deref().is_some_and(|error| error.contains("left untouched"))
+        });
+        assert_eq!(world.mappings(), vec![KEY_A, foreign]);
+        harness.handle.request_shutdown();
+        assert!(harness.wait_exit());
+    }
+
+    #[test]
+    fn kb_04_07_a_failed_recovery_is_reported_once_without_blocking_startup_or_retrying() {
+        let fixture = fixture();
+        let world = stale(vec![KEY_A]);
+        world.script_set(SetFault::Exited);
+        let sets_before = world.sets();
+        let (mut harness, runs) = harness_with(&world);
+        harness.start(&fixture, false, None);
+        harness.wait_ready();
+        wait_for(&harness.handle, "failure report", |status| {
+            status.error.as_deref().is_some_and(|error| error.contains("not retried"))
+        });
+        std::thread::sleep(Duration::from_millis(250));
+        assert_eq!(runs.load(Ordering::SeqCst), 1, "no retry loop");
+        assert_eq!(
+            world.sets(),
+            sets_before,
+            "the refused write did not apply and was not repeated"
+        );
+        assert!(
+            world.journal().is_some(),
+            "the journal stays for the next launch"
+        );
+        let error = harness.handle.status().error.expect("error");
+        assert_eq!(error.matches("not retried").count(), 1, "reported once: {error}");
+        harness.handle.request_shutdown();
+        assert!(harness.wait_exit());
+    }
+
+    #[test]
+    fn kb_04_07_a_busy_lease_during_recovery_does_not_block_ready_or_shutdown() {
+        let fixture = fixture();
+        let world = stale(vec![KEY_A]);
+        // Another cooperating process holds the lease: recovery waits on it.
+        world.hold_lease(true);
+        let (mut harness, _runs) = harness_with(&world);
+        harness.start(&fixture, false, None);
+        harness.wait_ready();
+        harness.handle.request_shutdown();
+        assert!(harness.wait_exit());
+        assert_eq!(
+            world.mappings(),
+            vec![KEY_A, OWNED],
+            "nothing was mutated without the lease"
+        );
+    }
 }

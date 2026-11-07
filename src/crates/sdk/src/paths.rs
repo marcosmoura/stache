@@ -59,6 +59,7 @@ fn non_empty_var(name: &str) -> Option<PathBuf> {
 pub struct AppPaths {
     cache: PathBuf,
     runtime: PathBuf,
+    support: PathBuf,
     owner: u32,
 }
 
@@ -85,7 +86,16 @@ impl AppPaths {
         if runtime.starts_with(&cache) || cache.starts_with(&runtime) {
             return Err(AppPathError::OverlappingDirectories { cache, runtime });
         }
-        Ok(Self { cache, runtime, owner })
+        let support =
+            resolve_anchor(&home.join("Library").join("Application Support"))?.join(IDENTITY);
+        if support.starts_with(&cache)
+            || cache.starts_with(&support)
+            || support.starts_with(&runtime)
+            || runtime.starts_with(&support)
+        {
+            return Err(AppPathError::OverlappingDirectories { cache: support, runtime });
+        }
+        Ok(Self { cache, runtime, support, owner })
     }
 
     /// The cache directory.
@@ -95,6 +105,15 @@ impl AppPaths {
     /// The runtime directory that owns the control socket.
     #[must_use]
     pub fn runtime_directory(&self) -> &Path { &self.runtime }
+
+    /// The durable Application Support directory for this identity.
+    ///
+    /// Unlike the cache it is never cleared, unlike the runtime directory it
+    /// survives a reboot, and it is not a user-selected configuration directory.
+    /// Durable feature state such as the Keybindings Caps journal lives in a
+    /// named subdirectory of it. Resolving this path creates nothing.
+    #[must_use]
+    pub fn application_support_directory(&self) -> &Path { &self.support }
 
     /// The expected owner: the current process's effective user ID.
     #[must_use]
@@ -237,6 +256,20 @@ mod tests {
             paths.socket_path().expect("socket"),
             root.join("com.marcosmoura.stache.next").join("ipc")
         );
+    }
+
+    #[test]
+    fn the_durable_directory_is_isolated_from_cache_runtime_and_legacy() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let paths = AppPaths::resolve(&environment(root.path(), root.path())).expect("resolve");
+        let root = fs::canonicalize(root.path()).expect("canonical root");
+        assert_eq!(
+            paths.application_support_directory(),
+            root.join("Library").join("Application Support").join(IDENTITY)
+        );
+        assert!(!paths.application_support_directory().starts_with(paths.cache_directory()));
+        assert!(!paths.application_support_directory().starts_with(paths.runtime_directory()));
+        assert!(!paths.runtime_directory().starts_with(paths.application_support_directory()));
     }
 
     #[test]

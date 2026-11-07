@@ -248,6 +248,7 @@ fn the_wire_envelope_round_trips_every_assertion_state() {
                 revision: "4294967296".to_owned(),
                 detail: None,
                 diagnostic: Some("held".to_owned()),
+                keybindings: None,
             },
             runtime: KeepAwakeRuntimeStatus {
                 assertion_state: state,

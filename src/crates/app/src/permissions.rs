@@ -2,12 +2,17 @@
 //!
 //! The registry asks for a fresh trust status whenever it starts a module; this
 //! manager adds the host policy on top: fast polling while a declared module is
-//! waiting, slower backoff otherwise (which still notices revocation), and one
-//! automatic system prompt per permission per session.
+//! waiting, slower backoff otherwise (which still notices revocation), and at
+//! most one automatic system prompt per permission per session for requirements
+//! that allow it.
 //!
 //! A permission is needed only when an enabled, non-paused registered module
-//! declares it. The pilot has no runtime module, so the host never prompts for
-//! Accessibility in normal operation.
+//! currently requires it for its accepted configuration. Shared-input
+//! requirements (Keybindings Caps today, Hold-to-Quit and `MenuAnywhere` later)
+//! are user-only: startup, enable, reload, tick and activation only check and
+//! poll, and the system prompt appears only for an explicit tray request. Only
+//! the Caps bindings of Keybindings need Accessibility, so ordinary shortcuts
+//! never cause a prompt.
 
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -17,7 +22,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use stache_sdk::shutdown::{ShutdownWait, wait_for_finish};
-use stache_sdk::{Permission, PermissionProvider, PermissionStatus};
+use stache_sdk::{Permission, PermissionProvider, PermissionRequirement, PermissionStatus};
 
 /// Why a fresh permission check was requested.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,8 +39,9 @@ pub enum RefreshTrigger {
 
 /// The registry facing side of permission policy.
 pub trait PermissionHost: Send + Sync {
-    /// Permissions declared by enabled, non-paused modules.
-    fn needed(&self) -> Vec<Permission>;
+    /// Permissions required by the accepted configuration of enabled,
+    /// non-paused modules, with their prompt policy.
+    fn needed(&self) -> Vec<PermissionRequirement>;
 
     /// Whether any module currently observes `WaitingForPermission`.
     fn waiting(&self) -> bool;
@@ -80,11 +86,18 @@ impl PermissionManager {
     /// Checks every needed permission and applies prompt policy.
     ///
     /// `status` never prompts. `request` is called at most once automatically
-    /// for each needed permission; an explicit user action may prompt again.
+    /// for each needed permission whose requirement allows automatic prompting;
+    /// a user-only requirement (every shared-input consumer) is requested only
+    /// by [`RefreshTrigger::Explicit`]. An explicit user action may prompt again.
     pub fn refresh(&mut self, host: &dyn PermissionHost, trigger: RefreshTrigger) -> RefreshReport {
         let needed = host.needed();
+        // A permission nobody needs now is forgotten, so a later requirement
+        // re-reads and re-applies the fresh status instead of trusting a stale one.
+        self.last
+            .retain(|permission, _| needed.iter().any(|r| r.permission() == *permission));
         let mut report = RefreshReport::default();
-        for permission in needed {
+        for requirement in needed {
+            let permission = requirement.permission();
             let fresh = self.provider.status(permission);
             if self.last.get(&permission) != Some(&fresh) {
                 host.apply(permission, fresh);
@@ -95,8 +108,9 @@ impl PermissionManager {
                 self.granted.insert(permission);
                 continue;
             }
-            let automatic =
-                !self.prompted.contains(&permission) && !self.granted.contains(&permission);
+            let automatic = requirement.may_auto_prompt()
+                && !self.prompted.contains(&permission)
+                && !self.granted.contains(&permission);
             let explicit = trigger == RefreshTrigger::Explicit;
             if !automatic && !explicit {
                 continue;
@@ -348,22 +362,30 @@ mod tests {
 
     #[derive(Default)]
     struct FakeHost {
-        needed: Mutex<Vec<Permission>>,
+        needed: Mutex<Vec<PermissionRequirement>>,
         waiting: AtomicBool,
         applied: Mutex<Vec<(Permission, PermissionStatus)>>,
     }
 
     impl FakeHost {
         fn need(&self, permission: Permission) {
+            self.require(PermissionRequirement::automatic(permission));
+        }
+
+        fn require(&self, requirement: PermissionRequirement) {
             let mut needed = self.needed.lock().expect("needed");
-            if !needed.contains(&permission) {
-                needed.push(permission);
+            if !needed.contains(&requirement) {
+                needed.push(requirement);
             }
         }
+
+        fn clear(&self) { self.needed.lock().expect("needed").clear(); }
     }
 
     impl PermissionHost for FakeHost {
-        fn needed(&self) -> Vec<Permission> { self.needed.lock().expect("needed").clone() }
+        fn needed(&self) -> Vec<PermissionRequirement> {
+            self.needed.lock().expect("needed").clone()
+        }
 
         fn waiting(&self) -> bool { self.waiting.load(Ordering::SeqCst) }
 
@@ -404,6 +426,70 @@ mod tests {
         let explicit = manager.refresh(&host, RefreshTrigger::Explicit);
         assert_eq!(explicit.prompted, Some(Permission::Accessibility));
         assert_eq!(provider.requests.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn kb_05_04_user_only_requirements_are_never_requested_automatically() {
+        let provider = provider(PermissionStatus::Denied);
+        let mut manager = PermissionManager::new(provider.clone());
+        let host = FakeHost::default();
+        host.require(PermissionRequirement::shared_input(Permission::Accessibility));
+        for trigger in [
+            RefreshTrigger::Startup,
+            RefreshTrigger::Tick,
+            RefreshTrigger::Activation,
+            RefreshTrigger::Tick,
+        ] {
+            let report = manager.refresh(&host, trigger);
+            assert_eq!(report.prompted, None);
+            assert!(!report.waiting);
+        }
+        assert_eq!(provider.requests.load(Ordering::SeqCst), 0);
+        // The status is still checked and applied without prompting.
+        assert_eq!(host.applied.lock().expect("applied").as_slice(), [(
+            Permission::Accessibility,
+            PermissionStatus::Denied
+        )]);
+        let explicit = manager.refresh(&host, RefreshTrigger::Explicit);
+        assert_eq!(explicit.prompted, Some(Permission::Accessibility));
+        assert_eq!(provider.requests.load(Ordering::SeqCst), 1);
+        // The explicit request does not consume or grant later automatic prompts.
+        manager.refresh(&host, RefreshTrigger::Tick);
+        assert_eq!(provider.requests.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn kb_05_04_a_user_only_requirement_wins_over_automatic_prompting_state() {
+        let provider = provider(PermissionStatus::Denied);
+        let mut manager = PermissionManager::new(provider.clone());
+        let host = FakeHost::default();
+        host.require(PermissionRequirement::user_only(Permission::Accessibility));
+        manager.refresh(&host, RefreshTrigger::Startup);
+        // The config stops needing it, then needs it again: still no auto prompt.
+        host.clear();
+        manager.refresh(&host, RefreshTrigger::Tick);
+        host.require(PermissionRequirement::user_only(Permission::Accessibility));
+        manager.refresh(&host, RefreshTrigger::Tick);
+        assert_eq!(provider.requests.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn kb_05_04_a_requirement_that_returns_rereads_a_fresh_status() {
+        let provider = provider(PermissionStatus::Granted);
+        let mut manager = PermissionManager::new(provider.clone());
+        let host = FakeHost::default();
+        host.require(PermissionRequirement::user_only(Permission::Accessibility));
+        manager.refresh(&host, RefreshTrigger::Startup);
+        host.clear();
+        manager.refresh(&host, RefreshTrigger::Tick);
+        *provider.status.lock().expect("status") = PermissionStatus::Denied;
+        host.require(PermissionRequirement::user_only(Permission::Accessibility));
+        manager.refresh(&host, RefreshTrigger::Tick);
+        let applied = host.applied.lock().expect("applied");
+        assert_eq!(
+            applied.last(),
+            Some(&(Permission::Accessibility, PermissionStatus::Denied))
+        );
     }
 
     #[test]

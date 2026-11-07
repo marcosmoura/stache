@@ -22,12 +22,14 @@ use std::time::{Duration, Instant};
 
 use serde::de::DeserializeOwned;
 use stache_keep_awake::{KeepAwakeConfig, KeepAwakeModule, KeepAwakeSnapshot};
+use stache_keybindings::{KeybindingsConfig, KeybindingsRuntime};
 use stache_macos::audio::{AudioBackend, CoreAudioBackend};
 use stache_macos::{
     ApplicationControl, AssertionOwner, LockObservationInstaller, LockProbe, SystemLockProbe,
 };
 use stache_notunes::{NoTunesConfig, NoTunesModule};
 use stache_proxy_audio::{AudioIpc, ProxyAudioConfig, ProxyAudioModule};
+use stache_sdk::input::{InputPriority, InputService};
 use stache_sdk::ipc::{
     ConfigCore, CoreHandler, CoreReload, CoreStatus, HandlerResult, IpcHandler, IpcServer, Router,
     RouterError, ServerError, SocketShutdown,
@@ -39,10 +41,28 @@ use stache_sdk::{
     AcceptedWatch, CancellationToken, ChangeSet, ConfigCatalog, ConfigFileId, ConfigPaths,
     ConfigStore, ConfigStoreError, ConfigWatcher, EventBus, Initial, LogFilter, Logger,
     MainThreadExecutor, Module, ModuleConfig, ModuleHandle, ModuleId, ModuleSnapshot, ModuleStatus,
-    PathEntry, Permission, PermissionProvider, PermissionStatus, Registry, RegistryError,
-    RegistryResult, ReloadOutcome, WatchError, WindowBackend, WindowError, WindowKey, WindowKind,
-    WindowRequest, WindowSize, inspect_paths,
+    PathEntry, Permission, PermissionProvider, PermissionRequirement, PermissionStatus, Registry,
+    RegistryError, RegistryResult, ReloadOutcome, WatchError, WindowBackend, WindowError,
+    WindowKey, WindowKind, WindowRequest, WindowSize, inspect_paths,
 };
+
+/// Host-assigned generic input priorities.
+///
+/// Hold-to-Quit > `MenuAnywhere` > Keybindings. The SDK knows no module
+/// identity. Only Keybindings subscribes today; the others are reserved for later
+/// parts.
+pub mod input_priority {
+    use super::InputPriority;
+
+    /// Reserved for Hold-to-Quit, the highest input priority.
+    #[allow(dead_code, reason = "reserved for the Hold-to-Quit part")]
+    pub const HOLD_TO_QUIT: InputPriority = InputPriority { level: 300, tie_break: 0 };
+    /// Reserved for `MenuAnywhere`.
+    #[allow(dead_code, reason = "reserved for the MenuAnywhere part")]
+    pub const MENU_ANYWHERE: InputPriority = InputPriority { level: 200, tie_break: 0 };
+    /// Reserved for Keybindings, the lowest input priority.
+    pub const KEYBINDINGS: InputPriority = InputPriority { level: 100, tie_break: 0 };
+}
 
 use crate::bindings::{HostStatus, ModuleStatusView, config_file_view};
 use crate::config_edit::{CommitOutcome, EnableEditError, plan_enabled};
@@ -65,28 +85,7 @@ struct RegistryPermissions {
 }
 
 impl PermissionHost for RegistryPermissions {
-    fn needed(&self) -> Vec<Permission> {
-        let snapshots: BTreeMap<ModuleId, ModuleSnapshot> = self
-            .registry
-            .snapshots()
-            .into_iter()
-            .map(|snapshot| (snapshot.id, snapshot))
-            .collect();
-        let mut needed = Vec::new();
-        for descriptor in self.registry.descriptors() {
-            let Some(snapshot) = snapshots.get(&descriptor.id) else {
-                continue;
-            };
-            if snapshot.enabled && !snapshot.paused {
-                for permission in descriptor.permissions {
-                    if !needed.contains(permission) {
-                        needed.push(*permission);
-                    }
-                }
-            }
-        }
-        needed
-    }
+    fn needed(&self) -> Vec<PermissionRequirement> { self.registry.permission_requirements() }
 
     fn waiting(&self) -> bool {
         self.registry
@@ -236,6 +235,14 @@ pub trait ModuleFactory: Send + Sync {
     fn ipc_handlers(&self, _context: &FactoryContext) -> Vec<(&'static str, Arc<dyn IpcHandler>)> {
         Vec::new()
     }
+
+    /// Adds this factory's separately published runtime details to the module's
+    /// status view and returns whether the view is one of its own. The default
+    /// adds nothing and returns `false`.
+    ///
+    /// Called with published data only: it must not lock module code, wait on
+    /// native work or read the disk.
+    fn project_status(&self, _view: &mut ModuleStatusView) -> bool { false }
 
     /// Stage 1: closes admission and wakes every host-service wait.
     ///
@@ -422,6 +429,85 @@ impl ModuleFactory for KeepAwakeFactory {
     }
 }
 
+/// Registers the Keybindings module over the host-lifetime runtime service.
+///
+/// Construction is inert: the composition root builds the dispatcher, the
+/// router, the Carbon control, the Caps owner and the shared input service, and
+/// none of them subscribes, registers or spawns until the enabled module starts.
+/// Registration installs the typed accepted-configuration watch before the
+/// registry starts modules. The factory has no socket surface: the runtime
+/// details travel on [`ModuleStatusView`].
+pub struct KeybindingsFactory {
+    runtime: KeybindingsRuntime,
+}
+
+impl KeybindingsFactory {
+    /// Wraps the one host-lifetime runtime service.
+    #[must_use]
+    pub const fn new(runtime: KeybindingsRuntime) -> Self { Self { runtime } }
+}
+
+impl ModuleFactory for KeybindingsFactory {
+    fn id(&self) -> ModuleId { KeybindingsConfig::ID }
+
+    fn register(
+        &self,
+        registry: &Registry,
+        store: &ConfigStore,
+    ) -> Result<Arc<dyn ModuleControl>, HostError> {
+        let runtime = self.runtime.clone();
+        register_module_observed(registry, store, runtime.module(), move |registry, handle| {
+            runtime.install_accepted_watch(registry.accepted_watch(handle)?);
+            Ok(())
+        })
+    }
+
+    fn project_status(&self, view: &mut ModuleStatusView) -> bool {
+        if view.id != KeybindingsConfig::ID.as_str() {
+            return false;
+        }
+        view.keybindings = Some(self.runtime.snapshot().read());
+        true
+    }
+
+    fn begin_shutdown(&self) { self.runtime.begin_shutdown(); }
+
+    fn finish_shutdown(&self, _wait: &dyn ShutdownWait) -> Result<bool, String> {
+        Ok(self.runtime.finish_shutdown())
+    }
+}
+
+/// Projects registry snapshots and overlays each factory's runtime details.
+///
+/// For a module a factory projected, a held configuration diagnostic (a parse,
+/// type, I/O or deletion rejection that never reached the registry) takes
+/// precedence over the snapshot diagnostic, as in the module status envelopes.
+/// Other modules keep their snapshot diagnostic. It never replaces runtime details: the
+/// diagnostic is the rejected-file channel only.
+fn module_views(
+    snapshots: &[ModuleSnapshot],
+    factories: &[Arc<dyn ModuleFactory>],
+    store: Option<&ConfigStore>,
+) -> Vec<ModuleStatusView> {
+    snapshots
+        .iter()
+        .map(|snapshot| {
+            let mut view = ModuleStatusView::from_snapshot(snapshot);
+            let mut projected = false;
+            for factory in factories {
+                projected |= factory.project_status(&mut view);
+            }
+            if projected
+                && let Some(held) =
+                    store.and_then(|store| store.diagnostic(ConfigFileId::module(snapshot.id)))
+            {
+                view.diagnostic = Some(held.to_string());
+            }
+            view
+        })
+        .collect()
+}
+
 /// The factories the composition root registers.
 #[derive(Default)]
 pub struct ModuleFactories {
@@ -471,6 +557,20 @@ impl ModuleFactories {
     /// The registered factories.
     #[must_use]
     pub fn entries(&self) -> &[Arc<dyn ModuleFactory>] { &self.entries }
+}
+
+/// A bounded step the host runs once per desktop start, before modules start
+/// and independent of module enabled state, configuration validity and the tray.
+///
+/// The host runs it on its own cancellable thread so a slow step never blocks
+/// startup, never retries it and surfaces a returned condition once.
+pub trait StartupRecovery: Send + Sync {
+    /// A stable name for logs and the teardown record.
+    fn name(&self) -> &'static str;
+
+    /// Runs the step. Returns a condition to publish, or `None` when the step
+    /// had nothing to report.
+    fn run(&self, cancel: &CancellationToken) -> Option<String>;
 }
 
 /// Paths and registrations the runner owns.
@@ -741,7 +841,12 @@ pub fn new_host(teardown: Arc<Teardown>) -> (HostHandle, HostDriver) {
             signal: Condvar::new(),
         }),
     };
-    (handle.clone(), HostDriver { receiver, handle })
+    (handle.clone(), HostDriver {
+        receiver,
+        handle,
+        input: None,
+        recovery: None,
+    })
 }
 
 /// The jobs and socket the coordinator removes during teardown.
@@ -756,6 +861,7 @@ struct MonitorCells {
     watcher: Mutex<Option<WatcherJob>>,
     ticker: Mutex<Option<PermissionTicker>>,
     startup: Mutex<Option<StartupJob>>,
+    recovery: Mutex<Option<WatcherJob>>,
     closed: AtomicBool,
 }
 
@@ -776,6 +882,11 @@ impl MonitorCells {
         if let Some(startup) = self.startup.lock().unwrap_or_else(PoisonError::into_inner).as_ref()
         {
             startup.cancel();
+        }
+        if let Some(recovery) =
+            self.recovery.lock().unwrap_or_else(PoisonError::into_inner).as_ref()
+        {
+            recovery.cancel();
         }
     }
 
@@ -951,6 +1062,11 @@ impl TeardownStages for HostStages {
         {
             report.unacknowledged.push("startup-job".to_owned());
         }
+        if let Some(recovery) = Self::take(&self.monitors.recovery)
+            && !recovery.stop_bounded(wait.as_ref())
+        {
+            report.unacknowledged.push("startup-recovery".to_owned());
+        }
         if self.setup_failed.load(Ordering::SeqCst) {
             report.failed.push(HOST_WORKER.to_owned());
         } else if !self.wait_for_runner_until(wait.as_ref(), target) {
@@ -1024,8 +1140,7 @@ impl TeardownStages for HostStages {
     fn publish_terminal(&self) {
         let mut status = self.status.lock().unwrap_or_else(PoisonError::into_inner).clone();
         status.ready = false;
-        status.modules =
-            self.registry.snapshots().iter().map(ModuleStatusView::from_snapshot).collect();
+        status.modules = module_views(&self.registry.snapshots(), &self.hooks.factories, None);
         *self.status.lock().unwrap_or_else(PoisonError::into_inner) = status.clone();
         self.ui.status(&status);
     }
@@ -1036,6 +1151,32 @@ impl TeardownStages for HostStages {
 pub struct HostDriver {
     receiver: Receiver<HostCommand>,
     handle: HostHandle,
+    input: Option<Arc<InputService>>,
+    recovery: Option<Arc<dyn StartupRecovery>>,
+}
+
+impl HostDriver {
+    /// Attaches the one shared input service the registry hands to modules.
+    ///
+    /// Without it (the default for host fixtures) every input subscription is
+    /// `Unavailable` and no native owner is ever called.
+    #[must_use]
+    pub fn with_input_service(mut self, input: Arc<InputService>) -> Self {
+        self.input = Some(input);
+        self
+    }
+}
+
+impl HostDriver {
+    /// Attaches the one startup recovery step the host runs per desktop start.
+    ///
+    /// Without it (the default for host fixtures) nothing is recovered and no
+    /// native tool is ever invoked.
+    #[must_use]
+    pub fn with_startup_recovery(mut self, recovery: Arc<dyn StartupRecovery>) -> Self {
+        self.recovery = Some(recovery);
+        self
+    }
 }
 
 impl HostDriver {
@@ -1053,13 +1194,17 @@ impl HostDriver {
         services: HostServices,
         ui: Arc<dyn HostUi>,
     ) -> Result<(), HostError> {
-        let registry = Arc::new(Registry::new(
+        let mut registry = Registry::new(
             Arc::clone(&services.logger),
             Arc::clone(&services.events),
             Arc::clone(&services.main_thread),
             Arc::clone(&services.permissions),
             Arc::clone(&services.windows),
-        ));
+        );
+        if let Some(input) = self.input {
+            registry = registry.with_input_service(input);
+        }
+        let registry = Arc::new(registry);
         let monitors = Arc::new(MonitorCells::default());
         let setup_failed = Arc::new(AtomicBool::new(false));
         let hooks = FactoryHooks::new(settings.factories.entries().to_vec());
@@ -1073,7 +1218,7 @@ impl HostDriver {
             ui: Arc::clone(&ui),
         }));
         let finished = self.handle.clone();
-        let runner = Runner::new(
+        let mut runner = Runner::new(
             settings,
             services,
             self.handle,
@@ -1082,6 +1227,7 @@ impl HostDriver {
             monitors,
             setup_failed,
         );
+        runner.recovery = self.recovery;
         let spawned = thread::Builder::new()
             .name("stache-host".to_owned())
             .spawn(move || runner.run(&self.receiver));
@@ -1131,6 +1277,7 @@ struct Runner {
     /// The last failed tray or host action, cleared by a later successful one.
     last_action_error: Option<String>,
     ready: bool,
+    recovery: Option<Arc<dyn StartupRecovery>>,
 }
 
 struct WatcherJob {
@@ -1211,6 +1358,7 @@ impl Runner {
             persistent_errors: Vec::new(),
             last_action_error: None,
             ready: false,
+            recovery: None,
         }
     }
 
@@ -1278,7 +1426,48 @@ impl Runner {
         self.finish(true);
     }
 
+    /// Runs the startup recovery step once, on its own cancellable thread.
+    ///
+    /// A failure to start the thread is a condition, not a startup failure; the
+    /// step is never retried.
+    fn start_recovery(&mut self) {
+        let Some(recovery) = self.recovery.take() else {
+            return;
+        };
+        let cancel = CancellationToken::new();
+        let worker_stop = cancel.clone();
+        let sender = self.handle.sender.clone();
+        let logger = Arc::clone(&self.services.logger);
+        let name = recovery.name();
+        let spawned = thread::Builder::new().name(format!("stache-{name}")).spawn(move || {
+            let report = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                recovery.run(&worker_stop)
+            }))
+            .unwrap_or_else(|_| Some(format!("{name} panicked and was not retried")));
+            if let Some(message) = report {
+                logger.log(stache_sdk::LogRecord {
+                    level: stache_sdk::LogLevel::Warn,
+                    module: ModuleId::new("host"),
+                    operation: stache_sdk::Operation::Start,
+                    message: message.clone(),
+                });
+                let _ = sender.send(HostCommand::Condition(message));
+            }
+        });
+        match spawned {
+            Ok(thread) => {
+                let job = WatcherJob { stop: cancel, thread };
+                if let Some(job) = self.monitors.install(&self.monitors.recovery, job) {
+                    // Stage 1 already closed the cells: reap it here instead.
+                    job.stop_bounded(&LateReapWait::new());
+                }
+            }
+            Err(error) => self.add_condition(format!("cannot start {name}: {error}")),
+        }
+    }
+
     fn start(&mut self) -> Result<(), HostError> {
+        self.start_recovery();
         for factory in self.settings.factories.entries() {
             let id = factory.id();
             let control = factory.register(&self.registry, &self.store)?;
@@ -1664,12 +1853,11 @@ impl Runner {
         let status = HostStatus {
             ready: self.ready,
             error: self.error_text(),
-            modules: self
-                .registry
-                .snapshots()
-                .iter()
-                .map(ModuleStatusView::from_snapshot)
-                .collect(),
+            modules: module_views(
+                &self.registry.snapshots(),
+                self.settings.factories.entries(),
+                Some(&self.store),
+            ),
             config: self.config_views(),
         };
         self.handle.publish(status.clone());
@@ -1721,6 +1909,7 @@ impl Runner {
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+    use std::sync::atomic::AtomicUsize;
 
     use stache_sdk::{
         AppEnvironment, AppPaths, DiscardLogger, EventBus, LogFilter, PermissionError,
@@ -1784,7 +1973,25 @@ mod tests {
         )
     }
 
-    fn runner(root: &Path) -> Runner {
+    fn runner(root: &Path) -> Runner { runner_with_commands(root).0 }
+
+    fn runner_with_commands(root: &Path) -> (Runner, Receiver<HostCommand>) {
+        runner_over(
+            root,
+            ModuleFactories::new(),
+            ConfigCatalog::new(),
+            Arc::new(AllowAll),
+            None,
+        )
+    }
+
+    fn runner_over(
+        root: &Path,
+        factories: ModuleFactories,
+        catalog: ConfigCatalog,
+        permissions: Arc<dyn PermissionProvider>,
+        input: Option<Arc<InputService>>,
+    ) -> (Runner, Receiver<HostCommand>) {
         let app = AppPaths::resolve(&AppEnvironment {
             home: Some(root.to_path_buf()),
             temporary: Some(root.to_path_buf()),
@@ -1793,15 +2000,15 @@ mod tests {
         let settings = HostSettings {
             app,
             config: ConfigPaths::new(root.join("config")),
-            catalog: ConfigCatalog::new(),
-            factories: ModuleFactories::new(),
+            catalog,
+            factories,
         };
         let services = HostServices {
             logger: Arc::new(DiscardLogger),
             log_filter: Arc::new(LogFilter::default()),
             events: Arc::new(EventBus::new()),
             main_thread: Arc::new(NoMainThread),
-            permissions: Arc::new(AllowAll),
+            permissions: Arc::clone(&permissions),
             windows: Arc::new(NoWindows),
             commands: Arc::new(NoCommands),
             poll: PermissionPoll {
@@ -1810,15 +2017,19 @@ mod tests {
                 backoff_max: Duration::from_millis(1),
             },
         };
-        let registry = Arc::new(Registry::new(
+        let mut registry = Registry::new(
             Arc::new(DiscardLogger),
             Arc::new(EventBus::new()),
             Arc::new(NoMainThread),
-            Arc::new(AllowAll),
+            permissions,
             Arc::new(NoWindows),
-        ));
-        let (handle, _driver) = new_host(quiet_teardown());
-        Runner::new(
+        );
+        if let Some(input) = input {
+            registry = registry.with_input_service(input);
+        }
+        let registry = Arc::new(registry);
+        let (handle, driver) = new_host(quiet_teardown());
+        let runner = Runner::new(
             settings,
             services,
             handle,
@@ -1826,7 +2037,157 @@ mod tests {
             registry,
             Arc::new(MonitorCells::default()),
             Arc::new(AtomicBool::new(false)),
-        )
+        );
+        (runner, driver.receiver)
+    }
+
+    /// A recovery step with a scripted result that records its runs and whether
+    /// it was cancelled.
+    struct ScriptedRecovery {
+        result: Option<String>,
+        runs: AtomicUsize,
+        block_until_cancelled: bool,
+        saw_cancel: AtomicBool,
+        panics: bool,
+    }
+
+    impl ScriptedRecovery {
+        fn new(result: Option<&str>) -> Arc<Self> {
+            Arc::new(Self {
+                result: result.map(str::to_owned),
+                runs: AtomicUsize::new(0),
+                block_until_cancelled: false,
+                saw_cancel: AtomicBool::new(false),
+                panics: false,
+            })
+        }
+    }
+
+    impl StartupRecovery for ScriptedRecovery {
+        fn name(&self) -> &'static str { "scripted-recovery" }
+
+        fn run(&self, cancel: &CancellationToken) -> Option<String> {
+            self.runs.fetch_add(1, Ordering::SeqCst);
+            assert!(!self.panics, "scripted failure");
+            if self.block_until_cancelled {
+                while !cancel.wait(Duration::from_millis(5)) {}
+                self.saw_cancel.store(true, Ordering::SeqCst);
+            }
+            self.result.clone()
+        }
+    }
+
+    fn next_condition(receiver: &Receiver<HostCommand>) -> Option<String> {
+        match receiver.recv_timeout(Duration::from_millis(500)) {
+            Ok(HostCommand::Condition(message)) => Some(message),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn kb_04_07_the_recovery_step_runs_once_and_reports_its_condition_once() {
+        let root = tempfile::tempdir().expect("root");
+        let (mut runner, receiver) = runner_with_commands(root.path());
+        let step = ScriptedRecovery::new(Some("Caps Lock recovery failed"));
+        runner.recovery = Some(step.clone());
+        runner.start_recovery();
+        assert_eq!(
+            next_condition(&receiver).as_deref(),
+            Some("Caps Lock recovery failed")
+        );
+        assert!(next_condition(&receiver).is_none(), "reported once");
+        // Taking the step makes a second call a no-op: never a retry loop.
+        runner.start_recovery();
+        assert!(next_condition(&receiver).is_none());
+        assert_eq!(step.runs.load(Ordering::SeqCst), 1);
+        let job = runner.monitors.recovery.lock().expect("cell").take().expect("job");
+        assert!(job.stop_bounded(&LateReapWait::new()));
+    }
+
+    #[test]
+    fn kb_04_07_a_quiet_step_and_a_panicking_step_do_not_disturb_startup() {
+        let root = tempfile::tempdir().expect("root");
+        let (mut runner, receiver) = runner_with_commands(root.path());
+        runner.recovery = Some(ScriptedRecovery::new(None));
+        runner.start_recovery();
+        assert!(next_condition(&receiver).is_none(), "nothing to report");
+
+        let (mut runner, receiver) = runner_with_commands(root.path());
+        runner.recovery = Some(Arc::new(ScriptedRecovery {
+            panics: true,
+            ..Arc::into_inner(ScriptedRecovery::new(None)).expect("unique")
+        }));
+        runner.start_recovery();
+        let message = next_condition(&receiver).expect("panic is reported");
+        assert!(message.contains("panicked and was not retried"), "{message}");
+    }
+
+    #[test]
+    fn kb_04_07_teardown_cancels_a_slow_recovery_and_reaps_its_thread() {
+        let root = tempfile::tempdir().expect("root");
+        let (mut runner, _receiver) = runner_with_commands(root.path());
+        let step = Arc::new(ScriptedRecovery {
+            block_until_cancelled: true,
+            ..Arc::into_inner(ScriptedRecovery::new(None)).expect("unique")
+        });
+        runner.recovery = Some(step.clone());
+        runner.start_recovery();
+        assert!(runner.monitors.recovery.lock().expect("cell").is_some());
+        runner.monitors.close();
+        let job = runner.monitors.recovery.lock().expect("cell").take().expect("job");
+        assert!(
+            job.stop_bounded(&LateReapWait::new()),
+            "the step woke on cancellation"
+        );
+        assert!(step.saw_cancel.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn kb_04_07_a_step_started_after_teardown_closed_the_cells_is_cancelled_and_reaped() {
+        let root = tempfile::tempdir().expect("root");
+        let (mut runner, _receiver) = runner_with_commands(root.path());
+        let step = Arc::new(ScriptedRecovery {
+            block_until_cancelled: true,
+            ..Arc::into_inner(ScriptedRecovery::new(None)).expect("unique")
+        });
+        runner.recovery = Some(step.clone());
+        runner.monitors.close();
+        runner.start_recovery();
+        assert!(runner.monitors.recovery.lock().expect("cell").is_none());
+        assert!(
+            step.saw_cancel.load(Ordering::SeqCst),
+            "the late job was cancelled and joined"
+        );
+    }
+
+    #[test]
+    fn kb_04_07_the_production_recovery_restores_a_stale_journal_over_fakes() {
+        use stache_keybindings::caps::CapsRecoveryStep;
+        use stache_macos::caps_remap::testing::World;
+        use stache_macos::caps_remap::{Mapping, OWNED};
+
+        let root = tempfile::tempdir().expect("root");
+        let key = Mapping { src: 100, dst: 200 };
+        let world = World::new(vec![key]);
+        world.remap().apply(&CancellationToken::new()).expect("apply");
+        world.restart();
+        assert_eq!(world.mappings(), vec![key, OWNED]);
+        let (mut runner, receiver) = runner_with_commands(root.path());
+        runner.recovery = Some(Arc::new(crate::caps_recovery::KeybindingsCapsRecovery::new(
+            CapsRecoveryStep::new(Arc::new(world.remap())),
+        )));
+        runner.start_recovery();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while world.journal().is_some() {
+            assert!(Instant::now() < deadline, "recovery never retired the journal");
+            thread::sleep(Duration::from_millis(5));
+        }
+        let job = runner.monitors.recovery.lock().expect("cell").take().expect("job");
+        assert!(job.stop_bounded(&LateReapWait::new()));
+        assert_eq!(world.mappings(), vec![key]);
+        assert_eq!(world.journal(), None);
+        assert_eq!(world.sets(), 2);
+        assert!(next_condition(&receiver).is_none(), "a clean restore is quiet");
     }
 
     #[test]
@@ -2126,6 +2487,172 @@ mod tests {
             }
             Ok(())
         }
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct InputConfig {
+        caps: bool,
+    }
+
+    impl ModuleConfig for InputConfig {
+        fn enabled(&self) -> bool { true }
+
+        fn validate(&self) -> Result<(), stache_sdk::ConfigError> { Ok(()) }
+    }
+
+    /// A shared-input consumer that needs Accessibility only for `caps`.
+    struct InputModule;
+
+    impl Module for InputModule {
+        type Config = InputConfig;
+
+        fn descriptor(&self) -> stache_sdk::ModuleDescriptor {
+            stache_sdk::ModuleDescriptor {
+                id: ModuleId::new("input-consumer"),
+                provides: &[],
+                requires: &[],
+                permissions: &[],
+                executables: &[],
+                surfaces: &[],
+            }
+        }
+
+        fn required_permissions(&self, config: &InputConfig) -> Vec<PermissionRequirement> {
+            if config.caps {
+                vec![PermissionRequirement::shared_input(
+                    Permission::Accessibility,
+                )]
+            } else {
+                Vec::new()
+            }
+        }
+
+        fn configure(
+            &mut self,
+            _: &InputConfig,
+            _: &stache_sdk::ModuleContext,
+        ) -> stache_sdk::ModuleResult<()> {
+            Ok(())
+        }
+
+        fn start(&mut self, _: &stache_sdk::ModuleContext) -> stache_sdk::ModuleResult<()> {
+            Ok(())
+        }
+
+        fn reconfigure(
+            &mut self,
+            _: &InputConfig,
+            _: &stache_sdk::ModuleContext,
+        ) -> stache_sdk::ModuleResult<()> {
+            Ok(())
+        }
+
+        fn stop(&mut self, _: &stache_sdk::ModuleContext) -> stache_sdk::ModuleResult<()> { Ok(()) }
+    }
+
+    /// Counts `request` calls so a default test can prove it never prompts.
+    struct CountingTrust {
+        trusted: std::sync::atomic::AtomicBool,
+        requests: AtomicUsize,
+    }
+
+    impl PermissionProvider for CountingTrust {
+        fn status(&self, _: Permission) -> PermissionStatus {
+            if self.trusted.load(Ordering::SeqCst) {
+                PermissionStatus::Granted
+            } else {
+                PermissionStatus::Denied
+            }
+        }
+
+        fn request(
+            &self,
+            permission: Permission,
+        ) -> Result<PermissionStatus, stache_sdk::PermissionError> {
+            self.requests.fetch_add(1, Ordering::SeqCst);
+            Ok(self.status(permission))
+        }
+    }
+
+    #[test]
+    fn kb_05_04_host_policy_never_prompts_for_shared_input_except_on_explicit_request() {
+        let trust = Arc::new(CountingTrust {
+            trusted: std::sync::atomic::AtomicBool::new(false),
+            requests: AtomicUsize::new(0),
+        });
+        let provider: Arc<dyn PermissionProvider> = trust.clone();
+        let registry = Arc::new(Registry::new(
+            Arc::new(DiscardLogger),
+            Arc::new(EventBus::new()),
+            Arc::new(NoMainThread),
+            Arc::clone(&provider),
+            Arc::new(NoWindows),
+        ));
+        let handle = registry.register(InputModule, InputConfig { caps: false }).expect("register");
+        let host = RegistryPermissions {
+            registry: Arc::clone(&registry),
+            logger: Arc::new(DiscardLogger),
+        };
+        let mut manager = PermissionManager::new(provider);
+        let requests = || trust.requests.load(Ordering::SeqCst);
+
+        // Ordinary configuration: permission-free, running, no prompt.
+        registry.start_all().expect("start");
+        manager.refresh(&host, RefreshTrigger::Startup);
+        assert_eq!(
+            registry.snapshot(handle).expect("snapshot").status,
+            ModuleStatus::Running
+        );
+        assert_eq!(requests(), 0);
+
+        // Ordinary -> Caps without trust: accepted, Waiting, still no prompt.
+        registry.reload(handle, InputConfig { caps: true }).expect("reload");
+        assert_eq!(
+            registry.snapshot(handle).expect("snapshot").status,
+            ModuleStatus::WaitingForPermission(Permission::Accessibility)
+        );
+        for trigger in [
+            RefreshTrigger::Startup,
+            RefreshTrigger::Tick,
+            RefreshTrigger::Activation,
+            RefreshTrigger::Tick,
+        ] {
+            let report = manager.refresh(&host, trigger);
+            assert!(report.waiting);
+            assert_eq!(report.prompted, None);
+        }
+        registry.reload(handle, InputConfig { caps: true }).expect("same reload");
+        registry.set_enabled(handle, true).expect("enable");
+        manager.refresh(&host, RefreshTrigger::Tick);
+        assert_eq!(requests(), 0);
+
+        // The explicit tray path may prompt.
+        let report = manager.refresh(&host, RefreshTrigger::Explicit);
+        assert_eq!(report.prompted, Some(Permission::Accessibility));
+        assert_eq!(requests(), 1);
+
+        // Trust arrives: the next tick starts the module; revocation stops it.
+        trust.trusted.store(true, Ordering::SeqCst);
+        manager.refresh(&host, RefreshTrigger::Tick);
+        assert_eq!(
+            registry.snapshot(handle).expect("snapshot").status,
+            ModuleStatus::Running
+        );
+        trust.trusted.store(false, Ordering::SeqCst);
+        manager.refresh(&host, RefreshTrigger::Tick);
+        assert_eq!(
+            registry.snapshot(handle).expect("snapshot").status,
+            ModuleStatus::WaitingForPermission(Permission::Accessibility)
+        );
+
+        // Caps -> ordinary leaves Waiting and runs without trust.
+        registry.reload(handle, InputConfig { caps: false }).expect("reload");
+        assert_eq!(
+            registry.snapshot(handle).expect("snapshot").status,
+            ModuleStatus::Running
+        );
+        manager.refresh(&host, RefreshTrigger::Tick);
+        assert_eq!(requests(), 1);
     }
 
     fn stage_registry(modules: Vec<StageModule>) -> Arc<Registry> {
@@ -2802,5 +3329,264 @@ mod tests {
         );
         hung_a.open();
         hung_c.open();
+    }
+    // -----------------------------------------------------------------------
+    // Keybindings over the actual runner, registry and configuration store
+    // -----------------------------------------------------------------------
+
+    use stache_keybindings::test_support::{Rig as KbRig, wait_until as kb_wait};
+
+    const KB_Q: u16 = 0x0c;
+    const KB_CMD: u32 = 0x0100;
+
+    struct KbHost {
+        runner: Runner,
+        rig: KbRig,
+        _receiver: Receiver<HostCommand>,
+        config: stache_sdk::ConfigPaths,
+        _root: tempfile::TempDir,
+    }
+
+    impl KbHost {
+        fn new(rig: KbRig, file: Option<&str>) -> Self {
+            let root = tempfile::tempdir().expect("root");
+            let config = ConfigPaths::new(root.path().join("config"));
+            std::fs::create_dir_all(root.path().join("config")).expect("config directory");
+            let factories =
+                ModuleFactories::new().with(KeybindingsFactory::new(rig.runtime.clone()));
+            let (runner, receiver) = runner_over(
+                root.path(),
+                factories,
+                crate::catalog::catalog().expect("catalog"),
+                Arc::new(AllowAll),
+                Some(Arc::clone(&rig.input)),
+            );
+            let host = Self {
+                runner,
+                rig,
+                _receiver: receiver,
+                config,
+                _root: root,
+            };
+            if let Some(file) = file {
+                host.write(file);
+            }
+            host
+        }
+
+        fn path(&self) -> std::path::PathBuf { self.config.module_file(KeybindingsConfig::ID) }
+
+        fn write(&self, text: &str) { std::fs::write(self.path(), text).expect("write"); }
+
+        /// The registration and start prefix of `Runner::start`, without the
+        /// socket, watcher, ticker or startup commands.
+        fn register(&mut self) {
+            self.runner.start_recovery();
+            let factories: Vec<Arc<dyn ModuleFactory>> =
+                self.runner.settings.factories.entries().to_vec();
+            for factory in factories {
+                let control =
+                    factory.register(&self.runner.registry, &self.runner.store).expect("register");
+                self.runner.controls.insert(factory.id().as_str().to_owned(), control);
+            }
+        }
+
+        fn start(&mut self) {
+            self.register();
+            let _ = self.runner.registry.start_all();
+            self.runner.ready = true;
+            self.runner.publish();
+        }
+
+        fn reload(&mut self) {
+            let mut changes = ChangeSet::default();
+            changes.files.insert(ConfigFileId::module(KeybindingsConfig::ID));
+            self.runner.apply_config(&changes);
+            self.runner.publish();
+        }
+
+        fn view(&self) -> ModuleStatusView {
+            self.runner
+                .handle
+                .status()
+                .modules
+                .into_iter()
+                .find(|module| module.id == "keybindings")
+                .expect("keybindings module")
+        }
+    }
+
+    const KB_ON: &str = r#"{ "enabled": true, "bindings": { "Cmd+Q": "/bin/sh hold-q" } }"#;
+
+    #[test]
+    fn kb_05_01_the_keybindings_factory_is_inert_until_start_and_projects_runtime_details() {
+        let mut host = KbHost::new(KbRig::new(), Some(KB_ON));
+        host.register();
+        // Registration and construction touch nothing.
+        assert!(host.rig.carbon.calls().is_empty());
+        assert_eq!(host.rig.backend.submit_calls(), 0);
+        assert_eq!(host.rig.processes.count(), 0);
+        host.runner.registry.start_all().expect("start");
+        host.runner.publish();
+        let view = host.view();
+        assert_eq!(view.state, crate::bindings::ModuleState::Running);
+        let details = view.keybindings.as_ref().expect("runtime details");
+        assert_eq!(details.state, stache_keybindings::RuntimeState::Active);
+        assert_eq!(details.revision, view.revision);
+        assert_eq!(host.rig.carbon.registered_chords(), [(KB_Q, KB_CMD)]);
+        // The wire shape: camelCase details on this module only.
+        let json = serde_json::to_value(host.runner.handle.status()).expect("encode");
+        assert_eq!(json["modules"][0]["keybindings"]["state"], "active");
+        assert_eq!(
+            json["modules"][0]["keybindings"]["revision"],
+            serde_json::json!(view.revision)
+        );
+        let _ = host.runner.registry.shutdown();
+    }
+
+    #[test]
+    fn kb_05_05_held_file_diagnostics_and_runtime_details_coexist_and_repair_independently() {
+        let mut host = KbHost::new(KbRig::new(), Some(KB_ON));
+        host.start();
+        let revision = host.view().revision;
+        // An invalid file is held; the running details are untouched.
+        host.write("{ \"enabled\": ");
+        host.reload();
+        let view = host.view();
+        assert!(view.diagnostic.is_some(), "the rejected file is held");
+        assert_eq!(view.state, crate::bindings::ModuleState::Running);
+        assert_eq!(view.revision, revision);
+        assert_eq!(
+            view.keybindings.as_ref().expect("details").state,
+            stache_keybindings::RuntimeState::Active
+        );
+        assert!(
+            !view
+                .keybindings
+                .as_ref()
+                .expect("details")
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("expected")),
+            "the file diagnostic never enters the runtime channel"
+        );
+        // A repaired file clears the diagnostic and advances the runtime.
+        host.write(r#"{ "enabled": true, "bindings": { "Cmd+W": "/bin/sh quick-w" } }"#);
+        host.reload();
+        let view = host.view();
+        assert!(view.diagnostic.is_none());
+        assert_ne!(view.revision, revision);
+        let adopted = view.revision;
+        kb_wait("the repaired file is adopted", || {
+            host.runner.publish();
+            host.view().keybindings.is_some_and(|details| details.revision == adopted)
+        });
+        let _ = host.runner.registry.shutdown();
+    }
+
+    #[test]
+    fn kb_05_07_a_rejected_or_unchanged_file_reload_cancels_no_accepted_work() {
+        let mut host = KbHost::new(KbRig::new(), Some(KB_ON));
+        host.start();
+        host.rig.press_chord(KB_Q, KB_CMD);
+        kb_wait("the held command", || host.rig.processes.count() == 1);
+        let generation = host.rig.dispatcher.generation();
+        // Same bytes: the registry sees an unchanged configuration.
+        host.write(KB_ON);
+        host.reload();
+        // Rejected bytes: nothing is published.
+        host.write("not json");
+        host.reload();
+        assert_eq!(host.rig.dispatcher.generation(), generation);
+        assert!(!host.rig.processes.child("hold-q").killed());
+        assert_eq!(host.rig.dispatcher.snapshot().active, 1);
+        assert!(host.view().diagnostic.is_some());
+        host.rig.processes.finish_all();
+        let _ = host.runner.registry.shutdown();
+    }
+
+    #[test]
+    fn kb_05_07_host_caps_recovery_runs_with_the_module_disabled_and_an_invalid_file() {
+        use stache_keybindings::caps::CapsRecoveryStep;
+        use stache_macos::caps_remap::{Mapping, OWNED};
+
+        let key = Mapping { src: 100, dst: 200 };
+        let rig = KbRig::with_mappings(vec![key]);
+        // A crash left Next's own mapping and journal behind.
+        rig.remap.apply(&CancellationToken::new()).expect("apply");
+        rig.world.restart();
+        assert_eq!(rig.world.mappings(), vec![key, OWNED]);
+        let sets_before = rig.world.sets();
+        // The module file is invalid and the module is therefore not enabled.
+        let mut host = KbHost::new(rig, Some("{ not valid"));
+        host.runner.recovery = Some(Arc::new(crate::caps_recovery::KeybindingsCapsRecovery::new(
+            CapsRecoveryStep::new(Arc::clone(&host.rig.remap)),
+        )));
+        host.register();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while host.rig.world.journal().is_some() {
+            assert!(Instant::now() < deadline, "recovery never retired the journal");
+            thread::sleep(Duration::from_millis(5));
+        }
+        let job = host.runner.monitors.recovery.lock().expect("cell").take().expect("job");
+        assert!(job.stop_bounded(&LateReapWait::new()));
+        assert_eq!(host.rig.world.mappings(), vec![key]);
+        assert_eq!(
+            host.rig.world.sets() - sets_before,
+            1,
+            "one restore write, nothing else"
+        );
+        // The module itself stayed inert: no tap, no hotkey, no process.
+        host.runner.registry.start_all().expect("start");
+        host.runner.publish();
+        assert!(host.view().diagnostic.is_some());
+        assert!(host.rig.carbon.calls().is_empty());
+        assert_eq!(host.rig.backend.submit_calls(), 0);
+    }
+
+    #[test]
+    fn kb_05_06_host_shutdown_closes_admission_then_stops_the_module_then_drains() {
+        let mut host = KbHost::new(KbRig::new(), Some(KB_ON));
+        host.start();
+        host.rig.press_chord(KB_Q, KB_CMD);
+        kb_wait("the held command", || host.rig.processes.count() == 1);
+        let factories: Vec<Arc<dyn ModuleFactory>> =
+            host.runner.settings.factories.entries().to_vec();
+        let stages = stages_over_hooks(Arc::clone(&host.runner.registry), factories);
+        stages.invalidate();
+        // Stage 1 closed admission before the module stopped.
+        host.rig.press_chord(KB_Q, KB_CMD);
+        assert_eq!(host.rig.processes.count(), 1, "admission is closed");
+        let report = stages.stop_registry(AdvancingWait::new());
+        assert!(report.failed.is_empty(), "{report:?}");
+        assert!(report.unacknowledged.is_empty(), "{report:?}");
+        assert!(
+            host.rig.processes.child("hold-q").killed(),
+            "the module stop cancelled it"
+        );
+        assert!(host.rig.carbon.registered_chords().is_empty());
+        assert!(
+            host.rig
+                .dispatcher
+                .submit(&[stache_keybindings::test_support::cmd("late")])
+                .is_err(),
+            "the factory drain closed the dispatcher"
+        );
+    }
+
+    #[test]
+    fn kb_05_06_two_independent_fake_hosts_share_nothing() {
+        let mut first = KbHost::new(KbRig::new(), Some(KB_ON));
+        let mut second = KbHost::new(KbRig::new(), Some(KB_ON));
+        first.start();
+        second.start();
+        first.rig.press_chord(KB_Q, KB_CMD);
+        kb_wait("first", || first.rig.processes.count() == 1);
+        assert_eq!(second.rig.processes.count(), 0);
+        let _ = second.runner.registry.shutdown();
+        first.rig.press_chord(KB_Q, KB_CMD);
+        kb_wait("first again", || first.rig.processes.count() == 2);
+        first.rig.processes.finish_all();
+        let _ = first.runner.registry.shutdown();
     }
 }

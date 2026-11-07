@@ -22,7 +22,7 @@ use crate::paths::AppPaths;
 use crate::threading::CancellationToken;
 
 /// How long one acquisition attempt waits between lock polls.
-const LEASE_QUANTUM: Duration = Duration::from_millis(10);
+pub(crate) const LEASE_QUANTUM: Duration = Duration::from_millis(10);
 
 /// Time and wake source for a bounded lease wait.
 ///
@@ -51,8 +51,8 @@ impl LeaseClock for SystemLeaseClock {
 /// Budget, cancellation and clock for one bounded lease acquisition.
 pub struct LeaseWait {
     budget: Duration,
-    cancellation: CancellationToken,
-    clock: Arc<dyn LeaseClock>,
+    pub(crate) cancellation: CancellationToken,
+    pub(crate) clock: Arc<dyn LeaseClock>,
 }
 
 impl LeaseWait {
@@ -72,12 +72,14 @@ impl LeaseWait {
         Self { budget, cancellation, clock }
     }
 
-    fn deadline(&self) -> Instant {
+    pub(crate) fn deadline(&self) -> Instant {
         let now = self.clock.now();
         now.checked_add(self.budget).unwrap_or(now)
     }
 
-    fn sleep(&self, timeout: Duration) -> bool { self.clock.sleep(timeout, &self.cancellation) }
+    pub(crate) fn sleep(&self, timeout: Duration) -> bool {
+        self.clock.sleep(timeout, &self.cancellation)
+    }
 }
 
 /// A held shared or exclusive cache lease.

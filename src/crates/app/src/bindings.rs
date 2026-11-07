@@ -14,6 +14,7 @@ use stache_keep_awake::{
     AssertionState, KeepAwakeCondition, KeepAwakeConditionKind, KeepAwakeConfig,
     KeepAwakeRuntimeStatus, LockObservation, LockState,
 };
+use stache_keybindings::{KeybindingsConfig, KeybindingsRuntimeStatus};
 use stache_notunes::NoTunesConfig;
 use stache_proxy_audio::{AudioDeviceInfo, AudioListKind, AudioListParams, ProxyAudioConfig};
 use stache_sdk::{GlobalConfig, IDENTITY, ModuleSnapshot, ModuleStatus, UnavailableReason};
@@ -109,6 +110,13 @@ pub struct ModuleStatusView {
     pub detail: Option<String>,
     /// Diagnostic for the most recently rejected configuration.
     pub diagnostic: Option<String>,
+    /// Keybindings runtime details, present only on the `keybindings` module.
+    ///
+    /// It is the module's separately published runtime observation, overlaid by
+    /// the host. It never replaces `diagnostic`, which stays the rejected-file
+    /// channel, and it is absent from the wire for every other module.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keybindings: Option<KeybindingsRuntimeStatus>,
 }
 
 impl ModuleStatusView {
@@ -123,6 +131,7 @@ impl ModuleStatusView {
             revision: snapshot.revision.to_string(),
             detail: detail(&snapshot.status),
             diagnostic: snapshot.diagnostic.as_ref().map(|value| value.message.clone()),
+            keybindings: None,
         }
     }
 }
@@ -235,8 +244,8 @@ pub fn config_file_view(
 /// Builds the typed command and event collection mounted by the desktop host.
 ///
 /// The config types are exported explicitly; they are the authoritative catalog
-/// types used by `global.jsonc`, `keepAwake.jsonc`, `proxyAudio.jsonc`,
-/// `notunes.jsonc` and `wallpapers.jsonc`. The Keep Awake status envelope and
+/// types used by `global.jsonc`, `keepAwake.jsonc`, `keybindings.jsonc`,
+/// `proxyAudio.jsonc`, `notunes.jsonc` and `wallpapers.jsonc`. The Keep Awake status envelope and
 /// its reachable runtime DTOs are exported from the same collection, so the
 /// generated client cannot mirror them by hand. The Wallpapers request and
 /// operation-outcome DTOs are exported from the same collection so Part 04's
@@ -257,6 +266,8 @@ pub fn builder() -> Builder<tauri::Wry> {
         .typ::<LockObservation>()
         .typ::<KeepAwakeCondition>()
         .typ::<KeepAwakeConditionKind>()
+        .typ::<KeybindingsConfig>()
+        .typ::<KeybindingsRuntimeStatus>()
         .typ::<NoTunesConfig>()
         .typ::<ProxyAudioConfig>()
         .typ::<AudioDeviceInfo>()

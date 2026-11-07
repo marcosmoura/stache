@@ -8,7 +8,7 @@ use std::fmt;
 
 use crate::context::ModuleContext;
 use crate::error::{ConfigError, ModuleResult};
-use crate::permissions::Permission;
+use crate::permissions::{Permission, PermissionRequirement};
 
 /// A stable module identifier.
 ///
@@ -113,6 +113,23 @@ pub trait Module: Send + 'static {
 
     /// Describes the module without starting it.
     fn descriptor(&self) -> ModuleDescriptor;
+
+    /// The permissions this module needs while `config` is accepted.
+    ///
+    /// The default is the static [`ModuleDescriptor::permissions`] list with
+    /// automatic prompting, so modules that do not override it are unchanged.
+    /// The registry calls this with the registered, candidate or accepted
+    /// configuration under the module lock; it must be pure, cheap and must not
+    /// touch the platform. A shared-input consumer must return
+    /// [`PermissionRequirement::shared_input`] requirements.
+    fn required_permissions(&self, config: &Self::Config) -> Vec<PermissionRequirement> {
+        let _ = config;
+        self.descriptor()
+            .permissions
+            .iter()
+            .map(|&permission| PermissionRequirement::automatic(permission))
+            .collect()
+    }
 
     /// Prepares the module with a configuration without starting work.
     ///

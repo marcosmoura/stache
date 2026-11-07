@@ -28,11 +28,14 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 pub mod cache_lease;
 pub mod cli;
+pub mod commands;
 pub mod config;
 pub mod context;
 mod dependencies;
+pub mod durable;
 pub mod error;
 pub mod events;
+pub mod input;
 pub mod instance;
 pub mod ipc;
 mod lockfile;
@@ -56,10 +59,12 @@ pub use config::{
     SourceLocation, StartupCommands, WatchError, inspect_paths, set_enabled,
 };
 pub use context::ModuleContext;
+pub use durable::{DurableError, DurableLease};
 pub use error::{
     ConfigError, ErrorCategory, ModuleError, ModuleResult, Operation, RegistryError, RegistryResult,
 };
 pub use events::{EventBus, Subscription};
+pub use input::{InputCapability, InputService};
 pub use instance::{INSTANCE_FILE_NAME, InstanceError, InstanceLock};
 pub use logging::{DiscardLogger, LogFilter, LogLevel, LogRecord, Logger, ScopedLogger};
 pub use module::{Module, ModuleConfig, ModuleDescriptor, ModuleId, ServiceId};
@@ -67,7 +72,10 @@ pub use paths::{
     AppEnvironment, AppPathError, AppPaths, CACHE_LEASE_FILE_NAME, IDENTITY, MAX_SOCKET_PATH,
     SOCKET_FILE_NAME,
 };
-pub use permissions::{Permission, PermissionError, PermissionProvider, PermissionStatus};
+pub use permissions::{
+    Permission, PermissionError, PermissionProvider, PermissionRequirement, PermissionStatus,
+    PromptPolicy,
+};
 pub use registry::{
     ModuleHandle, ModuleInvalidation, Registry, ReloadReport, ReloadStatus, StopTarget,
 };
