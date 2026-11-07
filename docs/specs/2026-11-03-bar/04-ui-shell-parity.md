@@ -8,7 +8,7 @@ Read when porting the Bar surface after 03 and separate approval. **No visual ch
 
 ## Scope
 
-Add `src/ui/src/bar/components/Bar/` and component directories for Media, Status, Clock, Cpu, Battery, KeepAwake, Wifi, Weather; each owns implementation, `.styles.tsx`, colocated tests and `index.ts`. Shared primitives follow the same directory convention. Support/fixtures only in `src/ui/tests`. Extend `WindowRouter`, SDK client/query/feed wrappers, app Bar capability/explicit capability list and production factory registration. Static fixtures/read-only unavailable data work before later providers; never invoke unimplemented commands. This part activates the config-disabled-by-default factory only after the route and capability exist.
+Add `src/ui/src/bar/components/Bar/` and component directories for Media, Status, Clock, Cpu, Battery, KeepAwake, Wifi, Weather; each owns implementation, `.styles.tsx`, colocated tests and `index.ts`. Shared primitives follow the same directory convention. Support/fixtures only in `src/ui/tests`. Extend `WindowRouter` (add `bar` to `SURFACES`, `src/ui/src/shell/components/WindowRouter/surface.ts:1`; additive with the Accessibility gate's surface, whichever lands second rebases), the existing `src/ui/src/sdk/{client,queries,statusFeed}.ts`, a new app `capabilities/bar.json` plus the `tauri.conf.json` capability list, and production factory registration (`ModuleFactories::production` in `app/src/host.rs` and the `.with(...)` chain in `app/src/lib.rs:449-460`). Static fixtures/read-only unavailable data work before later providers; never invoke unimplemented commands. This part activates the config-disabled-by-default factory only after the route and capability exist.
 
 ## Requirements
 

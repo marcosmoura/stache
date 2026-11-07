@@ -2,7 +2,7 @@
 
 Read when auditing the draft against C01–C20. This is a planning applicability audit, not runtime verification or a change to sibling criteria/statuses.
 
-Sources inspected read-only with `git show`: `f13cd3a:docs/specs/2026-11-03-wallpapers/review-findings.md` and `2ddd0e3:docs/specs/2026-11-03-keep-awake/review-findings.md`. [Keep Awake](../2026-11-03-keep-awake/review-findings.md)/[Wallpapers](../2026-11-03-wallpapers/review-findings.md) are draft records now on `main`, not shipped implementations. Main `ad34b46` already includes shipped noTunes `ccae030`; the older audit's noTunes in-progress attribution is historical, not current status.
+Sources: [Wallpapers](../2026-11-03-wallpapers/review-findings.md) and [Keep Awake](../2026-11-03-keep-awake/review-findings.md) review findings. Baseline main `f260c6f` ships noTunes, Keep Awake, Wallpapers, Keybindings, Hold-to-Quit and MenuAnywhere; this audit still records planning applicability, not verification of those modules.
 
 | Lesson | Bar application / owning part                                                                                                                                                                          |
 | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -24,7 +24,7 @@ Sources inspected read-only with `git show`: `f13cd3a:docs/specs/2026-11-03-wall
 | C16    | 01/06 trim config strings before home expansion, config-directory base; no arbitrary CLI path argument added; migration warns on unprovable old base.                                                  |
 | C17    | Wallpapers standalone-set/no-socket race is not applicable: Bar exposes no standalone mutation fallback. 05/08 reject unavailable host/actions, never retry locally after uncertainty.                 |
 | C18    | 03/05 native callbacks enqueue/coalesce signals only with panic containment; query/decoding/policy/wait stays off callback, native commit rechecks generation/permit.                                  |
-| C19    | 00 and planned feature/index label all work draft, distinguish shipped noTunes and separate unmerged plans, preserve existing routes.                                                                  |
+| C19    | 00 and planned feature/index label all work draft, distinguish shipped modules from Bar's own draft plans, preserve existing routes.                                                                   |
 | C20    | 08 Keep Awake owns runtime DTO/codec; app owns envelope/ModuleStatusView projection and generated bindings, SDK/Bar do not copy or depend on its module crate.                                         |
 
 Acceptance IDs remain owned exactly once in the eight parts; this audit adds no duplicate criteria. Native feasibility, baseline evidence, performance and compile-proof are future implementation gates, not satisfied by this document.

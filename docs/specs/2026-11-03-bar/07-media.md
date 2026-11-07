@@ -8,7 +8,7 @@ Read when adding media after 06 and separate approval. Private MediaRemote compa
 
 ## Scope
 
-Add `modules/bar/src/providers/media/` parser/owner/artwork code and tests, app resource resolution/projection/bindings and fixed media actions, UI Media hooks and colocated tests. Reuse the landed owned-child command runner with the minimal bounded streaming extension, not a second subprocess service. Native/private calls remain in safe `stache-macos` wrappers where applicable.
+Add `modules/bar/src/providers/media/` parser/owner/artwork code and tests, app resource resolution/projection/bindings and fixed media actions, UI Media hooks and colocated tests. Reuse the landed `CommandExecutor` (`sdk/src/commands.rs`), which today has only one-shot captured runs (`run_captured`/`run_captured_prepared`, `:847,864`); add the minimal bounded streaming extension there (bounded line reads, cancellation, exact-child kill/reap) with tests that keep captured callers unchanged, not a second subprocess service. Native/private calls remain in safe `stache-macos` wrappers where applicable.
 
 ## Requirements
 

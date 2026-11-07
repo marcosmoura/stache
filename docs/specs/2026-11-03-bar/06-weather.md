@@ -8,7 +8,7 @@ Read when connecting weather after 05 and separate approval. Keep legacy provide
 
 ## Scope
 
-Add Bar weather config/env reader in Rust, app generated read contract, UI `bar/` weather/location/provider directories and tests; additive pinned CSP in `app/tauri.conf.json` and necessary scoped usage descriptions. Preserve legacy `stores/WeatherStore/{location,providers}` mappings and `Weather.state.ts`, without the old store framework or widgets.
+Add Bar weather config/env reader in Rust, app generated read contract, UI `bar/` weather/location/provider directories and tests; additive pinned CSP in `app/tauri.conf.json` (`csp`/`devCsp`, `:15-16`, admit only `ipc:` and localhost today) and necessary scoped usage descriptions. Preserve legacy `stores/WeatherStore/{location,providers}` mappings and `Weather.state.ts`, without the old store framework or widgets.
 
 ## Requirements
 

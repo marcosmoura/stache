@@ -16,7 +16,7 @@ No macOS Spaces management, per-window hiding engine, focus-follows-mouse, persi
 
 ## Sequencing and shipped baseline
 
-**Implementation of ALL parts is last**, blocked until Keep Awake, Wallpapers, Keybindings, Hold-to-Quit, MenuAnywhere and Bar land and their foundation contracts are exercised together. Rebase each part on current main. Baseline `ad34b46` ships noTunes, exact opaque applications identity/issuance permit/cancel/ack and the catalog migration hook; it does **not** ship the sibling input, accepted-watch, published-state or reservation proposals.
+**Implementation of ALL parts is last**, blocked until Keep Awake, Wallpapers, Keybindings, Hold-to-Quit, MenuAnywhere and Bar land and their foundation contracts are exercised together. Rebase each part on current main. Main `f260c6f` ships noTunes, Keep Awake, Wallpapers, Keybindings, Hold-to-Quit and MenuAnywhere, including exact opaque applications identity/issuance permit/cancel/ack, the catalog migration hook, shared input and the accepted-config watch; it does **not** ship Bar's published-state or reservation proposals.
 
 Read-only draft dependency records on `main` (branch names identify future implementation):
 
