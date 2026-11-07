@@ -8,7 +8,7 @@ Read when planning the Bar module. This is a draft, not shipped behavior or perm
 
 ## Goal
 
-Rebuild the legacy status bar as `stache-bar`: one non-activating panel on the primary display, visually identical to legacy, fed by typed providers. Land the generic SDK published-state channel and the host-owned screen reservation registry that Tiling consumes later.
+Rebuild the legacy status bar as `stache-bar`: one non-activating panel on the primary display, visually identical to legacy, fed by typed providers. Parts 01–02 (config, the generic SDK published-state channel and the host-owned screen reservation registry) moved to the [Bar foundation](../2026-11-08-bar-foundation/00-overview.md) spec on 2026-11-08; this spec keeps parts 03–08.
 
 ## Non-goals
 
@@ -42,22 +42,20 @@ Approved by the user; parts must not re-decide them.
 
 ## Parts
 
-| Part                               | Summary                                                                         | Status |
-| ---------------------------------- | ------------------------------------------------------------------------------- | ------ |
-| [01](01-config-catalog.md)         | `BarConfig`, catalog, schema/bindings, typed migration                          | draft  |
-| [02](02-sdk-state-reservations.md) | Published-state channel, change notifier, screen reservation registry (fakes)   | draft  |
-| [03](03-panel-window.md)           | Non-activating panel kind, bar window lifecycle, auto-hide, reservation, bridge | draft  |
-| [04](04-ui-shell-parity.md)        | UI shell port, tiling-absent empty state, visual-parity gate                    | draft  |
-| [05](05-system-providers.md)       | Clock, CPU, battery, Wi-Fi providers and fixed click actions                    | draft  |
-| [06](06-weather.md)                | Weather providers, location chain, CSP, env-file key                            | draft  |
-| [07](07-media.md)                  | Media adapter child process and artwork (gated)                                 | draft  |
-| [08](08-keep-awake-indicator.md)   | Keep Awake provider + indicator + generic pause/resume                          | draft  |
+| Part                             | Summary                                                                         | Status |
+| -------------------------------- | ------------------------------------------------------------------------------- | ------ |
+| [03](03-panel-window.md)         | Non-activating panel kind, bar window lifecycle, auto-hide, reservation, bridge | draft  |
+| [04](04-ui-shell-parity.md)      | UI shell port, tiling-absent empty state, visual-parity gate                    | draft  |
+| [05](05-system-providers.md)     | Clock, CPU, battery, Wi-Fi providers and fixed click actions                    | draft  |
+| [06](06-weather.md)              | Weather providers, location chain, CSP, env-file key                            | draft  |
+| [07](07-media.md)                | Media adapter child process and artwork (gated)                                 | draft  |
+| [08](08-keep-awake-indicator.md) | Keep Awake provider + indicator + generic pause/resume                          | draft  |
 
-Acceptance IDs are `BAR-NN-MM`; each is owned by exactly one part. Every part builds, tests and commits alone; unfinished parts block merge.
+Parts 01–02 moved to the [Bar foundation](../2026-11-08-bar-foundation/00-overview.md) spec, which must merge first. Acceptance IDs are `BAR-NN-MM`; each is owned by exactly one part. Every part builds, tests and commits alone; unfinished parts block merge.
 
 ## Integration order
 
-Roadmap: noTunes → Keep Awake → Wallpapers → Keybindings → Hold-to-Quit → MenuAnywhere → **Bar** → Tiling. Baseline is main `f260c6f`: noTunes, Keep Awake (`src/crates/modules/keep-awake`), Wallpapers (`af81491`), Keybindings (`4b8c2b3`), Hold-to-Quit (`5abfe55`) and MenuAnywhere (`6cdbcdd`) are shipped, with `ApplicationControl` exact-instance identity/issuance permit and catalog-driven migration. Keep Awake's native power/lock gate remains unverified; Bar does not rely on it. Rebase on current main before each part.
+Roadmap (reordered 2026-11-08): noTunes → Keep Awake → Wallpapers → Keybindings → Hold-to-Quit → MenuAnywhere → Bar foundation → Tiling 01–09 → **Bar 03–08** → [Tiling–Bar integration](../2026-11-08-tiling-bar/00-overview.md). Baseline is main `f260c6f`: noTunes, Keep Awake (`src/crates/modules/keep-awake`), Wallpapers (`af81491`), Keybindings (`4b8c2b3`), Hold-to-Quit (`5abfe55`) and MenuAnywhere (`6cdbcdd`) are shipped, with `ApplicationControl` exact-instance identity/issuance permit and catalog-driven migration. Keep Awake's native power/lock gate remains unverified; Bar does not rely on it. Rebase on current main before each part.
 
 Reuse these landed facilities; do not recreate them:
 
@@ -69,9 +67,9 @@ Reuse these landed facilities; do not recreate them:
 - Per-module typed status overlay on `ModuleStatusView` (`src/crates/app/src/bindings.rs` ~97-128, e.g. `keybindings: Option<KeybindingsRuntimeStatus>`); bindings builder `collect_commands![app_info, host_status]`/`collect_events![StatusChanged]` (`bindings.rs:258-291`); `AppUi::status` emits `StatusChanged` (`src/crates/app/src/lib.rs:90-96`).
 - Session pause/resume exists host-side only (`ModuleControl::pause/resume` `host.rs:150-172`, `HostHandle::pause/resume` `host.rs:844-847`, tray rows `tray.rs:206-214`); not exposed to modules/UI, so part 08's generated session-action command is new.
 
-Still absent; the owning part introduces each once, minimally, compile-proven and preserving existing consumers: generic published-state channel with revision/notify and `observes` declaration (02), screen reservation registry (02; distinct name from the unrelated keyboard-chord `src/crates/sdk/src/input/reservations.rs`), SDK-side typed display ID (02), panel window kind, menu-bar visibility observation (03), Wi-Fi/battery/SMC providers (05), weather/env-file reader/CSP hosts (06), MediaRemote provider and streaming runner (07). Catalog, bindings, router surfaces, capabilities and index entries are additive. No competing lifecycle, service framework or module-crate imports in Bar.
+Still absent; the owning part introduces each once (02 is Bar foundation part 02), minimally, compile-proven and preserving existing consumers: generic published-state channel with revision/notify and `observes` declaration (02), screen reservation registry (02; distinct name from the unrelated keyboard-chord `src/crates/sdk/src/input/reservations.rs`), SDK-side typed display ID (02), panel window kind, menu-bar visibility observation (03), Wi-Fi/battery/SMC providers (05), weather/env-file reader/CSP hosts (06), MediaRemote provider and streaming runner (07). Catalog, bindings, router surfaces, capabilities and index entries are additive. No competing lifecycle, service framework or module-crate imports in Bar.
 
-Dependency chain: 01 → 02 → 03 → 04 → 05 → 06 → 07 → 08. Part 03 tests a staged backend with fakes but registers no production Bar factory/unknown UI route. Part 04 supplies the real static surface and only then activates the inert-by-default production factory. Later providers replace fixture seams, never forward-call unimplemented commands.
+Dependency chain: parts 03–08 start only after [Bar foundation](../2026-11-08-bar-foundation/00-overview.md) and Tiling 01–09 have merged into `main`; then 03 → 04 → 05 → 06 → 07 → 08. Part 03 tests a staged backend with fakes but registers no production Bar factory/unknown UI route. Part 04 supplies the real static surface and only then activates the inert-by-default production factory. Later providers replace fixture seams, never forward-call unimplemented commands.
 
 ## Accessibility gate interaction
 

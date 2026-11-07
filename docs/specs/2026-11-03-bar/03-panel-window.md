@@ -4,7 +4,7 @@ status: draft
 
 # 03 — Panel lifecycle, menu bar and host bridge
 
-Read when implementing native/backend foundations after 02 and separate approval. Production Bar factory stays unregistered until 04 provides the real surface.
+Read when implementing native/backend foundations after [Bar foundation](../2026-11-08-bar-foundation/00-overview.md) and Tiling 01–09 have merged, and after separate approval. Production Bar factory stays unregistered until 04 provides the real surface.
 
 ## Scope
 

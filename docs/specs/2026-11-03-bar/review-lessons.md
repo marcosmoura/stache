@@ -2,7 +2,7 @@
 
 Read when auditing the draft against C01–C20. This is a planning applicability audit, not runtime verification or a change to sibling criteria/statuses.
 
-Sources: [Wallpapers](../2026-11-03-wallpapers/review-findings.md) and [Keep Awake](../2026-11-03-keep-awake/review-findings.md) review findings. Baseline main `f260c6f` ships noTunes, Keep Awake, Wallpapers, Keybindings, Hold-to-Quit and MenuAnywhere; this audit still records planning applicability, not verification of those modules.
+Sources: [Wallpapers](../2026-11-03-wallpapers/review-findings.md) and [Keep Awake](../2026-11-03-keep-awake/review-findings.md) review findings. Baseline main `f260c6f` ships noTunes, Keep Awake, Wallpapers, Keybindings, Hold-to-Quit and MenuAnywhere; this audit still records planning applicability, not verification of those modules. Owning parts 01 and 02 now live in the [Bar foundation](../2026-11-08-bar-foundation/00-overview.md) spec; this audit applies to them unchanged.
 
 | Lesson | Bar application / owning part                                                                                                                                                                          |
 | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

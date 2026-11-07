@@ -4,11 +4,11 @@ status: draft
 
 # 10 — Bar strip, reservations and final integration gates
 
-Read when implementing after 09 and separate approval. Bar foundation and independent parity baseline must already have landed and been exercised.
+Read when implementing after [Tiling 09](../2026-11-03-tiling/09-jankyborders.md) and [Bar 03–08](../2026-11-03-bar/00-overview.md) have merged, and after separate approval. Bar foundation and the independent parity baseline must already have landed and been exercised. Bare part numbers below (05, 06, 09) refer to the [Tiling spec](../2026-11-03-tiling/00-overview.md).
 
 ## Scope
 
-Tiling `src/published.rs` (reservation consumption itself landed in 05); app `bindings.rs`, concrete Tiling command/event bridge, capability authorization and host schema registration; UI `src/ui/src/bar/components/Spaces/` with App/AppList/Workspace/WorkspaceList directories, colocated tests/styles/index, SDK client/query/feed wrappers. Use existing Bar shell's first empty slot. Map inventory bridge/Spaces/icon/transitive rows. This is data/UI integration, not a second native Bar implementation.
+Tiling `src/published.rs` (reservation consumption itself landed in 05); app `bindings.rs`, concrete Tiling command/event bridge, capability authorization and host schema registration; UI `src/ui/src/bar/components/Spaces/` with App/AppList/Workspace/WorkspaceList directories, colocated tests/styles/index, SDK client/query/feed wrappers. Use existing Bar shell's first empty slot. Map [inventory](../2026-11-03-tiling/inventory.md) bridge/Spaces/icon/transitive rows. This is data/UI integration, not a second native Bar implementation.
 
 ## Requirements
 
@@ -20,7 +20,7 @@ Tiling `src/published.rs` (reservation consumption itself landed in 05); app `bi
 - Preserve grid-auto-flow/6px gap/0 10px padding, opacity0.68→1/crust focus, workspace surface1 indicator radius12 and motion spring bounce0/durationSlower, app width0↔auto/opacity0↔1 and length-scaled motion duration, loading fallback, reveal/exit/intermediate animation behavior. Reuse approved Bar fonts/colors/spacing/Surface/Button/Icon computed values; no dependency-induced icon changes.
 - Extend **independent** Bar reference manifest with pinned legacy Spaces/AppList/maps/transitive source object/hash/provenance, font/browser/OS/scale/profile/data/animation timeline. Reference is extracted read-only markup/CSS/SVG reviewed against originals or user-approved screenshots with measurements; never derived from new components/helpers or baseline auto-updates. No legacy runtime/build/automation. Missing font/baseline is blocked/unverified, not similarity pass. Exact screenshots, computed geometry/styles/SVG and animation samples; narrowly justified raster tolerance requires explicit approval.
 - React Query owns canonical snapshots with generation/sequence ordering, subscribe-before-fetch and stale-response rejection; zustand UI-local only. StrictMode/late unlisten disposal, provider disappearance and schema mismatch remain bounded/inert. Keep existing generated surface/capability least privilege and earlier UI unchanged.
-- Final integration exercises **landed** accepted-watch, host shutdown ordering, input HQ>MA>KB with passive Tiling, Bar reservations/optional state, noTunes applications identity and sibling disabled/failure recovery. Publish actual native limitations/capabilities and performance evidence from [validation](validation.md), not an unsupported universal-window claim.
+- Final integration exercises **landed** accepted-watch, host shutdown ordering, input HQ>MA>KB with passive Tiling, Bar reservations/optional state, noTunes applications identity and sibling disabled/failure recovery. Publish actual native limitations/capabilities and performance evidence from [validation](../2026-11-03-tiling/validation.md), not an unsupported universal-window claim.
 
 ## Acceptance criteria
 

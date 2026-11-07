@@ -4,7 +4,7 @@ status: draft
 
 # 01 — Typed configuration and inert catalog
 
-Read when implementing after the overview's last-in-order gate and separate approval.
+Read when implementing after the overview's sequencing gate (Bar foundation merged) and separate approval.
 
 ## Scope
 

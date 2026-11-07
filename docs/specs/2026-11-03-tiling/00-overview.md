@@ -4,11 +4,11 @@ branch: feat/tiling
 
 # Tiling rewrite
 
-Read when planning the final runtime rewrite. **DRAFT — NOT SHIPPED.** Each part needs separate approval; this document authorizes no native work.
+Read when planning the Tiling runtime rewrite. **DRAFT — NOT SHIPPED.** Each part needs separate approval; this document authorizes no native work.
 
 ## Goal
 
-Rebuild legacy tiling as one `stache-tiling` module at `src/crates/modules/tiling`, with pure actor-owned state, safe native adapters and the identical legacy workspace/app strip in Bar's reserved UI slot.
+Rebuild legacy tiling as one `stache-tiling` module at `src/crates/modules/tiling`, with pure actor-owned state and safe native adapters. The identical legacy workspace/app strip in Bar's reserved UI slot is part 10, which lives in the [Tiling–Bar integration](../2026-11-08-tiling-bar/00-overview.md) spec.
 
 ## Non-goals
 
@@ -16,17 +16,18 @@ No macOS Spaces management, per-window hiding engine, focus-follows-mouse, persi
 
 ## Sequencing and shipped baseline
 
-**Implementation of ALL parts is last**, blocked until Keep Awake, Wallpapers, Keybindings, Hold-to-Quit, MenuAnywhere and Bar land and their foundation contracts are exercised together. Rebase each part on current main. Main `f260c6f` ships noTunes, Keep Awake, Wallpapers, Keybindings, Hold-to-Quit and MenuAnywhere, including exact opaque applications identity/issuance permit/cancel/ack, the catalog migration hook, shared input and the accepted-config watch; it does **not** ship Bar's published-state or reservation proposals.
+Approved order (2026-11-08): Bar foundation → **Tiling 01–09** → Bar 03–08 → Tiling–Bar integration. Parts 01–09 implement after [Bar foundation](../2026-11-08-bar-foundation/00-overview.md) merges, because it supplies the published-state channel and the host screen reservations that part 05 consumes; they no longer wait for Bar 03–08. Part 10 lives in the [Tiling–Bar integration](../2026-11-08-tiling-bar/00-overview.md) spec and runs last. Rebase each part on current main. Main `f260c6f` ships noTunes, Keep Awake, Wallpapers, Keybindings, Hold-to-Quit and MenuAnywhere, including exact opaque applications identity/issuance permit/cancel/ack, the catalog migration hook, shared input and the accepted-config watch; it does **not** ship Bar's published-state or reservation proposals.
 
 Read-only draft dependency records on `main` (branch names identify future implementation):
 
-| Branch               | Draft contract path                                                                                                              | Reuse after landing                                                                                     |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `feat/wallpapers`    | [Wallpapers](../2026-11-03-wallpapers/00-overview.md), source `f13cd3a`                                                          | Same-cell typed accepted config/revision watch; generic factory context and begin-shutdown              |
-| `feat/keybindings`   | [Shared input](../2026-11-03-keybindings/02-shared-input.md)                                                                     | One lazy host input service, owner-thread tap and press ledger                                          |
-| `feat/hold-to-quit`  | [Applications/frontmost](../2026-11-03-hold-to-quit/03-applications-frontmost.md)                                                | Additive exact applications/frontmost adapter, 2 s hops                                                 |
-| `feat/menu-anywhere` | [Runtime](../2026-11-03-menu-anywhere/03-runtime.md)                                                                             | Shared input priorities and actual-send authority/cleanup integration                                   |
-| `feat/bar`           | [State/reservations](../2026-11-03-bar/02-sdk-state-reservations.md), [UI shell parity](../2026-11-03-bar/04-ui-shell-parity.md) | Versioned optional observation, host reservations, approved empty slot and independent parity reference |
+| Branch                | Draft contract path                                                               | Reuse after landing                                                                        |
+| --------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `feat/wallpapers`     | [Wallpapers](../2026-11-03-wallpapers/00-overview.md), source `f13cd3a`           | Same-cell typed accepted config/revision watch; generic factory context and begin-shutdown |
+| `feat/keybindings`    | [Shared input](../2026-11-03-keybindings/02-shared-input.md)                      | One lazy host input service, owner-thread tap and press ledger                             |
+| `feat/hold-to-quit`   | [Applications/frontmost](../2026-11-03-hold-to-quit/03-applications-frontmost.md) | Additive exact applications/frontmost adapter, 2 s hops                                    |
+| `feat/menu-anywhere`  | [Runtime](../2026-11-03-menu-anywhere/03-runtime.md)                              | Shared input priorities and actual-send authority/cleanup integration                      |
+| `feat/bar-foundation` | [State/reservations](../2026-11-08-bar-foundation/02-sdk-state-reservations.md)   | Versioned optional observation and host reservations (parts 01–09)                         |
+| `feat/bar`            | [UI shell parity](../2026-11-03-bar/04-ui-shell-parity.md)                        | Approved empty slot and independent parity reference (tiling-bar part 10 only)             |
 
 No dependencies on unmerged module crates. Tiling depends only on SDK + macOS (ordinary serialization/geometry dependencies are not sibling services). Bar cannot import Tiling crate/config; Tiling cannot import Bar crate/config. App composition registers original DTO codecs and concrete generated commands/events.
 
@@ -43,7 +44,7 @@ No dependencies on unmerged module crates. Tiling depends only on SDK + macOS (o
 9. Stop seals new issuance, cancels/wakes work, drains issued animations/frame writes **before** owned restore/unhide, removes observers with acknowledgements and joins off-main. Retain failed cleanup/restore ownership inertly in quarantine; retry exact resources, no restart while quarantined. Main never waits on a worker awaiting main; host cancels waits before IPC joins.
 10. Optional JankyBorders Mach IPC + CLI fallback remains, styles/hidpi/state/layout overrides/gradients/glow/blacklist/8 fps unchanged. Connection ownership is not service-process/settings ownership. Never silently launch/kill/reconfigure a foreign service or send blanket width=0; unsafe shared ownership blocks part 09 for a decision, not silent integration removal.
 11. Shared input remains HQ > MA > KB. Tiling passively observes drag through the service's **listen-only** observation tap (approved exception: at most one suppressing tap plus one listen-only tap that only exists while passive subscribers exist); it claims no key/click interception, injects nothing and adds no private suppressing tap. AX observation/queries/actions run on a dedicated AX owner thread per consumer, never on main and never through one serialized thread shared with MenuAnywhere. Failures degrade optional drag/borders/tabs honestly, not other modules.
-12. Bar optionally observes atomic Tiling workspace/window/focus state through SDK. From part 05's first frame writes, Tiling consumes landed host per-display reservations, never `bar.height`/config. Edges are inward from full logical display bounds: per-edge exclusion is max(native visible-frame inset, host aggregated reservation), then own outer gap once. This explicitly corrects legacy double-counting. Part 10 owns the strip/final integration, not first safe reservation consumption. Bar reservation stays constant while active but slid hidden, tombstones on stop/pause/disable/failure. Neither module is the other's lifecycle prerequisite.
+12. Bar optionally observes atomic Tiling workspace/window/focus state through SDK. From part 05's first frame writes, Tiling consumes landed host per-display reservations, never `bar.height`/config. Edges are inward from full logical display bounds: per-edge exclusion is max(native visible-frame inset, host aggregated reservation), then own outer gap once. This explicitly corrects legacy double-counting. Part 10 ([Tiling–Bar integration](../2026-11-08-tiling-bar/00-overview.md)) owns the strip/final integration, not first safe reservation consumption. Bar reservation stays constant while active but slid hidden, tombstones on stop/pause/disable/failure. Neither module is the other's lifecycle prerequisite.
 13. Numeric CLI focus is an approved bug fix: legacy String help advertised IDs but IPC parsed directions only. Resolve the numeric selector once to the current exact window token, then preserve every stale identity/revision/issuance gate. Keep case-insensitive focus directions including `prev`, but case-sensitive six-value swap grammar with no `prev` alias.
 14. Non-Grid new windows insert after the focused window in their assigned workspace, or append without such focus, matching legacy. Grid alone appends new eligible windows to protect the existing ten tiles; this stable-cap exception is intentional. Promotions/swaps follow part 02, never focus replacement.
 
@@ -60,9 +61,8 @@ No dependencies on unmerged module crates. Tiling depends only on SDK + macOS (o
 | [07](07-ipc-cli.md)             | Full typed IPC/CLI and golden contracts                    | draft  |
 | [08](08-tabs-drag-animation.md) | Native tabs/passive drag/animation                         | draft  |
 | [09](09-jankyborders.md)        | Optional external JankyBorders                             | draft  |
-| [10](10-bar-integration.md)     | Bar strip/final reservation integration and safety gates   | draft  |
 
-Sequence 01 → 02 → 03 → 04 → 05 → 06 → 07 → 08 → 09 → 10. Each part compiles/tests/commits alone; internal seams compile before consumers. Part 05's production factory remains unregistered until 06 supplies workspace safety; 06 rejects not-yet-implemented optional features explicitly. Part 07 must not report success for unimplemented actions; later parts activate only compiled features, never placeholders. Unfinished parts block feature-branch merge.
+Sequence 01 → 02 → 03 → 04 → 05 → 06 → 07 → 08 → 09. Part 10 moved to the [Tiling–Bar integration](../2026-11-08-tiling-bar/00-overview.md) spec, which merges after this spec and Bar 03–08; it keeps its number and `TI-10-*` IDs, so appendix references to part 10 point there. Each part compiles/tests/commits alone; internal seams compile before consumers. Part 05's production factory remains unregistered until 06 supplies workspace safety; 06 rejects not-yet-implemented optional features explicitly. Part 07 must not report success for unimplemented actions; later parts activate only compiled features, never placeholders. Unfinished parts block feature-branch merge.
 
 Acceptance IDs `TI-NN-MM` have exactly one owning part; appendices contain contracts, not duplicate criteria. See [inventory](inventory.md), [CLI contract](cli-contract.md), [review lessons](review-lessons.md) and [validation](validation.md).
 
@@ -72,4 +72,4 @@ Separate `tiling.jsonc`; transactional accepted reload instead of whole-app rest
 
 ## Affected docs
 
-The [feature notice](../../features/tiling.md) stays planned until implementation lands. Each part materializes only its shipped slice in architecture/config/sdk/ipc/ui, feature/testing/performance docs and additive index routes. Preserve all earlier catalog/schema/bindings/capability/roadmap additions. No unresolved product choice now; native feasibility, shared-service authority and independent baseline evidence are blocking gates, not assumed facts.
+The [feature notice](../../features/tiling.md) stays planned until implementation lands; the workspace strip lands only with the Tiling–Bar integration spec. Each part materializes only its shipped slice in architecture/config/sdk/ipc/ui, feature/testing/performance docs and additive index routes. Preserve all earlier catalog/schema/bindings/capability/roadmap additions. No unresolved product choice now; native feasibility, shared-service authority and independent baseline evidence are blocking gates, not assumed facts.

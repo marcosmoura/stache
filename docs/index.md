@@ -23,8 +23,10 @@ Read when navigating the shipped foundation, explicitly planned rewrites or the 
 | Accessibility launch gate (planned)       | [spec](specs/2026-11-07-accessibility-gate/00-overview.md)                                  |
 | Hold-to-Quit (runtime)                    | [feature](features/hold-to-quit.md), [spec](specs/2026-11-03-hold-to-quit/00-overview.md)   |
 | MenuAnywhere (runtime, native unverified) | [feature](features/menu-anywhere.md), [spec](specs/2026-11-03-menu-anywhere/00-overview.md) |
+| Bar foundation (planned)                  | [spec](specs/2026-11-08-bar-foundation/00-overview.md)                                      |
 | Bar (planned)                             | [feature](features/bar.md), [spec](specs/2026-11-03-bar/00-overview.md)                     |
 | Tiling (planned)                          | [feature](features/tiling.md), [spec](specs/2026-11-03-tiling/00-overview.md)               |
+| Tiling–Bar integration (planned)          | [spec](specs/2026-11-08-tiling-bar/00-overview.md)                                          |
 | Coordinated teardown                      | [spec](specs/2026-11-03-teardown/00-overview.md)                                            |
 | Release/packaging (planned)               | [spec](specs/2026-11-03-release/00-overview.md)                                             |
 | Old application/features                  | [legacy docs](../_legacy/docs/index.md), [legacy build](../_legacy/README.md)               |

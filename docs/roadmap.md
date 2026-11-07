@@ -1,7 +1,7 @@
 # Runtime rewrite roadmap
 
 Read when checking what is finished, awaiting integration, specified or still planned.
-Snapshot: **2026-11-04**. Here, **finished/shipped means merged into `main`**, not a
+Snapshot: **2026-11-08**. Here, **finished/shipped means merged into `main`**, not a
 packaged public release. Only an ad-hoc development bundle exists; no release artifact
 has shipped.
 
@@ -18,8 +18,10 @@ has shipped.
 | Finished                   | [Hold-to-Quit](specs/2026-11-03-hold-to-quit/00-overview.md)                         | 6/6 done on `main`                  | Runtime, HUD, `dismissDelay` linger and position/animation shipped; see [feature](features/hold-to-quit.md). Slide, other positions, Spaces and multiple displays unverified natively. |
 | Specified, not started     | [Accessibility launch gate](specs/2026-11-07-accessibility-gate/00-overview.md)      | 4 draft parts                       | `feat/accessibility-gate`; app-wide Accessibility requirement with a guidance window; decisions confirmed 2026-11-07.                                                                  |
 | Finished                   | [MenuAnywhere](specs/2026-11-03-menu-anywhere/00-overview.md)                        | 3/3 done on `main`                  | Native menu, exact activation and runtime shipped; manual gates passed 2026-11-07/08; see [feature](features/menu-anywhere.md).                                                        |
-| Specified, not started     | [Bar](specs/2026-11-03-bar/00-overview.md)                                           | 8 draft parts                       | `feat/bar`; preserve legacy visual parity.                                                                                                                                             |
-| Specified, not started     | [Tiling](specs/2026-11-03-tiling/00-overview.md)                                     | 10 draft parts                      | `feat/tiling`; **last runtime rewrite**.                                                                                                                                               |
+| Specified, not started     | [Bar foundation](specs/2026-11-08-bar-foundation/00-overview.md)                     | 2 draft parts                       | `feat/bar-foundation`; next; SDK published state + host screen reservations.                                                                                                           |
+| Specified, not started     | [Tiling](specs/2026-11-03-tiling/00-overview.md)                                     | 9 draft parts                       | `feat/tiling`; after Bar foundation.                                                                                                                                                   |
+| Specified, not started     | [Bar](specs/2026-11-03-bar/00-overview.md)                                           | 6 draft parts (03–08)               | `feat/bar`; after Tiling; preserve legacy visual parity.                                                                                                                               |
+| Specified, not started     | [Tiling–Bar integration](specs/2026-11-08-tiling-bar/00-overview.md)                 | 1 draft part                        | `feat/tiling-bar`; last runtime rewrite; workspace strip and end-to-end reservation gates.                                                                                             |
 | Specified, not started     | [Release and packaging](specs/2026-11-03-release/00-overview.md)                     | 6 draft parts                       | `feat/release`; independent of runtime rewrite order.                                                                                                                                  |
 | Planned, no dedicated spec | Tray “Reload Stache”                                                                 | Not shipped or separately specified | Release-only follow-up; coordinated restart prerequisite is shipped.                                                                                                                   |
 
@@ -42,16 +44,19 @@ approval. Implement one authorized part at a time.
 
 ## Runtime sequence and hard gates
 
-noTunes → Keep Awake → Wallpapers → Keybindings → Hold-to-Quit → MenuAnywhere → Bar
-→ **Tiling LAST**.
+noTunes → Keep Awake → Wallpapers → Keybindings → Hold-to-Quit → MenuAnywhere → Bar foundation
+→ Tiling → Bar → **Tiling–Bar integration LAST**.
+
+Reordered 2026-11-08: Bar and Tiling interleave because each needs only a slice of the
+other, and the merge gate plus the no-unmerged-dependency rule give each slice its own spec and branch.
 
 The middle order is a dependency/risk recommendation, not a universal technical chain.
 
-| Gate          | Required before proceeding                                                                                                                                             |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Shared input  | Keybindings lands the service needed by Hold-to-Quit and MenuAnywhere runtimes.                                                                                        |
-| Bar indicator | Keep Awake owns independent, lock-aware power prevention, lifecycle resources and read-only status. Bar only consumes state, never owns the native power service.      |
-| Tiling last   | All smaller rewrites land and shared contracts are exercised. Tiling owns workspace display and Bar-reserved screen-area integration, avoiding circular prerequisites. |
+| Gate            | Required before proceeding                                                                                                                                                                                 |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Shared input    | Keybindings lands the service needed by Hold-to-Quit and MenuAnywhere runtimes.                                                                                                                            |
+| Bar indicator   | Keep Awake owns independent, lock-aware power prevention, lifecycle resources and read-only status. Bar only consumes state, never owns the native power service.                                          |
+| Tiling–Bar last | Bar foundation, Tiling 01–09 and Bar 03–08 land and shared contracts are exercised. Tiling–Bar integration owns the workspace strip and end-to-end Bar reservation gates, avoiding circular prerequisites. |
 
 Later branches must integrate latest `main`, preserve additive catalog/schema/bindings/
 index routes and other-module tests, and reuse merged generic facilities. Share safe

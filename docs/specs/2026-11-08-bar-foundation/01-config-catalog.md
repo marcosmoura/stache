@@ -13,10 +13,10 @@ Add `src/crates/modules/bar/{Cargo.toml,src/lib.rs,src/config.rs}` (`stache-bar`
 ## Requirements
 
 - Authoritative `BarConfig`, ID `bar`, `bar.jsonc`, serde camelCase, schemars/Specta. Defaults: `enabled: false`, `height: 28`, `padding: 12`, `weather: { provider: "auto", apiKeys: "", defaultLocation: "" }`. Dimensions retain legacy u16 wire range; preserve explicit zero. Weather enum uses `auto`, `visual-crossing`, `open-meteo`. No widgets, settings or new CLI grammar.
-- Structural decode/defaults and native feasibility are separate. Geometry uses checked `height + padding` in a wider type. Preserve explicit zero without substituting defaults; at runtime zero height or nonpositive computed width means Bar runs with no panel (part 03, overview Decision 16), never a silent clamp. Padding that leaves no width follows the same no-panel rule; frames beyond backend limits fail start/reconfigure actionably; rejected live candidates retain last-good resources. Do not narrow historical config values merely to fit the current 8192 window validation.
+- Structural decode/defaults and native feasibility are separate. Geometry uses checked `height + padding` in a wider type. Preserve explicit zero without substituting defaults; at runtime zero height or nonpositive computed width means Bar runs with no panel ([Bar part 03](../2026-11-03-bar/03-panel-window.md), [Bar overview](../2026-11-03-bar/00-overview.md) Decision 16), never a silent clamp. Padding that leaves no width follows the same no-panel rule; frames beyond backend limits fail start/reconfigure actionably; rejected live candidates retain last-good resources. Do not narrow historical config values merely to fit the current 8192 window validation.
 - Migration validates through the catalog. Keep explicit values including 0, materialize omitted height/padding as 28/12 and warn that old derive-default omissions rendered 0. Missing Bar section emits the catalog's disabled template, never enables itself. Retain unknown keys with warnings; widgets still dropped. Immutable source, source-is-destination refusal even with force, collision preflight, file modes and unrelated sections stay unchanged.
 - Normalize `weather.apiKeys` by trimming then injected home expansion (`~`/`~/`) and config-directory-relative resolution; never shell/env expansion or process-CWD resolution. Migration retains relative text and warns that the destination config directory may differ from legacy's base/CWD fallback; do not guess historical CWD. Absolute/home-anchored paths retain meaning. No env file I/O during schemas/templates/config validation.
-- Main noTunes catalog/migration/bindings and all currently landed modules survive additive edits. Registration is catalog-only until part 04; `enabled: true` can validate but must not claim active runtime.
+- Main noTunes catalog/migration/bindings and all currently landed modules survive additive edits. Registration is catalog-only, with no production Bar factory, until [Bar part 04](../2026-11-03-bar/04-ui-shell-parity.md); `enabled: true` can validate but must not claim active runtime.
 
 ## Acceptance criteria
 
@@ -31,4 +31,4 @@ Colocate config tests in the new crate; extend `app/tests/{config_catalog,bindin
 
 ## Notes
 
-Update config docs' registered/copy lists (`docs/architecture/config.md:321-332`) on implementation, not now. Native geometry and accepted live configuration are owned by part 03; this part does not invent a runtime placeholder that reports Running.
+Update config docs' registered/copy lists (`docs/architecture/config.md:321-332`) on implementation, not now. Native geometry and accepted live configuration are owned by Bar part 03; this part does not invent a runtime placeholder that reports Running.
