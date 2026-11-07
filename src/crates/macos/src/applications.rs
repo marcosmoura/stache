@@ -30,6 +30,20 @@
 //! an identifier. Both answer `Ok(None)` for "no such bundle" or "not
 //! installed", and only report an error when the query itself could not run.
 //!
+//! ## Frontmost, graceful quit and display hint
+//!
+//! Three additive capabilities extend the same generation and owner maps; the
+//! will-launch observation and the force-terminating
+//! [`ApplicationObservation::terminate`] are unchanged:
+//!
+//! - [`frontmost`]: workspace activation observation, a nonblocking published
+//!   [`FrontmostSnapshot`] and the main [`FrontmostPreflight`].
+//! - [`graceful`]: [`ApplicationObservation::terminate_gracefully`], which calls
+//!   only `terminate` under the existing [`IssuancePermit`] plus a typed
+//!   [`PressAuthorization`].
+//! - [`display`]: [`ApplicationObservation::display_for`], a best-effort display
+//!   hint from public window geometry.
+//!
 //! ## Linearization
 //!
 //! A narrow generation gate (`Mutex<GenerationState>`) is the commit point
@@ -72,7 +86,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, TryLockError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, TryLockError, Weak};
 use std::time::{Duration, Instant};
 
 use block2::{DynBlock, RcBlock};
@@ -80,13 +94,29 @@ use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObjectProtocol, ProtocolObject};
 use objc2_app_kit::{
-    NSRunningApplication, NSWorkspace, NSWorkspaceApplicationKey, NSWorkspaceOpenConfiguration,
+    NSRunningApplication, NSScreen, NSWorkspace, NSWorkspaceApplicationKey,
+    NSWorkspaceDidActivateApplicationNotification, NSWorkspaceOpenConfiguration,
     NSWorkspaceWillLaunchApplicationNotification,
 };
 use objc2_foundation::{
     NSBundle, NSError, NSNotification, NSNotificationCenter, NSOperationQueue, NSString, NSURL,
 };
 use stache_sdk::{CancellationToken, MainThreadExecutor, ThreadError};
+
+pub mod display;
+pub mod frontmost;
+pub mod graceful;
+
+pub use display::{
+    DisplayHint, DisplayRect, DisplaySource, ScreenRecord, WindowRecord, appkit_rect_from_cg,
+    select_display,
+};
+pub use frontmost::{
+    ActivationSink, FINDER_BUNDLE_IDENTIFIER, FrontmostApplication, FrontmostClass,
+    FrontmostListener, FrontmostPreflight, FrontmostSnapshot, FrontmostState, FrontmostWatch,
+    PreflightRejection, RefreshTicket, Unconfirmed, classify_preflight,
+};
+pub use graceful::{GracefulOutcome, PressAuthorization, PressCancel};
 
 /// How long one dispatched native operation may wait for its acknowledgement.
 ///
@@ -381,6 +411,88 @@ pub trait ApplicationBackend: Send + Sync {
         permit: IssuancePermit<'_>,
     ) -> Result<TerminateOutcome, ApplicationError>;
 
+    /// Registers workspace activation observation for one generation.
+    ///
+    /// The native callback must only call `notify` (plain-state invalidation) and
+    /// enqueue the returned ticket's [`frontmost::RefreshTicket::run`] on a *later*
+    /// main turn through its own main-queue deferral (as will-launch does), never
+    /// inline. The default implementation reports [`ApplicationError::Unavailable`].
+    ///
+    /// # Errors
+    /// Returns [`ApplicationError::AlreadyInstalled`] when already registered, a
+    /// registration failure or [`ApplicationError::NotMainThread`].
+    fn observe_activation(
+        &self,
+        _handle: BackendHandle,
+        _generation: u64,
+        _notify: ActivationSink,
+    ) -> Result<(), ApplicationError> {
+        Err(ApplicationError::Unavailable)
+    }
+
+    /// Removes only the activation observer for one generation. Idempotent; a
+    /// superseded generation is left untouched. [`ApplicationBackend::unobserve`]
+    /// also removes it.
+    ///
+    /// # Errors
+    /// Returns a removal failure; ownership stays with the caller.
+    fn unobserve_activation(
+        &self,
+        _handle: BackendHandle,
+        _generation: u64,
+    ) -> Result<(), ApplicationError> {
+        Ok(())
+    }
+
+    /// Queries the actual current frontmost application.
+    ///
+    /// Main-thread only. The instance is interned into the generation's owner
+    /// map. `Ok(None)` means the system reports no frontmost application.
+    ///
+    /// # Errors
+    /// Returns [`ApplicationError::NotMainThread`] off-main or a query failure.
+    fn frontmost(
+        &self,
+        _handle: BackendHandle,
+    ) -> Result<Option<FrontmostApplication>, ApplicationError> {
+        Err(ApplicationError::Unavailable)
+    }
+
+    /// Requests graceful termination of the exact instance through `permit`.
+    ///
+    /// The backend runs the main exact-identity/current-frontmost preflight
+    /// first, then calls [`IssuancePermit::issue`] at the exact `terminate` site
+    /// and, inside that closure, [`PressAuthorization::commit_send`]. It must
+    /// return [`GracefulOutcome::Stale`] when the permit returns `None` and
+    /// [`GracefulOutcome::Cancelled`] when the commit fails. It never calls
+    /// `forceTerminate`.
+    ///
+    /// # Errors
+    /// Returns [`ApplicationError::NotMainThread`] off-main.
+    fn request_graceful_terminate(
+        &self,
+        _handle: BackendHandle,
+        _application: ApplicationId,
+        _authorization: &PressAuthorization,
+        _permit: IssuancePermit<'_>,
+    ) -> Result<GracefulOutcome, ApplicationError> {
+        Err(ApplicationError::Unavailable)
+    }
+
+    /// Best-effort display hint for the exact instance from public geometry.
+    ///
+    /// The caller has already validated identity and frontmost state on main.
+    ///
+    /// # Errors
+    /// Returns [`ApplicationError::NotMainThread`] off-main.
+    fn display_hint(
+        &self,
+        _handle: BackendHandle,
+        _application: ApplicationId,
+    ) -> Result<DisplayHint, ApplicationError> {
+        Err(ApplicationError::Unavailable)
+    }
+
     /// Opens an application at an exact path through `permit`.
     ///
     /// The backend prepares the path, URL and configuration first. It must call
@@ -427,6 +539,8 @@ struct ControlState {
     /// Generations only increase, so a late cleanup of an old generation can
     /// never invalidate a successor.
     invalidated: AtomicU64,
+    /// Observed frontmost watches, told once when their generation is invalidated.
+    observed_watches: Mutex<Vec<Weak<frontmost::FrontmostShared>>>,
     gate: Mutex<GenerationState>,
 }
 
@@ -478,6 +592,7 @@ impl ApplicationControl {
                 next_generation: AtomicU64::new(0),
                 published: AtomicU64::new(0),
                 invalidated: AtomicU64::new(0),
+                observed_watches: Mutex::new(Vec::new()),
                 gate: Mutex::new(GenerationState::default()),
             }),
         }
@@ -594,6 +709,7 @@ impl ApplicationControl {
                     state: Arc::clone(&self.state),
                     generation,
                     removed: AtomicBool::new(false),
+                    frontmost: Mutex::new(None),
                 });
             }
             AckWait::Ready(InstallAck::Done(Err(error))) => error,
@@ -743,6 +859,40 @@ impl ControlState {
     fn invalidate(&self, generation: u64) {
         if generation != 0 {
             self.invalidated.fetch_max(generation, Ordering::SeqCst);
+            self.notify_invalidated_watches();
+        }
+    }
+
+    /// Remembers a watch so invalidating its generation tells its listener.
+    fn watch_frontmost_inactive_on_invalidation(&self, shared: &Arc<frontmost::FrontmostShared>) {
+        let mut watches = lock(&self.observed_watches);
+        watches.retain(|watch| watch.strong_count() > 0);
+        watches.push(Arc::downgrade(shared));
+    }
+
+    /// Runs the one-shot `Inactive` notification for every invalidated watch.
+    /// Listener code runs after the registry lock is released.
+    fn notify_invalidated_watches(&self) {
+        let due: Vec<Arc<frontmost::FrontmostShared>> = {
+            let mut watches = lock(&self.observed_watches);
+            if watches.is_empty() {
+                return;
+            }
+            let mut due = Vec::new();
+            watches.retain(|watch| {
+                let Some(shared) = watch.upgrade() else {
+                    return false;
+                };
+                if self.is_invalidated(shared.generation()) {
+                    due.push(shared);
+                    return false;
+                }
+                true
+            });
+            due
+        };
+        for shared in due {
+            shared.notify_inactive();
         }
     }
 
@@ -931,6 +1081,9 @@ pub struct ApplicationObservation {
     state: Arc<ControlState>,
     generation: u64,
     removed: AtomicBool,
+    /// The frontmost publication cell, when [`ApplicationObservation::watch_frontmost`]
+    /// installed one.
+    frontmost: Mutex<Option<Arc<frontmost::FrontmostShared>>>,
 }
 
 impl ApplicationObservation {
@@ -1509,6 +1662,22 @@ impl RequestCommit {
             .is_ok()
     }
 
+    /// Abandons a pending request and reports whether it can never issue.
+    fn abandon_confirmed(&self) -> bool {
+        match self.state.compare_exchange(
+            REQUEST_PENDING,
+            REQUEST_ABANDONED,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        ) {
+            Ok(_) => true,
+            Err(current) => current == REQUEST_ABANDONED,
+        }
+    }
+
+    /// Whether the request has not committed to the native send.
+    fn is_unissued(&self) -> bool { self.state.load(Ordering::SeqCst) != REQUEST_COMMITTED }
+
     fn abandon(&self) {
         let _ = self.state.compare_exchange(
             REQUEST_PENDING,
@@ -1644,6 +1813,8 @@ struct ObserverState {
     generation: u64,
     center: Retained<NSNotificationCenter>,
     token: Retained<ProtocolObject<dyn NSObjectProtocol>>,
+    /// The optional workspace activation observer of the same generation.
+    activation: Option<Retained<ProtocolObject<dyn NSObjectProtocol>>>,
 }
 
 /// Retained native instances for one control, owned by one generation.
@@ -1726,6 +1897,25 @@ fn defer_notification(
     let _ = enqueue(delivery);
 }
 
+impl SystemApplicationBackend {
+    /// The retained instance for an exact, current-generation id.
+    fn retained_instance(
+        handle: BackendHandle,
+        application: ApplicationId,
+    ) -> Option<Retained<NSRunningApplication>> {
+        if application.handle != handle {
+            return None;
+        }
+        INSTANCES.with(|cell| {
+            cell.borrow().get(&handle).and_then(|store| {
+                (store.generation == application.generation)
+                    .then(|| store.entries.get(&application.token).cloned())
+                    .flatten()
+            })
+        })
+    }
+}
+
 fn require_main() -> Result<MainThreadMarker, ApplicationError> {
     MainThreadMarker::new().ok_or(ApplicationError::NotMainThread)
 }
@@ -1796,7 +1986,12 @@ impl ApplicationBackend for SystemApplicationBackend {
                     block,
                 )
             };
-            observers.insert(handle, ObserverState { generation, center, token });
+            observers.insert(handle, ObserverState {
+                generation,
+                center,
+                token,
+                activation: None,
+            });
             INSTANCES.with(|cell| {
                 let mut stores = cell.borrow_mut();
                 let store = stores.entry(handle).or_default();
@@ -1826,10 +2021,14 @@ impl ApplicationBackend for SystemApplicationBackend {
             return Ok(());
         }
         if let Some(state) = removed {
-            // SAFETY: the token came from this center and has not been removed;
-            // removal is idempotent for an installed observer.
+            // SAFETY: the tokens came from this center and have not been removed;
+            // removal is idempotent for an installed observer. The activation
+            // token leaves with its generation's will-launch observer.
             unsafe {
                 state.center.removeObserver(AsRef::<AnyObject>::as_ref(&state.token));
+                if let Some(activation) = &state.activation {
+                    state.center.removeObserver(AsRef::<AnyObject>::as_ref(activation));
+                }
             }
         }
         INSTANCES.with(|cell| {
@@ -2003,6 +2202,180 @@ impl ApplicationBackend for SystemApplicationBackend {
         Ok(outcome)
     }
 
+    fn observe_activation(
+        &self,
+        handle: BackendHandle,
+        generation: u64,
+        notify: ActivationSink,
+    ) -> Result<(), ApplicationError> {
+        let _main = require_main()?;
+        OBSERVERS.with(|cell| {
+            let mut observers = cell.borrow_mut();
+            let Some(state) = observers.get_mut(&handle) else {
+                return Err(ApplicationError::NotInstalled);
+            };
+            if state.generation != generation {
+                return Err(ApplicationError::NotInstalled);
+            }
+            if state.activation.is_some() {
+                return Err(ApplicationError::AlreadyInstalled);
+            }
+            let queue = NSOperationQueue::mainQueue();
+            let block = RcBlock::new(move |_notification: NonNull<NSNotification>| {
+                // Contain panics; only invalidate and enqueue. No query, wait or
+                // policy runs here: the block may be running inside a native send.
+                let _ = catch_unwind(AssertUnwindSafe(|| {
+                    let installed = OBSERVERS
+                        .with(|cell| cell.borrow().get(&handle).map(|state| state.generation));
+                    if !ingestion_is_current(installed, generation) {
+                        return;
+                    }
+                    frontmost::defer_activation(crate::main_thread::run_on_main, &notify);
+                }));
+            });
+            let block: &DynBlock<dyn Fn(NonNull<NSNotification>)> = &block;
+            // SAFETY: the notification name is an immutable AppKit constant; the
+            // observer object is `None`; delivery is explicitly on the main
+            // operation queue, and the center retains the block until the token
+            // is removed in `unobserve`/`unobserve_activation`.
+            let token = unsafe {
+                let name = NSWorkspaceDidActivateApplicationNotification;
+                state.center.addObserverForName_object_queue_usingBlock(
+                    Some(name),
+                    None,
+                    Some(&queue),
+                    block,
+                )
+            };
+            state.activation = Some(token);
+            Ok(())
+        })
+    }
+
+    fn unobserve_activation(
+        &self,
+        handle: BackendHandle,
+        generation: u64,
+    ) -> Result<(), ApplicationError> {
+        let _main = require_main()?;
+        OBSERVERS.with(|cell| {
+            let mut observers = cell.borrow_mut();
+            let Some(state) = observers.get_mut(&handle) else {
+                return;
+            };
+            if state.generation != generation {
+                return;
+            }
+            if let Some(token) = state.activation.take() {
+                // SAFETY: the token came from this center and has not been
+                // removed; removal is idempotent for an installed observer.
+                unsafe {
+                    state.center.removeObserver(AsRef::<AnyObject>::as_ref(&token));
+                }
+            }
+        });
+        Ok(())
+    }
+
+    fn frontmost(
+        &self,
+        handle: BackendHandle,
+    ) -> Result<Option<FrontmostApplication>, ApplicationError> {
+        let _main = require_main()?;
+        let generation = OBSERVERS
+            .with(|cell| cell.borrow().get(&handle).map(|state| state.generation))
+            .ok_or(ApplicationError::NotInstalled)?;
+        let Some(application) = NSWorkspace::sharedWorkspace().frontmostApplication() else {
+            return Ok(None);
+        };
+        if application.isTerminated() {
+            return Ok(None);
+        }
+        // Self comparison is by retained-instance equality against the current
+        // process's own `NSRunningApplication`, never by executable name.
+        let current = NSRunningApplication::currentApplication();
+        let is_current_process = application.isEqual(Some(AsRef::<AnyObject>::as_ref(&*current)));
+        let id = INSTANCES
+            .with(|cell| {
+                let mut stores = cell.borrow_mut();
+                let store = stores.get_mut(&handle)?;
+                (store.generation == generation)
+                    .then(|| store.intern(handle, generation, &application))
+            })
+            .ok_or(ApplicationError::NotInstalled)?;
+        Ok(Some(FrontmostApplication {
+            id,
+            bundle_identifier: application.bundleIdentifier().map(|id| id.to_string()),
+            name: application.localizedName().map(|name| name.to_string()),
+            is_current_process,
+        }))
+    }
+
+    fn request_graceful_terminate(
+        &self,
+        handle: BackendHandle,
+        application: ApplicationId,
+        authorization: &PressAuthorization,
+        permit: IssuancePermit<'_>,
+    ) -> Result<GracefulOutcome, ApplicationError> {
+        let _main = require_main()?;
+        // Preflight is deliberately outside the gate and immediately before the
+        // permit: exact identity running, current frontmost, not Finder/self.
+        match frontmost::preflight_on_main(self, handle, application)? {
+            FrontmostPreflight::Eligible(_) => {}
+            FrontmostPreflight::NotRunning => return Ok(GracefulOutcome::NotRunning),
+            FrontmostPreflight::Rejected(reason) => return Ok(GracefulOutcome::Rejected(reason)),
+        }
+        let Some(current) = Self::retained_instance(handle, application) else {
+            return Ok(GracefulOutcome::NotRunning);
+        };
+        let Some(outcome) = permit.issue(|| {
+            // One-shot ordering with a concurrent cancel: whichever CAS wins.
+            if !authorization.commit_send() {
+                return GracefulOutcome::Cancelled;
+            }
+            // `terminate` only; never `forceTerminate`.
+            if current.terminate() {
+                GracefulOutcome::Requested
+            } else {
+                GracefulOutcome::Refused
+            }
+        }) else {
+            return Ok(GracefulOutcome::Stale);
+        };
+        Ok(outcome)
+    }
+
+    fn display_hint(
+        &self,
+        handle: BackendHandle,
+        application: ApplicationId,
+    ) -> Result<DisplayHint, ApplicationError> {
+        let mtm = require_main()?;
+        let Some(current) = Self::retained_instance(handle, application) else {
+            return Ok(DisplayHint::none(DisplaySource::NotValidated));
+        };
+        let pid = current.processIdentifier();
+        let screens: Vec<ScreenRecord> = NSScreen::screens(mtm)
+            .to_vec()
+            .iter()
+            .map(|screen| {
+                let frame = screen.frame();
+                ScreenRecord {
+                    id: crate::desktop::DisplayId::new(screen.CGDirectDisplayID()),
+                    frame: DisplayRect::new(
+                        frame.origin.x,
+                        frame.origin.y,
+                        frame.size.width,
+                        frame.size.height,
+                    ),
+                }
+            })
+            .collect();
+        let windows = display::read_window_records();
+        Ok(select_display(windows.as_deref(), pid, &screens))
+    }
+
     fn open(
         &self,
         _handle: BackendHandle,
@@ -2070,3 +2443,12 @@ pub mod testing;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod display_tests;
+
+#[cfg(test)]
+mod frontmost_tests;
+
+#[cfg(test)]
+mod graceful_tests;

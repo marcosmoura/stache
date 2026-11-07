@@ -113,6 +113,15 @@ impl ContextPublisher {
     #[allow(clippy::must_use_candidate)]
     pub fn mark_unknown(&self) -> u64 { self.publish(FrontmostState::Unknown) }
 
+    /// The snapshot the router would read now. Tests only.
+    #[cfg(any(test, feature = "testing"))]
+    #[must_use]
+    pub fn snapshot(&self) -> Arc<ContextSnapshot> {
+        self.cell
+            .load_nonblocking()
+            .unwrap_or_else(|| Arc::new(ContextSnapshot::unknown()))
+    }
+
     fn publish(&self, frontmost: FrontmostState) -> u64 {
         let mut last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
         let version = self.version.fetch_add(1, Ordering::SeqCst) + 1;

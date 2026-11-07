@@ -14,6 +14,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use stache_app::bindings::{HostStatus, ModuleState};
 use stache_app::caps_recovery::KeybindingsCapsRecovery;
+use stache_app::hold_to_quit::{HoldToQuitFactory, HudOwner};
 use stache_app::host::{
     FactoryContext, HostDriver, HostHandle, HostServices, HostSettings, HostUi, ModuleFactories,
     ModuleFactory, NoTunesFactory, StartupRecovery, new_host, register_module,
@@ -32,10 +33,15 @@ use stache_app::windows::{
     CloseOutcome, NativeWindowSpec, NativeWindows, WindowHost, WindowsOwner,
 };
 use stache_cli::CliEnvironment;
+use stache_hold_to_quit::test_support::Fakes;
 use stache_macos::{
     ApplicationControl, DesktopBackend, DesktopError, DesktopOperation, DisplayEntry, DisplayFrame,
     DisplayId, DisplaySnapshot, FakeApplicationBackend, FakeDesktop, GuardedDesktopBackend,
     ManualExecutor,
+};
+use stache_sdk::input::{
+    Disposition, InputEventKind, InputService, KeyCode, ModifierFlags, PressStream, RawInput,
+    TapKind,
 };
 use stache_sdk::ipc::{HandlerResult, IpcClient, IpcHandler, Request, Response, RetryPolicy};
 use stache_sdk::shutdown::ShutdownWait;
@@ -686,6 +692,7 @@ struct Harness {
     main: Arc<dyn MainThreadExecutor>,
     windows: Arc<dyn WindowBackend>,
     recovery: Option<Arc<dyn StartupRecovery>>,
+    input: Option<Arc<InputService>>,
 }
 
 impl Harness {
@@ -723,6 +730,7 @@ impl Harness {
             main,
             windows,
             recovery: None,
+            input: None,
         }
     }
 
@@ -753,6 +761,9 @@ impl Harness {
         let mut driver = self.driver.take().expect("driver");
         if let Some(recovery) = self.recovery.take() {
             driver = driver.with_startup_recovery(recovery);
+        }
+        if let Some(input) = self.input.take() {
+            driver = driver.with_input_service(input);
         }
         let permissions: Arc<dyn PermissionProvider> = self.permissions.clone();
         let commands: Arc<dyn CommandRunner> = self.commands.clone();
@@ -4352,5 +4363,365 @@ mod caps_recovery {
             vec![KEY_A, OWNED],
             "nothing was mutated without the lease"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Hold-to-Quit (HQ-04-01): the production factory over fake native services
+// ---------------------------------------------------------------------------
+
+/// A host harness whose production-composed Hold-to-Quit runs over fakes: the
+/// shared input service has a fake tap, applications and the HUD are fakes and
+/// no tap, panel, observer or termination ever reaches the machine.
+struct HoldHarness {
+    harness: Harness,
+    fakes: Fakes,
+}
+
+impl HoldHarness {
+    fn new(permissions: Arc<FakePermissions>) -> Self {
+        let fakes = Fakes::new();
+        let mut harness = Harness::new(
+            permissions,
+            fakes.app_main.clone(),
+            Arc::new(FakeCommands::default()),
+            Arc::new(RecordingWindows::default()),
+        );
+        harness.input = Some(Arc::clone(&fakes.input));
+        Self { harness, fakes }
+    }
+
+    fn start(&mut self, fixture: &Fixture) {
+        let factories = ModuleFactories::new()
+            .with(TestFactory {
+                counters: Arc::clone(&self.harness.counters),
+                permission: false,
+                gate: None,
+                configure_gate: None,
+            })
+            .with(HoldToQuitFactory::new(self.fakes.runtime.clone()));
+        self.harness.start_with_factories(fixture, factories);
+    }
+
+    fn view(&self) -> Option<stache_app::bindings::ModuleStatusView> {
+        self.harness
+            .handle
+            .status()
+            .modules
+            .into_iter()
+            .find(|module| module.id == "commandQuit")
+    }
+
+    fn state(&self) -> Option<ModuleState> { self.view().map(|module| module.state) }
+
+    fn wait_state(&self, state: ModuleState) {
+        wait_for(
+            &self.harness.handle,
+            &format!("commandQuit {state:?}"),
+            |status| status.modules.iter().any(|m| m.id == "commandQuit" && m.state == state),
+        );
+    }
+
+    fn q_down(&self) -> Disposition {
+        self.fakes.input.dispatch(TapKind::Suppressing, RawInput {
+            kind: InputEventKind::KeyDown,
+            stream: PressStream::Key(KeyCode(12)),
+            flags: ModifierFlags::COMMAND,
+            repeat: false,
+            timestamp: Duration::ZERO,
+        })
+    }
+
+    fn shutdown(&self) {
+        self.harness.handle.request_shutdown();
+        assert!(self.harness.wait_exit());
+    }
+}
+
+#[test]
+fn hq_04_01_enable_writes_jsonc_and_pause_writes_nothing() {
+    let fixture = fixture();
+    let source = "{\n  // Keep this comment.\n  \"enabled\": false,\n  \"holdDuration\": 900\n}\n";
+    fixture.write("commandQuit.jsonc", source);
+    let mut hold = HoldHarness::new(FakePermissions::new(PermissionStatus::Granted));
+    hold.start(&fixture);
+    hold.harness.wait_ready();
+    // Default-disabled and inert: no lease, observer, panel or tap exists.
+    assert_eq!(hold.state(), Some(ModuleState::Disabled));
+    assert_eq!(hold.fakes.leaser.leases(), 0);
+    assert_eq!(hold.fakes.apps.observations(), 0);
+    assert_eq!(hold.fakes.hud_backend.panels_created(), 0);
+    assert!(hold.fakes.tap.submitted().is_empty());
+
+    hold.harness.handle.set_enabled("commandQuit", true);
+    hold.wait_state(ModuleState::Running);
+    let edited = fixture.read("commandQuit.jsonc");
+    assert!(edited.contains("// Keep this comment."));
+    assert!(edited.contains("\"holdDuration\": 900"));
+    assert!(edited.contains("\"enabled\": true"));
+    assert_eq!(hold.fakes.leaser.held(), 1);
+    assert_eq!(hold.fakes.hud_backend.panels_live(), 1);
+
+    let rows = stache_app::tray::rows(&hold.harness.handle.status());
+    assert_eq!(tray_row(&rows, "enable:commandQuit").checked, Some(true));
+    assert_eq!(tray_row(&rows, "pause:commandQuit").label, "Pause commandQuit");
+
+    hold.harness.handle.pause("commandQuit");
+    hold.wait_state(ModuleState::Paused);
+    assert_eq!(
+        fixture.read("commandQuit.jsonc"),
+        edited,
+        "pause is session-only"
+    );
+    assert_eq!(hold.fakes.leaser.held(), 0);
+    assert_eq!(hold.q_down(), Disposition::Pass);
+    hold.harness.handle.resume("commandQuit");
+    hold.wait_state(ModuleState::Running);
+    assert_eq!(hold.fakes.leaser.held(), 1);
+    hold.shutdown();
+}
+
+#[test]
+fn hq_04_01_a_malformed_or_deleted_file_keeps_the_last_good_runtime_with_a_diagnostic() {
+    let fixture = fixture();
+    fixture.write("commandQuit.jsonc", "{ \"enabled\": true }\n");
+    let mut hold = HoldHarness::new(FakePermissions::new(PermissionStatus::Granted));
+    hold.start(&fixture);
+    hold.harness.wait_ready();
+    hold.wait_state(ModuleState::Running);
+    fixture.write("commandQuit.jsonc", "{ \"enabled\": ");
+    wait_for(&hold.harness.handle, "a diagnostic", |status| {
+        status.modules.iter().any(|m| m.id == "commandQuit" && m.diagnostic.is_some())
+    });
+    assert_eq!(
+        hold.state(),
+        Some(ModuleState::Running),
+        "the last good state keeps running"
+    );
+    assert_eq!(hold.fakes.leaser.held(), 1);
+    std::fs::remove_file(fixture.paths.directory().join("commandQuit.jsonc")).expect("delete");
+    wait_for(&hold.harness.handle, "a deletion diagnostic", |status| {
+        status.modules.iter().any(|m| m.id == "commandQuit" && m.diagnostic.is_some())
+    });
+    assert_eq!(hold.state(), Some(ModuleState::Running));
+    assert_eq!(hold.fakes.hud_backend.panels_live(), 1);
+    hold.shutdown();
+}
+
+#[test]
+fn hq_04_01_permission_denied_then_granted_then_revoked_never_prompts_automatically() {
+    let fixture = fixture();
+    fixture.write("commandQuit.jsonc", "{ \"enabled\": true }\n");
+    let permissions = FakePermissions::new(PermissionStatus::Denied);
+    let mut hold = HoldHarness::new(permissions.clone());
+    hold.start(&fixture);
+    hold.harness.wait_ready();
+    hold.wait_state(ModuleState::WaitingForPermission);
+    assert_eq!(hold.fakes.leaser.leases(), 0, "nothing starts while waiting");
+    assert_eq!(hold.fakes.hud_backend.panels_created(), 0);
+
+    permissions.set(PermissionStatus::Granted);
+    hold.wait_state(ModuleState::Running);
+    permissions.set(PermissionStatus::Denied);
+    hold.wait_state(ModuleState::WaitingForPermission);
+    assert_eq!(hold.fakes.leaser.held(), 0, "revocation releases everything");
+    assert_eq!(hold.fakes.hud_backend.panels_live(), 0);
+    permissions.set(PermissionStatus::Granted);
+    hold.wait_state(ModuleState::Running);
+    assert_eq!(
+        permissions.requests.load(Ordering::SeqCst),
+        0,
+        "startup, polling, activation and recovery only check; only the tray prompts"
+    );
+    hold.shutdown();
+}
+
+#[test]
+fn hq_04_01_a_hud_install_failure_is_failed_start_and_retry_recovers() {
+    let fixture = fixture();
+    fixture.write("commandQuit.jsonc", "{ \"enabled\": true }\n");
+    let mut hold = HoldHarness::new(FakePermissions::new(PermissionStatus::Granted));
+    hold.fakes
+        .hud_backend
+        .fail_next_install(stache_macos::hold_hud::HudInstallError::NoScreen);
+    hold.start(&fixture);
+    hold.harness.wait_ready();
+    hold.wait_state(ModuleState::Failed);
+    let view = hold.view().expect("view");
+    assert!(
+        view.detail.as_deref().is_some_and(|d| d.contains("start")),
+        "{view:?}"
+    );
+    assert_eq!(hold.fakes.leaser.held(), 0, "full rollback");
+    assert_eq!(hold.fakes.apps.activation_observers(), 0);
+    let rows = stache_app::tray::rows(&hold.harness.handle.status());
+    assert!(
+        rows.iter()
+            .any(|row| matches!(row, TrayRow::Item(item) if item.id == "retry:commandQuit")),
+        "the tray offers Retry"
+    );
+    assert_eq!(hold.q_down(), Disposition::Pass, "callbacks are inert");
+    hold.harness.handle.retry("commandQuit");
+    hold.wait_state(ModuleState::Running);
+    assert_eq!(hold.fakes.leaser.held(), 1);
+    hold.shutdown();
+}
+
+#[test]
+fn hq_04_01_a_runtime_hud_failure_is_degraded_pass_through_with_a_detail() {
+    let fixture = fixture();
+    fixture.write("commandQuit.jsonc", "{ \"enabled\": true }\n");
+    let mut hold = HoldHarness::new(FakePermissions::new(PermissionStatus::Granted));
+    hold.start(&fixture);
+    hold.harness.wait_ready();
+    hold.wait_state(ModuleState::Running);
+    // Put Finder-free eligible state in place, then break the next show.
+    let editor = hold.fakes.apps.add_running("com.example.editor");
+    hold.fakes.apps.set_name(editor, Some("Editor"));
+    let _ = hold.fakes.apps.activate(editor);
+    hold.fakes
+        .input
+        .context_publisher()
+        .publish_frontmost(stache_sdk::input::FrontmostApp {
+            bundle_id: Arc::from("com.example.editor"),
+            exemptions: stache_sdk::input::ExemptionFlags(0),
+        });
+    hold.fakes
+        .hud_backend
+        .fail_next_show(stache_macos::hold_hud::HudShowFailure::NotInstalled);
+    assert_eq!(hold.q_down(), Disposition::Suppress);
+    // The detail is read from the runtime at each host publication, so the next
+    // publication (any command, a permission tick or an activation refresh)
+    // carries it.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        hold.harness.handle.refresh_permissions();
+        if hold
+            .view()
+            .is_some_and(|m| m.detail.as_deref().is_some_and(|d| d.contains("passes through")))
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the degraded detail never reached the status"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        hold.state(),
+        Some(ModuleState::Running),
+        "degraded mode stays Running"
+    );
+    assert_eq!(hold.fakes.leaser.held(), 1);
+    // No subscription remains: a new press passes.
+    assert_eq!(hold.q_down(), Disposition::Pass);
+    // Pause then Resume recovers and clears the detail.
+    hold.harness.handle.pause("commandQuit");
+    hold.wait_state(ModuleState::Paused);
+    hold.harness.handle.resume("commandQuit");
+    hold.wait_state(ModuleState::Running);
+    assert!(hold.view().expect("view").detail.is_none());
+    hold.shutdown();
+}
+
+#[test]
+fn hq_04_01_unrelated_modules_keep_working_and_no_extra_surface_exists() {
+    let fixture = fixture();
+    fixture.write("commandQuit.jsonc", "{ \"enabled\": true }\n");
+    fixture.write("testModule.jsonc", "{ \"enabled\": true }\n");
+    let mut hold = HoldHarness::new(FakePermissions::new(PermissionStatus::Granted));
+    hold.fakes.leaser.fail_next_lease();
+    hold.start(&fixture);
+    hold.harness.wait_ready();
+    hold.wait_state(ModuleState::Failed);
+    wait_for(&hold.harness.handle, "the unrelated module", |status| {
+        status
+            .modules
+            .iter()
+            .any(|m| m.id == "testModule" && m.state == ModuleState::Running)
+    });
+    // The module owns no window and registers no socket handler of its own.
+    let status = hold.harness.handle.status();
+    assert!(status.error.is_none(), "{:?}", status.error);
+    hold.shutdown();
+}
+
+#[test]
+fn hq_04_01_the_hud_owner_acknowledges_a_retained_hud_and_is_idle_otherwise() {
+    use stache_app::shutdown::OwnerState;
+    let fakes = Fakes::new();
+    let owner = HudOwner::new(Arc::clone(&fakes.hud));
+    assert_eq!(owner.name(), "hold-to-quit-hud");
+    assert!(!owner.on_main());
+    assert_eq!(
+        owner.release().state(),
+        OwnerState::Succeeded,
+        "nothing retained"
+    );
+
+    // Retain a real fake HUD whose release timed out.
+    let (control, _events) = stache_macos::hold_hud::HudControl::with_acknowledgement_budget(
+        fakes.hud_executor.clone(),
+        Arc::new(fakes.hud_backend.clone()),
+        Duration::from_millis(30),
+    );
+    fakes.hud_executor.set_on_main(true);
+    control.install(&stache_sdk::CancellationToken::new()).expect("install");
+    fakes.hud_executor.set_on_main(false);
+    let outcome = control.release(&stache_sdk::CancellationToken::new());
+    assert!(matches!(
+        outcome,
+        stache_macos::hold_hud::HudReleaseOutcome::Retained(_)
+    ));
+    fakes.hud.retain(control);
+    assert!(fakes.hud.has_retained());
+    // The main queue drains, then the owner's retry is acknowledged.
+    fakes.hud_executor.set_on_main(true);
+    fakes.hud_executor.drain();
+    let answer = owner.release();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while answer.state() == OwnerState::Pending {
+        assert!(Instant::now() < deadline, "the owner never answered");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(answer.state(), OwnerState::Succeeded);
+    assert!(!fakes.hud.has_retained());
+}
+
+#[test]
+fn hq_04_01_the_hud_owner_release_never_waits_on_a_settle_holding_the_retained_lock() {
+    use stache_app::shutdown::OwnerState;
+    let fakes = Fakes::new();
+    let owner = HudOwner::new(Arc::clone(&fakes.hud));
+    let (control, _events) = stache_macos::hold_hud::HudControl::with_acknowledgement_budget(
+        fakes.hud_executor.clone(),
+        Arc::new(fakes.hud_backend.clone()),
+        Duration::from_millis(1_500),
+    );
+    fakes.hud_executor.set_on_main(true);
+    control.install(&stache_sdk::CancellationToken::new()).expect("install");
+    fakes.hud_executor.set_on_main(false);
+    fakes.hud.retain(control);
+    // The executor never drains, so this settle holds the retained lock for the
+    // whole acknowledgement budget.
+    let hud = Arc::clone(&fakes.hud);
+    let settling = std::thread::spawn(move || {
+        let _ = hud.settle(&stache_sdk::CancellationToken::new());
+    });
+    std::thread::sleep(Duration::from_millis(200));
+    let started = Instant::now();
+    let answer = owner.release();
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "release waited on the retained lock: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(answer.state(), OwnerState::Pending);
+    settling.join().expect("settle");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while answer.state() == OwnerState::Pending {
+        assert!(Instant::now() < deadline, "the owner never answered");
+        std::thread::sleep(Duration::from_millis(5));
     }
 }

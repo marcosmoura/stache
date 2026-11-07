@@ -1,0 +1,28 @@
+[package]
+name = "stache-hold-to-quit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Stache Hold-to-Quit configuration and runtime"
+readme = "../../../../README.md"
+keywords = ["stache", "hold-to-quit", "configuration"]
+categories = ["config"]
+
+[features]
+testing = ["stache-macos/testing", "stache-sdk/testing"]
+
+[dependencies]
+schemars = "1.2.3"
+serde = { version = "1.0.229", features = ["derive"] }
+specta = { version = "=2.0.0-rc.26", features = ["derive"] }
+stache-macos = { path = "../../macos" }
+stache-sdk = { path = "../../sdk" }
+
+[dev-dependencies]
+serde_json = "1.0.154"
+stache-macos = { path = "../../macos", features = ["testing"] }
+stache-sdk = { path = "../../sdk", features = ["testing"] }
+
+[lints]
+workspace = true

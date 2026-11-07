@@ -65,8 +65,8 @@ cargo build -p stache-app --bin stache
 ./target/debug/stache config init
 ```
 
-`config init` writes `global.jsonc`, `keepAwake.jsonc`, `keybindings.jsonc`, `notunes.jsonc` and
-`proxyAudio.jsonc`; each
+`config init` writes `global.jsonc`, `commandQuit.jsonc`, `keepAwake.jsonc`,
+`keybindings.jsonc`, `notunes.jsonc` and `proxyAudio.jsonc`; each
 file is validated separately, and runtime-backed modules reload independently. `keepAwake.jsonc`
 starts disabled: setting `enabled: true` (or tray Enable) starts the lock-aware power assertion,
 and an invalid file keeps the last accepted lease and reports a diagnostic.

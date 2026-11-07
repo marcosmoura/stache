@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 01 — Configuration, catalog and migration
@@ -24,10 +24,10 @@ Files: root `Cargo.toml`/`Cargo.lock`; new `src/crates/modules/hold-to-quit/{Car
 
 ## Acceptance criteria
 
-- [ ] HQ-01-01: Config defaults, serde casing, type rejection, `ModuleConfig`, schema and Specta derive from one type. The schema says disabled by default, the generated TypeScript does not export the lossy `holdDuration`, and generated checks are deterministic.
-- [ ] HQ-01-02: Every `u64`, including 0 and `u64::MAX`, is accepted without clamping or arbitrary limits; wrong types and overflow fail with a field path.
-- [ ] HQ-01-03: `config init`/`path`/`schema commandQuit` include the file. Migration of a valid, invalid or absent legacy `commandQuit` is typed, and the other unported sections are still copied verbatim.
-- [ ] HQ-01-04: No runtime, factory or native side effect is introduced. Catalog-only state stays inactive; proxyAudio, noTunes and subsequently landed catalog consumers pass unchanged regression tests.
+- [x] HQ-01-01: Config defaults, serde casing, type rejection, `ModuleConfig`, schema and Specta derive from one type. The schema says disabled by default, the generated TypeScript does not export the lossy `holdDuration`, and generated checks are deterministic.
+- [x] HQ-01-02: Every `u64`, including 0 and `u64::MAX`, is accepted without clamping or arbitrary limits; wrong types and overflow fail with a field path.
+- [x] HQ-01-03: `config init`/`path`/`schema commandQuit` include the file. Migration of a valid, invalid or absent legacy `commandQuit` is typed, and the other unported sections are still copied verbatim.
+- [x] HQ-01-04: No runtime, factory or native side effect is introduced. Catalog-only state stays inactive; proxyAudio, noTunes and subsequently landed catalog consumers pass unchanged regression tests.
 
 ## Tests
 

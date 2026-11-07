@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 02 — Native HUD adapter
@@ -29,7 +29,7 @@ Add `src/crates/macos/src/hold_hud.rs`, `hold_hud/{testing,tests}.rs`, exports i
 
 ### Minimal native visual plan
 
-Use a compact rounded system-material surface, one accessible static-text line “Hold ⌘Q to quit <App>” and a high-contrast progress track beneath. Missing name uses “the app”; long names truncate without moving the progress track off-screen. Center horizontally in the chosen visible frame near its lower edge, with margins and width constrained to that frame. Use system typography/colors and respect increased contrast/Reduce Motion (omit decorative fades, keep meaningful progress). No icon, actions, webview or focus. This is a concrete minimal engineering proposal; no pixel sizes or legacy theme tokens are user-approved requirements.
+Use a compact rounded system-material surface, one accessible static-text line “Hold ⌘Q to quit <App>” and a high-contrast progress track beneath. Missing name uses “the app”; long names truncate without moving the progress track off-screen. Center horizontally in the chosen visible frame near its lower edge, with margins and width constrained to that frame. Use system typography/colors and respect increased contrast/Reduce Motion (omit decorative fades, keep meaningful progress; superseded by [part 06](06-hud-position-animation.md), which animates show and hide and uses a fade as the Reduce Motion substitute). No icon, actions, webview or focus. This is a concrete minimal engineering proposal; no pixel sizes or legacy theme tokens are user-approved requirements.
 
 ### Compile/ownership gate
 
@@ -37,11 +37,11 @@ Before part 04, compile-prove panel creation/configuration/ordering, layer anima
 
 ## Acceptance criteria
 
-- [ ] HQ-02-01: Compile proof and rustdoc establish safe main-only Cocoa ownership and opaque Send handles without unsafe trait impls.
-- [ ] HQ-02-02: Hidden readiness is truthful for nil/error/dispatch/cancel/timeout. Async show acknowledges only matching authorized ordering; stale, failed or late shows are inert.
-- [ ] HQ-02-03: Hide/release invalidate before dispatch; bounded acknowledged release keeps exact inert ownership on failure, supports eventual cleanup/retry and prevents fresh duplicate panels.
-- [ ] HQ-02-04: Fake-tested layout/placement diagnostics, no-screen failure, fallback, accessible text, zero/full-u64 progress and idle animation behavior match the design without Rust polling.
-- [ ] HQ-02-05: Exported fakes provide queued/never-draining executors, pre-order barriers and injectable install/show/hide/release failures. Default tests create no native panels.
+- [x] HQ-02-01: Compile proof and rustdoc establish safe main-only Cocoa ownership and opaque Send handles without unsafe trait impls.
+- [x] HQ-02-02: Hidden readiness is truthful for nil/error/dispatch/cancel/timeout. Async show acknowledges only matching authorized ordering; stale, failed or late shows are inert.
+- [x] HQ-02-03: Hide/release invalidate before dispatch; bounded acknowledged release keeps exact inert ownership on failure, supports eventual cleanup/retry and prevents fresh duplicate panels.
+- [x] HQ-02-04: Fake-tested layout/placement diagnostics, no-screen failure, fallback, accessible text, zero/full-u64 progress and idle animation behavior match the design without Rust polling.
+- [x] HQ-02-05: Exported fakes provide queued/never-draining executors, pre-order barriers and injectable install/show/hide/release failures. Default tests create no native panels.
 
 ## Tests
 

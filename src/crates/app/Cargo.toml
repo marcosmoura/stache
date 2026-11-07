@@ -41,6 +41,7 @@ signal-hook = "0.4.6"
 specta = { version = "=2.0.0-rc.26", features = ["derive"] }
 specta-typescript = "=0.0.13"
 stache-cli = { path = "../cli" }
+stache-hold-to-quit = { path = "../modules/hold-to-quit" }
 stache-keep-awake = { path = "../modules/keep-awake" }
 stache-keybindings = { path = "../modules/keybindings" }
 stache-macos = { path = "../macos" }
@@ -58,6 +59,7 @@ tauri-build = { version = "=2.7.4", features = [] }
 [dev-dependencies]
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 schemars = "1.2.3"
+stache-hold-to-quit = { path = "../modules/hold-to-quit", features = ["testing"] }
 stache-keybindings = { path = "../modules/keybindings", features = ["testing"] }
 stache-macos = { path = "../macos", features = ["testing"] }
 

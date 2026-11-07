@@ -4,6 +4,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::process::ExitCode;
 
+use stache_hold_to_quit::{CommandQuitConfig, HudAnimation, HudPosition};
 use stache_keep_awake::KeepAwakeConfig;
 use stache_keybindings::KeybindingsConfig;
 use stache_notunes::NoTunesConfig;
@@ -21,6 +22,7 @@ fn the_catalog_owns_the_global_and_module_files() {
     let ids: Vec<&str> = catalog.ids().map(stache_sdk::ModuleId::as_str).collect();
     assert_eq!(ids, [
         "global",
+        "commandQuit",
         "keepAwake",
         "keybindings",
         "notunes",
@@ -30,6 +32,10 @@ fn the_catalog_owns_the_global_and_module_files() {
     assert_eq!(
         catalog.file_name(GlobalConfig::ID).as_deref(),
         Some("global.jsonc")
+    );
+    assert_eq!(
+        catalog.file_name(CommandQuitConfig::ID).as_deref(),
+        Some("commandQuit.jsonc")
     );
     assert_eq!(
         catalog.file_name(KeepAwakeConfig::ID).as_deref(),
@@ -188,12 +194,27 @@ fn migration_converts_the_legacy_fixture_into_valid_typed_files() {
         .expect("migrated wallpapers validates");
     let decoded: WallpapersConfig = serde_json::from_str(&wallpapers).expect("typed wallpapers");
     assert!(!decoded.enabled, "migration never enables Wallpapers");
-    for name in [
-        "bar.jsonc",
-        "commandQuit.jsonc",
-        "menuAnywhere.jsonc",
-        "tiling.jsonc",
-    ] {
+    let command_quit_path = destination.join("commandQuit.jsonc");
+    let command_quit = fs::read_to_string(&command_quit_path).expect("commandQuit");
+    catalog
+        .inspect(CommandQuitConfig::ID, &command_quit_path, &command_quit)
+        .expect("migrated commandQuit validates");
+    let decoded: CommandQuitConfig =
+        serde_json::from_str(&command_quit).expect("typed commandQuit");
+    assert!(decoded.enabled);
+    assert_eq!(decoded.hold_duration, 1500);
+    assert!(
+        !command_quit.contains("dismissDelay"),
+        "migration copies only legacy keys, so the file has no dismissDelay"
+    );
+    assert_eq!(
+        decoded.dismiss_delay, 1500,
+        "a legacy file has no dismissDelay, so the default applies"
+    );
+    assert!(!command_quit.contains("position") && !command_quit.contains("animation"));
+    assert_eq!(decoded.position, HudPosition::Bottom);
+    assert_eq!(decoded.animation, HudAnimation::Fade);
+    for name in ["bar.jsonc", "menuAnywhere.jsonc", "tiling.jsonc"] {
         assert!(destination.join(name).exists(), "{name}");
     }
     let keybindings_path = destination.join("keybindings.jsonc");
@@ -215,6 +236,14 @@ fn migration_converts_the_legacy_fixture_into_valid_typed_files() {
     assert!(!out.contains("copied keybindings"));
     assert!(!out.contains("copied notunes"));
     assert!(!out.contains("copied wallpapers"));
+    assert!(out.contains("validated commandQuit -> commandQuit.jsonc"));
+    assert!(!out.contains("copied commandQuit"));
+    for unported in ["bar", "menuAnywhere", "tiling"] {
+        assert!(
+            out.contains(&format!("copied {unported} -> {unported}.jsonc")),
+            "{unported}"
+        );
+    }
     assert!(out.contains("warning: dropped widgets (not ported)"));
     assert!(out.contains("warning: unknown key `futureKey` was not migrated"));
 }
@@ -679,6 +708,127 @@ fn wallpapers_is_catalogued_without_a_runtime_and_ignored_by_unbound_reloads() {
     let (code, out, err) = run_args(&["stache", "schema", "wallpapers"]);
     assert_eq!(code, ExitCode::SUCCESS, "{err}");
     assert!(out.contains("/schemas/wallpapers.schema.json"), "{out}");
+}
+
+#[test]
+fn command_quit_migration_preserves_values_including_the_u64_extremes() {
+    for (value, expected) in [
+        ("800", 800_u64),
+        ("0", 0),
+        ("18446744073709551615", u64::MAX),
+    ] {
+        let root = tempfile::tempdir().expect("temp dir");
+        let source = root.path().join("legacy.jsonc");
+        let destination = root.path().join("config");
+        fs::write(
+            &source,
+            format!(r#"{{ "commandQuit": {{ "enabled": true, "holdDuration": {value} }} }}"#),
+        )
+        .expect("source");
+        let (code, out, err) = migrate(&source, &destination, false);
+        assert_eq!(code, ExitCode::SUCCESS, "{value}: {err}");
+        assert!(
+            out.contains("validated commandQuit -> commandQuit.jsonc"),
+            "{out}"
+        );
+        assert!(!out.contains("copied commandQuit"), "{out}");
+        let written = fs::read_to_string(destination.join("commandQuit.jsonc")).expect("file");
+        let decoded: CommandQuitConfig = serde_json::from_str(&written).expect("typed");
+        assert!(decoded.enabled);
+        assert_eq!(decoded.hold_duration, expected);
+    }
+}
+
+#[test]
+fn an_invalid_command_quit_value_aborts_before_writing_anything() {
+    for invalid in ["-1", "1.5", r#""800""#, "18446744073709551616"] {
+        let root = tempfile::tempdir().expect("temp dir");
+        let source = root.path().join("legacy.jsonc");
+        let destination = root.path().join("config");
+        fs::write(
+            &source,
+            format!(r#"{{ "commandQuit": {{ "enabled": true, "holdDuration": {invalid} }} }}"#),
+        )
+        .expect("source");
+        let (code, _out, err) = migrate(&source, &destination, false);
+        assert_eq!(code, ExitCode::FAILURE, "{invalid}: {err}");
+        assert!(err.contains("cannot convert commandQuit"), "{invalid}: {err}");
+        assert!(err.contains("holdDuration"), "{invalid}: {err}");
+        assert!(!destination.exists(), "{invalid}");
+    }
+}
+
+#[test]
+fn an_absent_command_quit_section_receives_the_same_template_as_init() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let source = root.path().join("legacy.jsonc");
+    let destination = root.path().join("config");
+    fs::write(&source, "{}").expect("source");
+    let (code, out, err) = migrate(&source, &destination, false);
+    assert_eq!(code, ExitCode::SUCCESS, "{err}");
+    assert!(
+        out.contains("emitted default template commandQuit.jsonc (disabled)"),
+        "{out}"
+    );
+    assert_eq!(
+        fs::read_to_string(destination.join("commandQuit.jsonc")).expect("file"),
+        catalog().template(CommandQuitConfig::ID).expect("template")
+    );
+}
+
+#[test]
+fn command_quit_migration_preflights_collisions_and_never_overwrites_the_source() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let destination = root.path().join("config");
+    let source = root.path().join("legacy.jsonc");
+    let legacy = r#"{ "commandQuit": { "enabled": true, "holdDuration": 800 } }"#;
+    fs::write(&source, legacy).expect("source");
+    let (code, _out, err) = migrate(&source, &destination, false);
+    assert_eq!(code, ExitCode::SUCCESS, "{err}");
+
+    let target = destination.join("commandQuit.jsonc");
+    fs::write(&target, "{ \"sentinel\": true }\n").expect("sentinel");
+    let (code, _out, err) = migrate(&source, &destination, false);
+    assert_eq!(code, ExitCode::FAILURE);
+    assert!(err.contains("refusing to overwrite existing files"), "{err}");
+    assert_eq!(
+        fs::read_to_string(&target).expect("kept"),
+        "{ \"sentinel\": true }\n"
+    );
+
+    let (code, _out, err) = migrate(&source, &destination, true);
+    assert_eq!(code, ExitCode::SUCCESS, "{err}");
+    assert!(fs::read_to_string(&target).expect("forced").contains("800"));
+    assert_eq!(fs::read_to_string(&source).expect("source"), legacy);
+
+    // A destination that is the legacy source itself is refused, never replaced.
+    let own = root.path().join("own");
+    fs::create_dir_all(&own).expect("own");
+    let own_source = own.join("commandQuit.jsonc");
+    fs::write(&own_source, legacy).expect("own source");
+    let (code, _out, _err) = migrate(&own_source, &own, true);
+    assert_eq!(code, ExitCode::FAILURE);
+    assert_eq!(fs::read_to_string(&own_source).expect("source"), legacy);
+}
+
+#[test]
+fn command_quit_config_path_and_schema_include_the_file_as_inactive() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let directory = root.path().join("config");
+    fs::create_dir_all(&directory).expect("config");
+    fs::write(directory.join("commandQuit.jsonc"), r#"{ "holdDuration": 0 }"#).expect("file");
+    let (code, out, err) = run_path(&directory);
+    assert_eq!(code, ExitCode::SUCCESS, "{err}");
+    assert!(out.contains("  commandQuit.jsonc (exists, offline)\n"), "{out}");
+
+    fs::write(directory.join("commandQuit.jsonc"), r#"{ "holdDuration": -1 }"#).expect("invalid");
+    let (_, out, _) = run_path(&directory);
+    assert!(out.contains("  commandQuit.jsonc (exists, invalid)\n"), "{out}");
+
+    let (code, out, err) = run_args(&["stache", "schema", "commandQuit"]);
+    assert_eq!(code, ExitCode::SUCCESS, "{err}");
+    assert!(out.contains("/schemas/commandQuit.schema.json"), "{out}");
+    assert!(!out.contains("\"maximum\""), "{out}");
 }
 
 fn run_args(arguments: &[&str]) -> (ExitCode, String, String) {

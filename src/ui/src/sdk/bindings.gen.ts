@@ -191,6 +191,29 @@ export type BindingStatus_Serialize = {
 	detail: string | null,
 };
 
+/**  Require holding Cmd+Q before an application quits. */
+export type CommandQuitConfig = CommandQuitConfig_Serialize | CommandQuitConfig_Deserialize;
+
+/**  Require holding Cmd+Q before an application quits. */
+export type CommandQuitConfig_Deserialize = {
+	/**  Whether Hold-to-Quit is enabled. Disabled by default. */
+	enabled?: boolean,
+	/**  Where the HUD appears on the display. Defaults to `bottom`. */
+	position?: HudPosition,
+	/**  How the HUD enters and leaves. Defaults to `fade`. */
+	animation?: HudAnimation,
+};
+
+/**  Require holding Cmd+Q before an application quits. */
+export type CommandQuitConfig_Serialize = {
+	/**  Whether Hold-to-Quit is enabled. Disabled by default. */
+	enabled: boolean,
+	/**  Where the HUD appears on the display. Defaults to `bottom`. */
+	position: HudPosition,
+	/**  How the HUD enters and leaves. Defaults to `fade`. */
+	animation: HudAnimation,
+};
+
 /**  The local state of one catalog file. */
 export type ConfigFileState =
 /**  The file is absent. */
@@ -341,6 +364,29 @@ export type HostStatus_Serialize = {
 	/**  Every catalog file in file order. */
 	config: ConfigFileView_Serialize[],
 };
+
+/**  How the Hold-to-Quit HUD enters and leaves. */
+export type HudAnimation =
+/**  Fade in and out in place. */
+"fade" |
+/**
+ *  Fade while sliding in from the configured position (down from above
+ *  for `center`) and back out. Reduce Motion makes it a plain fade.
+ */
+"slide";
+
+/**  Where the Hold-to-Quit HUD appears on the display. */
+export type HudPosition =
+/**  Horizontally centered near the lower edge. */
+"bottom" |
+/**  Horizontally centered near the upper edge. */
+"top" |
+/**  Vertically centered near the left edge. */
+"left" |
+/**  Vertically centered near the right edge. */
+"right" |
+/**  Centered on the display. */
+"center";
 
 /**  One actionable runtime condition. */
 export type KeepAwakeCondition = {

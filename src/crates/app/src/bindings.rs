@@ -10,6 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
+use stache_hold_to_quit::CommandQuitConfig;
 use stache_keep_awake::{
     AssertionState, KeepAwakeCondition, KeepAwakeConditionKind, KeepAwakeConfig,
     KeepAwakeRuntimeStatus, LockObservation, LockState,
@@ -244,7 +245,7 @@ pub fn config_file_view(
 /// Builds the typed command and event collection mounted by the desktop host.
 ///
 /// The config types are exported explicitly; they are the authoritative catalog
-/// types used by `global.jsonc`, `keepAwake.jsonc`, `keybindings.jsonc`,
+/// types used by `global.jsonc`, `commandQuit.jsonc`, `keepAwake.jsonc`, `keybindings.jsonc`,
 /// `proxyAudio.jsonc`, `notunes.jsonc` and `wallpapers.jsonc`. The Keep Awake status envelope and
 /// its reachable runtime DTOs are exported from the same collection, so the
 /// generated client cannot mirror them by hand. The Wallpapers request and
@@ -258,6 +259,7 @@ pub fn builder() -> Builder<tauri::Wry> {
         .commands(collect_commands![app_info, host_status])
         .events(collect_events![StatusChanged])
         .typ::<GlobalConfig>()
+        .typ::<CommandQuitConfig>()
         .typ::<KeepAwakeConfig>()
         .typ::<KeepAwakeStatus>()
         .typ::<KeepAwakeRuntimeStatus>()

@@ -159,9 +159,11 @@ fn kb_04_06_stop_invalidates_dispatch_before_any_restore_work() {
     assert!(report.dispatch_invalidated);
     assert_eq!(report.restore, RestoreOutcome::Restored);
     assert_eq!(report.status, CapsStatus::Inactive);
+    // A chord key pressed during the restore is swallowed; its tombstone keeps
+    // the tap installed until its release, so removal may be deferred.
     assert!(matches!(
         report.native,
-        Some(NativeCleanup::Closed | NativeCleanup::NotNeeded)
+        Some(NativeCleanup::Closed | NativeCleanup::NotNeeded | NativeCleanup::Deferred)
     ));
     let seen = owner_cell.lock().unwrap_or_else(PoisonError::into_inner).clone();
     assert!(!seen.is_empty(), "the hook observed the restore");

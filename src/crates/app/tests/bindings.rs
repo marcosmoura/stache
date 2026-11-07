@@ -18,6 +18,7 @@ fn the_shared_builder_exports_commands_events_and_config_types_without_a_host() 
         "export type HostStatus",
         "export type ConfigFileView",
         "export type GlobalConfig",
+        "export type CommandQuitConfig",
         "export type KeepAwakeConfig",
         "export type KeepAwakeStatus",
         "export type KeepAwakeRuntimeStatus",
@@ -64,6 +65,51 @@ fn the_shared_builder_exports_commands_events_and_config_types_without_a_host() 
         !bindings.contains("audioList"),
         "the pilot has no Tauri command, only exported DTOs"
     );
+}
+
+#[test]
+fn command_quit_exports_no_lossy_hold_duration() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let path = directory.path().join("bindings.gen.ts");
+    stache_app::bindings::builder()
+        .export(Typescript::default(), &path)
+        .expect("export bindings");
+    let bindings = std::fs::read_to_string(&path).expect("read bindings");
+    assert!(
+        bindings.contains("export type CommandQuitConfig_Serialize = {"),
+        "the config type stays exported"
+    );
+    assert!(
+        !bindings.contains("holdDuration") && !bindings.contains("hold_duration"),
+        "holdDuration must not be claimed as a lossy TypeScript number"
+    );
+    assert!(
+        !bindings.contains("dismissDelay") && !bindings.contains("dismiss_delay"),
+        "dismissDelay must not be claimed as a lossy TypeScript number"
+    );
+    for exported in [
+        "position?: HudPosition",
+        "animation?: HudAnimation",
+        "export type HudPosition =",
+        "export type HudAnimation =",
+        "\"bottom\" |",
+        "\"top\" |",
+        "\"left\" |",
+        "\"right\" |",
+        "\"center\"",
+        "\"fade\" |",
+        "\"slide\"",
+    ] {
+        assert!(
+            bindings.contains(exported),
+            "{exported} is exported as a string enum"
+        );
+    }
+    let again = directory.path().join("again.gen.ts");
+    stache_app::bindings::builder()
+        .export(Typescript::default(), &again)
+        .expect("export bindings again");
+    assert_eq!(bindings, std::fs::read_to_string(&again).expect("read again"));
 }
 
 #[test]

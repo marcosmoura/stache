@@ -26,6 +26,7 @@
 mod capability;
 mod context_snapshot;
 mod control;
+mod deferral;
 mod diagnostics;
 mod event;
 mod filter;

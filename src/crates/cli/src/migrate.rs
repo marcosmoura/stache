@@ -18,7 +18,7 @@ use stache_sdk::{ConfigCatalog, GlobalConfig, LoggingConfig, ModuleId, StartupCo
 
 use crate::{MigrateArgs, fail, write_atomic};
 
-const UNPORTED: [&str; 4] = ["bar", "commandQuit", "menuAnywhere", "tiling"];
+const UNPORTED: [&str; 3] = ["bar", "menuAnywhere", "tiling"];
 
 pub(crate) fn run<W: Write, E: Write>(
     args: &MigrateArgs,
@@ -555,6 +555,22 @@ mod tests {
         assert!(plan.files.contains_key("proxyAudio.jsonc"));
         assert!(!plan.files.contains_key("widgets.jsonc"));
         assert!(plan.files["global.jsonc"].contains("\"level\": \"debug\""));
+    }
+
+    #[test]
+    fn command_quit_is_no_longer_copied_verbatim() {
+        let source = Path::new("/legacy/config.jsonc");
+        let legacy = parse(r#"{ "commandQuit": { "enabled": true }, "bar": {} }"#);
+
+        let mut catalog = catalog();
+        catalog.register::<Pilot>(ModuleId::new("commandQuit")).expect("commandQuit");
+        let plan = plan(&legacy, source, &catalog).expect("plan");
+        assert!(plan.reports.contains(&"validated commandQuit -> commandQuit.jsonc".to_owned()));
+        assert!(!plan.reports.iter().any(|line| line.starts_with("copied commandQuit")));
+        assert!(plan.reports.contains(&"copied bar -> bar.jsonc".to_owned()));
+
+        let plan = super::plan(&legacy, source, &super::tests::catalog()).expect("plan");
+        assert!(!plan.files.contains_key("commandQuit.jsonc"));
     }
 
     #[test]

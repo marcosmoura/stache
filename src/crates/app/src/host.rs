@@ -49,19 +49,32 @@ use stache_sdk::{
 /// Host-assigned generic input priorities.
 ///
 /// Hold-to-Quit > `MenuAnywhere` > Keybindings. The SDK knows no module
-/// identity. Only Keybindings subscribes today; the others are reserved for later
-/// parts.
+/// identity. Keybindings and Hold-to-Quit subscribe today; `MenuAnywhere` is
+/// reserved for a later part.
 pub mod input_priority {
     use super::InputPriority;
 
-    /// Reserved for Hold-to-Quit, the highest input priority.
-    #[allow(dead_code, reason = "reserved for the Hold-to-Quit part")]
+    /// Hold-to-Quit, the highest input priority. Its HID reservation yields an
+    /// overlapping lower-priority Carbon hotkey, such as a Keybindings `Cmd+Q`.
     pub const HOLD_TO_QUIT: InputPriority = InputPriority { level: 300, tie_break: 0 };
     /// Reserved for `MenuAnywhere`.
     #[allow(dead_code, reason = "reserved for the MenuAnywhere part")]
     pub const MENU_ANYWHERE: InputPriority = InputPriority { level: 200, tie_break: 0 };
     /// Reserved for Keybindings, the lowest input priority.
     pub const KEYBINDINGS: InputPriority = InputPriority { level: 100, tie_break: 0 };
+}
+
+/// The host's meaning of the opaque `ExemptionFlags` frontmost bits.
+///
+/// The SDK assigns none; consumers such as Hold-to-Quit read them from the
+/// event's context. Remaining bits are reserved.
+pub mod input_context {
+    use stache_sdk::input::ExemptionFlags;
+
+    /// The frontmost application is Finder.
+    pub const FINDER: ExemptionFlags = ExemptionFlags(1 << 0);
+    /// The frontmost application is this process.
+    pub const CURRENT_PROCESS: ExemptionFlags = ExemptionFlags(1 << 1);
 }
 
 use crate::bindings::{HostStatus, ModuleStatusView, config_file_view};

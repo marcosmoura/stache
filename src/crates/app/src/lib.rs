@@ -12,6 +12,8 @@ pub mod caps_recovery;
 pub mod catalog;
 pub mod commands;
 pub mod config_edit;
+pub mod frontmost_context;
+pub mod hold_to_quit;
 pub mod host;
 pub mod input;
 pub mod keep_awake;
@@ -48,6 +50,8 @@ use tauri::{Emitter, Manager, RunEvent};
 use tauri_specta::Event as _;
 
 use crate::bindings::{HostStatus, StatusChanged};
+use crate::frontmost_context::{FrontmostContext, FrontmostContextOwner};
+use crate::hold_to_quit::{HoldToQuitFactory, HudOwner, ObserverOwner};
 use crate::host::{
     HostDriver, HostHandle, HostServices, HostSettings, HostState, HostUi, KeybindingsFactory,
     ModuleFactories, new_host,
@@ -379,7 +383,17 @@ fn run_with(
     // starts `hidutil`. No tap or hotkey exists until an enabled module starts.
     let keybindings = keybindings::compose(&app_paths, Arc::clone(&main_thread));
     let input_backend = keybindings.backend;
+    // The one host frontmost publisher over its own `ApplicationControl`,
+    // publishing into the shared input service. Nothing is leased at startup:
+    // no observer or thread exists until a consumer's start takes a lease.
+    let frontmost_context =
+        FrontmostContext::system(Arc::clone(&main_thread), keybindings.input.context_publisher());
     let keybindings_runtime = keybindings.runtime;
+    // Hold-to-Quit shares the publisher through a lease of its own; the runtime,
+    // HUD owner and application control are inert until the enabled module
+    // starts.
+    let hold_to_quit = hold_to_quit::compose(Arc::clone(&main_thread), frontmost_context.clone());
+    let hold_to_quit_runtime = hold_to_quit.runtime;
     let (host, driver) = new_host(Arc::clone(&teardown));
     let driver = driver
         .with_input_service(keybindings.input)
@@ -442,7 +456,8 @@ fn run_with(
             let factories =
                 ModuleFactories::production(Arc::clone(&main_thread), setup_power_owner)
                     .with(wallpapers)
-                    .with(KeybindingsFactory::new(keybindings_runtime));
+                    .with(KeybindingsFactory::new(keybindings_runtime))
+                    .with(HoldToQuitFactory::new(hold_to_quit_runtime));
             let services = HostServices {
                 logger: Arc::clone(&logger),
                 log_filter: filter,
@@ -536,6 +551,23 @@ fn run_with(
         NativeSlot::PowerAssertion,
         Arc::new(PowerAssertionOwner::new(power_owner)),
     );
+    // Retained frontmost-context cleanup is acknowledged beside the activation
+    // observer. Its release always runs on a short cleanup thread (the context's
+    // `cleanup` is a no-op when nothing is retained), never on the coordinator.
+    teardown.register_owner(
+        NativeSlot::ApplicationObservers,
+        Arc::new(FrontmostContextOwner::new(frontmost_context)),
+    );
+    // A Hold-to-Quit stop that could not prove its cleanup keeps the exact native
+    // owner; these acknowledge it beside the other application observers and
+    // after them, in the HUD slot. The observer owner always stops its control on
+    // a cleanup thread (a no-op when nothing is owned); the HUD owner answers
+    // immediately when nothing is retained.
+    teardown.register_owner(
+        NativeSlot::ApplicationObservers,
+        Arc::new(ObserverOwner::new(hold_to_quit.control)),
+    );
+    teardown.register_owner(NativeSlot::Hud, Arc::new(HudOwner::new(hold_to_quit.hud)));
     // The input owner stops any tap and joins its thread off the main thread.
     teardown.register_owner(NativeSlot::InputTap, Arc::new(InputTapOwner::new(input_backend)));
     // The coordinator exists before the observation and before `run_return`,

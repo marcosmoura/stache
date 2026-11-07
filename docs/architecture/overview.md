@@ -15,8 +15,18 @@ Read when changing the shipped foundation boundaries.
 - `src/crates/macos`: safe Accessibility trust, application-activation, main-thread, `CoreAudio`,
   display, application-observation/control and per-display desktop-image adapters, plus the owned
   Keep Awake assertion, lock-probe and observation adapters; constructing them acquires no
-  assertion. It is the only crate containing project-authored unsafe code; public functions are
-  safe.
+  assertion. The shipped `hold_hud` adapter is a click-through, nonactivating `NSPanel` HUD with
+  Core Animation progress, pure placement/layout and fake-tested ownership; it is main-thread
+  owned, hidden until a show request, and has no event tap, tray, IPC or application observer of
+  its own; the Hold-to-Quit runtime owns when it is installed, shown and released. The application
+  adapter additionally exposes workspace-activation observation with a nonblocking published
+  frontmost snapshot (and an additive listener, `watch_frontmost_observed`, told about every
+  activation and publication), a main exact-instance frontmost preflight, a separately named
+  graceful `terminate` request (the force-terminating `terminate` that noTunes uses is unchanged)
+  under a typed per-press authorization, and a best-effort display hint from public window
+  geometry; it never uses Accessibility or Screen Recording. Hold-to-Quit and the host frontmost
+  publisher consume it. It is the only crate containing project-authored unsafe code; public
+  functions are safe.
 - `src/crates/modules/proxy-audio`: the proxyAudio pilot — authoritative configuration, priority
   policy, `CoreAudio` watcher, `audio list` command and read-only `proxyAudio.list` handler. See
   [proxy-audio.md](../features/proxy-audio.md).
@@ -24,6 +34,11 @@ Read when changing the shipped foundation boundaries.
   configuration, an optional user-chosen replacement target (path or bundle
   identifier) and the launch policy that terminates Apple Music/iTunes through the
   safe application boundary. See [notunes.md](../features/notunes.md).
+- `src/crates/modules/hold-to-quit`: the Hold-to-Quit module — authoritative `commandQuit.jsonc`
+  (`enabled`, `holdDuration`, `dismissDelay`, `position`, `animation`), schema, template and typed migration, plus `HoldToQuitRuntime`: an
+  allocation-free input callback over the shared service, one worker, the HUD owner (`HudHost`)
+  and an injected host frontmost lease. The app's `hold_to_quit.rs` is its factory and teardown
+  owners. See [hold-to-quit.md](../features/hold-to-quit.md).
 - `src/crates/modules/keybindings`: the Keybindings module — `keybindings.jsonc`
   configuration with legacy-map migration, shortcut planning, the bounded command
   dispatcher, Caps Lock ownership, and the `KeybindingsRuntime` lifecycle with its
@@ -149,12 +164,12 @@ The composition root creates exactly one `InputService` over `stache_macos::MacI
 and attaches it to the registry through `HostDriver::with_input_service`; host fixtures keep
 the inert default. The Keybindings dispatcher's reservations are the service's work budget,
 and the host reserves generic priorities (`input_priority`: Hold-to-Quit > MenuAnywhere >
-Keybindings), of which only Keybindings is used today. The backend owns one lazily started thread,
+Keybindings), of which Hold-to-Quit and Keybindings are used today. The backend owns one lazily started thread,
 `stache-input-owner`, with its own run loop: the event-tap ports, run-loop sources and the
 run loop itself live in a `!Send` struct created on that thread and never leave it. Only the
 256-request control queue, a signal-only wake handle and the `Arc<InputService>` cross
 threads. The owner never dispatches to the main thread. The Keybindings module subscribes only
-while it is enabled with Caps Lock bindings, so no thread starts and no tap exists otherwise;
+while it is enabled with Caps Lock bindings, and Hold-to-Quit only while it is enabled and running with a healthy HUD, so no thread starts and no tap exists otherwise;
 real native behavior remains unverified. Install creates a disabled HID tap
 (suppressing: head-insert; passive: listen-only), a missing Input Monitoring or
 Accessibility grant is acknowledged as an error and never prompts, and each request is
@@ -287,6 +302,6 @@ and SIGINT delivery; the opt-in harness covers SIGTERM and the WebKit surface. T
 runtime ships in [Foundation part 06](../specs/2026-11-02-foundation/06-proxy-audio.md); only its
 comparative measurements and manual hardware checks remain open.
 
-`stache-sdk`, `stache-cli`, `stache-keep-awake`, `stache-keybindings`, `stache-proxy-audio`,
-`stache-notunes`, `stache-wallpapers` and `stache-app` forbid unsafe code; `stache-macos`
-documents every unsafe block.
+`stache-sdk`, `stache-cli`, `stache-hold-to-quit`, `stache-keep-awake`, `stache-keybindings`,
+`stache-proxy-audio`, `stache-notunes`, `stache-wallpapers` and `stache-app` forbid unsafe code;
+`stache-macos` documents every unsafe block.

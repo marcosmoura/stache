@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 
 use super::context_snapshot::{ContextSnapshot, SnapshotCell};
 use super::control::{CALLBACK_SOFT_TARGET, InputClock};
+use super::deferral::RemovalSignal;
 use super::diagnostics::{Diagnostics, InputCounters, InputDiagnostic};
 use super::event::{Disposition, Epoch, InputEvent, InputEventKind, PressId, RawInput};
 use super::ledger::{Owned, PressEntry, PressLedger};
@@ -59,6 +60,7 @@ pub(crate) struct Router {
     pub(crate) counters: Counters,
     pub(crate) diagnostics: Arc<Diagnostics>,
     epoch: AtomicU64,
+    pub(crate) removal: Arc<RemovalSignal>,
 }
 
 impl Router {
@@ -79,6 +81,7 @@ impl Router {
             counters: Counters::default(),
             diagnostics,
             epoch: AtomicU64::new(0),
+            removal: Arc::new(RemovalSignal::default()),
         }
     }
 
@@ -123,11 +126,34 @@ impl Router {
         let Some(mut ledger) = self.lock_ledger() else {
             return Disposition::Pass;
         };
-        if raw.kind.is_down() && !raw.repeat {
+        let disposition = if raw.kind.is_down() && !raw.repeat {
             self.first_down(&set, &mut ledger, raw)
         } else {
             self.continue_press(&mut ledger, raw)
+        };
+        self.note_ledger(&ledger);
+        disposition
+    }
+
+    /// Flags deferred tap removal as due once no suppressed tombstone is left.
+    /// Only an atomic check, a flag flip and a notify: no native work, no wait.
+    fn note_ledger(&self, ledger: &PressLedger) {
+        if self.removal.is_armed() && ledger.suppressed() == 0 {
+            self.removal.mark_due();
         }
+    }
+
+    /// Arms deferred tap removal when the ledger holds a suppressed tombstone.
+    /// Atomic with the callback's ledger check, so a tombstone consumed
+    /// concurrently can never leave an armed deferral that nothing completes.
+    pub(crate) fn arm_removal_if_tombstones(&self, id: u64) -> bool {
+        let ledger = self.ledger.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if ledger.suppressed() == 0 {
+            return false;
+        }
+        self.removal.arm(id);
+        drop(ledger);
+        true
     }
 
     /// Dispatch for the listen-only tap. It returns nothing: passive delivery can
@@ -320,6 +346,7 @@ impl Router {
             let mut ledger = self.ledger.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let drained = ledger.drain();
             self.epoch.fetch_add(1, Ordering::SeqCst);
+            self.note_ledger(&ledger);
             drained
         };
         for entry in drained {

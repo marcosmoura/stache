@@ -2,7 +2,7 @@
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use super::control::{
@@ -113,6 +113,50 @@ struct BackendState {
     listen_only_live: bool,
 }
 
+type EnableHook = Box<dyn FnOnce() + Send>;
+
+/// Gate in front of the deferred-removal helper. Open unless held.
+#[derive(Default)]
+pub struct DeferralGate {
+    held: Mutex<bool>,
+    cv: Condvar,
+}
+
+impl DeferralGate {
+    pub(super) fn hold(self: &Arc<Self>) -> DeferralHold {
+        *self.held.lock().unwrap_or_else(PoisonError::into_inner) = true;
+        DeferralHold { gate: Arc::clone(self) }
+    }
+
+    /// Blocks while held; gives up after a generous bound so a broken test
+    /// cannot hang the suite.
+    pub(super) fn wait_open(&self) {
+        let held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        drop(
+            self.cv
+                .wait_timeout_while(held, Duration::from_secs(30), |held| *held)
+                .unwrap_or_else(PoisonError::into_inner),
+        );
+    }
+}
+
+/// Keeps the deferral helper parked until released or dropped.
+pub struct DeferralHold {
+    gate: Arc<DeferralGate>,
+}
+
+impl DeferralHold {
+    /// Lets the helper continue.
+    pub fn release(self) { drop(self); }
+}
+
+impl Drop for DeferralHold {
+    fn drop(&mut self) {
+        *self.gate.held.lock().unwrap_or_else(PoisonError::into_inner) = false;
+        self.gate.cv.notify_all();
+    }
+}
+
 /// A fake native owner over a real [`ControlQueue`] (256 bound).
 pub struct FakeBackend {
     queue: ControlQueue,
@@ -120,6 +164,7 @@ pub struct FakeBackend {
     state: Mutex<BackendState>,
     clock: Arc<FakeClock>,
     submits: AtomicUsize,
+    enable_hook: Mutex<Option<EnableHook>>,
 }
 
 impl FakeBackend {
@@ -132,6 +177,7 @@ impl FakeBackend {
             state: Mutex::new(BackendState::default()),
             clock: Arc::clone(clock),
             submits: AtomicUsize::new(0),
+            enable_hook: Mutex::new(None),
         });
         let weak: Weak<Self> = Arc::downgrade(&backend);
         clock.on_advance(move || {
@@ -159,6 +205,12 @@ impl FakeBackend {
     /// Scripts the next request regardless of kind.
     pub fn script_next(&self, response: FakeResponse) {
         self.state().script.push_back((None, response));
+    }
+
+    /// Runs `hook` once, on the next performed `Enable`, after the native
+    /// operation and before it is acknowledged (a window for an OS disable).
+    pub fn on_next_enable(&self, hook: impl FnOnce() + Send + 'static) {
+        *self.enable_hook.lock().unwrap_or_else(PoisonError::into_inner) = Some(Box::new(hook));
     }
 
     /// Every request submitted (including rejected and held), in order.
@@ -232,6 +284,12 @@ impl FakeBackend {
             }
             Ok(())
         };
+        if action == ControlAction::Enable && outcome.is_ok() {
+            let hook = self.enable_hook.lock().unwrap_or_else(PoisonError::into_inner).take();
+            if let Some(hook) = hook {
+                hook();
+            }
+        }
         request.acknowledge(outcome);
     }
 

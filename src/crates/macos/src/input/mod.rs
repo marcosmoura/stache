@@ -96,6 +96,11 @@ impl MacInputBackend {
     /// object are destroyed on the owner thread, and then `done` runs there with
     /// the cleanup result. Never blocks the caller; safe to call repeatedly.
     pub fn shutdown(&self, done: impl FnOnce(Result<(), String>) + Send + 'static) {
+        // Queue any deferred suppressing-tap removal first so shutdown runs it
+        // with the other removals. Never blocks.
+        if let Some(service) = self.service.get().and_then(std::sync::Weak::upgrade) {
+            service.begin_owner_shutdown();
+        }
         self.owner.shutdown(done);
     }
 

@@ -1120,11 +1120,12 @@ fn kb_02_04_suppressed_down_then_logical_stop_then_up_is_consumed_by_tombstone()
     let sub = handler(&rig, &recorder, any_key(), 1);
     assert_eq!(sup(&rig, down(A)), Disposition::Suppress);
     let report = sub.unsubscribe();
-    assert_eq!(report.native, NativeCleanup::Closed);
+    assert_eq!(report.native, NativeCleanup::Deferred);
     assert_eq!(sup(&rig, repeat(A)), Disposition::Suppress);
     assert_eq!(sup(&rig, up(A)), Disposition::Suppress);
     assert_eq!(recorder.count(), 1, "no callback after invalidation");
     assert_eq!(rig.service.ledger_len(), 0);
+    settle_removed(&rig);
     // The orphan release after the tombstone is gone passes.
     assert_eq!(sup(&rig, up(A)), Disposition::Pass);
     assert_eq!(rig.service.counters().orphan_events, 1);
@@ -1678,4 +1679,301 @@ fn kb_02_07_work_fake_never_exceeds_capacity_under_contention() {
     });
     assert!(peak.load(Ordering::SeqCst) <= 4);
     assert_eq!(fake.used(), 0);
+}
+
+// ---------------------------------------------------------------- HQ-04-09
+
+/// Waits for the helper thread's acknowledged removal. The callback only flags
+/// it, so completion is asynchronous.
+fn settle_removed(rig: &Rig) {
+    for _ in 0..5_000 {
+        if rig.service.tap_status(TapKind::Suppressing) == TapStatus::Absent {
+            assert!(!rig.backend.is_live(TapKind::Suppressing));
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    panic!("deferred removal never completed");
+}
+
+/// Gives a wrongly scheduled removal time to show up before asserting it did not.
+fn assert_still_installed(rig: &Rig) {
+    std::thread::sleep(Duration::from_millis(30));
+    assert!(rig.backend.is_live(TapKind::Suppressing));
+    assert_eq!(rig.service.tap_status(TapKind::Suppressing), TapStatus::Ready);
+    assert_eq!(rig.backend.count(TapKind::Suppressing, ControlAction::Remove), 0);
+}
+
+#[test]
+fn hq_04_09_last_handler_mid_press_keeps_tap_until_up_then_removes_acknowledged() {
+    let rig = rig();
+    let recorder = Recorder::suppressing();
+    let sub = handler(&rig, &recorder, any_key(), 1);
+    assert_eq!(sup(&rig, down(A)), Disposition::Suppress);
+    assert_eq!(sub.unsubscribe().native, NativeCleanup::Deferred);
+    assert_eq!(sup(&rig, repeat(A)), Disposition::Suppress);
+    assert_eq!(sup(&rig, repeat(A)), Disposition::Suppress);
+    assert_still_installed(&rig);
+    assert_eq!(sup(&rig, up(A)), Disposition::Suppress);
+    settle_removed(&rig);
+    assert_eq!(rig.backend.count(TapKind::Suppressing, ControlAction::Remove), 1);
+    assert_eq!(recorder.count(), 1, "the inert handler never sees the rest");
+}
+
+#[test]
+fn hq_04_09_removal_waits_for_every_tombstone() {
+    let rig = rig();
+    let sub = handler(&rig, &Recorder::suppressing(), any_key(), 1);
+    assert_eq!(sup(&rig, down(A)), Disposition::Suppress);
+    assert_eq!(sup(&rig, down(SHIFT_KEY)), Disposition::Suppress);
+    assert_eq!(sub.unsubscribe().native, NativeCleanup::Deferred);
+    assert_eq!(sup(&rig, up(A)), Disposition::Suppress);
+    assert_still_installed(&rig);
+    assert_eq!(sup(&rig, up(SHIFT_KEY)), Disposition::Suppress);
+    settle_removed(&rig);
+}
+
+#[test]
+fn hq_04_09_new_first_down_passes_while_deferred() {
+    let rig = rig();
+    let recorder = Recorder::suppressing();
+    let sub = handler(&rig, &recorder, any_key(), 1);
+    assert_eq!(sup(&rig, down(A)), Disposition::Suppress);
+    assert_eq!(sub.unsubscribe().native, NativeCleanup::Deferred);
+    assert_eq!(sup(&rig, down(SHIFT_KEY)), Disposition::Pass);
+    assert_eq!(sup(&rig, up(SHIFT_KEY)), Disposition::Pass);
+    assert_eq!(recorder.count(), 1);
+    assert_still_installed(&rig);
+    assert_eq!(sup(&rig, up(A)), Disposition::Suppress);
+    settle_removed(&rig);
+}
+
+#[test]
+fn hq_04_09_tap_disable_drains_ledger_and_removes_without_reenable() {
+    // The helper is held so the deferral is still pending when the disable checks.
+    let (rig, hold) = deferred_rig();
+    rig.service.tap_disabled(TapKind::Suppressing);
+    hold.release();
+    settle_removed(&rig);
+    assert_eq!(rig.service.ledger_len(), 0);
+    // Orphans pass after the drain, and no re-enable raced the removal.
+    assert_eq!(sup(&rig, up(A)), Disposition::Pass);
+    assert_eq!(rig.backend.count(TapKind::Suppressing, ControlAction::Enable), 1);
+}
+
+#[test]
+fn hq_04_09_owner_shutdown_hands_removal_to_the_owner() {
+    let rig = rig();
+    let sub = handler(&rig, &Recorder::suppressing(), any_key(), 1);
+    assert_eq!(sup(&rig, down(A)), Disposition::Suppress);
+    assert_eq!(sub.unsubscribe().native, NativeCleanup::Deferred);
+    assert_still_installed(&rig);
+    rig.service.begin_owner_shutdown();
+    assert!(!rig.backend.is_live(TapKind::Suppressing));
+    assert_eq!(rig.backend.count(TapKind::Suppressing, ControlAction::Remove), 1);
+    assert_eq!(rig.service.tap_status(TapKind::Suppressing), TapStatus::Absent);
+    // Idempotent, and the helper never removes a second time.
+    rig.service.begin_owner_shutdown();
+    assert_eq!(sup(&rig, up(A)), Disposition::Suppress);
+    std::thread::sleep(Duration::from_millis(30));
+    assert_eq!(rig.backend.count(TapKind::Suppressing, ControlAction::Remove), 1);
+}
+
+#[test]
+fn hq_04_09_carbon_yield_is_restored_immediately_on_unsubscribe() {
+    let rig = rig();
+    let registry = rig.service.reservations();
+    let owner = registry.new_owner();
+    let chord = Chord::new(A, ModifierFlags::COMMAND);
+    let carbon = registry
+        .register(
+            owner,
+            ReservationBackend::Carbon,
+            Claim::Chord(chord),
+            InputPriority { level: 5, tie_break: 0 },
+        )
+        .expect("carbon");
+    let filter = any_key()
+        .with_keys([A])
+        .with_modifiers(ModifierMatch::Exact(ModifierFlags::COMMAND));
+    let sub = handler(&rig, &Recorder::suppressing(), filter, 9);
+    assert!(!registry.dispatchable(carbon));
+    let command = raw(
+        InputEventKind::KeyDown,
+        PressStream::Key(A),
+        ModifierFlags::COMMAND,
+        false,
+    );
+    assert_eq!(sup(&rig, command), Disposition::Suppress);
+    assert_eq!(sub.unsubscribe().native, NativeCleanup::Deferred);
+    assert!(
+        registry.dispatchable(carbon),
+        "yield restored while the tap is deferred"
+    );
+    assert_eq!(sup(&rig, up(A)), Disposition::Suppress);
+    settle_removed(&rig);
+}
+
+#[test]
+fn hq_04_09_resubscribe_during_deferral_reuses_the_tap() {
+    let rig = rig();
+    let first = Recorder::suppressing();
+    let sub = handler(&rig, &first, any_key(), 1);
+    assert_eq!(sup(&rig, down(A)), Disposition::Suppress);
+    assert_eq!(sub.unsubscribe().native, NativeCleanup::Deferred);
+    let second = Recorder::suppressing();
+    let again = handler(&rig, &second, any_key(), 1);
+    assert_eq!(
+        rig.backend.count(TapKind::Suppressing, ControlAction::Install),
+        1
+    );
+    assert_eq!(sup(&rig, repeat(A)), Disposition::Suppress);
+    assert_eq!(sup(&rig, up(A)), Disposition::Suppress);
+    assert_eq!(second.count(), 0, "the old press stays with its tombstone");
+    assert_still_installed(&rig);
+    assert_eq!(sup(&rig, down(A)), Disposition::Suppress);
+    assert_eq!(second.count(), 1);
+    // The cancelled deferral stays cancelled: a later last unsubscribe is plain.
+    assert_eq!(sup(&rig, up(A)), Disposition::Suppress);
+    assert_eq!(again.unsubscribe().native, NativeCleanup::Closed);
+    assert_eq!(rig.backend.count(TapKind::Suppressing, ControlAction::Remove), 1);
+}
+
+/// A rig whose last suppressing handler left while a press is still held, with
+/// the deferral helper parked before it takes the control lock.
+fn deferred_rig() -> (Rig, crate::input::testing::DeferralHold) {
+    let rig = rig();
+    let hold = rig.service.hold_deferral_helper();
+    let sub = handler(&rig, &Recorder::suppressing(), any_key(), 1);
+    assert_eq!(sup(&rig, down(A)), Disposition::Suppress);
+    assert_eq!(sub.unsubscribe().native, NativeCleanup::Deferred);
+    (rig, hold)
+}
+
+fn subscribe_again(rig: &Rig) -> Result<Subscription, InputError> {
+    rig.service.subscribe_handler(
+        spec(any_key(), 1),
+        Recorder::suppressing() as Arc<dyn InputHandler>,
+        &live(),
+    )
+}
+
+#[test]
+fn hq_04_09_subscribe_after_disable_during_deferral_reenables_the_reused_tap() {
+    let (rig, hold) = deferred_rig();
+    rig.service.tap_disabled(TapKind::Suppressing);
+    assert_eq!(
+        rig.service.tap_status(TapKind::Suppressing),
+        TapStatus::Disabled,
+        "a skipped re-enable must not leave the status Ready"
+    );
+    assert_eq!(rig.backend.count(TapKind::Suppressing, ControlAction::Enable), 1);
+    let again = subscribe_again(&rig).expect("revive");
+    assert_eq!(rig.backend.count(TapKind::Suppressing, ControlAction::Enable), 2);
+    assert_eq!(rig.backend.count(TapKind::Suppressing, ControlAction::Remove), 0);
+    assert_eq!(rig.service.tap_status(TapKind::Suppressing), TapStatus::Ready);
+    // The cancelled deferral makes the released helper a no-op.
+    hold.release();
+    assert_still_installed(&rig);
+    assert_eq!(rig.backend.count(TapKind::Suppressing, ControlAction::Enable), 2);
+    drop(again);
+}
+
+#[test]
+fn hq_04_09_subscribe_after_the_helper_removed_the_disabled_tap_installs_afresh() {
+    let rig = rig();
+    let sub = handler(&rig, &Recorder::suppressing(), any_key(), 1);
+    assert_eq!(sup(&rig, down(A)), Disposition::Suppress);
+    assert_eq!(sub.unsubscribe().native, NativeCleanup::Deferred);
+    // The helper wins: the press ends, the tap is removed, then the OS disable lands.
+    assert_eq!(sup(&rig, up(A)), Disposition::Suppress);
+    settle_removed(&rig);
+    rig.service.tap_disabled(TapKind::Suppressing);
+    assert_eq!(rig.service.tap_status(TapKind::Suppressing), TapStatus::Absent);
+    let again = subscribe_again(&rig).expect("fresh install");
+    assert_eq!(
+        rig.backend.count(TapKind::Suppressing, ControlAction::Install),
+        2
+    );
+    assert!(rig.backend.is_live(TapKind::Suppressing));
+    assert_eq!(rig.service.tap_status(TapKind::Suppressing), TapStatus::Ready);
+    drop(again);
+}
+
+#[test]
+fn hq_04_09_failed_revive_fails_the_subscribe_and_the_helper_still_removes_the_tap() {
+    let (rig, hold) = deferred_rig();
+    rig.service.tap_disabled(TapKind::Suppressing);
+    rig.backend.script(
+        TapKind::Suppressing,
+        ControlAction::Enable,
+        FakeResponse::Fail("denied".into()),
+    );
+    let error = subscribe_again(&rig).map(drop).expect_err("revive fails");
+    assert!(matches!(error, InputError::Native {
+        action: ControlAction::Enable,
+        ..
+    }));
+    assert!(matches!(
+        rig.service.tap_status(TapKind::Suppressing),
+        TapStatus::ReenableFailed { attempts: 1, .. }
+    ));
+    hold.release();
+    settle_removed(&rig);
+    assert_eq!(rig.backend.count(TapKind::Suppressing, ControlAction::Remove), 1);
+    assert!(!rig.backend.is_live(TapKind::Suppressing));
+}
+
+#[test]
+fn hq_04_09_disable_during_the_revive_enable_is_not_lost() {
+    let (rig, hold) = deferred_rig();
+    rig.service.tap_disabled(TapKind::Suppressing);
+    let service = Arc::clone(&rig.service);
+    rig.backend.on_next_enable(move || service.tap_disabled(TapKind::Suppressing));
+    let again = subscribe_again(&rig).expect("revive");
+    // install + revive + the re-enable the intervening disable submitted.
+    assert_eq!(rig.backend.count(TapKind::Suppressing, ControlAction::Enable), 3);
+    assert_eq!(rig.service.tap_status(TapKind::Suppressing), TapStatus::Ready);
+    hold.release();
+    assert_still_installed(&rig);
+    drop(again);
+}
+
+#[test]
+fn hq_04_09_unacknowledged_disable_during_the_revive_enable_keeps_the_status_honest() {
+    let (rig, hold) = deferred_rig();
+    rig.service.tap_disabled(TapKind::Suppressing);
+    let service = Arc::clone(&rig.service);
+    let backend = Arc::clone(&rig.backend);
+    rig.backend.on_next_enable(move || {
+        backend.script(TapKind::Suppressing, ControlAction::Enable, FakeResponse::Hold);
+        service.tap_disabled(TapKind::Suppressing);
+    });
+    let error = subscribe_again(&rig).map(drop).expect_err("tap is disabled again");
+    assert!(matches!(error, InputError::TapNotReady { .. }));
+    assert_eq!(
+        rig.service.tap_status(TapKind::Suppressing),
+        TapStatus::Disabled,
+        "revive must not overwrite the newer disable with Ready"
+    );
+    assert_eq!(rig.backend.queued(), 1, "the disable's own re-enable is pending");
+    assert!(rig.backend.process_next(&FakeResponse::Ack));
+    assert_eq!(rig.service.tap_status(TapKind::Suppressing), TapStatus::Ready);
+    hold.release();
+    settle_removed(&rig);
+}
+
+#[test]
+fn hq_04_09_without_tombstones_removal_is_immediate() {
+    let passing_rig = rig();
+    let rig = rig();
+    let sub = handler(&rig, &Recorder::suppressing(), any_key(), 1);
+    assert_eq!(sup(&rig, down(A)), Disposition::Suppress);
+    assert_eq!(sup(&rig, up(A)), Disposition::Suppress);
+    assert_eq!(sub.unsubscribe().native, NativeCleanup::Closed);
+    assert!(!rig.backend.is_live(TapKind::Suppressing));
+    // A passed press leaves no suppressed tombstone either.
+    let sub = handler(&passing_rig, &Recorder::passing(), any_key(), 1);
+    assert_eq!(sup(&passing_rig, down(A)), Disposition::Pass);
+    assert_eq!(sub.unsubscribe().native, NativeCleanup::Closed);
 }

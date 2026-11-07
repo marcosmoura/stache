@@ -98,6 +98,21 @@ They run the real `Registry`, `ConfigStore` and `Runner` registration/start path
 real hotkey, installs a real tap, runs `hidutil` or spawns a real command; real shortcut, layout, Caps
 and process-lifecycle checks are manual and need approval for each run.
 
+Hold-to-Quit tests (`stache-hold-to-quit` `tests.rs`, plus the `hq_04_01_` cases in the app `host.rs`
+suite) use the `testing` feature's `test_support::Rig`/`Fakes`: the shared `InputService` over its fake
+tap and clock (callbacks are driven with `InputService::dispatch`), `FakeApplicationBackend` with
+`FakeBarrier`s at the preflight, commit, issuance and after-issue points, `FakeHudBackend`, a separate
+HUD `ManualExecutor` that can queue or never drain, a `PumpMain` thread for tests that need a real
+cross-thread acknowledgement wait, and `FakeHoldClock`, whose `park` records every requested wait and
+whose `advance` wakes the worker only when its timeout is due (so an idle worker is proven to request
+one indefinite wait and nothing else). They cover the modifier matrix, both frontmost gates, inbox
+overflow, slow and panicking callbacks, release before/at/after the deadline and the commit,
+`Uncertain` versus `Refused`, focus changes and bursts, reconfigure rejection and the
+reconfigure-to-publication window (`HoldToQuitRuntime::set_reconfigure_hook`), retained HUD and
+observer cleanup, and the Carbon yield in both registration orders. Nothing installs a real tap, shows
+a real panel, terminates an application or prompts. Real tap, HUD, display, Space and quit checks are
+manual and need approval for each run (see [the feature](../features/hold-to-quit.md#verification)).
+
 The Caps Lock remap (`stache-macos` `caps_remap`, `stache-keybindings` `caps`, the host recovery
 step) never runs the real `hidutil` and never touches the real mapping, event taps or Application
 Support. One `World` fake holds the global mapping, the journal file and the lease and numbers
@@ -121,7 +136,7 @@ process and journal identification, saved before/after mapping evidence and veri
 Socket-binding tests (`ipc`, the app `host` integration suites, the config watcher) cannot run in
 a sandbox that forbids local binds; run them unsandboxed.
 
-`cargo doc -p stache-sdk -p stache-macos -p stache-keep-awake -p stache-keybindings -p stache-proxy-audio -p stache-notunes -p stache-cli --no-deps`
+`cargo doc -p stache-sdk -p stache-macos -p stache-keep-awake -p stache-keybindings -p stache-hold-to-quit -p stache-app -p stache-proxy-audio -p stache-notunes -p stache-cli --no-deps`
 builds their public docs; pass `RUSTDOCFLAGS='-D warnings'` in validation.
 The shared command runner is tested over an injected process factory, child handles and
 a fake clock (poll quantum, 2 s cleanup transfer, 64-slot exhaustion, captured deadline

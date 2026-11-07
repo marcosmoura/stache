@@ -17,6 +17,11 @@ use std::time::Duration;
 
 use stache_sdk::{MainThreadExecutor, ThreadError};
 
+use super::display::{DisplayHint, ScreenRecord, WindowRecord, select_display};
+use super::frontmost::{
+    ActivationSink, FrontmostApplication, FrontmostPreflight, defer_activation, preflight_on_main,
+};
+use super::graceful::{GracefulOutcome, PressAuthorization};
 use super::{
     ApplicationBackend, ApplicationError, ApplicationId, BackendHandle, IssuancePermit,
     NativeOpenCompletion, OpenRequest, TerminateOutcome, defer_notification,
@@ -62,6 +67,20 @@ impl ManualExecutor {
     /// enqueues on the main dispatch queue.
     pub fn enqueue(&self, job: Box<dyn FnOnce() + Send + 'static>) {
         lock(&self.state).queued.push(job);
+    }
+
+    /// Queues a job like [`ManualExecutor::enqueue`], but fails when the
+    /// executor rejects work (a rejected main-queue enqueue).
+    ///
+    /// # Errors
+    /// Returns [`ThreadError::GroupStopped`] while rejecting.
+    pub fn try_enqueue(&self, job: Box<dyn FnOnce() + Send + 'static>) -> Result<(), ThreadError> {
+        let mut state = lock(&self.state);
+        if state.reject {
+            return Err(ThreadError::GroupStopped);
+        }
+        state.queued.push(job);
+        Ok(())
     }
 
     /// Runs every queued job in order and returns how many ran.
@@ -234,6 +253,44 @@ struct FakeState {
     notification_queue: Mutex<Option<Arc<ManualExecutor>>>,
     launch_during_terminate_send: Mutex<Option<FakeAppKey>>,
     launch_during_observe: Mutex<Option<FakeAppKey>>,
+    frontmost: Mutex<Option<FakeAppKey>>,
+    current_process: Mutex<Option<FakeAppKey>>,
+    activations: Mutex<BTreeMap<BackendHandle, FakeActivation>>,
+    fail_activation_observe: AtomicBool,
+    fail_activation_unobserve: AtomicUsize,
+    activation_removals: AtomicUsize,
+    drop_next_activation: AtomicBool,
+    fail_frontmost: AtomicBool,
+    frontmost_queries: AtomicUsize,
+    frontmost_barrier: Mutex<Option<Arc<FakeBarrier>>>,
+    graceful_requests: Mutex<Vec<FakeAppKey>>,
+    graceful_attempts: AtomicUsize,
+    refuse_graceful: AtomicBool,
+    graceful_preflight_barrier: Mutex<Option<Arc<FakeBarrier>>>,
+    graceful_commit_barrier: Mutex<Option<Arc<FakeBarrier>>>,
+    graceful_after_issue_barrier: Mutex<Option<Arc<FakeBarrier>>>,
+    graceful_issuance_barrier: Mutex<Option<Arc<FakeBarrier>>>,
+    display: Mutex<FakeDisplay>,
+    display_queries: AtomicUsize,
+}
+
+struct FakeActivation {
+    generation: u64,
+    sink: ActivationSink,
+}
+
+struct FakeDisplay {
+    windows: Option<Vec<WindowRecord>>,
+    screens: Vec<ScreenRecord>,
+}
+
+impl Default for FakeDisplay {
+    fn default() -> Self {
+        Self {
+            windows: Some(Vec::new()),
+            screens: Vec::new(),
+        }
+    }
 }
 
 struct FakeObservation {
@@ -245,6 +302,7 @@ struct FakeObservation {
 
 struct FakeApplication {
     bundle_id: Option<String>,
+    name: Option<String>,
     pid: i32,
     alive: bool,
 }
@@ -266,6 +324,7 @@ impl FakeApplicationBackend {
         let key = FakeAppKey(self.state.next_application.fetch_add(1, Ordering::SeqCst) + 1);
         lock(&self.state.applications).insert(key.0, FakeApplication {
             bundle_id: Some(bundle_id.to_owned()),
+            name: None,
             pid,
             alive: true,
         });
@@ -576,6 +635,171 @@ impl FakeApplicationBackend {
         lock(&self.state.applications).get(&key.0).map(|application| application.pid)
     }
 
+    // ----- frontmost, graceful and display fixtures ------------------------
+
+    /// Sets the localized name of one fake application.
+    pub fn set_name(&self, key: FakeAppKey, name: Option<&str>) {
+        if let Some(application) = lock(&self.state.applications).get_mut(&key.0) {
+            application.name = name.map(str::to_owned);
+        }
+    }
+
+    /// Marks one fake application as this process (`currentApplication`).
+    pub fn set_current_process(&self, key: Option<FakeAppKey>) {
+        *lock(&self.state.current_process) = key;
+    }
+
+    /// Changes the OS frontmost application without delivering any activation
+    /// notification: the unobservable interval before notification ingestion.
+    pub fn set_frontmost(&self, key: Option<FakeAppKey>) { *lock(&self.state.frontmost) = key; }
+
+    /// Activates `key` and delivers the activation notification to every live
+    /// activation observer. Returns how many observers received it.
+    ///
+    /// The refresh is deferred through [`FakeApplicationBackend::defer_launches`]'s
+    /// queue when configured, mirroring the system backend's main-queue deferral.
+    #[must_use]
+    pub fn activate(&self, key: FakeAppKey) -> usize {
+        self.set_frontmost(Some(key));
+        self.deliver_activation()
+    }
+
+    /// Delivers one activation notification without changing the frontmost
+    /// application (for example a duplicate or lagging notification).
+    #[must_use]
+    pub fn deliver_activation(&self) -> usize {
+        if self.state.drop_next_activation.swap(false, Ordering::SeqCst) {
+            return 0;
+        }
+        let sinks: Vec<ActivationSink> = lock(&self.state.activations)
+            .values()
+            .map(|registration| Arc::clone(&registration.sink))
+            .collect();
+        let delivered = sinks.len();
+        let executor = lock(&self.state.notification_queue).clone();
+        for sink in sinks {
+            if let Some(executor) = &executor {
+                let executor = Arc::clone(executor);
+                defer_activation(move |job| executor.try_enqueue(job), &sink);
+            } else {
+                defer_activation(
+                    |job| {
+                        job();
+                        Ok(())
+                    },
+                    &sink,
+                );
+            }
+        }
+        delivered
+    }
+
+    /// Loses the next activation notification entirely (a dropped delivery).
+    pub fn drop_next_activation_delivery(&self) {
+        self.state.drop_next_activation.store(true, Ordering::SeqCst);
+    }
+
+    /// Makes the next activation registration fail.
+    pub fn fail_next_activation_observe(&self) {
+        self.state.fail_activation_observe.store(true, Ordering::SeqCst);
+    }
+
+    /// Makes the next `count` activation removals fail and leave it registered.
+    pub fn fail_activation_unobserves(&self, count: usize) {
+        self.state.fail_activation_unobserve.store(count, Ordering::SeqCst);
+    }
+
+    /// Makes the next frontmost query fail.
+    pub fn fail_next_frontmost(&self) { self.state.fail_frontmost.store(true, Ordering::SeqCst); }
+
+    /// Parks the next frontmost query after it read the OS answer and before it
+    /// returns (a query that overlaps a later activation).
+    #[must_use]
+    pub fn block_next_frontmost(&self) -> Arc<FakeBarrier> {
+        let barrier = Arc::new(FakeBarrier::default());
+        *lock(&self.state.frontmost_barrier) = Some(Arc::clone(&barrier));
+        barrier
+    }
+
+    /// The number of live activation registrations.
+    #[must_use]
+    pub fn activation_observers(&self) -> usize { lock(&self.state.activations).len() }
+
+    /// How many activation registrations have actually been removed.
+    #[must_use]
+    pub fn activation_removals(&self) -> usize {
+        self.state.activation_removals.load(Ordering::SeqCst)
+    }
+
+    /// The number of frontmost queries answered or attempted.
+    #[must_use]
+    pub fn frontmost_queries(&self) -> usize { self.state.frontmost_queries.load(Ordering::SeqCst) }
+
+    /// The graceful requests the backend sent (`terminate`, never force).
+    #[must_use]
+    pub fn graceful_requests(&self) -> Vec<FakeAppKey> {
+        lock(&self.state.graceful_requests).clone()
+    }
+
+    /// The number of graceful attempts, including rejected and cancelled ones.
+    #[must_use]
+    pub fn graceful_attempts(&self) -> usize { self.state.graceful_attempts.load(Ordering::SeqCst) }
+
+    /// Makes every graceful request return `false` from the fake `terminate`.
+    pub fn refuse_graceful_terminate(&self) {
+        self.state.refuse_graceful.store(true, Ordering::SeqCst);
+    }
+
+    /// Parks the next graceful request before its main preflight.
+    #[must_use]
+    pub fn block_next_graceful_before_preflight(&self) -> Arc<FakeBarrier> {
+        let barrier = Arc::new(FakeBarrier::default());
+        *lock(&self.state.graceful_preflight_barrier) = Some(Arc::clone(&barrier));
+        barrier
+    }
+
+    /// Parks the next graceful request after preflight and before the permit and
+    /// press commit (still cancellable).
+    #[must_use]
+    pub fn block_next_graceful_before_commit(&self) -> Arc<FakeBarrier> {
+        let barrier = Arc::new(FakeBarrier::default());
+        *lock(&self.state.graceful_commit_barrier) = Some(Arc::clone(&barrier));
+        barrier
+    }
+
+    /// Parks the next graceful request inside the irreversible send, after the
+    /// press authorization committed.
+    #[must_use]
+    pub fn block_next_graceful_issuance(&self) -> Arc<FakeBarrier> {
+        let barrier = Arc::new(FakeBarrier::default());
+        *lock(&self.state.graceful_issuance_barrier) = Some(Arc::clone(&barrier));
+        barrier
+    }
+
+    /// Parks the next graceful request after the send committed and before the
+    /// backend returns.
+    #[must_use]
+    pub fn block_next_graceful_after_issue(&self) -> Arc<FakeBarrier> {
+        let barrier = Arc::new(FakeBarrier::default());
+        *lock(&self.state.graceful_after_issue_barrier) = Some(Arc::clone(&barrier));
+        barrier
+    }
+
+    /// Sets the fake window list (front to back); `None` models an unavailable
+    /// `CGWindowListCopyWindowInfo` result.
+    pub fn set_windows(&self, windows: Option<Vec<WindowRecord>>) {
+        lock(&self.state.display).windows = windows;
+    }
+
+    /// Sets the attached screens; index 0 must be the primary screen.
+    pub fn set_screens(&self, screens: Vec<ScreenRecord>) {
+        lock(&self.state.display).screens = screens;
+    }
+
+    /// The number of display geometry reads.
+    #[must_use]
+    pub fn display_queries(&self) -> usize { self.state.display_queries.load(Ordering::SeqCst) }
+
     /// Consumes the one-shot query failure shared by every running-instance
     /// query.
     fn query_preflight(&self) -> Result<(), ApplicationError> {
@@ -610,6 +834,17 @@ impl FakeApplicationBackend {
 
     /// Mirrors a native send that synchronously delivers a will-launch
     /// notification while the permit still holds the gate.
+    fn remove_activation(&self, handle: BackendHandle, generation: u64) {
+        let mut activations = lock(&self.state.activations);
+        if activations
+            .get(&handle)
+            .is_some_and(|registration| registration.generation == generation)
+        {
+            activations.remove(&handle);
+            self.state.activation_removals.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
     fn deliver_notification_in_terminate_send(&self) {
         let Some(key) = lock(&self.state.launch_during_terminate_send).take() else {
             return;
@@ -699,8 +934,173 @@ impl ApplicationBackend for FakeApplicationBackend {
             .is_some_and(|observation| observation.generation == generation)
         {
             observations.remove(&handle);
+            self.remove_activation(handle, generation);
         }
         Ok(())
+    }
+
+    fn observe_activation(
+        &self,
+        handle: BackendHandle,
+        generation: u64,
+        notify: ActivationSink,
+    ) -> Result<(), ApplicationError> {
+        if self.state.fail_activation_observe.swap(false, Ordering::SeqCst) {
+            return Err(ApplicationError::ObservationFailed(
+                "injected activation failure".to_owned(),
+            ));
+        }
+        let live = lock(&self.state.observations)
+            .get(&handle)
+            .is_some_and(|observation| observation.generation == generation);
+        if !live {
+            return Err(ApplicationError::NotInstalled);
+        }
+        let mut activations = lock(&self.state.activations);
+        if activations.contains_key(&handle) {
+            return Err(ApplicationError::AlreadyInstalled);
+        }
+        activations.insert(handle, FakeActivation { generation, sink: notify });
+        Ok(())
+    }
+
+    fn unobserve_activation(
+        &self,
+        handle: BackendHandle,
+        generation: u64,
+    ) -> Result<(), ApplicationError> {
+        let fail = self
+            .state
+            .fail_activation_unobserve
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .is_ok();
+        if fail {
+            return Err(ApplicationError::RemovalFailed(
+                "injected activation failure".to_owned(),
+            ));
+        }
+        self.remove_activation(handle, generation);
+        Ok(())
+    }
+
+    fn frontmost(
+        &self,
+        handle: BackendHandle,
+    ) -> Result<Option<FrontmostApplication>, ApplicationError> {
+        self.state.frontmost_queries.fetch_add(1, Ordering::SeqCst);
+        if self.state.fail_frontmost.swap(false, Ordering::SeqCst) {
+            return Err(ApplicationError::Unavailable);
+        }
+        let key = *lock(&self.state.frontmost);
+        let current = *lock(&self.state.current_process);
+        let result = {
+            // Same lock order as `running_applications`: applications first.
+            let applications = lock(&self.state.applications);
+            let mut observations = lock(&self.state.observations);
+            let Some(observation) = observations.get_mut(&handle) else {
+                return Err(ApplicationError::NotInstalled);
+            };
+            key.and_then(|key| {
+                let application = applications.get(&key.0)?;
+                if !application.alive {
+                    return None;
+                }
+                let id = intern(handle, observation, key);
+                Some(FrontmostApplication {
+                    id,
+                    bundle_identifier: application.bundle_id.clone(),
+                    name: application.name.clone(),
+                    is_current_process: current == Some(key),
+                })
+            })
+        };
+        // The answer has been read; a later activation can still land before
+        // this query returns.
+        let barrier = lock(&self.state.frontmost_barrier).take();
+        if let Some(barrier) = barrier {
+            barrier.enter();
+        }
+        Ok(result)
+    }
+
+    fn request_graceful_terminate(
+        &self,
+        handle: BackendHandle,
+        application: ApplicationId,
+        authorization: &PressAuthorization,
+        permit: IssuancePermit<'_>,
+    ) -> Result<GracefulOutcome, ApplicationError> {
+        self.state.graceful_attempts.fetch_add(1, Ordering::SeqCst);
+        let barrier = lock(&self.state.graceful_preflight_barrier).take();
+        if let Some(barrier) = barrier {
+            barrier.enter();
+        }
+        match preflight_on_main(self, handle, application)? {
+            FrontmostPreflight::Eligible(_) => {}
+            FrontmostPreflight::NotRunning => return Ok(GracefulOutcome::NotRunning),
+            FrontmostPreflight::Rejected(reason) => {
+                return Ok(GracefulOutcome::Rejected(reason));
+            }
+        }
+        let key = {
+            let observations = lock(&self.state.observations);
+            observations
+                .get(&handle)
+                .and_then(|observation| observation.applications.get(&application.token).copied())
+        };
+        let Some(key) = key else {
+            return Ok(GracefulOutcome::NotRunning);
+        };
+        // Preflight is complete; this barrier is still cancellable.
+        let barrier = lock(&self.state.graceful_commit_barrier).take();
+        if let Some(barrier) = barrier {
+            barrier.enter();
+        }
+        let issuance_barrier = lock(&self.state.graceful_issuance_barrier).take();
+        let Some(outcome) = permit.issue(|| {
+            // The one-shot press commit and the send are the irreversible step.
+            if !authorization.commit_send() {
+                return GracefulOutcome::Cancelled;
+            }
+            if let Some(barrier) = issuance_barrier {
+                barrier.enter();
+            }
+            lock(&self.state.graceful_requests).push(key);
+            if self.state.refuse_graceful.load(Ordering::SeqCst) {
+                GracefulOutcome::Refused
+            } else {
+                GracefulOutcome::Requested
+            }
+        }) else {
+            return Ok(GracefulOutcome::Stale);
+        };
+        let after = lock(&self.state.graceful_after_issue_barrier).take();
+        if let Some(barrier) = after {
+            barrier.enter();
+        }
+        Ok(outcome)
+    }
+
+    fn display_hint(
+        &self,
+        handle: BackendHandle,
+        application: ApplicationId,
+    ) -> Result<DisplayHint, ApplicationError> {
+        self.state.display_queries.fetch_add(1, Ordering::SeqCst);
+        let key = {
+            let observations = lock(&self.state.observations);
+            observations
+                .get(&handle)
+                .and_then(|observation| observation.applications.get(&application.token).copied())
+        };
+        let Some(key) = key else {
+            return Ok(DisplayHint::none(super::display::DisplaySource::NotValidated));
+        };
+        let pid = self.pid(key).unwrap_or(0);
+        let display = lock(&self.state.display);
+        Ok(select_display(display.windows.as_deref(), pid, &display.screens))
     }
 
     fn running_applications(

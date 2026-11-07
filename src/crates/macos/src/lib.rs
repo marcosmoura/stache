@@ -12,6 +12,7 @@ pub mod audio;
 pub mod caps_remap;
 pub mod desktop;
 pub mod display;
+pub mod hold_hud;
 pub mod hotkeys;
 pub mod input;
 pub mod keep_awake;
@@ -26,10 +27,14 @@ pub use applications::testing::{
     FakeAppKey, FakeApplicationBackend, FakeBarrier, FakeLaunch, ManualExecutor,
 };
 pub use applications::{
-    ACKNOWLEDGEMENT_BUDGET, AcceptedActionToken, ApplicationBackend, ApplicationControl,
-    ApplicationError, ApplicationId, ApplicationObservation, BackendHandle, CANCELLATION_QUANTUM,
-    IssuancePermit, NativeOpenCompletion, OpenCompletion, OpenCompletionContext, OpenRequest,
-    SystemApplicationBackend, TerminateOutcome,
+    ACKNOWLEDGEMENT_BUDGET, AcceptedActionToken, ActivationSink, ApplicationBackend,
+    ApplicationControl, ApplicationError, ApplicationId, ApplicationObservation, BackendHandle,
+    CANCELLATION_QUANTUM, DisplayHint, DisplayRect, DisplaySource, FINDER_BUNDLE_IDENTIFIER,
+    FrontmostApplication, FrontmostClass, FrontmostListener, FrontmostPreflight, FrontmostSnapshot,
+    FrontmostState, FrontmostWatch, GracefulOutcome, IssuancePermit, NativeOpenCompletion,
+    OpenCompletion, OpenCompletionContext, OpenRequest, PreflightRejection, PressAuthorization,
+    PressCancel, RefreshTicket, ScreenRecord, SystemApplicationBackend, TerminateOutcome,
+    Unconfirmed, WindowRecord, appkit_rect_from_cg, classify_preflight, select_display,
 };
 pub use audio::{
     AudioBackend, AudioChangeSubscription, AudioDevice, AudioDeviceId, AudioDirection, AudioError,

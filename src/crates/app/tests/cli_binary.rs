@@ -338,6 +338,19 @@ fn config_init_writes_the_registered_templates() {
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(directory.join("global.jsonc").exists());
     assert!(directory.join("proxyAudio.jsonc").exists());
+    let command_quit =
+        std::fs::read_to_string(directory.join("commandQuit.jsonc")).expect("commandQuit");
+    assert!(command_quit.contains("\"enabled\": false"), "{command_quit}");
+    assert!(command_quit.contains("\"holdDuration\": 1500"), "{command_quit}");
+    assert!(command_quit.contains("\"dismissDelay\": 1500"), "{command_quit}");
+    assert!(
+        command_quit.contains("\"position\": \"bottom\""),
+        "{command_quit}"
+    );
+    assert!(
+        command_quit.contains("\"animation\": \"fade\""),
+        "{command_quit}"
+    );
     let keep_awake = std::fs::read_to_string(directory.join("keepAwake.jsonc")).expect("keepAwake");
     assert!(keep_awake.contains("\"enabled\": false"), "{keep_awake}");
     assert!(!keep_awake.contains("duration"), "{keep_awake}");

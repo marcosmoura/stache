@@ -1,0 +1,85 @@
+{
+  "$id": "https://raw.githubusercontent.com/marcosmoura/stache/main/schemas/commandQuit.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CommandQuitConfig",
+  "description": "Require holding Cmd+Q before an application quits.",
+  "type": "object",
+  "properties": {
+    "animation": {
+      "description": "How the HUD enters and leaves. Defaults to `fade`.",
+      "$ref": "#/$defs/HudAnimation",
+      "default": "fade"
+    },
+    "dismissDelay": {
+      "description": "How long the HUD stays visible after Cmd+Q is released early, in\nmilliseconds. 0 hides it immediately.\nAny unsigned 64-bit value is accepted, including 0.\n\nNot exported to the generated TypeScript: `number` cannot represent\nevery `u64`. A future consumer must approve an explicit representation.",
+      "type": "integer",
+      "format": "uint64",
+      "default": 1500,
+      "minimum": 0
+    },
+    "enabled": {
+      "description": "Whether Hold-to-Quit is enabled. Disabled by default.",
+      "type": "boolean",
+      "default": false
+    },
+    "holdDuration": {
+      "description": "How long Cmd+Q must be held before the quit proceeds, in milliseconds.\nAny unsigned 64-bit value is accepted, including 0.\n\nNot exported to the generated TypeScript: `number` cannot represent\nevery `u64`. A future consumer must approve an explicit representation.",
+      "type": "integer",
+      "format": "uint64",
+      "default": 1500,
+      "minimum": 0
+    },
+    "position": {
+      "description": "Where the HUD appears on the display. Defaults to `bottom`.",
+      "$ref": "#/$defs/HudPosition",
+      "default": "bottom"
+    }
+  },
+  "$defs": {
+    "HudAnimation": {
+      "description": "How the Hold-to-Quit HUD enters and leaves.",
+      "oneOf": [
+        {
+          "description": "Fade in and out in place.",
+          "type": "string",
+          "const": "fade"
+        },
+        {
+          "description": "Fade while sliding in from the configured position (down from above\nfor `center`) and back out. Reduce Motion makes it a plain fade.",
+          "type": "string",
+          "const": "slide"
+        }
+      ]
+    },
+    "HudPosition": {
+      "description": "Where the Hold-to-Quit HUD appears on the display.",
+      "oneOf": [
+        {
+          "description": "Horizontally centered near the lower edge.",
+          "type": "string",
+          "const": "bottom"
+        },
+        {
+          "description": "Horizontally centered near the upper edge.",
+          "type": "string",
+          "const": "top"
+        },
+        {
+          "description": "Vertically centered near the left edge.",
+          "type": "string",
+          "const": "left"
+        },
+        {
+          "description": "Vertically centered near the right edge.",
+          "type": "string",
+          "const": "right"
+        },
+        {
+          "description": "Centered on the display.",
+          "type": "string",
+          "const": "center"
+        }
+      ]
+    }
+  }
+}

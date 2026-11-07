@@ -4,13 +4,14 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError, Weak};
 
 use super::context_snapshot::ContextPublisher;
 use super::control::{
     ACKNOWLEDGEMENT_BUDGET, CANCELLATION_QUANTUM, ControlAction, ControlRejected, ControlRequest,
     FailureCause, InputBackend, InputClock, MAX_RETRY_ATTEMPTS, SystemClock, TapKind, Ticket,
 };
+use super::deferral::Wake;
 use super::diagnostics::{Diagnostics, InputCounters, InputDiagnostic};
 use super::event::{Disposition, Epoch, RawInput};
 use super::filter::{FilterError, InputFilter};
@@ -143,6 +144,15 @@ pub enum NativeCleanup {
     NotNeeded,
     /// The tap was removed and acknowledged.
     Closed,
+    /// The last suppressing handler left while the press ledger still holds a
+    /// suppressed tombstone. Logical unsubscribe and reservation removal are
+    /// done, but the suppressing tap stays installed so the rest of that press
+    /// (repeats and up) is still swallowed. It is removed with acknowledgement
+    /// off the tap thread once the last tombstone is consumed by its up, a
+    /// tap-disable drains the ledger or the owner shuts down; a subscription
+    /// made first reuses it. Failures surface in [`InputService::tap_status`]
+    /// and [`InputService::diagnostics`].
+    Deferred,
     /// The tap is not physically closed; inert resources are retained.
     Retained(Retained),
 }
@@ -188,6 +198,9 @@ struct Control {
     handlers: Vec<Arc<HandlerEntry>>,
     observers: Vec<Arc<ObserverEntry>>,
     reservations: HashMap<u64, (ReservationOwner, ReservationId)>,
+    next_deferral: u64,
+    /// The deferred suppressing-tap removal in flight, if any.
+    deferral: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -224,6 +237,10 @@ pub struct InputService {
     control: Mutex<Control>,
     suppressing: Arc<TapCell>,
     listen_only: Arc<TapCell>,
+    this: Weak<Self>,
+    /// Test seam: holds the deferral helper before it takes the control lock.
+    #[cfg(any(test, feature = "testing"))]
+    deferral_gate: Arc<super::testing::DeferralGate>,
 }
 
 impl InputService {
@@ -264,7 +281,7 @@ impl InputService {
             PRESS_LEDGER_CAPACITY,
         );
         let publisher = ContextPublisher::new(Arc::clone(&router.context));
-        Arc::new(Self {
+        Arc::new_cyclic(|this| Self {
             identity,
             backend,
             clock,
@@ -275,8 +292,17 @@ impl InputService {
             control: Mutex::new(Control::default()),
             suppressing: TapCell::new(),
             listen_only: TapCell::new(),
+            this: Weak::clone(this),
+            #[cfg(any(test, feature = "testing"))]
+            deferral_gate: Arc::default(),
         })
     }
+
+    /// Holds the deferred-removal helper before it takes the control lock until
+    /// the returned guard is released or dropped. Tests only.
+    #[cfg(any(test, feature = "testing"))]
+    #[must_use]
+    pub fn hold_deferral_helper(&self) -> super::testing::DeferralHold { self.deferral_gate.hold() }
 
     /// Whether a native owner is attached.
     #[must_use]
@@ -356,6 +382,24 @@ impl InputService {
             TapKind::ListenOnly => self.router.notify_observers_discontinuity(),
         };
         self.diagnostics.record(InputDiagnostic::Discontinuity { tap, epoch });
+        if tap == TapKind::Suppressing && self.router.removal.is_pending() {
+            // The drained ledger made the deferred removal due; re-enabling a tap
+            // that is about to be removed would only race it. The status must
+            // still tell the truth: a subscription that reuses the tap before
+            // the removal runs re-enables it (`revive_disabled_for_reuse`).
+            //
+            // A `ReenableFailed` status is not skipped: while a subscription is
+            // reviving the tap it is the in-flight placeholder, and a disable
+            // that lands then needs its own re-enable (normal path below).
+            let mut state = self.cell(tap).lock();
+            if matches!(state.status, TapStatus::Ready | TapStatus::Disabled) {
+                if state.status == TapStatus::Ready {
+                    state.status = TapStatus::Disabled;
+                    state.reenable_attempts = 0;
+                }
+                return;
+            }
+        }
         let cell = self.cell(tap);
         let generation = {
             let mut state = cell.lock();
@@ -503,6 +547,7 @@ impl InputService {
         self.require_backend()?;
         spec.filter.validate()?;
         let mut control = self.control();
+        self.revive_disabled_for_reuse(&control, cancel)?;
         let owner = self.reservations.new_owner();
         let reservation = self
             .reservations
@@ -520,6 +565,8 @@ impl InputService {
                 return Err(error);
             }
         };
+        // A tap still held for a tombstone is reused, not installed twice.
+        self.cancel_deferral(&mut control);
         control.next_revision += 1;
         control.next_sequence += 1;
         let id = SubscriptionId {
@@ -606,6 +653,8 @@ impl InputService {
         };
         let native = if still_used || self.cell(tap).lock().status == TapStatus::Absent {
             NativeCleanup::NotNeeded
+        } else if tap == TapKind::Suppressing && self.defer_removal(&mut control) {
+            NativeCleanup::Deferred
         } else {
             match self.remove_tap(tap) {
                 Ok(()) => NativeCleanup::Closed,
@@ -614,6 +663,158 @@ impl InputService {
         };
         drop(control);
         Ok(UnsubscribeReport { native })
+    }
+
+    /// Defers removing the suppressing tap while a suppressed tombstone is live.
+    /// `false` means there is none, or no helper thread could be started, and the
+    /// caller removes the tap now.
+    fn defer_removal(&self, control: &mut Control) -> bool {
+        control.next_deferral += 1;
+        let id = control.next_deferral;
+        if !self.router.arm_removal_if_tombstones(id) {
+            return false;
+        }
+        let signal = Arc::clone(&self.router.removal);
+        let service = Weak::clone(&self.this);
+        let spawned = std::thread::Builder::new()
+            .name("stache-input-deferred-removal".into())
+            .spawn(move || {
+                // Waits holding only the signal, so a dropped service wakes it.
+                if signal.wait(id) == Wake::Due
+                    && let Some(service) = service.upgrade()
+                {
+                    service.finish_deferred_removal(id);
+                }
+            });
+        if spawned.is_err() {
+            self.router.removal.cancel();
+            return false;
+        }
+        control.deferral = Some(id);
+        true
+    }
+
+    fn finish_deferred_removal(&self, id: u64) {
+        #[cfg(any(test, feature = "testing"))]
+        self.deferral_gate.wait_open();
+        let mut control = self.control();
+        if control.deferral != Some(id) {
+            return;
+        }
+        control.deferral = None;
+        self.router.removal.finish();
+        if control.handlers.is_empty()
+            && self.cell(TapKind::Suppressing).lock().status != TapStatus::Absent
+        {
+            // Failure is retained and recorded; `retry_cleanup` is explicit.
+            let _ = self.remove_tap(TapKind::Suppressing);
+        }
+    }
+
+    /// A tap disabled while its removal was deferred is still held for reuse by
+    /// a new subscription: re-enable it (acknowledged) and cancel the removal.
+    /// On failure the deferral stays, so the helper still removes the tap.
+    fn revive_disabled_for_reuse(
+        &self,
+        control: &Control,
+        cancel: &CancellationToken,
+    ) -> Result<(), InputError> {
+        let tap = TapKind::Suppressing;
+        if control.deferral.is_none() {
+            return Ok(());
+        }
+        let cell = self.cell(tap);
+        let generation = {
+            let mut state = cell.lock();
+            if state.status != TapStatus::Disabled {
+                return Ok(());
+            }
+            state.reenable_attempts = 1;
+            // In-flight placeholder (as in `retry_reenable`): a disable that lands
+            // during the acknowledged `Enable` takes `tap_disabled`'s normal path.
+            state.status = TapStatus::ReenableFailed {
+                attempts: 1,
+                cause: FailureCause::Cancelled,
+            };
+            state.generation
+        };
+        match self.run(tap, ControlAction::Enable, generation, cancel) {
+            Ok(()) => {
+                let mut state = cell.lock();
+                // Only the placeholder at this generation becomes `Ready`; an
+                // intervening disable keeps its own state and re-enable.
+                if state.generation == generation
+                    && state.status
+                        == (TapStatus::ReenableFailed {
+                            attempts: 1,
+                            cause: FailureCause::Cancelled,
+                        })
+                {
+                    state.status = TapStatus::Ready;
+                    state.reenable_attempts = 0;
+                }
+                Ok(())
+            }
+            Err(cause) => {
+                let status = TapStatus::ReenableFailed {
+                    attempts: 1,
+                    cause: cause.clone(),
+                };
+                cell.lock().status = status;
+                self.diagnostics.record(InputDiagnostic::ReenableFailed {
+                    tap,
+                    attempts: 1,
+                    cause: cause.clone(),
+                });
+                Err(match cause {
+                    FailureCause::Cancelled => InputError::Cancelled,
+                    cause => InputError::Native {
+                        tap,
+                        action: ControlAction::Enable,
+                        cause,
+                    },
+                })
+            }
+        }
+    }
+
+    fn cancel_deferral(&self, control: &mut Control) {
+        if control.deferral.take().is_some() {
+            self.router.removal.cancel();
+        }
+    }
+
+    /// Coordinated owner teardown: hands any deferred removal to the owner now.
+    ///
+    /// The `Remove` is only queued, not awaited, so a shutdown that follows runs
+    /// it with the other queued removals. Never blocks: when a control operation
+    /// is in flight the deferred removal is already being completed by it.
+    pub fn begin_owner_shutdown(&self) {
+        let control = match self.control.try_lock() {
+            Ok(control) => control,
+            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(TryLockError::WouldBlock) => return,
+        };
+        let mut control = control;
+        if control.deferral.take().is_none() {
+            return;
+        }
+        self.router.removal.cancel();
+        let cell = Arc::clone(self.cell(TapKind::Suppressing));
+        let generation = cell.lock().generation;
+        let ticket = Ticket::new(Some(Box::new(move |result| {
+            let mut state = cell.lock();
+            if state.generation == generation && result.is_ok() {
+                state.status = TapStatus::Absent;
+                state.reenable_attempts = 0;
+            }
+        })));
+        let request =
+            ControlRequest::new(TapKind::Suppressing, ControlAction::Remove, generation, ticket);
+        if let Some(backend) = self.backend.as_ref() {
+            let _ = backend.submit(request);
+        }
+        drop(control);
     }
 
     /// Changes a handler's priority and/or filter. The old ID becomes stale and
@@ -938,6 +1139,10 @@ impl Subscription {
 
 impl Drop for Subscription {
     fn drop(&mut self) { let _ = self.inner.release(); }
+}
+
+impl Drop for InputService {
+    fn drop(&mut self) { self.router.removal.cancel(); }
 }
 
 impl fmt::Debug for Subscription {

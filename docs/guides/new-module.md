@@ -315,6 +315,36 @@ catalog without a factory or `Module`: the watcher and `reload_all` skip its
 unbound file, `core.status` marks it valid but not active and no warning storm
 or startup failure results. Add the runtime only when a later part needs it.
 
+## Input-handler modules: Hold-to-Quit
+
+A module that suppresses keys through the shared input service
+([Hold-to-Quit](../features/hold-to-quit.md) is the reference) keeps the policy in
+its crate and everything host-owned behind an injected seam, so the crate never
+depends on the app crate:
+
+- Declare `PermissionRequirement::shared_input(Permission::Accessibility)` from
+  `required_permissions` while enabled; nothing else prompts.
+- Register through `register_module_observed` and install the typed
+  `AcceptedWatch` before the registry starts. A host-lifetime runtime service
+  (`HoldToQuitRuntime`) is built inert by a `compose` function, and the factory
+  only registers it.
+- Start acquires in a fixed order (cancel state, host leases, observation, HUD,
+  accepted policy, worker) and subscribes **last**; every failure rolls back in
+  reverse and returns a typed `ModuleError`. Keep an owner that could not prove
+  its release (`HudHost`, `ApplicationControl`) so a successor cannot create a
+  duplicate, and acknowledge it from a `NativeOwner` under the matching
+  `NativeSlot`.
+- The input callback reads atomics, one nonblocking snapshot and `event.context()`
+  only. Cancellation is a monotone atomic mark plus the one-shot authorization,
+  never a queued message, and the worker wakes through `Thread::unpark`, so an
+  idle worker has no timeout or tick.
+- Reconfigure ends with its only fallible step and clears readiness before it
+  stages the candidate; the worker re-arms only after the accepted publication
+  shows the staged value, and the callback compares atomics, never the watch.
+- Tests inject the module clock and the main-thread executor, so a test advances
+  fake time, observes every requested wait and proves cancellation ordering with
+  barriers instead of sleeping.
+
 ## Pilot example: proxyAudio
 
 The shipping pilot combines the pieces above. It is the reference for a module

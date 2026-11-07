@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 03 — Applications adapter: frontmost and graceful terminate
@@ -23,10 +23,10 @@ Additive changes to `src/crates/macos/src/applications.rs`, `applications/{testi
 
 ## Acceptance criteria
 
-- [ ] HQ-03-01: Exact frontmost/self identity, epoch invalidation and nonblocking pure snapshots survive install/query overlap, deferred delivery, drops and A→B→A; will-launch/noTunes behavior remains compatible.
-- [ ] HQ-03-02: Separate graceful issuance calls only `terminate`, under existing permit plus current per-press authorization, with truthful confirmed/uncertain results. Force API and noTunes regressions pass unchanged.
-- [ ] HQ-03-03: Main preflights before authorized show and actual send reject mismatched, exempt, missing or dead instances, including reused PID and same-bundle replacement; notification-race limits are documented.
-- [ ] HQ-03-04: Public display selection, coordinate conversion, nil/error fallback and owner-thread cleanup are compile-/fake-proven without permissions or assumed AX data; limitations are recorded.
+- [x] HQ-03-01: Exact frontmost/self identity, epoch invalidation and nonblocking pure snapshots survive install/query overlap, deferred delivery, drops and A→B→A; will-launch/noTunes behavior remains compatible.
+- [x] HQ-03-02: Separate graceful issuance calls only `terminate`, under existing permit plus current per-press authorization, with truthful confirmed/uncertain results. Force API and noTunes regressions pass unchanged.
+- [x] HQ-03-03: Main preflights before authorized show and actual send reject mismatched, exempt, missing or dead instances, including reused PID and same-bundle replacement; notification-race limits are documented.
+- [x] HQ-03-04: Public display selection, coordinate conversion, nil/error fallback and owner-thread cleanup are compile-/fake-proven without permissions or assumed AX data; limitations are recorded.
 
 ## Tests
 

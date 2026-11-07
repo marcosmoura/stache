@@ -298,8 +298,8 @@ The production host attaches one service over the `stache-macos` owner with
 `Registry::with_input_service` (through `HostDriver::with_input_service`), with the Keybindings
 dispatcher's `WorkReservations` as the work capacity (`NoWork` in fixtures and the default), so a tap reservation and
 dispatcher admission are one bounded decision. The native owner thread and every tap are lazy:
-they exist only while an enabled module (today, Keybindings with Caps bindings) holds a
-subscription. No live tap or hotkey exists in this crate.
+they exist only while an enabled module (today, Keybindings with Caps bindings and a running
+Hold-to-Quit) holds a subscription, or while a deferred removal still swallows a claimed press. No live tap or hotkey exists in this crate.
 
 ### Accepted configuration and post-commit work
 
@@ -328,6 +328,23 @@ extend the registry contract narrowly instead of weakening `reconfigure`.
   a `ContextPublisher`; frontmost state is `Known` (bundle id plus opaque
   exemption bits), `Unknown` or `Stale`. The tap reads the snapshot with
   `try_read`; a busy read fails open as `Unknown` and is counted.
+  The host publishes it from `frontmost_context.rs`, one reference-counted lease
+  over its own `ApplicationControl`: the first lease installs the observation and
+  an observed frontmost watch, the last release stops them with acknowledgement,
+  and with no lessee nothing runs. An activation marks `Stale` at once; a
+  confirmed refresh with a bundle id publishes `Known` with the
+  `host::input_context` bits (`FINDER = 1 << 0`, `CURRENT_PROCESS = 1 << 1`, the
+  rest reserved; an exempt app is still `Known`); anything else and the final
+  stop mark `Unknown`. A lease failure is a typed error, unacknowledged cleanup
+  stays owned (it blocks a duplicate install and is retried first), and a
+  teardown owner under `NativeSlot::ApplicationObservers` acknowledges it.
+  Hold-to-Quit is the first lessee: its start leases the publisher through an
+  injected `FrontmostLeaser` (the module crate never depends on the app crate)
+  and releases it at stop, and it reads the context only as the secondary,
+  bundle-only gate beside its own exact-instance snapshot. Its HUD and
+  application-control cleanup that is not acknowledged is kept by the factory
+  (`HudHost`, `ApplicationControl`) and acknowledged under `NativeSlot::Hud` and
+  `NativeSlot::ApplicationObservers`.
 - **Subscriptions.** `InputHandler` (suppressing) returns `Disposition` and gets a
   `CallbackScope` that can only take the work slot reserved for the press and
   change one per-press word. `InputObserver` (passive) returns nothing and runs on
@@ -353,7 +370,8 @@ extend the registry contract narrowly instead of weakening `reconfigure`.
   (`Install`, `Enable`, `Remove` per `TapKind::{Suppressing, ListenOnly}`) for one
   native owner; `ControlQueue` is the 256-request reject-on-full queue the owner
   drains. The suppressing tap installs on the first suppressing subscription and
-  is removed after the last unsubscribe is acknowledged; the listen-only tap
+  is removed after the last unsubscribe is acknowledged (see _Deferred tap
+  removal_ below when a suppressed press is still in flight); the listen-only tap
   exists only for passive subscribers, and passive-only use never creates the
   suppressing tap. Readiness is published only after the `Enable` acknowledgement.
   Acknowledgements wait up to `ACKNOWLEDGEMENT_BUDGET` (2 s) in
@@ -363,6 +381,28 @@ extend the registry contract narrowly instead of weakening `reconfigure`.
   `Remove` stays queued. A failed or timed-out action leaves the tap `Retained`
   with the reason, never a false success; `retry_cleanup` and
   `retry_reenable` (bounded at `MAX_RETRY_ATTEMPTS`) are explicit.
+- **Deferred tap removal.** When the last suppressing handler unsubscribes while
+  the ledger still holds a suppressed tombstone, logical unsubscribe and
+  reservation removal (which restores Carbon yields) stay immediate but the
+  suppressing tap stays installed, so the rest of that press (repeats and up) is
+  still swallowed. `UnsubscribeReport.native` is `NativeCleanup::Deferred`. New
+  first downs pass meanwhile (no handler) and tombstoned repeats/ups stay
+  suppressed. Removal becomes due when the last tombstone is consumed by its up,
+  when a tap-disable drains the ledger (which then skips the re-enable, but only
+  while the deferral is still pending and the tap is `Ready` or `Disabled`; if the
+  helper already finished, or a subscription is reviving the tap, or a revive
+  failed, the normal re-enable runs, which is harmless), or at
+  owner shutdown (`InputService::begin_owner_shutdown` queues the `Remove`
+  without waiting; `MacInputBackend::shutdown` calls it first). The tap
+  callback only flips a flag and notifies; a short-lived helper thread then
+  performs the ordinary acknowledged `Remove` through the control path, never on
+  the tap thread, with no timer. A failure leaves the tap `Retained` for
+  `retry_cleanup`. A new suppressing subscription during the deferral cancels it
+  and reuses the installed tap; if that tap was disabled meanwhile, the
+  subscription first re-enables it with an acknowledged `Enable`, and if that
+  fails the subscribe fails while the deferral still removes the tap. A disable
+  that lands during that revive `Enable` submits its own re-enable, so the
+  subscribe may fail with `TapNotReady`. Without tombstones removal is immediate as before.
 - **Tap disabled.** `InputService::tap_disabled` cancels armed per-press state
   (`InputHandler::on_cancel`), clears the ledger, advances the `Epoch`, never
   synthesizes releases, records a `Discontinuity` and submits one re-enable whose
