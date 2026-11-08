@@ -26,8 +26,10 @@ export function parseAudioState(output: string): AudioState {
 
   for (const group of groups) {
     const items = asArray(asRecord(group)?.['_items']) ?? [];
+
     for (const item of items) {
       const device = parseAudioDevice(item);
+
       if (device !== null) {
         devices.push(device);
       }
@@ -43,15 +45,20 @@ export function parseAudioState(output: string): AudioState {
 
 function parseAudioDevice(value: unknown): AudioDeviceInfo | null {
   const item = asRecord(value);
+
   if (item === null) {
     return null;
   }
+
   const name = asString(item['_name']);
+
   if (name === null) {
     return null;
   }
+
   const transport = asString(item['coreaudio_device_transport']);
   const lowerName = name.toLowerCase();
+
   return {
     name,
     manufacturer: asString(item['coreaudio_device_manufacturer']),
@@ -78,15 +85,20 @@ export function parseDisplays(output: string): DisplayInfo[] {
 
   for (const group of groups) {
     const groupRecord = asRecord(group);
+
     if (groupRecord === null) {
       continue;
     }
+
     const gpu = asString(groupRecord['sppci_model']) ?? asString(groupRecord['_name']);
+
     for (const display of asArray(groupRecord['spdisplays_ndrvs']) ?? []) {
       const item = asRecord(display);
+
       if (item === null) {
         continue;
       }
+
       displays.push({
         gpu,
         name: asString(item['_name']),
@@ -97,6 +109,7 @@ export function parseDisplays(output: string): DisplayInfo[] {
       });
     }
   }
+
   return displays;
 }
 
@@ -104,6 +117,7 @@ export function parseDisplays(output: string): DisplayInfo[] {
 export function parsePower(output: string): PowerInfo {
   const source = /Now drawing from '([^']+)'/.exec(output)?.[1] ?? 'unknown';
   const batteryPercent = /(\d+)%/.exec(output)?.[1];
+
   return {
     source,
     batteryPercent: batteryPercent === undefined ? null : Number.parseInt(batteryPercent, 10),
@@ -129,6 +143,7 @@ function collectMachine(): MachineInfo {
   const model = runCommand('/usr/sbin/sysctl', ['-n', 'hw.model']).trim();
   const chip = runCommand('/usr/sbin/sysctl', ['-n', 'machdep.cpu.brand_string']).trim();
   const memory = runCommand('/usr/sbin/sysctl', ['-n', 'hw.memsize']).trim();
+
   return {
     model,
     chip,
@@ -165,6 +180,7 @@ function collectRepository(): RepositoryInfo {
     'status',
     '--porcelain',
   ]).trim();
+
   return { root: REPOSITORY_ROOT, commit, branch, dirty: status.length > 0 };
 }
 
@@ -190,23 +206,28 @@ export function restoreDefaultDevice(
   try {
     if (commandExists('SwitchAudioSource')) {
       runCommand('SwitchAudioSource', ['-t', direction, '-s', name]);
+
       return {
         attempted: true,
         succeeded: true,
         detail: `SwitchAudioSource restored the default ${direction} to "${name}"`,
       };
     }
+
     if (commandExists('swift')) {
       const helper = fileURLToPath(
         new URL('./restore-default-audio-device.swift', import.meta.url),
       );
+
       runCommand('/usr/bin/swift', [helper, direction, name]);
+
       return {
         attempted: true,
         succeeded: true,
         detail: `restore-default-audio-device.swift restored the default ${direction} to "${name}"`,
       };
     }
+
     return {
       attempted: false,
       succeeded: false,
@@ -216,6 +237,7 @@ export function restoreDefaultDevice(
     };
   } catch (error) {
     const detail = error instanceof CommandExecutionError ? error.message : String(error);
+
     return { attempted: true, succeeded: false, detail };
   }
 }
@@ -232,6 +254,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return null;
   }
+
   return value as Record<string, unknown>;
 }
 

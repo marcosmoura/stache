@@ -54,6 +54,12 @@ export default defineConfig({
       provider: playwright(),
       headless: true,
       instances: [{ browser: 'webkit' }],
+      commands: {
+        // Lets a test emulate `prefers-reduced-motion` through Playwright.
+        setReducedMotion: async ({ page }, reduce: boolean) => {
+          await page.emulateMedia({ reducedMotion: reduce ? 'reduce' : 'no-preference' });
+        },
+      },
       screenshotFailures: true,
       screenshotDirectory: 'test-results/screenshots',
     },

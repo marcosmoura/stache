@@ -13,6 +13,7 @@ function deferred<T>() {
     resolve = resolvePromise;
     reject = rejectPromise;
   });
+
   return { promise, resolve, reject };
 }
 
@@ -44,6 +45,7 @@ test('subscribes before requesting the initial snapshot', async () => {
   const status = hostStatus();
   const read = vi.fn(async () => {
     order.push('read');
+
     return status;
   });
 
@@ -51,6 +53,7 @@ test('subscribes before requesting the initial snapshot', async () => {
     client,
     subscribe: () => {
       order.push('subscribe');
+
       return listener.promise;
     },
     read,
@@ -80,6 +83,7 @@ test('a live event wins over an overlapping initial snapshot', async () => {
     client,
     subscribe: async (onStatus) => {
       publish = onStatus;
+
       return unlisten;
     },
     read: () => snapshot.promise,
@@ -88,6 +92,7 @@ test('a live event wins over an overlapping initial snapshot', async () => {
   await vi.waitFor(() => expect(publish).toBeTypeOf('function'));
 
   const live = hostStatus({ modules: [moduleStatus({ id: 'from-event' })] });
+
   publish?.(live);
   expect(client.getQueryData(HOST_STATUS_QUERY_KEY)).toEqual(live);
 
@@ -110,6 +115,7 @@ test('later events update the cache and a disposed feed ignores them', async () 
     client,
     subscribe: async (onStatus) => {
       publish = onStatus;
+
       return unlisten;
     },
     read: async () => initial,
@@ -118,6 +124,7 @@ test('later events update the cache and a disposed feed ignores them', async () 
   await vi.waitFor(() => expect(client.getQueryData(HOST_STATUS_QUERY_KEY)).toEqual(initial));
 
   const live = hostStatus({ ready: true, modules: [moduleStatus()] });
+
   publish?.(live);
   expect(client.getQueryData(HOST_STATUS_QUERY_KEY)).toEqual(live);
 
@@ -184,6 +191,7 @@ test('does not report a stale snapshot failure after a live event', async () => 
     client,
     subscribe: async (onStatus): Promise<() => void> => {
       publish = onStatus;
+
       return vi.fn<() => void>();
     },
     read: () => snapshot.promise,

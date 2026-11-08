@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
-import { WindowRouter } from './src/shell/components/WindowRouter';
+import { Shell } from './src/shell';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -14,7 +14,7 @@ const queryClient = new QueryClient({
 export function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <WindowRouter />
+      <Shell />
     </QueryClientProvider>
   );
 }

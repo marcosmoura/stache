@@ -61,6 +61,11 @@ pub struct RefreshReport {
     pub prompted: Option<Permission>,
     /// A prompt that could not be presented.
     pub prompt_error: Option<String>,
+    /// The latest status of every needed permission after this refresh: the
+    /// fresh status read, replaced by the answer of an explicit request. The
+    /// host feeds its Accessibility gate from here, with no second platform
+    /// status call.
+    pub statuses: Vec<(Permission, PermissionStatus)>,
 }
 
 /// Applies prompt policy and forwards fresh statuses to the registry.
@@ -99,6 +104,7 @@ impl PermissionManager {
         for requirement in needed {
             let permission = requirement.permission();
             let fresh = self.provider.status(permission);
+            report.statuses.push((permission, fresh));
             if self.last.get(&permission) != Some(&fresh) {
                 host.apply(permission, fresh);
                 report.changed = true;
@@ -118,6 +124,7 @@ impl PermissionManager {
             self.prompted.insert(permission);
             match self.provider.request(permission) {
                 Ok(PermissionStatus::Granted) => {
+                    set_status(&mut report.statuses, permission, PermissionStatus::Granted);
                     self.granted.insert(permission);
                     host.apply(permission, PermissionStatus::Granted);
                     self.last.insert(permission, PermissionStatus::Granted);
@@ -125,6 +132,7 @@ impl PermissionManager {
                     report.prompted = Some(permission);
                 }
                 Ok(status) => {
+                    set_status(&mut report.statuses, permission, status);
                     host.apply(permission, status);
                     self.last.insert(permission, status);
                     report.changed = true;
@@ -138,6 +146,16 @@ impl PermissionManager {
         }
         report.waiting = host.waiting();
         report
+    }
+}
+
+fn set_status(
+    statuses: &mut [(Permission, PermissionStatus)],
+    permission: Permission,
+    status: PermissionStatus,
+) {
+    if let Some(entry) = statuses.iter_mut().find(|(candidate, _)| *candidate == permission) {
+        entry.1 = status;
     }
 }
 

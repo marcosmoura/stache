@@ -102,6 +102,7 @@ export async function runMeasurement(
   const nextTarget = resolveTarget('next', options.newAppPath);
   const legacyTarget =
     options.legacyAppPath === null ? null : resolveTarget('legacy', options.legacyAppPath);
+
   if (legacyTarget !== null && legacyTarget.executablePath === nextTarget.executablePath) {
     throw new Error('--legacy-app must not point at the Stache Next executable');
   }
@@ -134,12 +135,16 @@ export async function runMeasurement(
         repeatedSignalNoted = true;
         safety.notes.push(`received ${signal} again; cleanup is already in progress`);
       }
+
       return;
     }
+
     interrupted = true;
     safety.notes.push(`received ${signal}; stopping the active measurement`);
+
     if (session.active?.child.kill('SIGTERM')) {
       const pid = session.active.child.pid;
+
       if (pid !== undefined) {
         recordSignal(pid, 'SIGTERM', `stop active measurement after ${signal}`);
       }
@@ -147,6 +152,7 @@ export async function runMeasurement(
   };
   const onSigint = (): void => onSignal('SIGINT');
   const onSigterm = (): void => onSignal('SIGTERM');
+
   process.on('SIGINT', onSigint);
   process.on('SIGTERM', onSigterm);
 
@@ -158,11 +164,14 @@ export async function runMeasurement(
 
   try {
     assertNoOtherStache(nextTarget, legacyTarget, safety);
+
     for (const plan of buildScenarioPlans(nextTarget, legacyTarget)) {
       throwIfInterrupted(() => interrupted, 'interrupted before the next scenario');
       const definition = prepareScenario(plan, environment, safety);
+
       console.log(`measure: scenario ${definition.id} (${definition.root})`);
       const result = createScenarioResult(definition, options);
+
       scenarios.push(result);
       await measureScenario(definition, result, {
         options,
@@ -178,6 +187,7 @@ export async function runMeasurement(
   } finally {
     try {
       let lingering = false;
+
       try {
         lingering = await settleActiveProcess(session, recordSignal, safety);
       } catch (error) {
@@ -187,10 +197,13 @@ export async function runMeasurement(
             (error instanceof Error ? error.message : String(error)),
         );
       }
+
       if (lingering && session.lingeringRoot === null) {
         session.lingeringRoot = session.activeRoot;
       }
+
       cleanupTemporaryRoots(safety, session.lingeringRoot);
+
       try {
         ({ audioAtEnd, audioChanged, audioObserved } = reconcileAudio(environment.audio, safety));
       } catch (error) {
@@ -212,6 +225,7 @@ export async function runMeasurement(
   if (interrupted && failure === null) {
     failure = new InterruptedError('interrupted during cleanup');
   }
+
   const interruptedBySignal = failure instanceof InterruptedError;
   const run: MeasurementRun = {
     startedAt,
@@ -231,6 +245,7 @@ export async function runMeasurement(
   const report = renderReport(run, checks);
   const outputs = writeMeasurementOutputs(run, report, outputRoot);
   const clean = safety.tempRootsRemoved && audioObserved && !audioChanged;
+
   return { outputs, clean, failure, interrupted: interruptedBySignal };
 }
 
@@ -249,6 +264,7 @@ function buildScenarioPlans(nextTarget: Target, legacyTarget: Target | null): Sc
       enabled: true,
     },
   ];
+
   if (legacyTarget !== null) {
     plans.push({
       id: 'legacy',
@@ -257,6 +273,7 @@ function buildScenarioPlans(nextTarget: Target, legacyTarget: Target | null): Sc
       enabled: null,
     });
   }
+
   return plans;
 }
 
@@ -266,8 +283,10 @@ function prepareScenario(
   safety: SafetyRecord,
 ): ScenarioDefinition {
   const root = createTempRoot();
+
   safety.tempRoots.push(root);
   const startAudio = readAudioState();
+
   if (plan.enabled === null) {
     return {
       ...plan,
@@ -276,9 +295,11 @@ function prepareScenario(
       startAudio,
     };
   }
+
   if (plan.enabled) {
     assertPilotIsInert(startAudio, environment.displays);
   }
+
   return {
     ...plan,
     config: writeNextConfigs(root, plan.enabled, startAudio),
@@ -324,11 +345,13 @@ async function measureScenario(
     throwIfInterrupted(isInterrupted, `${definition.id}: interrupted before launch ${index + 1}`);
     assertNoOtherStache(guardTargets.next, guardTargets.legacy, safety);
     const started = startTarget(definition.target, definition.config, definition.root);
+
     session.active = started;
     session.activeRoot = definition.root;
 
     let failure: Error | null = null;
     let cleanupProblem: Error | null = null;
+
     try {
       const ready = await waitForReady(
         started,
@@ -336,6 +359,7 @@ async function measureScenario(
         controlSocketPath(definition.root),
         isInterrupted,
       );
+
       console.log(
         `measure: ${definition.id} launch ${index + 1}/${options.launches} ready in ` +
           `${Math.round(ready.externalReadyMs)} ms external, ` +
@@ -365,15 +389,18 @@ async function measureScenario(
     } finally {
       cleanupProblem = await stopLaunch(definition, started, session, recordSignal);
     }
+
     if (cleanupProblem !== null) {
       if (failure === null) {
         throw cleanupProblem;
       }
+
       // The measurement error stays primary; the cleanup issue is evidence too.
       safety.notes.push(
         `${definition.id}: cleanup after the failure also reported: ${cleanupProblem.message}`,
       );
     }
+
     if (failure !== null) {
       throw failure;
     }
@@ -398,6 +425,7 @@ async function stopLaunch(
 ): Promise<Error | null> {
   let problem: Error | null = null;
   let outcome: ShutdownOutcome | null = null;
+
   try {
     outcome = await stopOwnedProcessTree(started.child, recordSignal);
   } catch (error) {
@@ -405,18 +433,22 @@ async function stopLaunch(
   }
 
   const lingering = outcome?.lingering ?? [];
+
   if (problem !== null) {
     // The stop outcome is unknown: keep the child tracked for one retry at the
     // outer cleanup, and keep the root because its tree may still be alive.
     session.lingeringRoot = definition.root;
+
     return problem;
   }
+
   if (lingering.length > 0) {
     // The root is gone but descendants survived. Never retry: a second
     // derivation from a dead root would miss them and free their HOME.
     session.active = null;
     session.activeRoot = null;
     session.lingeringRoot = definition.root;
+
     return new Error(
       `${definition.id} process tree did not exit: ` +
         lingering.map((row) => `${row.pid} ${row.executable}`).join(', '),
@@ -425,11 +457,13 @@ async function stopLaunch(
 
   session.active = null;
   session.activeRoot = null;
+
   try {
     assertDefaultAudioUnchanged(definition.startAudio, definition.id);
   } catch (error) {
     return error instanceof Error ? error : new Error(String(error));
   }
+
   return null;
 }
 
@@ -437,11 +471,13 @@ function requirePid(started: StartedProcess): number {
   if (started.child.pid === undefined) {
     throw new Error('spawned process has no pid');
   }
+
   return started.child.pid;
 }
 
 function assertNoOtherStache(next: Target, legacy: Target | null, safety: SafetyRecord): void {
   let running: RunningStacheProcess[];
+
   try {
     running = findRunningStacheProcesses(next, legacy);
   } catch (error) {
@@ -454,6 +490,7 @@ function assertNoOtherStache(next: Target, legacy: Target | null, safety: Safety
   const otherNext = running.filter((process) => process.kind === 'next');
   const otherLegacy = running.filter((process) => process.kind === 'legacy');
   const blocking = legacy === null ? otherNext : [...otherNext, ...otherLegacy];
+
   if (blocking.length > 0) {
     throw new Error(describeRunningProcesses(blocking));
   }
@@ -462,12 +499,14 @@ function assertNoOtherStache(next: Target, legacy: Target | null, safety: Safety
     legacy === null
       ? 'Stache Next process (legacy Stache is not guarded without --legacy-app)'
       : 'Stache Next or legacy Stache process';
+
   safety.guardChecks.push(`no other ${scope} at ${new Date().toISOString()}`);
 
   if (legacy === null && otherLegacy.length > 0 && safety.guardChecks.length === 1) {
     const observed = otherLegacy
       .map((process) => `pid ${process.pid ?? '?'} ${process.description}`)
       .join(', ');
+
     safety.notes.push(
       `A legacy Stache was running and was not measured (${observed}); it does not block a ` +
         'run without --legacy-app, and its proxyAudio must stay disabled so only one ' +
@@ -480,6 +519,7 @@ function describeRunningProcesses(running: RunningStacheProcess[]): string {
   const details = running
     .map((process) => `  ${process.kind} pid ${process.pid ?? '?'}: ${process.description}`)
     .join('\n');
+
   return [
     'Refusing to start: another Stache process is running.',
     details,
@@ -490,12 +530,14 @@ function describeRunningProcesses(running: RunningStacheProcess[]): string {
 
 function assertDefaultAudioUnchanged(expected: AudioState, scenarioId: string): void {
   const current = readAudioState();
+
   if (current.defaultInput !== expected.defaultInput) {
     throw new Error(
       `${scenarioId} changed the default input from "${expected.defaultInput ?? '(none)'}" ` +
         `to "${current.defaultInput ?? '(none)'}"; restoring before continuing`,
     );
   }
+
   if (current.defaultOutput !== expected.defaultOutput) {
     throw new Error(
       `${scenarioId} changed the default output from "${expected.defaultOutput ?? '(none)'}" ` +
@@ -518,17 +560,23 @@ async function settleActiveProcess(
   if (session.active === null) {
     return session.lingeringRoot !== null;
   }
+
   const started = session.active;
+
   session.active = null;
+
   if (started.child.exitCode !== null || started.child.signalCode !== null) {
     // The root already exited, so a fresh derivation cannot see descendants
     // that outlived it. Keep the root rather than assume the tree is gone.
     safety.notes.push(
       'the measured root exited without a confirmed process-tree stop; its temporary root was kept',
     );
+
     return true;
   }
+
   let outcome: ShutdownOutcome;
+
   try {
     outcome = await stopOwnedProcessTree(started.child, recordSignal);
   } catch (error) {
@@ -536,16 +584,21 @@ async function settleActiveProcess(
       'could not confirm the measured process tree stopped: ' +
         (error instanceof Error ? error.message : String(error)),
     );
+
     return true;
   }
+
   if (outcome.lingering.length > 0) {
     safety.notes.push(
       'A measured process tree did not exit; its temporary root was kept for inspection: ' +
         outcome.lingering.map((row) => `${row.pid} ${row.executable}`).join(', '),
     );
+
     return true;
   }
+
   session.lingeringRoot = null;
+
   return false;
 }
 
@@ -555,6 +608,7 @@ async function settleActiveProcess(
  */
 export function cleanupTemporaryRoots(safety: SafetyRecord, keepRoot: string | null): void {
   let removed = 0;
+
   for (const root of safety.tempRoots) {
     if (root === keepRoot) {
       safety.notes.push(
@@ -562,6 +616,7 @@ export function cleanupTemporaryRoots(safety: SafetyRecord, keepRoot: string | n
       );
       continue;
     }
+
     try {
       removeTempRoot(root);
       removed += 1;
@@ -572,6 +627,7 @@ export function cleanupTemporaryRoots(safety: SafetyRecord, keepRoot: string | n
       );
     }
   }
+
   safety.tempRootsRemoved = keepRoot === null && removed === safety.tempRoots.length;
 }
 
@@ -580,6 +636,7 @@ function reconcileAudio(
   safety: SafetyRecord,
 ): { audioAtEnd: AudioState | null; audioChanged: boolean; audioObserved: boolean } {
   let audioAtEnd: AudioState;
+
   try {
     audioAtEnd = readAudioState();
   } catch (error) {
@@ -592,8 +649,10 @@ function reconcileAudio(
       succeeded: false,
       detail: 'the default devices could not be re-read, so no restore was attempted',
     };
+
     return { audioAtEnd: null, audioChanged: false, audioObserved: false };
   }
+
   safety.audioDefaultsAtEnd = {
     input: audioAtEnd.defaultInput,
     output: audioAtEnd.defaultOutput,
@@ -601,23 +660,30 @@ function reconcileAudio(
 
   const outputChanged = audioAtEnd.defaultOutput !== start.defaultOutput;
   const inputChanged = audioAtEnd.defaultInput !== start.defaultInput;
+
   if (!inputChanged && !outputChanged) {
     return { audioAtEnd, audioChanged: false, audioObserved: true };
   }
 
   const details: string[] = [];
   let succeeded = true;
+
   if (outputChanged && start.defaultOutput !== null) {
     const result = restoreDefaultDevice('output', start.defaultOutput);
+
     succeeded &&= result.succeeded;
     details.push(result.detail);
   }
+
   if (inputChanged && start.defaultInput !== null) {
     const result = restoreDefaultDevice('input', start.defaultInput);
+
     succeeded &&= result.succeeded;
     details.push(result.detail);
   }
+
   const attempted = details.length > 0;
+
   safety.audioRestore = {
     attempted,
     succeeded: attempted && succeeded,
@@ -636,8 +702,10 @@ function reconcileAudio(
     const stillChanged =
       audioAtEnd.defaultOutput !== start.defaultOutput ||
       audioAtEnd.defaultInput !== start.defaultInput;
+
     if (safety.audioRestore !== null) {
       safety.audioRestore.succeeded &&= !stillChanged;
+
       if (stillChanged) {
         safety.audioRestore.detail += '; devices still differ after the restore attempt';
       }
@@ -645,6 +713,7 @@ function reconcileAudio(
   } catch {
     // The earlier end state stays in the report.
   }
+
   return { audioAtEnd, audioChanged: true, audioObserved: true };
 }
 
@@ -665,6 +734,7 @@ function describeLimitations(legacyTarget: Target | null): string[] {
       'path, and the Stache Next/Stache .app paths. A bare release binary at a different path is ' +
       'not detected by the guard.',
   ];
+
   if (legacyTarget === null) {
     limitations.push(
       'A running legacy Stache is recorded in the safety notes but does not block a run ' +
@@ -677,5 +747,6 @@ function describeLimitations(legacyTarget: Target | null): string[] {
         'own setup log line and the baseline lacks that idle accept thread.',
     );
   }
+
   return limitations;
 }

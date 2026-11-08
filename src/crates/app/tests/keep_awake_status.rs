@@ -101,12 +101,18 @@ impl PermissionProvider for AllowAll {
 struct NoCore;
 
 impl CoreHandler for NoCore {
-    fn reload(&self) -> HandlerResult<CoreReload> { Ok(CoreReload { files: Vec::new() }) }
+    fn reload(&self) -> HandlerResult<CoreReload> {
+        Ok(CoreReload {
+            files: Vec::new(),
+            access: None,
+        })
+    }
 
     fn status(&self) -> HandlerResult<CoreStatus> {
         Ok(CoreStatus {
             directory: std::path::PathBuf::new(),
             files: Vec::new(),
+            access: None,
         })
     }
 }

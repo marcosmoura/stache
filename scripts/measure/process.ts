@@ -20,24 +20,29 @@ export function runCommand(command: string, args: string[]): string {
     encoding: 'utf8',
     maxBuffer: 16 * 1024 * 1024,
   });
+
   if (result.error !== undefined) {
     throw new CommandExecutionError(command, args, null, result.error.message);
   }
+
   if (result.status !== 0) {
     throw new CommandExecutionError(command, args, result.status, result.stderr);
   }
+
   return result.stdout;
 }
 
 /** Whether an executable name resolves through `/usr/bin/which`. */
 export function commandExists(name: string): boolean {
   const result = spawnSync('/usr/bin/which', [name], { encoding: 'utf8' });
+
   return result.status === 0 && result.stdout.trim().length > 0;
 }
 
 /** One process-table snapshot, root included. */
 export function listProcesses(): ProcessRow[] {
   const output = runCommand('/bin/ps', ['-axo', 'pid=,ppid=,rss=,time=,comm=']);
+
   return output
     .split('\n')
     .map(parseProcessLine)
@@ -46,13 +51,17 @@ export function listProcesses(): ProcessRow[] {
 
 function parseProcessLine(line: string): ProcessRow | null {
   const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.+?)\s*$/.exec(line);
+
   if (match === null) {
     return null;
   }
+
   const cpuTimeSeconds = parseCpuTime(match[4]);
+
   if (cpuTimeSeconds === null) {
     return null;
   }
+
   return {
     pid: Number.parseInt(match[1], 10),
     ppid: Number.parseInt(match[2], 10),
@@ -66,25 +75,33 @@ function parseProcessLine(line: string): ProcessRow | null {
 export function parseCpuTime(value: string): number | null {
   const [daysPart, clockPart] = value.includes('-') ? value.split('-', 2) : ['0', value];
   const days = Number.parseInt(daysPart, 10);
+
   if (!Number.isFinite(days) || days < 0) {
     return null;
   }
+
   const segments = clockPart.split(':').map((segment) => Number.parseFloat(segment));
+
   if (segments.length === 0 || segments.some((segment) => !Number.isFinite(segment))) {
     return null;
   }
+
   let seconds = 0;
+
   for (const segment of segments) {
     seconds = seconds * 60 + segment;
   }
+
   return days * 86_400 + seconds;
 }
 
 /** The root process and every transitive child present in one snapshot. */
 export function processTree(rootPid: number, rows: ProcessRow[]): ProcessRow[] {
   const childrenByParent = new Map<number, ProcessRow[]>();
+
   for (const row of rows) {
     const siblings = childrenByParent.get(row.ppid) ?? [];
+
     siblings.push(row);
     childrenByParent.set(row.ppid, siblings);
   }
@@ -92,21 +109,28 @@ export function processTree(rootPid: number, rows: ProcessRow[]): ProcessRow[] {
   const tree: ProcessRow[] = [];
   const seen = new Set<number>();
   const queue = [rootPid];
+
   while (queue.length > 0) {
     const pid = queue.shift();
+
     if (pid === undefined || seen.has(pid)) {
       continue;
     }
+
     seen.add(pid);
     const row = rows.find((candidate) => candidate.pid === pid);
+
     if (row === undefined) {
       continue;
     }
+
     tree.push(row);
+
     for (const child of childrenByParent.get(pid) ?? []) {
       queue.push(child.pid);
     }
   }
+
   return tree;
 }
 
@@ -138,10 +162,12 @@ function parseRunningApplications(output: string): RunningApplication[] {
 
   for (const line of output.split('\n')) {
     const header = /^\s*\d+\)\s+"(.*)"\s+ASN:/.exec(line);
+
     if (header !== null) {
       if (current !== null) {
         applications.push(current);
       }
+
       current = {
         name: header[1],
         bundleIdentifier: null,
@@ -150,27 +176,36 @@ function parseRunningApplications(output: string): RunningApplication[] {
       };
       continue;
     }
+
     if (current === null) {
       continue;
     }
+
     const bundleIdentifier = /^\s*bundleID="(.*)"\s*$/.exec(line);
+
     if (bundleIdentifier !== null && bundleIdentifier[1] !== '[ NULL ]') {
       current.bundleIdentifier = bundleIdentifier[1];
       continue;
     }
+
     const executablePath = /^\s*executable path="(.*)"\s*$/.exec(line);
+
     if (executablePath !== null) {
       current.executablePath = executablePath[1];
       continue;
     }
+
     const pid = /^\s*pid = (\d+)\b/.exec(line);
+
     if (pid !== null) {
       current.pid = Number.parseInt(pid[1], 10);
     }
   }
+
   if (current !== null) {
     applications.push(current);
   }
+
   return applications;
 }
 
@@ -205,17 +240,21 @@ export function findRunningStacheProcesses(
     if (application.pid !== null && excluded.has(application.pid)) {
       continue;
     }
+
     const kind =
       application.bundleIdentifier === NEXT_BUNDLE_IDENTIFIER
         ? 'next'
         : application.bundleIdentifier === LEGACY_BUNDLE_IDENTIFIER
           ? 'legacy'
           : null;
+
     if (kind === null) {
       continue;
     }
+
     const pid = application.pid;
     const key = `${kind}:${pid ?? application.bundleIdentifier}`;
+
     found.set(key, {
       kind,
       pid,
@@ -228,11 +267,15 @@ export function findRunningStacheProcesses(
     if (excluded.has(row.pid)) {
       continue;
     }
+
     const kind = classifyExecutable(row.executable, next, legacy);
+
     if (kind === null) {
       continue;
     }
+
     const key = `${kind}:${row.pid}`;
+
     if (!found.has(key)) {
       found.set(key, {
         kind,
@@ -254,15 +297,19 @@ function classifyExecutable(
   if (matchesTargetExecutable(executablePath, next)) {
     return 'next';
   }
+
   if (legacy !== null && matchesTargetExecutable(executablePath, legacy)) {
     return 'legacy';
   }
+
   if (/\/Stache Next\.app\/Contents\/MacOS\//.test(executablePath)) {
     return 'next';
   }
+
   if (/\/Stache\.app\/Contents\/MacOS\//.test(executablePath)) {
     return 'legacy';
   }
+
   return null;
 }
 
@@ -298,15 +345,18 @@ export function assertNoOtherNextInstance(
   ownedPid: number,
 ): RunningStacheProcess[] {
   let evidence: RunningStacheProcess[];
+
   try {
     evidence = query();
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
+
     throw new InstanceCollisionError('query-failed', `the instance query failed: ${detail}`);
   }
 
   const nextInstances = evidence.filter((entry) => entry.kind === 'next');
   const unidentified = nextInstances.find((entry) => entry.pid === null);
+
   if (unidentified !== undefined) {
     throw new InstanceCollisionError(
       'unknown-identity',
@@ -314,7 +364,9 @@ export function assertNoOtherNextInstance(
       evidence,
     );
   }
+
   const foreign = nextInstances.find((entry) => entry.pid !== ownedPid);
+
   if (foreign !== undefined) {
     throw new InstanceCollisionError(
       'foreign-instance',
@@ -322,6 +374,7 @@ export function assertNoOtherNextInstance(
       evidence,
     );
   }
+
   if (!nextInstances.some((entry) => entry.pid === ownedPid)) {
     throw new InstanceCollisionError(
       'unknown-identity',
@@ -329,6 +382,7 @@ export function assertNoOtherNextInstance(
       evidence,
     );
   }
+
   return evidence;
 }
 
@@ -336,6 +390,7 @@ function matchesTargetExecutable(executablePath: string, target: Target): boolea
   if (executablePath === target.executablePath) {
     return true;
   }
+
   return (
     target.bundlePath !== null && executablePath.startsWith(`${target.bundlePath}/Contents/MacOS/`)
   );
@@ -360,11 +415,13 @@ export async function stopOwnedProcessTree(
   recordSignal: RecordSignal,
 ): Promise<ShutdownOutcome> {
   const rootPid = child.pid;
+
   if (rootPid === undefined) {
     return { lingering: [] };
   }
 
   const tracked = readProcessTree(rootPid);
+
   if (tracked.length === 0) {
     return { lingering: [] };
   }
@@ -374,6 +431,7 @@ export async function stopOwnedProcessTree(
     recordSignal(rootPid, 'SIGTERM', 'stop measured process tree');
     await waitForExit(child, SHUTDOWN_TIMEOUT_MS);
   }
+
   if (isProcessAlive(rootPid)) {
     child.kill('SIGKILL');
     recordSignal(rootPid, 'SIGKILL', 'root did not exit after SIGTERM');
@@ -381,12 +439,15 @@ export async function stopOwnedProcessTree(
   }
 
   const descendants = tracked.filter((row) => row.pid !== rootPid);
+
   await stopDescendants(descendants, recordSignal);
   const lingering = aliveMatching(descendants);
   const rootRow = tracked.find((row) => row.pid === rootPid);
+
   if (rootRow !== undefined && isProcessAlive(rootPid)) {
     lingering.push(rootRow);
   }
+
   return { lingering };
 }
 
@@ -394,7 +455,9 @@ async function stopDescendants(tracked: ProcessRow[], recordSignal: RecordSignal
   if (tracked.length === 0) {
     return;
   }
+
   const alive = aliveMatching(tracked);
+
   for (const row of alive) {
     try {
       process.kill(row.pid, 'SIGTERM');
@@ -403,6 +466,7 @@ async function stopDescendants(tracked: ProcessRow[], recordSignal: RecordSignal
       // The process exited between the check and the signal.
     }
   }
+
   await sleep(2_000);
 
   for (const row of aliveMatching(alive)) {
@@ -415,6 +479,7 @@ async function stopDescendants(tracked: ProcessRow[], recordSignal: RecordSignal
   }
 
   const deadline = Date.now() + 5_000;
+
   while (Date.now() < deadline && aliveMatching(alive).length > 0) {
     await sleep(100);
   }
@@ -422,6 +487,7 @@ async function stopDescendants(tracked: ProcessRow[], recordSignal: RecordSignal
 
 function aliveMatching(rows: ProcessRow[]): ProcessRow[] {
   const current = new Map(listProcesses().map((row) => [row.pid, row]));
+
   return rows.filter((row) => current.get(row.pid)?.executable === row.executable);
 }
 
@@ -430,6 +496,7 @@ export async function waitForExit(child: ChildProcess, timeoutMs: number): Promi
   if (child.exitCode !== null || child.signalCode !== null) {
     return true;
   }
+
   return await new Promise<boolean>((resolve) => {
     const timer = setTimeout(() => {
       child.off('exit', onExit);
@@ -439,7 +506,9 @@ export async function waitForExit(child: ChildProcess, timeoutMs: number): Promi
       clearTimeout(timer);
       resolve(true);
     };
+
     child.once('exit', onExit);
+
     if (child.exitCode !== null || child.signalCode !== null) {
       onExit();
     }
@@ -449,6 +518,7 @@ export async function waitForExit(child: ChildProcess, timeoutMs: number): Promi
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
+
     return true;
   } catch {
     return false;

@@ -226,6 +226,8 @@ pub enum RegistryError {
         /// The validation diagnostic.
         message: String,
     },
+    /// The baseline permission requirements were set after a module registered.
+    BaselineAfterRegistration,
     /// The registry is shutting down or has already shut down.
     ShuttingDown,
     /// A module operation failed; the module snapshot records the same failure.
@@ -265,6 +267,9 @@ impl fmt::Display for RegistryError {
             ),
             Self::InvalidConfig { module, message } => {
                 write!(f, "module `{module}` rejected its configuration: {message}")
+            }
+            Self::BaselineAfterRegistration => {
+                f.write_str("baseline permission requirements must be set before any registration")
             }
             Self::ShuttingDown => f.write_str("the registry is shut down"),
             Self::Module(error) => error.fmt(f),

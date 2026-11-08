@@ -35,6 +35,8 @@ export const colors = {
 export const fonts = {
   ui: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif',
   mono: 'ui-monospace, "SF Mono", Menlo, monospace',
+  /** The bar's root stack. System-installed only; never bundled. */
+  bar: "'Maple Mono NF', 'SF Mono', monospace",
 } as const;
 
 export const space = {
@@ -49,4 +51,15 @@ export const space = {
 export const radii = {
   sm: '4px',
   md: '8px',
+  /** Controls, as on legacy buttons. */
+  control: '12px',
+  /** Outer panels, as on legacy widgets. */
+  panel: '16px',
+} as const;
+
+/** Mirrors `_legacy/app/ui/design-system/motion.ts`. */
+export const motion = {
+  easing: 'cubic-bezier(0.42, 0, 0.58, 1)',
+  duration: '150ms',
+  durationSlow: '400ms',
 } as const;

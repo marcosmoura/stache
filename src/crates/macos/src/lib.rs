@@ -19,6 +19,7 @@ pub mod keep_awake;
 pub mod keyboard_layout;
 pub mod main_thread;
 pub mod menu;
+pub mod settings;
 pub mod termination;
 
 pub use accessibility::{AccessibilityPermission, is_trusted, request_trust};
@@ -68,6 +69,7 @@ pub use menu::{
     ActionToken, AxOwner, MenuItemKind, MenuItemSnapshot, MenuReadOutcome, MenuReleaseOutcome,
     MenuSnapshot, MenuTarget, PresentationId, ReadRequest, TargetCheck, TargetValidator,
 };
+pub use settings::{SettingsError, open_accessibility_settings};
 #[cfg(feature = "test")]
 pub use termination::terminate_after;
 pub use termination::{TerminateAnswer, TerminateError, TerminateObservation, reply_to_terminate};

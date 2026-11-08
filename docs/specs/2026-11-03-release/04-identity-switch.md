@@ -39,7 +39,7 @@ The inventory at the base commit. Stage 1's test keeps it complete.
 | Tray and window strings | `TRAY_ID`, tooltip, title and Quit label in `app/src/tray.rs`; title in `app/src/windows.rs`; comment in `app/src/catalog.rs`                                                |
 | CLI                     | `about` in `cli/src/commands.rs`; `cli/src/lib.rs`. `is_app_bundle` in `cli/src/mode.rs` matches `.app/Contents/MacOS` and needs no logic change; only its test path changes |
 | Tests asserting `.next` | `sdk/src/paths.rs` tests, `cli/src/cache.rs`, `cli/tests/commands.rs`, `cli/src/mode.rs`, `app/tests/cli_binary.rs`, `app/tests/bindings.rs`, `app/src/lib.rs`               |
-| UI                      | `src/ui/index.html`, `Shell.tsx`, `TestWindow.tsx`, their tests, `WindowRouter.test.tsx`, and `tests/hostFixtures.ts` (whose `dev.stache.next` is a fixture value)           |
+| UI                      | `src/ui/index.html`, `Placeholder.tsx`, `TestWindow.tsx`, their tests, `Shell.test.tsx`, and `tests/hostFixtures.ts` (whose `dev.stache.next` is a fixture value)            |
 | Tooling                 | `name` and `tauri:dev` in `package.json`; `scripts/measure/` `paths.ts`, `config.ts`, `launch.ts`, `process.ts`, `run.ts`, `report.ts`, `cli.ts`                             |
 | Docs                    | `README.md`, `AGENTS.md`, `docs/index.md`, `architecture/overview.md`, `architecture/ipc.md`, `guides/testing.md`, `guides/performance.md`                                   |
 | Not changed             | `_legacy/`, archived specs, and `~/.config/stache`, whose path never depended on the bundle identity. Development keeps `.next` through the overlay                          |
@@ -55,8 +55,8 @@ The inventory at the base commit. Stage 1's test keeps it complete.
   needed. `tray::rows` takes the name as an argument. `app_info` takes the `AppHandle`, which
   must leave the generated bindings unchanged.
 - **Fallback.** A `PRODUCT_NAME` constant in the app crate covers only places with no Tauri
-  context: the CLI `about` text, and `Shell.tsx`, `TestWindow.tsx` and `index.html` before or
-  without an `app_info` answer. `Shell.tsx` reads `app_info` as `TestWindow.tsx` already does.
+  context: the CLI `about` text, and `Placeholder.tsx`, `TestWindow.tsx` and `index.html` before or
+  without an `app_info` answer. `Placeholder.tsx` reads `app_info` as `TestWindow.tsx` already does.
 - Add `src/crates/app/tests/identity.rs`. It asserts that `tauri.conf.json`'s identifier equals
   the release identity and its `productName` equals the constant, and fails when the other
   identity's literal appears in a tracked source outside a short allow-list. The allow-list holds
@@ -223,6 +223,7 @@ applications. The full suite plus `check:generated` must pass in the Stage 3 com
   would be a new surface, so this is published as a limitation in Part 06.
 - macOS privacy records follow the identifier and signature. Legacy records for
   `com.marcosmoura.stache` were made under the self-signed `Stache App`, so they will not match the
-  Developer ID build. No shipped module needs Accessibility; Part 05 covers cleanup.
+  Developer ID build. Accessibility is an app-wide launch requirement (Accessibility launch gate), so the renamed bundle
+  needs a fresh grant and shows the guidance window until it has one; Part 05 covers cleanup.
 - Building `_legacy/` after the rename produces a bundle with the same identifier. `_legacy/` stays
   unchanged; Part 05 documents the warning.

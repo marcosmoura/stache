@@ -10,11 +10,12 @@
     "frontendDist": "../../ui/dist"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [],
     "security": {
       "csp": "default-src 'self'; object-src 'none'; base-uri 'none'; connect-src ipc: http://ipc.localhost; style-src 'self' 'unsafe-inline'",
       "devCsp": "default-src 'self'; object-src 'none'; base-uri 'none'; connect-src ipc: http://ipc.localhost http://localhost:1420 ws://localhost:1420; style-src 'self' 'unsafe-inline'",
-      "capabilities": ["test-window"]
+      "capabilities": ["test-window", "access-window"]
     }
   },
   "bundle": {

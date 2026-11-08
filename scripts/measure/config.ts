@@ -23,11 +23,13 @@ export interface ScenarioConfig {
  */
 export function createTempRoot(): string {
   const base = path.join(os.tmpdir(), 'opencode');
+
   mkdirSync(base, { recursive: true });
 
   const root = runCommand('/usr/bin/mktemp', ['-d', path.join(base, 'XXXX')]).trim();
   const canonical = realpathSync(root);
   const socketLength = Math.max(root.length, canonical.length) + SOCKET_SUFFIX.length;
+
   if (socketLength > MAXIMUM_SOCKET_PATH_BYTES) {
     removeTempRoot(canonical);
     throw new Error(
@@ -35,6 +37,7 @@ export function createTempRoot(): string {
         `(limit ${MAXIMUM_SOCKET_PATH_BYTES}): ${canonical}`,
     );
   }
+
   return canonical;
 }
 
@@ -42,9 +45,11 @@ export function createTempRoot(): string {
 export function removeTempRoot(root: string): void {
   const name = path.basename(root);
   const parent = path.basename(path.dirname(root));
+
   if (name.length !== TEMP_DIRECTORY_NAME_LENGTH || parent !== 'opencode') {
     throw new Error(`refusing to remove a directory this tool did not create: ${root}`);
   }
+
   rmSync(root, { recursive: true, force: true });
 }
 
@@ -55,6 +60,7 @@ export function writeNextConfigs(
   audio: AudioState,
 ): ScenarioConfig {
   const directory = path.join(root, 'config', 'stache');
+
   mkdirSync(directory, { recursive: true });
 
   const globalContent = `${JSON.stringify(
@@ -76,6 +82,7 @@ export function writeNextConfigs(
     writeConfigFile(directory, 'global.jsonc', globalContent),
     writeConfigFile(directory, 'proxyAudio.jsonc', proxyAudioContent),
   ];
+
   return { directory, files };
 }
 
@@ -87,6 +94,7 @@ export function writeNextConfigs(
  */
 export function writeLegacyConfig(root: string): ScenarioConfig {
   const directory = path.join(root, 'config', 'stache');
+
   mkdirSync(directory, { recursive: true });
   const content = `${JSON.stringify(
     {
@@ -103,6 +111,7 @@ export function writeLegacyConfig(root: string): ScenarioConfig {
     null,
     2,
   )}\n`;
+
   return {
     directory,
     files: [writeConfigFile(directory, 'config.jsonc', content)],
@@ -111,7 +120,9 @@ export function writeLegacyConfig(root: string): ScenarioConfig {
 
 function writeConfigFile(directory: string, fileName: string, content: string): ConfigFile {
   const filePath = path.join(directory, fileName);
+
   writeFileSync(filePath, content, 'utf8');
+
   return { path: filePath, content };
 }
 
@@ -137,6 +148,7 @@ export function assertPilotIsInert(audio: AudioState, displays: DisplayInfo[]): 
         'refusing to enable proxyAudio because its priorities cannot be proven inert',
     );
   }
+
   if (audio.defaultInput !== null && defaultInput === null) {
     throw new Error(
       `cannot locate the default input "${audio.defaultInput}" in the device list; ` +
@@ -146,6 +158,7 @@ export function assertPilotIsInert(audio: AudioState, displays: DisplayInfo[]): 
 
   if (defaultOutput?.builtIn === true) {
     const hdmi = audio.devices.find((device) => device.hdmi && (device.outputChannels ?? 0) > 0);
+
     if (hdmi !== undefined) {
       throw new Error(
         'proxyAudio cannot be measured inertly while the default output is built in and ' +
@@ -169,15 +182,18 @@ function assertNoMirroringAirPlayOverride(
   if (current === null) {
     return;
   }
+
   const capable = audio.devices.filter((device) => {
     if (!device.airPlay) {
       return false;
     }
+
     return direction === 'input'
       ? (device.inputChannels ?? 0) > 0
       : (device.outputChannels ?? 0) > 0;
   });
   const first = capable[0];
+
   if (first !== undefined && first.name !== current?.name) {
     throw new Error(
       `screen mirroring is active and the pilot would choose AirPlay ` +
@@ -190,5 +206,6 @@ function findDevice(audio: AudioState, name: string | null): AudioDeviceInfo | n
   if (name === null) {
     return null;
   }
+
   return audio.devices.find((device) => device.name === name) ?? null;
 }

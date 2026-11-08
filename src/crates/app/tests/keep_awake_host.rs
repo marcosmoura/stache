@@ -277,6 +277,8 @@ impl Harness {
                 backoff_start: Duration::from_millis(5),
                 backoff_max: Duration::from_millis(5),
             },
+            baseline: Vec::new(),
+            settings: Arc::new(stache_app::access::UnavailableSettings),
         };
         let driver = self.driver.take().expect("driver");
         driver.start(settings, services, Arc::new(QuietUi)).expect("start host");

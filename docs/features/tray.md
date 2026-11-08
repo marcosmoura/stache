@@ -7,7 +7,7 @@ behavior.** The source of truth is `src/crates/app/src/tray.rs`.
 
 The tray is the primary, always-present UI surface of the desktop app. It shows host and
 module status and carries the actions: configuration-backed Enable, session-only
-Pause/Resume, Retry, the explicit permission request, the on-demand test window and Quit.
+Pause/Resume, Retry, the explicit Accessibility gate actions, the on-demand test window and Quit.
 The test window is the only other surface, and it exists only while it is open.
 
 There is no Dock icon and no settings window. The app supplies no menu, so Tauri installs
@@ -35,27 +35,33 @@ reaches AppKit.
 `rows(&HostStatus)` is a pure description, so wording and eligibility are testable
 without AppKit. It produces, in order:
 
-| Row                        | Kind       | Content                                                         |
-| -------------------------- | ---------- | --------------------------------------------------------------- |
-| `status`                   | non-action | `Stache Next`, or `Stache Next — starting…` before readiness    |
-| `error`                    | non-action | Host error, truncated                                           |
-| `enable:<id>`              | check item | `<id> enabled`; checked state is the configuration flag         |
-| `state:<id>`               | non-action | Two-space indent, `<id>: <state label>`                         |
-| `detail:<id>`              | non-action | Two-space indent, runtime detail when present, truncated        |
-| `diagnostic:<id>`          | non-action | Two-space indent, `configuration: <diagnostic>`, truncated      |
-| `pause:<id>`/`resume:<id>` | menu item  | Present for an enabled module; `Pause <id>` or `Resume <id>`    |
-| `retry:<id>`               | menu item  | `Retry <id>`, when failed, or enabled, unpaused and unavailable |
-| `permission`               | menu item  | `Request Accessibility…` when any module waits for permission   |
-| `config:<file>`            | non-action | `<file>: <diagnostic>`, truncated                               |
-| `warning:<file>:<index>`   | non-action | `<file>: <warning>`, truncated                                  |
-| `test-window`              | menu item  | `Open Test Window`                                              |
-| `quit`                     | menu item  | `Quit Stache Next`                                              |
+| Row                        | Kind       | Content                                                                                                                                              |
+| -------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `status`                   | non-action | `Stache Next`; `— starting…` before readiness; `— checking Accessibility…`; `— Accessibility required` or `— Accessibility was turned off` (revoked) |
+| `access-guide`             | menu item  | `Show Accessibility Help…`, the first gate row, only while the gate is blocked; opens or focuses the guidance window                                 |
+| `access-request`           | menu item  | `Request Accessibility…`, only while the gate is blocked                                                                                             |
+| `access-settings`          | menu item  | `Open Accessibility Settings…`, only while the gate is blocked                                                                                       |
+| `error`                    | non-action | Host error, truncated                                                                                                                                |
+| `enable:<id>`              | check item | `<id> enabled`; checked state is the configuration flag                                                                                              |
+| `state:<id>`               | non-action | Two-space indent, `<id>: <state label>`                                                                                                              |
+| `detail:<id>`              | non-action | Two-space indent, runtime detail when present, truncated                                                                                             |
+| `diagnostic:<id>`          | non-action | Two-space indent, `configuration: <diagnostic>`, truncated                                                                                           |
+| `pause:<id>`/`resume:<id>` | menu item  | Present for an enabled module; `Pause <id>` or `Resume <id>`                                                                                         |
+| `retry:<id>`               | menu item  | `Retry <id>`, when failed, or enabled, unpaused and unavailable                                                                                      |
+| `config:<file>`            | non-action | `<file>: <diagnostic>`, truncated                                                                                                                    |
+| `warning:<file>:<index>`   | non-action | `<file>: <warning>`, truncated                                                                                                                       |
+| `test-window`              | menu item  | `Open Test Window`                                                                                                                                   |
+| `quit`                     | menu item  | `Quit Stache Next`                                                                                                                                   |
 
 Separators sit between the status block, the test window and Quit.
 
 Every truncated payload has a budget of 80 characters, and the trailing `…` is part of
 that budget. Truncation applies to the payload before indentation and prefixes are added,
 so a rendered line can be longer than 80 characters.
+
+While the gate is blocked, module rows stay and read `waiting for permission`; Enable, Pause/Resume,
+Test Window and Quit keep working. When the gate is open no gate row appears. The former per-module
+`permission` row is gone: the gate rows replace it.
 
 State labels are `stopped`, `disabled`, `running`, `paused`, `waiting for permission`,
 `unavailable` and `failed`. A non-action row is a disabled menu item, so it can never be
@@ -73,7 +79,12 @@ clicked and never implies an action it does not have.
 - `pause:<id>` / `resume:<id>` are session-only and never write a file.
 - `retry:<id>` retries an eligible failed or unavailable module. A failed module that is
   disabled or paused has a failed stop, so Retry repeats that cleanup and starts nothing.
-- `permission` triggers the explicit permission request.
+- `access-guide` opens or focuses the Accessibility guidance window (also opened automatically once per
+  gated episode); it does nothing while the gate is open.
+- `access-request` triggers the explicit Accessibility request; it requests nothing while the gate
+  is open.
+- `access-settings` asks the host to open the Accessibility pane of System Settings while the gate
+  is not open; a failure becomes the host's last action error.
 - `test-window` opens or focuses the development test window.
 - `quit` calls `HostHandle::request_shutdown`, the one idempotent teardown coordinator.
   Cmd-Q and other AppKit-initiated quits reach the same coordinator through the observed

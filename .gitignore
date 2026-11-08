@@ -29,6 +29,7 @@ target/
 coverage
 test-results
 .vitest-attachments/
+.vitest/
 
 # New Tauri generated schemas
 src/crates/app/gen/

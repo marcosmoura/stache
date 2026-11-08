@@ -27,7 +27,7 @@ pub use cache::CacheCommand;
 pub use config::{ConfigCommand, InitArgs, MigrateArgs};
 pub use schema::{generate_files, run_generate};
 use stache_sdk::config::ConfigEnvironment;
-use stache_sdk::ipc::{ClientError, IpcClient};
+use stache_sdk::ipc::{ClientError, CoreAccess, IpcClient};
 use stache_sdk::{AppEnvironment, AppPathError, AppPaths, CommandCatalog, ConfigCatalog};
 
 /// Injected process environment for one CLI invocation.
@@ -153,6 +153,7 @@ fn reload<E: Write>(environment: &CliEnvironment, err: &mut E) -> ExitCode {
                     let _ = writeln!(err, "stache: {diagnostic}");
                 }
             }
+            write_access_notice(err, report.access.as_ref());
             if reported {
                 ExitCode::FAILURE
             } else {
@@ -164,6 +165,17 @@ fn reload<E: Write>(environment: &CliEnvironment, err: &mut E) -> ExitCode {
             "IPC error: Failed to send reload command to Stache app: Stache app is not running",
         ),
         Err(error) => fail(err, &error.to_string()),
+    }
+}
+
+/// The stderr line printed when the host reports modules waiting for Accessibility.
+pub(crate) const ACCESS_NOTICE: &str = "stache: modules are waiting for Accessibility permission";
+
+/// Prints the Accessibility notice when the host reports a blocked or checking
+/// gate. An unreported gate (`None`) prints nothing.
+pub(crate) fn write_access_notice(err: &mut impl Write, access: Option<&CoreAccess>) {
+    if access.is_some_and(CoreAccess::is_waiting) {
+        let _ = writeln!(err, "{ACCESS_NOTICE}");
     }
 }
 

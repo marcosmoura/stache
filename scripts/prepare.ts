@@ -12,6 +12,10 @@ if (process.env.HUSKY === '0') {
   const result = spawnSync('husky', [], {
     stdio: 'inherit',
   });
-  if (result.error) throw result.error;
+
+  if (result.error) {
+    throw result.error;
+  }
+
   process.exit(result.status ?? 1);
 }

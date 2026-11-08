@@ -4,7 +4,7 @@ branch: feat/accessibility-gate
 
 # Accessibility launch gate
 
-Read when planning the app-wide Accessibility requirement for Stache Next. This is a draft, not shipped behavior or permission to implement.
+Read when checking the app-wide Accessibility launch gate's implementation and decisions. All five parts are done on `feat/accessibility-gate`; this record does not authorize further implementation.
 
 ## Goal
 
@@ -15,7 +15,7 @@ Motivation: in a manual test Hold-to-Quit silently did nothing until the user fo
 ## Non-goals
 
 - No Input Monitoring, Screen Recording or other permission in the gate (see Resolved questions).
-- No automatic `tccutil` call, no TCC database access, no private API.
+- No automatic `tccutil` call, no TCC database access, no private permission API. (Tauri's `macos-private-api` feature for the guidance window's transparency is allowed by Decision 9; it authorizes no other private API.)
 - No Settings window, onboarding beyond this one permission, or change to module configuration files.
 - No change to the legacy app, its identity or its privacy records.
 - No change to the coordinated teardown order beyond the gate's own owners.
@@ -28,10 +28,15 @@ Decisions 1–4 and 6–8 restate the user's request. Decision 5 and the resolve
 2. **Subsume, do not replace, the per-module machinery.** The registry gains one host-level baseline requirement merged into every module's accepted requirements (part 01). The existing `missing_permission` start check, `WaitingForPermission(accessibility)` status, `on_permission_change` revocation stop and grant restart in dependency order are reused unchanged. `Module::required_permissions` and `PermissionRequirement::shared_input` stay for future, non-baseline permissions; for Accessibility they become redundant but harmless. Nothing caches a grant.
 3. **What still runs while gated.** The tray, instance lock, config store and watcher (changes are accepted and staged; modules stay waiting), the permission ticker and activation observer, the socket server (part 03), the Caps Lock startup recovery (it restores user state and needs no Accessibility), the test window and Quit. `execOnStartup` is deferred until the gate first opens in that launch and runs at most once per launch.
 4. **Prompt policy.** The baseline requirement is user-only. The host never calls `PermissionProvider::request` on its own; only an explicit action in the guidance surface or tray does. Showing the guidance surface itself is automatic.
-5. **Surface: a dedicated webview window** (`?surface=access`, label `stache-access-<n>`), opened automatically when the gate blocks, not a native `NSAlert`. Reasons: it reuses the shipped window backend, router, typed bindings and status feed, so it closes itself on the `status-changed` event that reports the grant; it runs in the WebKit browser suites with fakes; it is non-modal and never blocks the AppKit main thread that the tray, activation observer and teardown hops share. `NSAlert.runModal` would block that thread, need new unsafe AppKit code, cannot dismiss itself on grant without extra native plumbing and is only manually testable. Cost: a gated launch creates one webview, so `startup: ... webviews=N` reports `1` on that path; a trusted launch still creates none. **Confirmed by the user on 2026-11-07.**
+5. **Surface: a dedicated webview window** (`?surface=access`, label `stache-access-<n>`), opened automatically when the gate blocks, not a native `NSAlert`. Reasons: it reuses the shipped window backend, router, typed bindings and status feed, so it closes itself on the `status-changed` event that reports the grant; it runs in the WebKit browser suites with fakes; it is non-modal and never blocks the AppKit main thread that the tray, activation observer and teardown hops share. `NSAlert.runModal` would block that thread, need new unsafe AppKit code, cannot dismiss itself on grant without extra native plumbing and is only manually testable. Cost: a gated launch creates one webview after setup (logged as `access: guidance window requested`; the `startup: ... webviews=N` record is written before the first check and stays `0`); a trusted launch still creates none. **Confirmed by the user on 2026-11-07.**
 6. **Grant detection.** The existing `PermissionManager`/`PermissionTicker` poll at the 1 s waiting delay while the gate blocks, plus the `NSApplicationDidBecomeActiveNotification` refresh. Once open, the shipped backoff (5 s to 30 s) and activation refresh detect revocation.
 7. **Revocation.** A fresh `Denied`/`Unknown` while open stops every running module in reverse start order through `on_permission_change`, returns to the gate and opens the guidance surface again.
 8. **Identity.** The check is for the running process's own identity (`com.marcosmoura.stache.next`, "Stache Next"). The guidance shows the name, bundle identifier and on-disk path being checked, so the user does not toggle the legacy "Stache" entry. Nothing terminates or signals processes by executable name.
+9. **Guidance window design (part 05).** On 2026-11-08 the user asked for a modern guidance window that matches the bar's look and has no title bar ("The UI completely sucks. Create a nice modern UI that matches the bar aesthetics, but with no title bar."). The user confirmed these choices:
+   1. Only the access surface is frameless and transparent: `decorations(false)`, `transparent(true)`, not resizable, native shadow on. This enables Tauri's `macos-private-api` cargo feature and `app.macOSPrivateApi: true`, which the Bar port needs anyway and the legacy app used. The test window keeps its decorated, opaque chrome. There are no traffic lights. A custom close button and Escape close the window, and the header is a drag region. Only `access-window.json` gains `core:window:allow-start-dragging`. The size may change from 520×420 within the backend bounds; the final size is recorded.
+   2. The typeface is the bar's root stack `'Maple Mono NF', 'SF Mono', monospace` at 13px, weight 500, with tabular numbers and line-height 1.6em. These fonts are system-installed and never bundled.
+   3. Icons are Hugeicons: `@hugeicons/react` 1.1.10 and `@hugeicons/core-free-icons` 4.4.0, exact pins, using the `HugeiconsIcon` component with free icons.
+   4. The redesign is recorded as part 05. Part 04 stays `done` as the record of the window's behavior, and its copy is unchanged.
 
 ## Intentional compatibility changes
 
@@ -45,14 +50,15 @@ Decisions 1–4 and 6–8 restate the user's request. Decision 5 and the resolve
 
 ## Parts
 
-| Part                        | Summary                                                                                      | Status |
-| --------------------------- | -------------------------------------------------------------------------------------------- | ------ |
-| [01](01-sdk-baseline.md)    | SDK: host-level baseline permission requirement in `Registry`                                | draft  |
-| [02](02-host-gate.md)       | Host gate state, status DTO, deferred startup commands, revocation, tray rows, settings URL  | draft  |
-| [03](03-socket-cli.md)      | Socket and CLI behavior while gated: refused module methods, additive `access` on core calls | draft  |
-| [04](04-guidance-window.md) | Guidance window surface, commands, capability, auto-open/close and copy                      | draft  |
+| Part                               | Summary                                                                                         | Status |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------- | ------ |
+| [01](01-sdk-baseline.md)           | SDK: host-level baseline permission requirement in `Registry`                                   | done   |
+| [02](02-host-gate.md)              | Host gate state, status DTO, deferred startup commands, revocation, tray rows, settings URL     | done   |
+| [03](03-socket-cli.md)             | Socket and CLI behavior while gated: refused module methods, additive `access` on core calls    | done   |
+| [04](04-guidance-window.md)        | Guidance window surface, commands, capability, auto-open/close and copy                         | done   |
+| [05](05-guidance-window-design.md) | Guidance window redesign: frameless transparent chrome, bar styling, close button, Escape, drag | done   |
 
-Order: 01 → 02 → (03, 04). 03 and 04 both need 02 and are independent of each other. Each part builds, tests and commits alone. Only the orchestrator changes status; all four block merge while draft.
+Order: 01 → 02 → (03, 04) → 05. 03 and 04 both need 02 and are independent of each other; 05 needs 04. Each part builds, tests and commits alone. Only the orchestrator changes status; a part that is not `done` blocks merge.
 
 ## Ad-hoc signed development builds
 
@@ -81,5 +87,6 @@ Lasting docs change only in the part that ships the behavior:
 - Part 02: [overview.md](../../architecture/overview.md) (Desktop host, permission contract for shared-input consumers), [tray.md](../../features/tray.md), [ui.md](../../architecture/ui.md) (`HostStatus` DTO), [keybindings.md](../../features/keybindings.md) (Accessibility note), [new-module.md](../../guides/new-module.md), [testing.md](../../guides/testing.md).
 - Part 03: [ipc.md](../../architecture/ipc.md).
 - Part 04: [ui.md](../../architecture/ui.md) (surfaces, capability), [performance.md](../../guides/performance.md) (gated launch webview count), [tray.md](../../features/tray.md).
+- Part 05: [ui.md](../../architecture/ui.md) (access surface chrome, final size, capability list, transparent window and `macos-private-api` note), [capabilities/README.md](../../../src/crates/app/capabilities/README.md), and [tray.md](../../features/tray.md) only if its wording about the window changes.
 - After merge: [roadmap](../../roadmap.md) and [index](../../index.md) rows; the release spec note in `2026-11-03-release/04-identity-switch.md` and the Hold-to-Quit/MenuAnywhere drafts' `shared_input` wording are aligned by the orchestrator.
 - Legacy docs stay untouched.

@@ -166,6 +166,11 @@ the real cache, runtime, configuration or legacy identity.
 ## Automated checks
 
 - `lint:ui`: strict typecheck of frontend, prepare script and root configs, then oxlint/stylelint.
+  oxlint enforces `curly: all`: every `if`, `else`, `for` and `while` body uses braces, even for one
+  statement. A blank line separates every `if`, loop, `switch`, `try` and bare block from the
+  statements before and after it, a blank line precedes every `return`, and one follows each run of
+  `const`/`let`/`var` declarations (`@stylistic/padding-line-between-statements`). The start and
+  end of a block need none.
   `lint:native`: cargo-sort check and Clippy with warnings as errors. Neither fixes source.
 - `format:check`: pinned oxfmt and rustfmt checks, including active specs. `format` explicitly rewrites.
   Root oxfmt disables nested configs so legacy config cannot override archive exclusions. Generated
@@ -174,7 +179,7 @@ the real cache, runtime, configuration or legacy identity.
 - `test` runs `test:ui`, `test:scripts` and `test:native`. Bun runs commands; Vitest runs TS tests.
 - `test:ui`: real Playwright WebKit through Vitest. Suites live under `src/ui/src` next to components;
   `src/ui/tests` holds setup/support only. SDK wrapper and status-feed suites mock the generated Tauri
-  command/event boundary; `WindowRouter` and `TestWindow` suites prove route validation, subscription
+  command/event boundary; `Shell` router and `TestWindow` suites prove route validation, subscription
   cleanup, event-over-snapshot precedence, empty/error states and token styles through the computed
   background. Coverage retains 80/80/65/80 thresholds.
 - `test:scripts`: the Vitest Node project in `vitest.scripts.config.ts` covers the root TypeScript
@@ -267,7 +272,12 @@ Record the actual restart/quiet-period/cleanup observations before marking this 
 composition with fake native and permission services: early quit, repeated
 shutdown, blocked-start/shutdown races, queued main-thread drain,
 watcher/enable/invalid/conflict cases, permission polling, ticker rescheduling and
-window leases. The teardown coordinator is exercised with an injected clock, fake
+window leases. The Accessibility launch gate is covered with a fake `PermissionProvider` whose
+status a test changes between ticks, a request counter, a recording `SettingsOpener`, recording
+fake modules and a fake startup-command runner: blocked launch, grant without restart, revocation
+in reverse order, `Unknown` as `Denied`, request/opener policy and shutdown while blocked (host
+fixtures opt in with `HostServices.baseline`; the default is empty). No test calls
+`AXIsProcessTrusted*`, opens System Settings or launches the app. The teardown coordinator is exercised with an injected clock, fake
 terminal and recording record channel: a blocked configuration commit ends
 `Uncertain` naming `host-worker` and `module:<id>` and still dispatches, a later
 request shortens but never extends the total, repeat and post-outcome requests
@@ -649,7 +659,7 @@ because Tauri would otherwise ship a dev-mode window. Generate/schema binaries a
 not bundled.
 
 Launch only `target/release/bundle/macos/Stache Next.app`, verify tray/Quit and zero windows, then quit.
-The skeleton needs no Accessibility/audio permissions. Local bundles use ad-hoc signing; distribution
+The bundle needs Accessibility for Stache Next before any module runs (the launch gate; grant it for the Stache Next entry only, never the legacy one); it needs no audio permission. Local bundles use ad-hoc signing; distribution
 signing/notarization needs separate credentials. CI audits new locks, not the archive. Legacy build
 verification is opt-in via [_legacy/README.md](../../_legacy/README.md), including resource/signing gaps.
 Never run legacy and new device-changing automation together.

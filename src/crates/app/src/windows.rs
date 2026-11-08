@@ -2,8 +2,9 @@
 //!
 //! The SDK validates ownership, surfaces, keys and kinds. This module owns the
 //! reuse map and hands native work to the main thread without ever waiting for
-//! it. Windows are labelled `stache-test-<n>`, the only labels the test-window
-//! capability grants.
+//! it. Windows are labelled `stache-<surface>-<n>`: `stache-test-<n>` is granted
+//! only the test-window capability and `stache-access-<n>` only the access-window
+//! capability.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -23,6 +24,67 @@ pub const HOST_OWNER: ModuleId = ModuleId::new("stache");
 
 /// Surface served to the explicit test window.
 pub const TEST_SURFACE: SurfaceId = SurfaceId::new("test");
+
+/// Surface served to the Accessibility guidance window.
+pub const ACCESS_SURFACE: SurfaceId = SurfaceId::new("access");
+
+/// Logical width of the Accessibility guidance window.
+pub const ACCESS_WIDTH: u32 = 480;
+
+/// Logical height of the Accessibility guidance window.
+pub const ACCESS_HEIGHT: u32 = 640;
+
+/// Native window chrome for one surface.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)] // Mirrors the four independent builder switches.
+pub struct WindowChrome {
+    /// Whether the window has a title bar and frame.
+    pub decorations: bool,
+    /// Whether the window background is transparent.
+    pub transparent: bool,
+    /// Whether the user can resize the window.
+    pub resizable: bool,
+    /// Whether the window has the native shadow.
+    pub shadow: bool,
+}
+
+/// Maps a surface to its native chrome.
+///
+/// The access surface is frameless and transparent; every other surface keeps
+/// the decorated, opaque builder defaults.
+#[must_use]
+pub fn chrome_for(surface: SurfaceId) -> WindowChrome {
+    if surface == ACCESS_SURFACE {
+        WindowChrome {
+            decorations: false,
+            transparent: true,
+            resizable: false,
+            shadow: true,
+        }
+    } else {
+        WindowChrome {
+            decorations: true,
+            transparent: false,
+            resizable: true,
+            shadow: true,
+        }
+    }
+}
+
+/// The host-owned request for the Accessibility guidance window.
+///
+/// # Errors
+/// Returns a backend error if a built-in key or size is rejected.
+pub fn access_window_request() -> Result<WindowRequest, WindowError> {
+    Ok(WindowRequest::new(
+        stache_sdk::WindowKey::new("access")
+            .map_err(|error| WindowError::Backend(error.to_string()))?,
+        ACCESS_SURFACE,
+        stache_sdk::WindowSize::new(ACCESS_WIDTH, ACCESS_HEIGHT)
+            .map_err(|error| WindowError::Backend(error.to_string()))?,
+        stache_sdk::WindowKind::Standard,
+    ))
+}
 
 /// The native operations the bookkeeping layer needs.
 ///
@@ -69,6 +131,8 @@ pub struct NativeWindowSpec {
     pub width: u32,
     /// Logical height.
     pub height: u32,
+    /// Native chrome for the surface.
+    pub chrome: WindowChrome,
 }
 
 /// A Tauri [window host](WindowHost).
@@ -106,7 +170,11 @@ impl WindowHost for TauriWindowHost {
         )
         .title("Stache Next")
         .visible(true)
-        .inner_size(f64::from(spec.width), f64::from(spec.height));
+        .inner_size(f64::from(spec.width), f64::from(spec.height))
+        .decorations(spec.chrome.decorations)
+        .transparent(spec.chrome.transparent)
+        .resizable(spec.chrome.resizable)
+        .shadow(spec.chrome.shadow);
         #[cfg(feature = "smoke")]
         let builder = {
             let loaded = Arc::clone(&self.loaded);
@@ -375,7 +443,7 @@ fn validate(request: &WindowRequest) -> Result<(), WindowError> {
     if !request.surface.is_safe() {
         return Err(WindowError::InvalidSurface { surface: request.surface });
     }
-    if request.surface != TEST_SURFACE {
+    if request.surface != TEST_SURFACE && request.surface != ACCESS_SURFACE {
         return Err(WindowError::UnsupportedSurface { surface: request.surface });
     }
     Ok(())
@@ -400,7 +468,7 @@ impl WindowBackend for NativeWindows {
                 Reserved::Existing(entry.id, entry.label)
             } else {
                 let id = WindowId::new(self.shared.next.fetch_add(1, Ordering::Relaxed) + 1);
-                let label = format!("stache-test-{}", id.get());
+                let label = format!("stache-{}-{}", request.surface.as_str(), id.get());
                 let entry = Entry {
                     id,
                     label: label.clone(),
@@ -426,6 +494,7 @@ impl WindowBackend for NativeWindows {
             surface: request.surface,
             width: request.size.width,
             height: request.size.height,
+            chrome: chrome_for(request.surface),
         };
         let shared = Arc::clone(&self.shared);
         let dispatched = self.shared.dispatch(move |host| {
@@ -863,5 +932,90 @@ mod tests {
             Err(WindowError::UnsupportedSurface { .. })
         ));
         assert!(host.opened.lock().expect("opened").is_empty());
+    }
+
+    #[test]
+    fn ag_04_03_access_and_test_host_requests_are_accepted_with_their_own_labels() {
+        let (windows, host) = windows();
+        windows.open_test_window().expect("test");
+        windows
+            .open(HOST_OWNER, &access_window_request().expect("request"))
+            .expect("access");
+        let opened = host.opened.lock().expect("opened");
+        assert_eq!(opened.len(), 2);
+        assert!(opened[0].label.starts_with("stache-test-"));
+        assert_eq!(opened[0].surface, TEST_SURFACE);
+        assert!(
+            opened[1].label.starts_with("stache-access-"),
+            "{}",
+            opened[1].label
+        );
+        assert_eq!(opened[1].surface, ACCESS_SURFACE);
+        let (width, height) = (opened[1].width, opened[1].height);
+        drop(opened);
+        assert_eq!((width, height), (480, 640));
+        assert!((1..=stache_sdk::MAX_WINDOW_DIMENSION).contains(&width));
+        assert!((1..=stache_sdk::MAX_WINDOW_DIMENSION).contains(&height));
+    }
+
+    #[test]
+    fn ag_05_01_chrome_is_frameless_for_access_and_default_for_test() {
+        assert_eq!(chrome_for(ACCESS_SURFACE), WindowChrome {
+            decorations: false,
+            transparent: true,
+            resizable: false,
+            shadow: true,
+        });
+        assert_eq!(chrome_for(TEST_SURFACE), WindowChrome {
+            decorations: true,
+            transparent: false,
+            resizable: true,
+            shadow: true,
+        });
+        let (windows, host) = windows();
+        windows.open_test_window().expect("test");
+        windows
+            .open(HOST_OWNER, &access_window_request().expect("request"))
+            .expect("access");
+        let opened = host.opened.lock().expect("opened");
+        assert_eq!(opened[0].chrome, chrome_for(TEST_SURFACE));
+        assert_eq!(opened[1].chrome, chrome_for(ACCESS_SURFACE));
+    }
+
+    #[test]
+    fn ag_04_03_the_access_window_is_reused_and_every_other_surface_kind_or_size_is_refused() {
+        let (windows, host) = windows();
+        let first = windows.open(HOST_OWNER, &request("access", "access")).expect("first");
+        let second = windows.open(HOST_OWNER, &request("access", "access")).expect("second");
+        assert_eq!(first, second);
+        assert_eq!(host.opened.lock().expect("opened").len(), 1);
+        assert_eq!(host.focused.lock().expect("focused").len(), 1);
+
+        let mut launcher = request("access", "access");
+        launcher.kind = WindowKind::Launcher;
+        assert!(matches!(
+            windows.open(HOST_OWNER, &launcher),
+            Err(WindowError::UnsupportedKind { .. })
+        ));
+        let mut huge = request("access", "other");
+        huge.size = WindowSize {
+            width: stache_sdk::MAX_WINDOW_DIMENSION + 1,
+            height: 420,
+        };
+        assert!(matches!(
+            windows.open(HOST_OWNER, &huge),
+            Err(WindowError::InvalidSize { .. })
+        ));
+        for surface in ["accessx", "guide", "main", "access&x=1"] {
+            let refused = windows.open(HOST_OWNER, &request(surface, "k"));
+            assert!(
+                matches!(
+                    refused,
+                    Err(WindowError::UnsupportedSurface { .. } | WindowError::InvalidSurface { .. })
+                ),
+                "{surface}: {refused:?}"
+            );
+        }
+        assert_eq!(host.opened.lock().expect("opened").len(), 1);
     }
 }

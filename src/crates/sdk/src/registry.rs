@@ -166,6 +166,18 @@ fn static_requirements(descriptor: &ModuleDescriptor) -> Vec<PermissionRequireme
         .collect()
 }
 
+/// Merges one requirement per permission: a user-only requirement wins over an
+/// automatic one.
+fn merge_requirement(merged: &mut Vec<PermissionRequirement>, requirement: PermissionRequirement) {
+    match merged.iter_mut().find(|m| m.permission() == requirement.permission()) {
+        Some(existing) if existing.may_auto_prompt() && !requirement.may_auto_prompt() => {
+            *existing = requirement;
+        }
+        Some(_) => {}
+        None => merged.push(requirement),
+    }
+}
+
 struct ModuleAdapter<M: Module> {
     module: M,
     id: ModuleId,
@@ -494,6 +506,9 @@ pub struct Registry {
     permissions: Arc<dyn PermissionProvider>,
     windows: Arc<dyn WindowBackend>,
     input: Arc<InputService>,
+    /// Host-level requirements merged into every module; immutable once the
+    /// first module is registered.
+    baseline: Vec<PermissionRequirement>,
     slots: Mutex<Vec<Arc<ModuleSlot>>>,
     failed_services: Mutex<HashSet<ServiceId>>,
     lifecycle: Mutex<()>,
@@ -519,6 +534,7 @@ impl Registry {
             permissions,
             windows,
             input: InputService::unavailable(),
+            baseline: Vec::new(),
             slots: Mutex::new(Vec::new()),
             failed_services: Mutex::new(HashSet::new()),
             lifecycle: Mutex::new(()),
@@ -534,6 +550,45 @@ impl Registry {
     pub fn with_input_service(mut self, input: Arc<InputService>) -> Self {
         self.input = input;
         self
+    }
+
+    /// Sets host-level permission requirements merged into every module.
+    ///
+    /// The baseline applies to every registered module whatever its own
+    /// configuration, and `permission_requirements` reports it even when no
+    /// module is enabled. Merging follows the per-permission rule: user-only
+    /// wins over automatic. The default baseline is empty. It is immutable after
+    /// construction, so this consuming builder must run before the first
+    /// `register`.
+    ///
+    /// # Errors
+    /// Returns [`RegistryError::BaselineAfterRegistration`] when a module is
+    /// already registered.
+    pub fn with_baseline_requirements(
+        mut self,
+        baseline: Vec<PermissionRequirement>,
+    ) -> RegistryResult<Self> {
+        if !lock(&self.slots).is_empty() {
+            return Err(RegistryError::BaselineAfterRegistration);
+        }
+        let mut merged = Vec::new();
+        for requirement in baseline {
+            merge_requirement(&mut merged, requirement);
+        }
+        self.baseline = merged;
+        Ok(self)
+    }
+
+    /// A module's requirements merged with the baseline.
+    fn effective_requirements(
+        &self,
+        module: Vec<PermissionRequirement>,
+    ) -> Vec<PermissionRequirement> {
+        let mut merged = Vec::new();
+        for requirement in module.into_iter().chain(self.baseline.iter().copied()) {
+            merge_requirement(&mut merged, requirement);
+        }
+        merged
     }
 
     /// Registers one module and its initial configuration.
@@ -605,10 +660,10 @@ impl Registry {
             diagnostic,
         } = initial;
         let adapter = ModuleAdapter { module, id };
-        let requirements = config.as_ref().map_or_else(
+        let requirements = self.effective_requirements(config.as_ref().map_or_else(
             || static_requirements(&descriptor),
             |config| adapter.requirements(config.as_ref()),
-        );
+        ));
         let state = ModuleState {
             module: Box::new(adapter),
             config,
@@ -925,7 +980,8 @@ impl Registry {
         let changed = !unchanged;
         let previous_status = state.status.clone();
         let was_running = previous_status == ModuleStatus::Running;
-        let candidate_requirements = state.module.requirements(candidate.as_ref());
+        let candidate_requirements =
+            self.effective_requirements(state.module.requirements(candidate.as_ref()));
         // A running module whose candidate newly needs a permission that is not
         // granted must not adopt it: the whole runtime stops and waits, and the
         // candidate is still accepted. Fresh, nonprompting status only.
@@ -1064,29 +1120,26 @@ impl Registry {
         self.slots_snapshot().iter().map(|slot| slot.descriptor).collect()
     }
 
-    /// Permissions needed right now by enabled, non-paused modules.
+    /// Permissions needed right now: the baseline, always, merged with the
+    /// requirements of enabled, non-paused modules.
     ///
-    /// Requirements come from each module's accepted configuration and are
-    /// merged per permission: one user-only requirement makes the merged
-    /// requirement user-only. Reads published data only and never prompts.
+    /// Module requirements come from each module's accepted configuration and
+    /// are merged per permission: one user-only requirement makes the merged
+    /// requirement user-only. The baseline is reported even with no registered,
+    /// enabled or unpaused module. Reads published data only and never prompts.
     #[must_use]
     pub fn permission_requirements(&self) -> Vec<PermissionRequirement> {
         let mut merged: Vec<PermissionRequirement> = Vec::new();
+        for &requirement in &self.baseline {
+            merge_requirement(&mut merged, requirement);
+        }
         for slot in self.slots_snapshot() {
             let snapshot = slot.published_snapshot();
             if !snapshot.enabled || snapshot.paused {
                 continue;
             }
-            for requirement in lock(&slot.requirements).iter() {
-                match merged.iter_mut().find(|m| m.permission() == requirement.permission()) {
-                    Some(existing)
-                        if existing.may_auto_prompt() && !requirement.may_auto_prompt() =>
-                    {
-                        *existing = *requirement;
-                    }
-                    Some(_) => {}
-                    None => merged.push(*requirement),
-                }
+            for &requirement in lock(&slot.requirements).iter() {
+                merge_requirement(&mut merged, requirement);
             }
         }
         merged
@@ -4242,5 +4295,231 @@ mod tests {
         stopper.join().expect("stop thread");
         assert_eq!(lock(&state).stops, 1, "the waiting stop performed the stop");
         assert!(registry.shutdown_targets().is_empty());
+    }
+
+    // ---- Accessibility launch gate part 01: baseline requirements ----
+
+    fn baseline() -> Vec<PermissionRequirement> {
+        vec![PermissionRequirement::user_only(Permission::Accessibility)]
+    }
+
+    fn baseline_harness(requirements: Vec<PermissionRequirement>) -> Harness {
+        let mut harness = Harness::new();
+        harness.registry =
+            harness.registry.with_baseline_requirements(requirements).expect("baseline");
+        harness
+    }
+
+    fn waiting() -> ModuleStatus { ModuleStatus::WaitingForPermission(Permission::Accessibility) }
+
+    fn status_of(harness: &Harness, handle: ModuleHandle<FakeConfig>) -> ModuleStatus {
+        harness.registry.snapshot(handle).expect("snapshot").status
+    }
+
+    fn grant(harness: &Harness) {
+        harness.permissions.set(Permission::Accessibility, PermissionStatus::Granted);
+        harness
+            .registry
+            .on_permission_change(Permission::Accessibility, PermissionStatus::Granted)
+            .expect("grant");
+    }
+
+    fn position(events: &[String], needle: &str) -> usize {
+        events
+            .iter()
+            .position(|e| e == needle)
+            .unwrap_or_else(|| panic!("{needle} in {events:?}"))
+    }
+
+    #[test]
+    fn ag_01_01_the_default_baseline_is_empty() {
+        let harness = Harness::new();
+        assert!(harness.registry.permission_requirements().is_empty());
+        let harness = baseline_harness(Vec::new());
+        let (module, _) = harness.fake("plain");
+        let handle = harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        harness.permissions.set(Permission::Accessibility, PermissionStatus::Denied);
+        harness.registry.start_all().expect("start");
+        assert_eq!(status_of(&harness, handle), ModuleStatus::Running);
+        assert!(harness.registry.permission_requirements().is_empty());
+    }
+
+    #[test]
+    fn ag_01_02_a_missing_baseline_blocks_every_module_before_any_module_code() {
+        let harness = baseline_harness(baseline());
+        harness.permissions.set(Permission::Accessibility, PermissionStatus::Denied);
+        let (mut provider, provider_state) = harness.fake("provider");
+        provider.provides = &PROVIDES_SERVICE;
+        let (mut consumer, consumer_state) = harness.fake("consumer");
+        consumer.requires = &REQUIRES_SERVICE;
+        let (plain, plain_state) = harness.fake("plain");
+        let a = harness.registry.register(provider, FakeConfig::on(1)).expect("register");
+        let b = harness.registry.register(consumer, FakeConfig::on(1)).expect("register");
+        let c = harness.registry.register(plain, FakeConfig::on(1)).expect("register");
+        harness.registry.start_all().expect("start");
+        for handle in [a, b, c] {
+            assert_eq!(status_of(&harness, handle), waiting());
+        }
+        for state in [&provider_state, &consumer_state, &plain_state] {
+            assert_eq!(lock(state).starts, 0);
+        }
+        assert!(harness.trace.events().is_empty(), "no configure or start ran");
+        assert_eq!(harness.permissions.requests.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn ag_01_03_the_baseline_is_reported_with_disabled_paused_or_no_modules() {
+        let expected = baseline();
+        let harness = baseline_harness(baseline());
+        assert_eq!(
+            harness.registry.permission_requirements(),
+            expected,
+            "zero modules"
+        );
+        let (one, _) = harness.fake("one");
+        let (two, _) = harness.fake("two");
+        let off = harness.registry.register(one, FakeConfig::off(1)).expect("register");
+        let paused = harness.registry.register(two, FakeConfig::on(1)).expect("register");
+        harness.registry.pause(paused).expect("pause");
+        assert_eq!(status_of(&harness, off), ModuleStatus::Disabled);
+        assert_eq!(
+            harness.registry.permission_requirements(),
+            expected,
+            "disabled and paused"
+        );
+        assert_eq!(harness.permissions.requests.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn ag_01_04_a_grant_starts_waiting_modules_in_dependency_order_and_a_failure_is_isolated() {
+        let harness = baseline_harness(baseline());
+        harness.permissions.set(Permission::Accessibility, PermissionStatus::Denied);
+        // Registered consumer-first to prove the order comes from dependencies.
+        let (mut consumer, _) = harness.fake("consumer");
+        consumer.requires = &REQUIRES_SERVICE;
+        consumer.fail.start = true;
+        let (mut provider, _) = harness.fake("provider");
+        provider.provides = &PROVIDES_SERVICE;
+        let (plain, _) = harness.fake("plain");
+        let b = harness.registry.register(consumer, FakeConfig::on(1)).expect("register");
+        let a = harness.registry.register(provider, FakeConfig::on(1)).expect("register");
+        let c = harness.registry.register(plain, FakeConfig::on(1)).expect("register");
+        harness.registry.start_all().expect("start");
+        assert!(harness.trace.events().is_empty());
+        harness.permissions.set(Permission::Accessibility, PermissionStatus::Granted);
+        let result = harness
+            .registry
+            .on_permission_change(Permission::Accessibility, PermissionStatus::Granted);
+        assert!(result.is_err(), "the failed start is reported");
+        let events = harness.trace.events();
+        assert!(position(&events, "provider.start") < position(&events, "consumer.start"));
+        assert_eq!(status_of(&harness, a), ModuleStatus::Running);
+        assert_eq!(status_of(&harness, c), ModuleStatus::Running);
+        assert!(matches!(status_of(&harness, b), ModuleStatus::Failed(_)));
+        assert_eq!(harness.permissions.requests.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn ag_01_05_revocation_stops_running_modules_in_reverse_order_and_skips_disabled_and_paused() {
+        let harness = baseline_harness(baseline());
+        let (mut provider, _) = harness.fake("provider");
+        provider.provides = &PROVIDES_SERVICE;
+        let (mut consumer, _) = harness.fake("consumer");
+        consumer.requires = &REQUIRES_SERVICE;
+        let (off, off_state) = harness.fake("off");
+        let (idle, idle_state) = harness.fake("idle");
+        let a = harness.registry.register(provider, FakeConfig::on(1)).expect("register");
+        let b = harness.registry.register(consumer, FakeConfig::on(1)).expect("register");
+        let off_handle = harness.registry.register(off, FakeConfig::off(1)).expect("register");
+        let idle_handle = harness.registry.register(idle, FakeConfig::on(1)).expect("register");
+        harness.registry.pause(idle_handle).expect("pause");
+        harness.registry.start_all().expect("start");
+        assert_eq!(status_of(&harness, a), ModuleStatus::Running);
+        assert_eq!(status_of(&harness, b), ModuleStatus::Running);
+        let before = harness.trace.events();
+        assert!(position(&before, "provider.start") < position(&before, "consumer.start"));
+
+        harness.permissions.set(Permission::Accessibility, PermissionStatus::Denied);
+        harness
+            .registry
+            .on_permission_change(Permission::Accessibility, PermissionStatus::Denied)
+            .expect("revoke");
+        let events = harness.trace.events();
+        assert!(position(&events, "consumer.stop") < position(&events, "provider.stop"));
+        assert_eq!(status_of(&harness, a), waiting());
+        assert_eq!(status_of(&harness, b), waiting());
+        assert_eq!(status_of(&harness, off_handle), ModuleStatus::Disabled);
+        assert_eq!(status_of(&harness, idle_handle), ModuleStatus::Paused);
+        for state in [&off_state, &idle_state] {
+            let state = lock(state);
+            assert_eq!((state.starts, state.stops), (0, 0));
+        }
+        assert_eq!(harness.permissions.requests.load(Ordering::SeqCst), 0);
+
+        // A later grant restarts them again in dependency order.
+        grant(&harness);
+        let after = harness.trace.events();
+        let restarts: Vec<&String> = after[events.len()..].iter().collect();
+        let first = restarts.iter().position(|e| e.as_str() == "provider.start").expect("p");
+        let second = restarts.iter().position(|e| e.as_str() == "consumer.start").expect("c");
+        assert!(first < second);
+    }
+
+    #[test]
+    fn ag_01_06_baseline_and_module_requirements_merge_to_one_user_only_entry() {
+        let harness = baseline_harness(baseline());
+        let (module, _) = caps_module(&harness, input_requirement());
+        harness.registry.register(module, FakeConfig::on(100)).expect("register");
+        assert_eq!(harness.registry.permission_requirements(), baseline());
+
+        let harness = baseline_harness(baseline());
+        let (module, _) = caps_module(
+            &harness,
+            PermissionRequirement::automatic(Permission::Accessibility),
+        );
+        harness.registry.register(module, FakeConfig::on(100)).expect("register");
+        assert_eq!(harness.registry.permission_requirements(), baseline());
+
+        // An automatic baseline yields to a user-only module requirement.
+        let harness =
+            baseline_harness(vec![PermissionRequirement::automatic(Permission::Accessibility)]);
+        let (module, _) = caps_module(&harness, input_requirement());
+        harness.registry.register(module, FakeConfig::on(100)).expect("register");
+        assert_eq!(harness.registry.permission_requirements(), vec![
+            input_requirement()
+        ]);
+    }
+
+    #[test]
+    fn ag_01_07_a_reload_while_the_baseline_is_missing_waits_and_a_grant_uses_the_newest() {
+        let harness = baseline_harness(baseline());
+        harness.permissions.set(Permission::Accessibility, PermissionStatus::Denied);
+        let (module, state) = harness.fake("plain");
+        let handle = harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        harness.registry.start_all().expect("start");
+        assert_eq!(status_of(&harness, handle), waiting());
+        let report = harness.registry.reload(handle, FakeConfig::on(2)).expect("reload");
+        assert_eq!(report.status, ReloadStatus::Applied { revision: 2 });
+        assert!(report.start_error.is_none());
+        assert_eq!(status_of(&harness, handle), waiting());
+        assert_eq!(lock(&state).starts, 0);
+        let newer = harness.registry.reload(handle, FakeConfig::on(3)).expect("reload");
+        assert_eq!(newer.status, ReloadStatus::Applied { revision: 3 });
+        assert!(harness.trace.events().is_empty());
+        grant(&harness);
+        assert_eq!(status_of(&harness, handle), ModuleStatus::Running);
+        assert_eq!(harness.trace.events(), vec!["plain.configure.3", "plain.start"]);
+        assert_eq!(harness.permissions.requests.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn ag_01_08_the_baseline_cannot_be_set_after_a_registration() {
+        let harness = Harness::new();
+        let (module, _) = harness.fake("plain");
+        harness.registry.register(module, FakeConfig::on(1)).expect("register");
+        let Err(error) = harness.registry.with_baseline_requirements(baseline()) else {
+            panic!("the builder must refuse after registration");
+        };
+        assert!(matches!(error, RegistryError::BaselineAfterRegistration));
     }
 }

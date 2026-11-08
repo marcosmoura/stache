@@ -207,6 +207,41 @@ file never blocks the others. The desktop `core.reload` wrapper asks the host
 worker to publish the resulting module status once, so a CLI reload updates the
 tray and test window without a restart.
 
+### Accessibility gate
+
+The host publishes its Accessibility gate state (`checking`, `blocked`,
+`open`; see [overview.md](overview.md)) through a lock-free atomic cell that
+the runner writes on every gate transition. An ungated host (empty baseline,
+test fixtures) reads `open`; a gated host starts at `checking`. Socket handlers
+read the cell without the host worker, a module lock or the registry lifecycle
+lock, so a refusal never waits on a busy worker or a stuck module start.
+
+`build_router` wraps every factory-contributed handler before registration.
+While the cell is not `open` (including `checking`) the wrapper answers the
+typed error `unavailable` with `Stache Next is waiting for Accessibility
+permission. Grant it in System Settings > Privacy & Security > Accessibility.`
+and never calls the module; read-only methods such as `keepAwake.status` and
+`proxyAudio.list` are refused too. While `open` it delegates unchanged. The
+cell also closes at the start of a revocation, before the registry stops
+modules.
+
+`core.reload` and `core.status` keep working while gated: reload applies and
+stages files as usual and still asks the host to publish once. Both results
+carry `access: { state: "checking" | "blocked" | "open", revoked }`, written
+by the host core and omitted (`None`, not serialized) by `ConfigCore` and by
+older hosts. Older JSON without `access` still decodes, and a client treats a
+missing field as "not reported".
+
+CLI: when `access.state` is `blocked` or `checking`, `stache reload` prints
+`stache: modules are waiting for Accessibility permission` once on stderr after
+any file diagnostics (exit 0 unless a file was rejected, then 1 with both
+printed), and `stache config path` prints the same line after its host
+diagnostics. A contributed command that calls a module method prints the
+`unavailable` message through its normal typed-refusal path;
+`stache wallpaper set` stays a refusal and never falls back to a standalone
+apply, because only `NotRunning` permits that. Commands that never contact the
+app are unaffected.
+
 ## Client behavior
 
 `IpcClient` sets a five-second total response deadline and write timeout. A
@@ -218,7 +253,8 @@ responses and structured remote errors are not retried either. Requests
 are serialized with serde; a serialization failure is a typed client error.
 `config path` uses a single-attempt client so it stays instant while offline.
 
-`reload` is silent on success (exit 0). Rejected files print
+`reload` is silent on success (exit 0) apart from the Accessibility notice
+described above. Rejected files print
 `stache: {diagnostic}` on stderr and exit 1; no running host prints
 `stache: IPC error: Failed to send reload command to Stache app: Stache app is not running`
 and exits 1. Application errors use `stache: {error}` on stderr. Clap usage

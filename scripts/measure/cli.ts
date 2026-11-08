@@ -22,6 +22,7 @@ export function parseCommandLine(args: string[]): ParsedCommandLine {
 
   for (let index = 0; index < args.length; index += 1) {
     const flag = args[index];
+
     switch (flag) {
       case '--help':
       case '-h':
@@ -55,9 +56,11 @@ export function parseCommandLine(args: string[]): ParsedCommandLine {
 
 function requireValue(args: string[], index: number, flag: string): string {
   const value = args[index + 1];
+
   if (value === undefined || value.startsWith('--')) {
     throw new UsageError(`${flag} requires a value`);
   }
+
   return value;
 }
 
@@ -65,10 +68,13 @@ function parseInteger(value: string, flag: string, minimum: number): number {
   if (!/^\d+$/.test(value)) {
     throw new UsageError(`${flag} expects a whole number, got ${value}`);
   }
+
   const parsed = Number.parseInt(value, 10);
+
   if (parsed < minimum) {
     throw new UsageError(`${flag} must be at least ${minimum}`);
   }
+
   return parsed;
 }
 

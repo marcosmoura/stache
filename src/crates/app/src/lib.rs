@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod access;
 pub mod bindings;
 pub mod caps_recovery;
 pub mod catalog;
@@ -44,7 +45,8 @@ use stache_macos::{
 };
 use stache_sdk::{
     AppEnvironment, AppPaths, ConfigPaths, EventBus, InstanceError, InstanceLock, LogFilter,
-    LogLevel, LogRecord, Logger, MainThreadExecutor, ModuleId, Operation,
+    LogLevel, LogRecord, Logger, MainThreadExecutor, ModuleId, Operation, Permission,
+    PermissionRequirement,
 };
 use tauri::{Emitter, Manager, RunEvent};
 use tauri_specta::Event as _;
@@ -462,11 +464,13 @@ fn run_with(
                 logger: Arc::clone(&logger),
                 log_filter: filter,
                 events: Arc::new(EventBus::new()),
+                settings: Arc::new(access::SystemSettingsOpener::new(Arc::clone(&main_thread))),
                 main_thread,
                 permissions: Arc::new(AccessibilityPermission),
                 windows: window_backend.clone(),
                 commands: Arc::new(ProcessCommands::new()),
                 poll: PermissionPoll::default(),
+                baseline: vec![PermissionRequirement::user_only(Permission::Accessibility)],
             };
             let settings = HostSettings {
                 app: app_paths,

@@ -11,8 +11,8 @@ pub mod server;
 
 pub use client::{ClientError, IO_TIMEOUT, IpcClient, MAX_RESPONSE_SIZE, RetryPolicy};
 pub use protocol::{
-    CoreApplyOutcome, CoreFileOutcome, CoreFileState, CoreFileStatus, CoreReload, CoreStatus,
-    Request, Response, WireError, WireErrorKind,
+    CoreAccess, CoreAccessState, CoreApplyOutcome, CoreFileOutcome, CoreFileState, CoreFileStatus,
+    CoreReload, CoreStatus, Request, Response, WireError, WireErrorKind,
 };
 pub use router::{
     CORE_MODULE, ConfigCore, CoreHandler, HandlerError, HandlerErrorKind, HandlerResult,

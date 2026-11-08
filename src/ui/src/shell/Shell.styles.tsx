@@ -1,6 +1,6 @@
 import { css } from '@linaria/core';
 
-import { colors, fonts, space } from '../../../sdk/tokens';
+import { colors, fonts, space } from '../sdk/tokens';
 
 export const page = css`
   box-sizing: border-box;

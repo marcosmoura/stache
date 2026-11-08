@@ -13,7 +13,7 @@ use tauri::AppHandle;
 use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 
-use crate::bindings::{ConfigFileView, HostStatus, ModuleState, ModuleStatusView};
+use crate::bindings::{AccessState, ConfigFileView, HostStatus, ModuleState, ModuleStatusView};
 use crate::host::HostHandle;
 
 /// The tray icon identity shared with status updates.
@@ -35,8 +35,12 @@ pub enum TrayAction {
     Resume(String),
     /// Retry an eligible failed or unavailable module.
     Retry(String),
-    /// Prompt for a needed permission.
-    Permission,
+    /// Open or focus the Accessibility guidance window.
+    AccessGuide,
+    /// Explicitly request Accessibility (may show the system prompt).
+    AccessRequest,
+    /// Open the Accessibility pane of System Settings.
+    AccessSettings,
     /// Open the explicit test window.
     TestWindow,
     /// Quit through the shared shutdown coordinator.
@@ -132,28 +136,41 @@ fn menu(app: &AppHandle, status: &HostStatus) -> tauri::Result<Menu<tauri::Wry>>
 pub fn rows(status: &HostStatus) -> Vec<TrayRow> {
     let mut rows = Vec::new();
     let header = if status.ready {
-        "Stache Next".to_owned()
+        match (status.access.state, status.access.revoked) {
+            (AccessState::Checking, _) => "Stache Next — checking Accessibility…",
+            (AccessState::Blocked, true) => "Stache Next — Accessibility was turned off",
+            (AccessState::Blocked, false) => "Stache Next — Accessibility required",
+            (AccessState::Open, _) => "Stache Next",
+        }
     } else {
-        "Stache Next — starting…".to_owned()
+        "Stache Next — starting…"
     };
     rows.push(item("status", header, None, None));
+    if status.access.state == AccessState::Blocked {
+        rows.push(item(
+            "access-guide",
+            "Show Accessibility Help…",
+            Some(TrayAction::AccessGuide),
+            None,
+        ));
+        rows.push(item(
+            "access-request",
+            "Request Accessibility…",
+            Some(TrayAction::AccessRequest),
+            None,
+        ));
+        rows.push(item(
+            "access-settings",
+            "Open Accessibility Settings…",
+            Some(TrayAction::AccessSettings),
+            None,
+        ));
+    }
     if let Some(error) = &status.error {
         rows.push(item("error", truncate(error, 80), None, None));
     }
     for module in &status.modules {
         module_rows(&mut rows, module);
-    }
-    if status
-        .modules
-        .iter()
-        .any(|module| module.state == ModuleState::WaitingForPermission)
-    {
-        rows.push(item(
-            "permission",
-            "Request Accessibility…",
-            Some(TrayAction::Permission),
-            None,
-        ));
     }
     for file in &status.config {
         config_rows(&mut rows, file);
@@ -287,8 +304,12 @@ fn handle_event(host: &HostHandle, id: &str) {
         host.resume(module);
     } else if let Some(module) = id.strip_prefix("retry:") {
         host.retry(module);
-    } else if id == "permission" {
+    } else if id == "access-guide" {
+        host.open_access_guide();
+    } else if id == "access-request" {
         host.request_permission();
+    } else if id == "access-settings" {
+        host.open_accessibility_settings();
     } else if id == "test-window" {
         host.open_test_window();
     } else if id == "quit" {
@@ -312,7 +333,7 @@ fn truncate(text: &str, limit: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bindings::{ConfigFileState, ModuleStatusView};
+    use crate::bindings::{AccessView, ConfigFileState, ModuleStatusView};
 
     fn module(state: ModuleState, enabled: bool, paused: bool) -> ModuleStatusView {
         ModuleStatusView {
@@ -331,9 +352,30 @@ mod tests {
         HostStatus {
             ready: true,
             error: None,
+            access: AccessView {
+                state: AccessState::Open,
+                revoked: false,
+                app_path: None,
+            },
             modules: Vec::new(),
             config: Vec::new(),
         }
+    }
+
+    fn gated(state: AccessState, revoked: bool) -> HostStatus {
+        let mut snapshot = status();
+        snapshot.access.state = state;
+        snapshot.access.revoked = revoked;
+        snapshot
+    }
+
+    fn labels(rows: &[TrayRow]) -> Vec<(String, String)> {
+        rows.iter()
+            .filter_map(|row| match row {
+                TrayRow::Item(item) => Some((item.id.clone(), item.label.clone())),
+                TrayRow::Separator => None,
+            })
+            .collect()
     }
 
     fn actions(rows: &[TrayRow]) -> Vec<TrayAction> {
@@ -429,5 +471,117 @@ mod tests {
         let actions = actions(&rows(&snapshot));
         assert!(!actions.iter().any(|action| matches!(action, TrayAction::Retry(_))));
         assert!(actions.iter().any(|action| matches!(action, TrayAction::Resume(_))));
+    }
+
+    fn access_rows(snapshot: &HostStatus) -> Vec<(String, String)> {
+        labels(&rows(snapshot))
+            .into_iter()
+            .filter(|(id, _)| id == "status" || id.starts_with("access-"))
+            .collect()
+    }
+
+    fn pair(id: &str, label: &str) -> (String, String) { (id.to_owned(), label.to_owned()) }
+
+    #[test]
+    fn ag_02_09_checking_shows_only_the_checking_status_row() {
+        let snapshot = gated(AccessState::Checking, false);
+        assert_eq!(access_rows(&snapshot), vec![pair(
+            "status",
+            "Stache Next — checking Accessibility…"
+        )]);
+    }
+
+    #[test]
+    fn ag_02_09_blocked_shows_the_required_status_and_both_gate_actions() {
+        let snapshot = gated(AccessState::Blocked, false);
+        assert_eq!(access_rows(&snapshot), vec![
+            pair("status", "Stache Next — Accessibility required"),
+            pair("access-guide", "Show Accessibility Help…"),
+            pair("access-request", "Request Accessibility…"),
+            pair("access-settings", "Open Accessibility Settings…"),
+        ]);
+        let actions = actions(&rows(&snapshot));
+        assert!(actions.contains(&TrayAction::AccessRequest));
+        assert!(actions.contains(&TrayAction::AccessSettings));
+    }
+
+    #[test]
+    fn ag_04_04_the_guide_row_is_the_first_gate_row_and_only_while_blocked() {
+        for revoked in [false, true] {
+            let rows = rows(&gated(AccessState::Blocked, revoked));
+            let ids: Vec<String> = labels(&rows).into_iter().map(|(id, _)| id).collect();
+            assert_eq!(ids[0], "status");
+            assert_eq!(ids[1], "access-guide", "{ids:?}");
+            assert_eq!(ids[2], "access-request");
+            assert_eq!(ids[3], "access-settings");
+            assert!(actions(&rows).contains(&TrayAction::AccessGuide));
+        }
+        for state in [AccessState::Checking, AccessState::Open] {
+            let rows = rows(&gated(state, false));
+            assert!(!labels(&rows).iter().any(|(id, _)| id == "access-guide"));
+            assert!(!actions(&rows).contains(&TrayAction::AccessGuide));
+        }
+    }
+
+    #[test]
+    fn ag_02_09_revoked_changes_only_the_status_wording() {
+        let snapshot = gated(AccessState::Blocked, true);
+        assert_eq!(access_rows(&snapshot), vec![
+            pair("status", "Stache Next — Accessibility was turned off"),
+            pair("access-guide", "Show Accessibility Help…"),
+            pair("access-request", "Request Accessibility…"),
+            pair("access-settings", "Open Accessibility Settings…"),
+        ]);
+    }
+
+    #[test]
+    fn ag_02_09_open_has_no_gate_row_and_no_snapshot_has_a_permission_row() {
+        assert_eq!(access_rows(&gated(AccessState::Open, false)), vec![pair(
+            "status",
+            "Stache Next"
+        )]);
+        for (state, revoked) in [
+            (AccessState::Checking, false),
+            (AccessState::Blocked, false),
+            (AccessState::Blocked, true),
+            (AccessState::Open, false),
+        ] {
+            let mut snapshot = gated(state, revoked);
+            snapshot.modules = vec![module(ModuleState::WaitingForPermission, true, false)];
+            assert!(
+                !labels(&rows(&snapshot)).iter().any(|(id, _)| id == "permission"),
+                "the per-module permission row is gone"
+            );
+        }
+    }
+
+    #[test]
+    fn ag_02_09_a_blocked_menu_keeps_modules_and_the_always_available_actions() {
+        let mut snapshot = gated(AccessState::Blocked, false);
+        snapshot.modules = vec![module(ModuleState::WaitingForPermission, true, false)];
+        let rows = rows(&snapshot);
+        assert!(labels(&rows).iter().any(|(_, label)| label.contains("waiting for permission")));
+        let actions = actions(&rows);
+        for expected in [
+            TrayAction::Enable {
+                module: "testModule".to_owned(),
+                enabled: false,
+            },
+            TrayAction::Pause("testModule".to_owned()),
+            TrayAction::TestWindow,
+            TrayAction::Quit,
+        ] {
+            assert!(actions.contains(&expected), "missing {expected:?}");
+        }
+    }
+
+    #[test]
+    fn a_host_that_is_not_ready_reads_starting() {
+        let mut snapshot = gated(AccessState::Checking, false);
+        snapshot.ready = false;
+        assert_eq!(access_rows(&snapshot), vec![pair(
+            "status",
+            "Stache Next — starting…"
+        )]);
     }
 }

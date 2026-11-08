@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 02 — Host gate, status and tray

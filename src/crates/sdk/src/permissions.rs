@@ -3,6 +3,10 @@
 //! The SDK never caches a permission forever. The registry asks the injected
 //! provider for a fresh status before starting a module and reacts to explicit
 //! change notifications. Native prompt policy belongs to the host.
+//!
+//! Requirements come from two places: each module's `required_permissions` and
+//! an optional host-level baseline set on the registry, which applies to every
+//! module and is merged with the module's requirements (user-only wins).
 
 use std::error::Error as StdError;
 use std::fmt;
@@ -34,7 +38,8 @@ pub enum PromptPolicy {
 /// One permission a module currently needs and how it may be requested.
 ///
 /// A module computes its requirements from its accepted or candidate typed
-/// configuration through `Module::required_permissions`.
+/// configuration through `Module::required_permissions`. The host may also set
+/// a baseline requirement that the registry merges into every module.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PermissionRequirement {
     permission: Permission,
@@ -63,8 +68,10 @@ impl PermissionRequirement {
     /// A requirement of a shared-input consumer.
     ///
     /// Every module that depends on the shared input service (Keybindings,
-    /// Hold-to-Quit, `MenuAnywhere`) must declare its input permission through
-    /// this constructor so the host never prompts automatically.
+    /// Hold-to-Quit, `MenuAnywhere`) declares its input permission through
+    /// this constructor so the host never prompts automatically. The host's
+    /// Accessibility baseline is also user-only, which makes this redundant for
+    /// Accessibility; it remains the declaration for non-baseline permissions.
     #[must_use]
     pub const fn shared_input(permission: Permission) -> Self { Self::user_only(permission) }
 

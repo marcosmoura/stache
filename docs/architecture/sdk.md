@@ -31,6 +31,7 @@ joins the workers it owns.
 | Register, config invalid            | either  | no      | `Stopped` plus `ConfigDiagnostic`, revision `0`    |
 | Start with every prerequisite       | `true`  | no      | `Running`                                          |
 | Start, permission absent            | `true`  | no      | `WaitingForPermission(permission)`                 |
+| Start, baseline permission absent   | `true`  | no      | `WaitingForPermission(permission)`, no module code |
 | Start, service or executable absent | `true`  | no      | `Unavailable(reason)`                              |
 | `set_enabled(false)`                | `false` | any     | `Disabled`, resources stopped                      |
 | `set_enabled(true)` from disabled   | `true`  | cleared | Start is attempted                                 |
@@ -46,6 +47,7 @@ joins the workers it owns.
 | Reload dropping the waited perm     | `true`  | no      | Leaves the wait and starts                         |
 | Permission granted                  | `true`  | no      | Waiting modules start                              |
 | Permission denied                   | `true`  | no      | Declaring modules stop, then wait                  |
+| Baseline permission revoked         | `true`  | no      | Every running module stops (reverse), then waits   |
 | `service_failed`                    | `true`  | no      | Transitive dependents become `Unavailable`         |
 | `service_recovered`                 | `true`  | no      | Unavailable dependents are retried                 |
 | `shutdown`                          | any     | any     | Resources stopped; later starts are refused        |
@@ -64,6 +66,21 @@ enabled, non-paused modules through `Registry::permission_requirements()`. The
 function must be pure and cheap: it runs under the module lock and never touches
 the platform.
 
+The registry also accepts a host-level **baseline**, set once with
+`Registry::with_baseline_requirements(Vec<PermissionRequirement>)` before the first
+`register` (afterwards it returns `RegistryError::BaselineAfterRegistration`; the
+default is empty). The baseline is merged into the requirements of every slot,
+whatever its configuration and even when it declares none, at registration,
+`register_rejected` and every committed reload, with the same user-only-wins rule.
+The existing start check, `WaitingForPermission` status and `on_permission_change`
+paths therefore apply unchanged: no module code (`configure`, `start`) runs while a
+baseline permission is missing, a reload then is accepted and waits, a grant starts
+waiting modules in dependency order (a failing start is `Failed` and does not block
+the others) and a denial stops running modules in reverse start order. Disabled and
+paused modules keep their status. `permission_requirements()` returns the baseline
+unconditionally, even with zero, disabled or paused modules. The baseline is
+immutable, performs no platform call and caches no grant.
+
 A reload of a running module whose candidate needs a permission that is not
 granted does not call `reconfigure`: the candidate is accepted (revision
 published), the whole runtime stops and the module reports
@@ -77,10 +94,12 @@ retry loop beyond the host's poll.
 `PromptPolicy` is `Automatic` (the host may request once per session on startup,
 enable, reload, tick or activation) or `UserOnly` (status checks and polling only;
 `request` happens solely on the explicit tray path, `HostHandle::request_permission`).
-**Every shared-input consumer must declare `PermissionRequirement::shared_input`**
-(user-only), including Keybindings, Hold-to-Quit and MenuAnywhere (the MenuAnywhere
-runtime consumes it unchanged, with no module-specific prompt hook). When two modules
-need the same permission, a user-only requirement wins the merge.
+The host's Accessibility baseline is user-only. `PermissionRequirement::shared_input`
+(user-only) stays the declaration for future non-baseline permissions and for
+shared-input consumers such as Keybindings, Hold-to-Quit and MenuAnywhere (the MenuAnywhere runtime consumes it
+unchanged, with no module-specific prompt hook); for
+Accessibility it is redundant with the baseline but harmless. When two requirements
+name the same permission, a user-only requirement wins the merge.
 
 `start_all` marks the registry started. Before that call, reload only stages a
 candidate so bootstrap can register every module without starting early. After

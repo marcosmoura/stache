@@ -25,6 +25,7 @@ import type { Target } from './measure/types';
 
 function bundleTarget(kind: 'next' | 'legacy', bundlePath: string): Target {
   const executablePath = path.join(bundlePath, 'Contents', 'MacOS', 'stache');
+
   return {
     kind,
     bundlePath,
@@ -41,6 +42,7 @@ function bundleTarget(kind: 'next' | 'legacy', bundlePath: string): Target {
 }
 
 const ownedPid = Number.parseInt(process.argv[2] ?? '', 10);
+
 if (!Number.isInteger(ownedPid) || ownedPid <= 0) {
   console.error('usage: bun scripts/check-next-instance.ts <owned-pid>');
   process.exit(2);
@@ -55,6 +57,7 @@ const query = (): ReturnType<typeof findRunningStacheProcesses> =>
 
 try {
   const evidence = assertNoOtherNextInstance(query, ownedPid);
+
   console.log(`query: ${JSON.stringify(evidence)}`);
   console.log(`result: ${JSON.stringify({ ok: true, ownedPid })}`);
 } catch (error) {
@@ -70,5 +73,6 @@ try {
     );
     process.exit(1);
   }
+
   throw error;
 }

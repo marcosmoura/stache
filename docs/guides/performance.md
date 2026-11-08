@@ -123,6 +123,11 @@ The two timing columns answer different questions:
 The `< 300 ms` provisional target applies to the internal host measurement only.
 External launch timing is reported separately and has no target.
 
+A gated launch (Accessibility missing) creates one webview, the guidance window,
+after the first permission check; the startup record above is written earlier and
+still reads `webviews=0`. The host then logs `access: guidance window requested`.
+A trusted launch creates no webview.
+
 ## Webview evidence
 
 For Stache Next the instrumented count in the startup line is authoritative,

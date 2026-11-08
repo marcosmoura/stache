@@ -1,6 +1,6 @@
 import { css } from '@linaria/core';
 
-export const shell = css`
+export const placeholder = css`
   padding: 2rem;
 
   font-family: system-ui, sans-serif;

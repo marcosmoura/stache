@@ -5,8 +5,27 @@ bindings, the on-demand test window or their drift checks.
 
 The native host, tray, test-window route and headless binding export ship. The
 React client consumes that contract through typed SDK wrappers, a validated
-`WindowRouter` and the on-demand `TestWindow`; the browser suites run in real
+`Shell` window router and the on-demand `TestWindow`; the browser suites run in real
 WebKit.
+
+## Layout
+
+```text
+src/ui/src/
+  sdk/                  generated bindings, client wrappers, status feed, tokens
+  shell/
+    Shell.tsx           window router: maps each `?surface=` value to one window
+    components/         reusable UI shared by windows (created with the first shared component)
+    windows/            one directory per window surface
+      AccessibilityGuide/
+      Placeholder/      development fallback for the `shell` surface
+      TestWindow/
+```
+
+Each directory holds the component, its `.styles.tsx`, a colocated test and an
+`index.ts`. A new window (for example the Bar) gets its own `windows/<Name>/`
+directory and a route in `Shell`; pieces used by more than one window move to
+`components/`.
 
 ## Versions
 
@@ -61,7 +80,11 @@ module, a worker join or a socket operation.
 
 ## Host status DTOs
 
-- `HostStatus { ready, error, modules, config }`.
+- `HostStatus { ready, error, access, modules, config }`.
+- `AccessView { state, revoked, appPath }` is the Accessibility launch gate: `state` is
+  `checking`, `blocked` or `open`, `revoked` is true when trust was lost after being open in this
+  launch, and `appPath` is the enclosing `.app` path of the running executable (`null` for an
+  unbundled binary). A gated host is `ready: true` with `access.state = "blocked"`.
 - `ModuleStatusView { id, state, enabled, paused, revision, detail, diagnostic }`.
   `state`/`detail` are runtime facts; `diagnostic` is a rejected configuration.
   `revision` is an exact decimal **string**: JavaScript numbers cannot hold every
@@ -133,7 +156,7 @@ tray's **Open Test Window** action is the only launch path that creates a webvie
   opt-in harness exercises the embedded bundle.
 - Module and host requests are validated twice: the SDK capability checks the
   declared surface, kind and size, and `NativeWindows` repeats the check for
-  host-owned requests. Only the shipped `test` surface is implemented; surface
+  host-owned requests. Only the shipped `test` and `access` surfaces are implemented; surface
   spellings must be ASCII letters, digits, `-` or `_`, so they cannot add a query
   parameter.
 - The same owner/key request reuses and focuses the existing window; closing it
@@ -152,6 +175,64 @@ tray's **Open Test Window** action is the only launch path that creates a webvie
 `core:window:allow-close`. `app.security.capabilities` lists it explicitly, so a
 new capability file is not silently enabled. No filesystem, shell, dialog, HTTP,
 media, weather, system or tray permission applies.
+
+## Accessibility guidance window
+
+While the Accessibility launch gate blocks, the host opens one more host-owned
+`Standard` window, surface `access` (`?surface=access`), key `access`, 480×640
+logical pixels (not resizable), labelled `stache-access-<n>`:
+
+- Chrome comes from `chrome_for(surface)` in `windows.rs`, carried in
+  `NativeWindowSpec`: `access` is frameless (`decorations(false)`), transparent,
+  not resizable and keeps the native shadow; `test` keeps the decorated, opaque,
+  resizable defaults. There is no title bar or traffic lights. Transparency needs
+  Tauri's `macos-private-api` cargo feature and `app.macOSPrivateApi: true` in
+  `tauri.conf.json` (app-wide; it authorizes no other private API). The page sets
+  `html[data-surface='access']`, which makes `html`, `body` and `#root` transparent
+  for this surface only.
+
+- The runner opens it once per gated episode on each `Blocked` transition (first
+  check or revocation) through `NativeWindows`; `window.set_focus` brings the
+  Accessory app and the window forward, exactly like the test window. A user
+  close does not reopen it in the same episode. The tray row `access-guide`
+  (**Show Accessibility Help…**) opens or focuses it again; the next episode
+  opens it automatically. On `Opened` the runner closes it through the release
+  path, and the React surface also closes itself when `status-changed` reports
+  `open`.
+- A trusted launch and an ungated host (empty baseline) never create it, so the
+  `webviews=0` startup record is unchanged on those paths. The startup record is
+  written before the first permission check; a gated launch logs
+  `access: guidance window requested` when the host opens the window.
+- `NativeWindows` accepts exactly the `test` and `access` host requests; every
+  other surface, kind or invalid size stays refused.
+- Commands in `bindings::builder()`, all returning `()` immediately with results
+  delivered through `status-changed`: `requestAccessibility()` (explicit request,
+  downgraded to a check while open), `openAccessibilitySettings()` and
+  `quitApp()` (`HostHandle::request_shutdown`).
+- `src/crates/app/capabilities/access-window.json` grants `stache-access-*`
+  labels only `core:event:allow-listen`, `core:event:allow-unlisten`,
+  `core:window:allow-close`, `core:window:allow-start-dragging` (header drag) and
+  `allow-request-accessibility`,
+  `allow-open-accessibility-settings`, `allow-quit-app`. `build.rs` declares those
+  three commands in the Tauri app manifest, so they are ACL-gated: the test
+  window's capability does not include them and cannot call them. Their
+  autogenerated permission files live in `src/crates/app/permissions/autogenerated/`.
+  `app.security.capabilities` lists both capabilities explicitly.
+- `AccessibilityGuide` (`src/ui/src/shell/windows/AccessibilityGuide/`) reads
+  `appInfo()` and the host status through the shared React Query feed (no new
+  event). States: checking (loading line), blocked (guidance, identity line with
+  name, identifier and `access.appPath`, collapsed troubleshooting with an
+  unbundled variant), revoked (alternate title and line) and open ("Access
+  granted. Starting Stache Next…", then it closes itself). Buttons disable while
+  their command is in flight and `HostStatus.error` is shown when present.
+- Look (part 05): one 16px-radius `crust` panel with a 1px inset `surface0` ring in the
+  bar's typeface (`fonts.bar`, 13px/500) and motion tokens. A `data-tauri-drag-region`
+  header (the Close button is a sibling, never inside it) sits above a scrolling body
+  (tinted hero badge with `data-tone`: overlay/mauve/peach/green; numbered steps;
+  identity card with Name, Bundle ID and Path; troubleshooting disclosure; red-tinted
+  alert) and a fixed action footer. Escape and the Close button call the window's
+  `close()`; auto-repeat is ignored. Animations and transitions are off under
+  `prefers-reduced-motion: reduce`. Icons are Hugeicons.
 
 ## React client
 
@@ -178,16 +259,17 @@ The host status lives only in the React Query cache:
 - `ModuleStatusView.revision` is rendered as text. It is never parsed with
   `Number()` or any other numeric conversion.
 
-`WindowRouter` accepts only `shell` (the default when `surface` is absent) and
-`test`. An unknown or empty `surface` value renders a local fallback and calls
-no native command, so only `index.html?surface=test` reads host data.
+`Shell` accepts only `shell` (the default when `surface` is absent),
+`test` and `access`. An unknown or empty `surface` value renders a local fallback
+and calls no native command, so only `index.html?surface=test` and
+`?surface=access` read host data.
 `TestWindow` shows loading, unavailable, host-ready and empty module/config
 states; module runtime detail and rejected-configuration diagnostics use
 separate labels, as do file diagnostics and warnings. It is a read-only status
 surface and adds no configuration persistence or action endpoint.
 
 Suites sit beside their sources: `client.test.ts`, `statusFeed.test.ts`,
-`TestWindow.test.tsx` and `WindowRouter.test.tsx`. Fixtures and the
+`TestWindow.test.tsx`, `AccessibilityGuide.test.tsx`, `Placeholder.test.tsx` and `Shell.test.tsx`. Fixtures and the
 QueryClient render helper live under `src/ui/tests/`. The generated wrappers are
 exercised with module mocks at the `@tauri-apps/api/core` and
 `@tauri-apps/api/event` boundary; the router and UI suites run against the real

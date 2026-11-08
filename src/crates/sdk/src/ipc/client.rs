@@ -395,6 +395,7 @@ mod tests {
                     outcome: CoreApplyOutcome::Applied { revision: 2 },
                     diagnostic: None,
                 }],
+                access: None,
             })
         }
 
@@ -402,6 +403,7 @@ mod tests {
             Ok(CoreStatus {
                 directory: "/config".into(),
                 files: Vec::new(),
+                access: None,
             })
         }
     }

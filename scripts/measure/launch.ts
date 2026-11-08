@@ -39,6 +39,7 @@ export function startTarget(target: Target, config: ScenarioConfig, root: string
   };
 
   const args = ['--config', target.kind === 'legacy' ? config.files[0].path : config.directory];
+
   args.push('--desktop');
 
   const startedAt = performance.now();
@@ -54,18 +55,25 @@ export function startTarget(target: Target, config: ScenarioConfig, root: string
   if (child.stderr === null) {
     throw new Error(`could not capture stderr from ${target.executablePath}`);
   }
+
   const lines = createInterface({ input: child.stderr });
+
   lines.on('line', (line) => {
     const trimmed = line.trim();
+
     state.stderrLines.push(trimmed);
+
     if (state.stderrLines.length > STDERR_TAIL_LINES) {
       state.stderrLines.shift();
     }
+
     const startup = /startup: tray ready after (\d+) ms, webviews=(\d+)/.exec(trimmed);
+
     if (startup !== null && state.internalTrayReadyMs === null) {
       state.internalTrayReadyMs = Number.parseInt(startup[1], 10);
       state.instrumentedWebviews = Number.parseInt(startup[2], 10);
     }
+
     if (trimmed.includes('setup complete (background tasks spawned)')) {
       state.legacyReady = true;
     }
@@ -92,9 +100,11 @@ function childEnvironment(target: Target, root: string): NodeJS.ProcessEnv {
     TMPDIR: root,
     XDG_CONFIG_HOME: path.join(root, 'config'),
   };
+
   if (target.kind === 'legacy') {
     environment.RUST_LOG = 'info';
   }
+
   return environment;
 }
 
@@ -124,14 +134,18 @@ export async function waitForReady(
       `failed to spawn ${target.executablePath}:\n${started.stderrTail().join('\n')}`,
     );
   }
+
   const deadline = started.startedAt + READY_TIMEOUT_MS;
+
   while (performance.now() < deadline) {
     throwIfInterrupted(isInterrupted, 'interrupted while waiting for readiness');
+
     if (started.child.exitCode !== null || started.child.signalCode !== null) {
       throw new Error(
         `${target.kind} target exited before readiness:\n${started.stderrTail().join('\n')}`,
       );
     }
+
     if (target.kind === 'next') {
       if (await coreStatusAnswers(socketPath)) {
         return {
@@ -145,8 +159,10 @@ export async function waitForReady(
         readySource: 'legacy stderr: setup complete (background tasks spawned)',
       };
     }
+
     await sleep(READY_POLL_INTERVAL_MS);
   }
+
   throw new Error(
     `${target.kind} target did not become ready within ${READY_TIMEOUT_MS} ms:\n` +
       started.stderrTail().join('\n'),
@@ -168,6 +184,7 @@ async function coreStatusAnswers(socketPath: string): Promise<boolean> {
       if (settled) {
         return;
       }
+
       settled = true;
       clearTimeout(timer);
       socket.destroy();
@@ -182,6 +199,7 @@ async function coreStatusAnswers(socketPath: string): Promise<boolean> {
     socket.on('data', (chunk: string) => {
       buffer += chunk;
       const newline = buffer.indexOf('\n');
+
       if (newline >= 0) {
         finish(isOkResponse(buffer.slice(0, newline)));
       }
@@ -194,9 +212,11 @@ async function coreStatusAnswers(socketPath: string): Promise<boolean> {
 function isOkResponse(line: string): boolean {
   try {
     const parsed: unknown = JSON.parse(line);
+
     if (typeof parsed !== 'object' || parsed === null) {
       return false;
     }
+
     return (parsed as { status?: unknown }).status === 'ok';
   } catch {
     return false;

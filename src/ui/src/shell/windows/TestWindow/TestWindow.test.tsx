@@ -24,15 +24,25 @@ type StatusHandler = (event: { payload: { status: HostStatus } }) => void;
 
 function mockHostCommands(status: Promise<HostStatus> | HostStatus) {
   vi.mocked(invoke).mockImplementation((async (command: string) => {
-    if (command === 'app_info') return appInfo;
-    if (command === 'host_status') return status;
+    if (command === 'app_info') {
+      return appInfo;
+    }
+
+    if (command === 'host_status') {
+      return status;
+    }
+
     throw new Error(`Unexpected command: ${command}`);
   }) as never);
 }
 
 function emitStatus(status: HostStatus) {
   const handler = vi.mocked(listen).mock.calls.at(-1)?.[1] as StatusHandler | undefined;
-  if (!handler) throw new Error('status listener was not registered');
+
+  if (!handler) {
+    throw new Error('status listener was not registered');
+  }
+
   handler({ payload: { status } });
 }
 
@@ -40,8 +50,14 @@ beforeEach(() => {
   vi.mocked(invoke).mockReset();
   vi.mocked(listen).mockReset();
   vi.mocked(invoke).mockImplementation((async (command: string) => {
-    if (command === 'app_info') return appInfo;
-    if (command === 'host_status') return hostStatus();
+    if (command === 'app_info') {
+      return appInfo;
+    }
+
+    if (command === 'host_status') {
+      return hostStatus();
+    }
+
     throw new Error(`Unexpected command: ${command}`);
   }) as never);
   vi.mocked(listen).mockResolvedValue(() => {});
@@ -49,6 +65,7 @@ beforeEach(() => {
 
 test('renders status, modules and configuration with exact revision text', async () => {
   const revision = '18446744073709551615';
+
   mockHostCommands(
     hostStatus({
       modules: [
@@ -106,6 +123,7 @@ test('separates a host error from configuration diagnostics', async () => {
 
 test('shows loading, then an empty host without modules or configuration', async () => {
   let resolveStatus: ((status: HostStatus) => void) | undefined;
+
   mockHostCommands(
     new Promise<HostStatus>((resolve) => {
       resolveStatus = resolve;
@@ -135,8 +153,14 @@ test('shows a host status failure instead of stale data', async () => {
 
 test('reports an application identity failure without hiding host status', async () => {
   vi.mocked(invoke).mockImplementation((async (command: string) => {
-    if (command === 'app_info') throw new Error('identity unavailable');
-    if (command === 'host_status') return hostStatus();
+    if (command === 'app_info') {
+      throw new Error('identity unavailable');
+    }
+
+    if (command === 'host_status') {
+      return hostStatus();
+    }
+
     throw new Error(`Unexpected command: ${command}`);
   }) as never);
 
@@ -150,6 +174,7 @@ test('reports an application identity failure without hiding host status', async
 
 test('a status event updates the view and a stale snapshot does not replace it', async () => {
   let resolveStatus: ((status: HostStatus) => void) | undefined;
+
   mockHostCommands(
     new Promise<HostStatus>((resolve) => {
       resolveStatus = resolve;
@@ -176,6 +201,7 @@ test('a status event updates the view and a stale snapshot does not replace it',
 test('StrictMode removes listeners that resolve after unmount', async () => {
   const stops = [vi.fn(), vi.fn()];
   const resolvers: Array<(stop: () => void) => void> = [];
+
   vi.mocked(listen).mockImplementation((() => {
     return new Promise<() => void>((resolve) => {
       resolvers.push(resolve);
@@ -216,9 +242,25 @@ test('uses the Catppuccin Mocha token background and text colors', async () => {
   await expect.element(screen.getByRole('heading', { name: 'Stache Next' })).toBeVisible();
 
   const main = document.querySelector('main');
-  if (!main) throw new Error('Test window did not mount');
+
+  if (!main) {
+    throw new Error('Test window did not mount');
+  }
+
   const computed = getComputedStyle(main);
+
   expect(computed.backgroundColor).toBe('rgb(30, 30, 46)');
   expect(computed.color).toBe('rgb(205, 214, 244)');
   expect(computed.fontFamily).toContain('system-ui');
+});
+
+test('AG-05-09 the test window leaves the document and its page opaque', async () => {
+  const { screen } = await renderWithClient(<TestWindow />);
+
+  await expect.element(screen.getByText('Host test surface')).toBeVisible();
+
+  expect(document.documentElement.dataset.surface).toBeUndefined();
+  const page = document.querySelector('main');
+
+  expect(page && getComputedStyle(page).backgroundColor).not.toBe('rgba(0, 0, 0, 0)');
 });

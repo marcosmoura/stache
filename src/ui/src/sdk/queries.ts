@@ -38,6 +38,7 @@ export function useHostStatus(): UseQueryResult<HostStatus> {
 
   useEffect(() => {
     const feed = connectHostStatus({ client: queryClient });
+
     return () => feed.dispose();
   }, [queryClient]);
 

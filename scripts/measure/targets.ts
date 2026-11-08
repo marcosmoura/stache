@@ -16,6 +16,7 @@ export class TargetError extends Error {}
 export function resolveTarget(kind: TargetKind, inputPath: string): Target {
   const resolved = path.resolve(REPOSITORY_ROOT, inputPath);
   let stats: ReturnType<typeof statSync>;
+
   try {
     stats = statSync(resolved);
   } catch {
@@ -31,14 +32,17 @@ export function resolveTarget(kind: TargetKind, inputPath: string): Target {
     if (!resolved.endsWith('.app')) {
       throw new TargetError(`${kind} directory is not a macOS .app bundle: ${resolved}`);
     }
+
     return resolveBundle(kind, resolved);
   }
 
   if (!stats.isFile()) {
     throw new TargetError(`${kind} target is not a file or .app bundle: ${resolved}`);
   }
+
   assertExecutable(resolved, kind);
   assertReleaseBuild(resolved, kind);
+
   return {
     kind,
     bundlePath: null,
@@ -51,8 +55,10 @@ export function resolveTarget(kind: TargetKind, inputPath: string): Target {
 function resolveBundle(kind: TargetKind, bundlePath: string): Target {
   const executableName = readBundleExecutable(bundlePath);
   const executablePath = path.join(bundlePath, 'Contents', 'MacOS', executableName);
+
   assertExecutable(executablePath, kind);
   assertReleaseBuild(executablePath, kind);
+
   return {
     kind,
     bundlePath,
@@ -65,6 +71,7 @@ function resolveBundle(kind: TargetKind, bundlePath: string): Target {
 function buildInfo(executablePath: string, bundlePath: string | null): BuildInfo {
   const stats = statSync(executablePath);
   const releasePath = `${executablePath}${bundlePath ?? ''}`.toLowerCase().includes('/release/');
+
   return {
     executablePath,
     bundlePath,
@@ -76,15 +83,18 @@ function buildInfo(executablePath: string, bundlePath: string | null): BuildInfo
 
 function readBundleExecutable(bundlePath: string): string {
   const infoPlist = path.join(bundlePath, 'Contents', 'Info.plist');
+
   try {
     const executable = runCommand('/usr/libexec/PlistBuddy', [
       '-c',
       'Print :CFBundleExecutable',
       infoPlist,
     ]).trim();
+
     if (executable.length === 0) {
       throw new Error('empty CFBundleExecutable');
     }
+
     return executable;
   } catch (error) {
     throw new TargetError(
@@ -95,12 +105,14 @@ function readBundleExecutable(bundlePath: string): string {
 
 function readBundleIdentifier(bundlePath: string): string | null {
   const infoPlist = path.join(bundlePath, 'Contents', 'Info.plist');
+
   try {
     const identifier = runCommand('/usr/libexec/PlistBuddy', [
       '-c',
       'Print :CFBundleIdentifier',
       infoPlist,
     ]).trim();
+
     return identifier.length === 0 ? null : identifier;
   } catch {
     return null;

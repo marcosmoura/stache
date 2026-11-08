@@ -26,7 +26,10 @@ const CONFIG_STATE_LABELS: Record<ConfigFileState, string> = {
 };
 
 function errorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
+  if (error instanceof Error) {
+    return error.message;
+  }
+
   return String(error);
 }
 

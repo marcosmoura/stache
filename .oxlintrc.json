@@ -17,6 +17,10 @@
   },
   "jsPlugins": [
     {
+      "name": "@stylistic",
+      "specifier": "@stylistic/eslint-plugin"
+    },
+    {
       "name": "@tanstack/query",
       "specifier": "@tanstack/eslint-plugin-query"
     },
@@ -30,6 +34,23 @@
     }
   ],
   "rules": {
+    "@stylistic/padding-line-between-statements": [
+      "error",
+      {
+        "blankLine": "always",
+        "prev": "*",
+        "next": ["if", "for", "while", "do", "switch", "try", "block"]
+      },
+      {
+        "blankLine": "always",
+        "prev": ["if", "for", "while", "do", "switch", "try", "block"],
+        "next": "*"
+      },
+      { "blankLine": "always", "prev": "*", "next": "return" },
+      { "blankLine": "always", "prev": ["const", "let", "var"], "next": "*" },
+      { "blankLine": "any", "prev": ["const", "let", "var"], "next": ["const", "let", "var"] }
+    ],
+    "eslint/curly": ["error", "all"],
     "@tanstack/query/exhaustive-deps": "error",
     "@tanstack/query/infinite-query-property-order": "error",
     "@tanstack/query/mutation-property-order": "error",

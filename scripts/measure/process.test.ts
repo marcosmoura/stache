@@ -14,20 +14,24 @@ function refusal(query: () => RunningStacheProcess[], ownedPid: number): Instanc
     if (error instanceof InstanceCollisionError) {
       return error;
     }
+
     throw error;
   }
+
   throw new Error('expected the guard to refuse');
 }
 
 describe('assertNoOtherNextInstance', () => {
   it('accepts the owned next instance and returns the query as evidence', () => {
     const evidence = [entry('next', 42), entry('legacy', 7)];
+
     expect(assertNoOtherNextInstance(() => evidence, 42)).toEqual(evidence);
   });
 
   it('refuses a foreign next instance', () => {
     const evidence = [entry('next', 42), entry('next', 99)];
     const error = refusal(() => evidence, 42);
+
     expect(error.reason).toBe('foreign-instance');
     expect(error.evidence).toEqual(evidence);
     expect(error.message).toContain('99');
@@ -35,12 +39,14 @@ describe('assertNoOtherNextInstance', () => {
 
   it('refuses a next instance whose identity cannot be verified', () => {
     const evidence = [entry('next', 42), entry('next', null)];
+
     expect(refusal(() => evidence, 42).reason).toBe('unknown-identity');
   });
 
   it('does not treat a legacy process as the owned next instance', () => {
     const evidence = [entry('legacy', 42)];
     const error = refusal(() => evidence, 42);
+
     expect(error.reason).toBe('unknown-identity');
     expect(error.evidence).toEqual(evidence);
   });
@@ -53,6 +59,7 @@ describe('assertNoOtherNextInstance', () => {
     const error = refusal(() => {
       throw new Error('lsappinfo is unavailable');
     }, 42);
+
     expect(error.reason).toBe('query-failed');
     expect(error.evidence).toEqual([]);
     expect(error.message).toContain('lsappinfo is unavailable');

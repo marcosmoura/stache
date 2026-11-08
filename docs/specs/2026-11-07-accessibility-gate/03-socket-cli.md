@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 03 — Socket and CLI while gated

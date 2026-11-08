@@ -12,7 +12,7 @@ Read when changing the shipped foundation boundaries.
   watcher, comment-preserving edits, schemas), identity paths/instance lock and the socket
   protocol/router/client/server; no Tauri dependency. See [sdk.md](sdk.md), [config.md](config.md)
   and [ipc.md](ipc.md).
-- `src/crates/macos`: safe Accessibility trust, application-activation, main-thread, `CoreAudio`,
+- `src/crates/macos`: safe Accessibility trust, System Settings opener, application-activation, main-thread, `CoreAudio`,
   display, application-observation/control and per-display desktop-image adapters, plus the owned
   Keep Awake assertion, lock-probe and observation adapters; constructing them acquires no
   assertion. The shipped `hold_hud` adapter is a click-through, nonactivating `NSPanel` HUD with
@@ -77,7 +77,8 @@ Read when changing the shipped foundation boundaries.
   planned. See [wallpapers.md](../features/wallpapers.md).
 - `src/crates/cli`: built-in `config`/`cache`/`reload`/`schema`/`completions` implementation and
   command composition; it imports the SDK, never the app or a module crate.
-- `src/ui/src/shell/components/Shell`: development/test-only React surface with colocated test,
+- `src/ui/src/shell`: the `Shell` window router (`Shell.tsx`), `windows/` (one directory per surface, including the
+  development-only `Placeholder`) and `components/` (reusable UI, created with the first shared component); each directory has a colocated test,
   Linaria `.styles.tsx` file and index export. React Compiler/Vite process the frontend.
 - `src/ui/src/sdk`: generated command/event bindings plus the React Query status feed, client wrappers and tokens used by the test window.
 - `src/ui/main.tsx` bootstraps the app exported by `src/ui/index.tsx`; `main.css` owns global CSS.
@@ -91,7 +92,7 @@ thread before any slow service. A background host thread owns one registry, conf
 watcher, permission policy, socket server and module control handles; tray/Tauri callbacks enqueue
 commands and never wait for module code, a worker join or the socket. Status is published to the tray
 and as the `status-changed` event; `host_status` reads that snapshot without taking module locks.
-After creating the tray the host writes one info record, `startup: tray ready after N ms,
+`HostStatus.access` reports the Accessibility launch gate described below. After creating the tray the host writes one info record, `startup: tray ready after N ms,
 webviews=N`, which the release measurement reads; see
 [performance.md](../guides/performance.md).
 
@@ -124,15 +125,41 @@ Tray **Enable** is a config-backed edit: plan, validate, prepare and sync the re
 for an external change immediately before the atomic rename, then apply once. A missing target is
 committed with a no-clobber rename and a symlink is refused. **Pause/Resume** are session-only. An
 invalid file is never overwritten and its diagnostic is displayed separately from runtime state.
-Failed and unavailable modules expose a **Retry** action; waiting modules expose the explicit
-permission request. Permissions poll every second while a module waits and back off otherwise; a
-schedule change wakes the pending wait, and at most one periodic tick is queued. Only enabled
-declared requirements may prompt, at most once per session unless the user explicitly retries.
+Failed and unavailable modules expose a **Retry** action; the gate rows expose the explicit
+Accessibility request. Permissions poll every second while a module waits or the Accessibility gate
+is not open and back off otherwise; a schedule change wakes the pending wait, and at most one
+periodic tick is queued. Only enabled declared requirements may prompt, at most once per session
+unless the user explicitly retries; the baseline Accessibility requirement never prompts on its own.
 macOS application activation is observed through `NSApplicationDidBecomeActiveNotification` in
 `stache-macos`, not Tauri's loop `Resumed` event. `MainThreadMarker` enforces main-thread
 registration; the non-`Send` guard is held in a main-thread cell that only a main-thread closure
-takes and drops, removing its observer. The pilot declares none, so normal operation never prompts
-for Accessibility.
+takes and drops, removing its observer.
+
+**Accessibility launch gate.** Accessibility is a launch requirement of the whole app. The
+composition root builds the registry with the baseline requirement
+`PermissionRequirement::user_only(Permission::Accessibility)`, which the registry merges into every
+module, so every registered module waits (`waitingForPermission`) without trust, including modules
+that need none themselves (proxyAudio, noTunes, Keep Awake, Wallpapers, ordinary shortcuts). The
+pure `AccessGate` (`access.rs`) is `Checking`, `Blocked { revoked }` or `Open`: `Granted` opens it,
+`Denied` and `Unknown` block (fail closed). The first non-prompting check runs in `Runner::start`
+after factory registration and before `registry.start_all()`; every later permission refresh
+(tick, activation, explicit, enable, pause, resume, retry, config apply) feeds the gate the
+Accessibility status that refresh already read (`RefreshReport::statuses`), so the gate makes no
+extra platform call. The registry's own `on_permission_change` stops running modules in reverse
+order on revocation and restarts them in dependency order on a grant; the gate adds no lifecycle
+path. Each transition writes one info record: `access: blocked (accessibility denied|unknown)`,
+`access: open` or `access: revoked`. While gated the tray, instance lock, configuration store and
+watcher, permission ticker, activation observer, test window, Quit and Caps Lock startup recovery
+keep working. The host never calls `PermissionProvider::request` on its own: only the explicit
+tray **Request Accessibility…** (`HostHandle::request_permission`) does, and it requests nothing
+while the gate is open. **Open Accessibility Settings…** (`HostHandle::open_accessibility_settings`)
+calls the injected `SettingsOpener` only while the gate is not open; its production implementation
+hops to the main thread and calls `stache_macos::settings::open_accessibility_settings`
+(`x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility`, an undocumented
+URL verified manually). A failure is the last action error until the next successful action.
+`HostStatus.access` is `{ state: checking|blocked|open, revoked, appPath }`; `appPath` is the
+enclosing `.app` of the running executable, or absent for an unbundled binary. `ready` keeps its
+meaning: a gated host is `ready: true` with `access.state = blocked`.
 
 Launch creates no webview and no Dock icon. The explicit **Open Test Window** action opens the app
 URL with `?surface=test` as `stache-test-<n>`, reuses it for the same owner/key and closes it on
@@ -204,7 +231,10 @@ configuration (nothing when the configuration needs no tap). The requirement is 
 host checks and polls the trust status on startup, enable, reload, tick and activation but calls
 `PermissionProvider::request` only for the explicit tray request. A configuration that newly needs
 trust is accepted and waits; it never prompts. A trusted but failed tap is a module failure, not a
-missing permission. Later consumers must not opt into automatic prompting.
+missing permission. Later consumers must not opt into automatic prompting. Since Accessibility is
+also the app-wide baseline (see the launch gate above), this declaration is redundant for
+Accessibility but harmless and stays for future, non-baseline permissions. The host still never
+calls the system prompt automatically; it does automatically block every module until trust exists.
 
 ### Caps Lock remap ownership and startup recovery
 
@@ -299,8 +329,9 @@ request starts teardown: Tauri's last-window `ExitRequested` (`code: None`, from
 reaches the coordinator through the default menu's Quit item, with the Test Window frontmost, but
 a repeat Cmd-Q does not escalate while the reply is pending; a signal does. Logout, restart and
 shutdown have not been verified end to end.
-`execOnStartup` runs once, through the shared SDK command runner, on its own owned thread after first setup, never for CLI, reload or a
-second launch; a long-lived command cannot delay readiness or shutdown. See [ipc.md](ipc.md) and
+`execOnStartup` runs once, through the shared SDK command runner, on its own owned thread, never for CLI, reload or a
+second launch. It starts when the Accessibility gate first opens in a launch (right after setup when
+trust already exists, otherwise after the first grant) and never reruns on a later reopening; a long-lived command cannot delay readiness or shutdown. See [ipc.md](ipc.md) and
 [config.md](config.md).
 
 ## Identity

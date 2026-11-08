@@ -16,8 +16,8 @@ has shipped.
 | Finished                   | [Wallpapers](specs/2026-11-03-wallpapers/00-overview.md)                             | 4/4 done on `main`                  | Rotation, processing cache and CLI shipped; see [feature](features/wallpapers.md).                                                                                                     |
 | Finished                   | [Keybindings / Caps Lock / section-key](specs/2026-11-03-keybindings/00-overview.md) | 5/5 done on `main`                  | Runtime and shared input service shipped; real hotkeys, Caps remap and taps unverified.                                                                                                |
 | Finished                   | [Hold-to-Quit](specs/2026-11-03-hold-to-quit/00-overview.md)                         | 6/6 done on `main`                  | Runtime, HUD, `dismissDelay` linger and position/animation shipped; see [feature](features/hold-to-quit.md). Slide, other positions, Spaces and multiple displays unverified natively. |
-| Specified, not started     | [Accessibility launch gate](specs/2026-11-07-accessibility-gate/00-overview.md)      | 4 draft parts                       | `feat/accessibility-gate`; app-wide Accessibility requirement with a guidance window; decisions confirmed 2026-11-07.                                                                  |
 | Finished                   | [MenuAnywhere](specs/2026-11-03-menu-anywhere/00-overview.md)                        | 3/3 done on `main`                  | Native menu, exact activation and runtime shipped; manual gates passed 2026-11-07/08; see [feature](features/menu-anywhere.md).                                                        |
+| Finished                   | [Accessibility launch gate](specs/2026-11-07-accessibility-gate/00-overview.md)      | 5/5 done on `main`                  | App-wide Accessibility requirement, gate status, socket refusal and the frameless guidance window shipped; manual gate checks (AG-02..05-M*) not run.                                  |
 | Specified, not started     | [Bar foundation](specs/2026-11-08-bar-foundation/00-overview.md)                     | 2 draft parts                       | `feat/bar-foundation`; next; SDK published state + host screen reservations.                                                                                                           |
 | Specified, not started     | [Tiling](specs/2026-11-03-tiling/00-overview.md)                                     | 9 draft parts                       | `feat/tiling`; after Bar foundation.                                                                                                                                                   |
 | Specified, not started     | [Bar](specs/2026-11-03-bar/00-overview.md)                                           | 6 draft parts (03–08)               | `feat/bar`; after Tiling; preserve legacy visual parity.                                                                                                                               |
@@ -39,7 +39,9 @@ taps and the measured HID-tap-versus-Carbon gate are unverified. Hold-to-Quit is
 configurable HUD position and fade/slide animation. User-reported manual runs on 2026-11-07
 held ⌘Q and quit the app after granting Accessibility, and confirmed the centered fade, the
 release linger and the fade-out; the other native cases (slide, other positions, Spaces,
-multiple displays) are unverified. Specified work has only documentation on its branches: a draft is not
+multiple displays) are unverified. The Accessibility launch gate is recorded on `main` after its approved squash merge (2026-11-08):
+every module waits for Accessibility, and the guidance window explains how to grant it; its manual
+native checks were not run. Specified work has only documentation on its branches: a draft is not
 approval. Implement one authorized part at a time.
 
 ## Runtime sequence and hard gates

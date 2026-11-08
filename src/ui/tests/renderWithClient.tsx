@@ -14,5 +14,6 @@ export async function renderWithClient(ui: ReactNode) {
   });
 
   const screen = await render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+
   return { client, screen };
 }

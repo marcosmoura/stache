@@ -30,6 +30,7 @@ test('reads app info through the generated command wrapper', async () => {
 
 test('reads host status through the generated command wrapper', async () => {
   const status = hostStatus();
+
   vi.mocked(invoke).mockResolvedValue(status);
 
   await expect(readHostStatus()).resolves.toEqual(status);
@@ -38,6 +39,7 @@ test('reads host status through the generated command wrapper', async () => {
 
 test('subscribes to the generated status event and unwraps its payload', async () => {
   const unlisten = vi.fn();
+
   vi.mocked(eventApi.listen).mockResolvedValue(unlisten);
   const onStatus = vi.fn();
 
@@ -45,9 +47,13 @@ test('subscribes to the generated status event and unwraps its payload', async (
 
   expect(eventApi.listen).toHaveBeenCalledWith('status-changed', expect.any(Function));
   const handler = vi.mocked(eventApi.listen).mock.calls[0]?.[1];
-  if (!handler) throw new Error('status listener was not registered');
+
+  if (!handler) {
+    throw new Error('status listener was not registered');
+  }
 
   const status = hostStatus({ ready: false });
+
   handler({ event: 'status-changed', id: 1, payload: { status } });
   expect(onStatus).toHaveBeenCalledWith(status);
 
@@ -57,6 +63,7 @@ test('subscribes to the generated status event and unwraps its payload', async (
 
 test('generated event wrapper exposes once, emit and webview-scoped variants', async () => {
   const onceUnlisten = vi.fn();
+
   vi.mocked(eventApi.once).mockResolvedValue(onceUnlisten);
   const statusChanged = { status: hostStatus() };
   const callback = vi.fn();

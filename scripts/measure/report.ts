@@ -59,14 +59,18 @@ function trayReadyCheck(scenarios: ScenarioResult[]): TargetCheck {
       parts.push(`${scenario.label}: incomplete run`);
       continue;
     }
+
     const stats = internalTimingStats(scenario.launches);
+
     if (stats.warmMedianMs === null) {
       incomplete = true;
       parts.push(`${scenario.label}: no internal tray timing`);
       continue;
     }
+
     measured = true;
     const passed = stats.warmMedianMs < TARGET_TRAY_READY_MS;
+
     failed ||= !passed;
     parts.push(
       `${scenario.label}: warm median ${formatMs(stats.warmMedianMs)} ` +
@@ -93,13 +97,16 @@ function idleCpuCheck(scenarios: ScenarioResult[]): TargetCheck {
       parts.push(`${scenario.label}: incomplete run`);
       continue;
     }
+
     if (scenario.idle === null) {
       incomplete = true;
       parts.push(`${scenario.label}: no idle sample`);
       continue;
     }
+
     measured = true;
     const nearZero = scenario.idle.treeCpuPercent < NEAR_ZERO_CPU_PERCENT;
+
     failed ||= !nearZero;
     parts.push(
       `${scenario.label}: tree average ${formatPercent(scenario.idle.treeCpuPercent)}, ` +
@@ -126,19 +133,23 @@ function webviewCheck(scenarios: ScenarioResult[]): TargetCheck {
       parts.push(`${scenario.label}: incomplete run`);
       continue;
     }
+
     const counts = scenario.launches
       .map((launch) => launch.instrumentedWebviews)
       .filter((count): count is number => count !== null);
     const observed = scenario.idle?.processes.filter((process) =>
       /WebKit\.(WebContent|Networking|GPU)/.test(process.executable),
     ).length;
+
     if (counts.length === 0) {
       incomplete = true;
       parts.push(`${scenario.label}: no instrumented webview count`);
       continue;
     }
+
     measured = true;
     const maximum = Math.max(...counts);
+
     failed ||= maximum !== 0 || (observed ?? 0) > 0;
     parts.push(
       `${scenario.label}: instrumented ${maximum} webview(s)` +
@@ -164,6 +175,7 @@ function treeRssCheck(
       detail: 'no Stache Next scenario produced an idle sample',
     };
   }
+
   if (legacyScenario?.idle === undefined || legacyScenario?.idle === null) {
     return {
       target: 'Lower idle tree RSS than legacy',
@@ -171,6 +183,7 @@ function treeRssCheck(
       detail: 'legacy baseline was not requested or produced no idle sample',
     };
   }
+
   const legacyRss = legacyScenario.idle.treeRssFinalKiB;
   const parts: string[] = [];
   let failed = false;
@@ -183,12 +196,15 @@ function treeRssCheck(
       parts.push(`${scenario.label}: incomplete run`);
       continue;
     }
+
     if (scenario.idle === null) {
       parts.push(`${scenario.label}: no idle sample`);
       continue;
     }
+
     measured = true;
     const passed = scenario.idle.treeRssFinalKiB < legacyRss;
+
     failed ||= !passed;
     parts.push(
       `${scenario.label}: ${formatKiB(scenario.idle.treeRssFinalKiB)} vs ` +
@@ -212,13 +228,16 @@ export function writeMeasurementOutputs(
   const timestamp = run.startedAt.replace(/[:.]/g, '-');
   let directory = path.join(repositoryRoot, MEASUREMENTS_DIRECTORY, timestamp);
   let suffix = 2;
+
   while (existsSync(directory)) {
     directory = path.join(repositoryRoot, MEASUREMENTS_DIRECTORY, `${timestamp}-${suffix}`);
     suffix += 1;
   }
+
   mkdirSync(directory, { recursive: true });
   const reportPath = path.join(directory, 'report.md');
   const samplesPath = path.join(directory, 'samples.json');
+
   writeFileSync(reportPath, report, 'utf8');
   writeFileSync(samplesPath, `${JSON.stringify(run, null, 2)}\n`, 'utf8');
   // Format with the repository formatter so the committed output passes the hooks.
@@ -226,12 +245,14 @@ export function writeMeasurementOutputs(
     '--disable-nested-config',
     directory,
   ]);
+
   return { directory, reportPath, samplesPath };
 }
 
 /** Renders the Markdown report from one completed run. */
 export function renderReport(run: MeasurementRun, checks: TargetCheck[]): string {
   const lines: string[] = [];
+
   lines.push(`# Foundation measurement — ${run.startedAt}`);
   lines.push('');
   lines.push(
@@ -257,9 +278,11 @@ export function renderReport(run: MeasurementRun, checks: TargetCheck[]): string
     );
     lines.push('');
     lines.push('```text');
+
     for (const line of run.failure.split('\n')) {
       lines.push(line);
     }
+
     lines.push('```');
     lines.push('');
   }
@@ -277,9 +300,11 @@ export function renderReport(run: MeasurementRun, checks: TargetCheck[]): string
   lines.push(`| Rust | ${run.environment.toolchain.rustc} |`);
   lines.push(`| Cargo | ${run.environment.toolchain.cargo} |`);
   lines.push(`| Stache Next build | ${describeBuild(run.targets.next.build)} |`);
+
   if (run.targets.legacy !== null) {
     lines.push(`| Legacy build | ${describeBuild(run.targets.legacy.build)} |`);
   }
+
   lines.push(
     `| Power | ${run.environment.power.source}` +
       (run.environment.power.batteryPercent === null
@@ -296,6 +321,7 @@ export function renderReport(run: MeasurementRun, checks: TargetCheck[]): string
   lines.push('');
   lines.push('| Device | Transport | Input | Output | Default input | Default output | Class |');
   lines.push('| --- | --- | --- | --- | --- | --- | --- |');
+
   for (const device of run.environment.audio.devices) {
     const classes = [
       device.builtIn ? 'built-in' : '',
@@ -304,6 +330,7 @@ export function renderReport(run: MeasurementRun, checks: TargetCheck[]): string
     ]
       .filter((label) => label.length > 0)
       .join(', ');
+
     lines.push(
       markdownRow([
         device.name,
@@ -316,6 +343,7 @@ export function renderReport(run: MeasurementRun, checks: TargetCheck[]): string
       ]),
     );
   }
+
   lines.push('');
 
   lines.push('## Method');
@@ -338,6 +366,7 @@ export function renderReport(run: MeasurementRun, checks: TargetCheck[]): string
   );
   lines.push('- The sampler runs `ps` outside the measured tree; its own CPU is not attributed.');
   const idleWindowSeconds = run.scenarios[0]?.idle?.windowSeconds ?? 60;
+
   lines.push(
     `- CPU precision: \`ps\` time resolution is ${PS_CPU_TIME_RESOLUTION_SECONDS * 1_000} ms, ` +
       `which is about ${((PS_CPU_TIME_RESOLUTION_SECONDS / idleWindowSeconds) * 100).toFixed(3)} ` +
@@ -364,9 +393,11 @@ export function renderReport(run: MeasurementRun, checks: TargetCheck[]): string
   lines.push('');
   lines.push('| Target | Status | Evidence |');
   lines.push('| --- | --- | --- |');
+
   for (const check of checks) {
     lines.push(markdownRow([check.target, check.status.toUpperCase(), check.detail]));
   }
+
   lines.push('');
   lines.push(
     'The "≈0% idle CPU" target has no numeric budget in the spec. The tool reports the raw ' +
@@ -376,8 +407,10 @@ export function renderReport(run: MeasurementRun, checks: TargetCheck[]): string
   lines.push('');
 
   const misses = checks.filter((check) => check.status === 'miss');
+
   lines.push('## Misses');
   lines.push('');
+
   if (misses.length === 0) {
     lines.push('None.');
   } else {
@@ -385,6 +418,7 @@ export function renderReport(run: MeasurementRun, checks: TargetCheck[]): string
       lines.push(`- **${miss.target}**: ${miss.detail}`);
     }
   }
+
   lines.push('');
 
   lines.push('## Safety record');
@@ -424,16 +458,20 @@ export function renderReport(run: MeasurementRun, checks: TargetCheck[]): string
             .join('; ')
     }`,
   );
+
   for (const note of run.safety.notes) {
     lines.push(`- ${note}`);
   }
+
   lines.push('');
 
   lines.push('## Limitations');
   lines.push('');
+
   for (const limitation of run.limitations) {
     lines.push(`- ${limitation}`);
   }
+
   lines.push('');
 
   return `${lines.join('\n')}\n`;
@@ -449,19 +487,23 @@ function renderScenario(lines: string[], scenario: ScenarioResult): void {
       `${scenario.target.build.modifiedAt}; /release/ in path: ` +
       `${scenario.target.build.pathIncludesReleaseDirectory ? 'yes' : 'no'}`,
   );
+
   for (const annotation of scenario.annotations) {
     lines.push(`- ${annotation}`);
   }
+
   if (!scenario.complete) {
     lines.push(
       '- Incomplete: the run stopped during this scenario; the rows below are partial ' +
         'measurements, not a finished sample.',
     );
   }
+
   lines.push('');
 
   lines.push('### Configuration used');
   lines.push('');
+
   for (const file of scenario.configFiles) {
     lines.push(`\`${file.path}\``);
     lines.push('');
@@ -477,6 +519,7 @@ function renderScenario(lines: string[], scenario: ScenarioResult): void {
     '| # | Context | External launch -> ready | Internal main -> tray | Webviews | Ready source |',
   );
   lines.push('| --- | --- | --- | --- | --- | --- |');
+
   for (const launch of scenario.launches) {
     lines.push(
       markdownRow([
@@ -489,6 +532,7 @@ function renderScenario(lines: string[], scenario: ScenarioResult): void {
       ]),
     );
   }
+
   lines.push('');
   lines.push(
     renderTimingSummary('External launch -> ready', externalTimingStats(scenario.launches)),
@@ -501,8 +545,10 @@ function renderScenario(lines: string[], scenario: ScenarioResult): void {
     lines.push('');
     lines.push('Not collected.');
     lines.push('');
+
     return;
   }
+
   renderIdle(lines, scenario.idle);
 }
 
@@ -521,13 +567,16 @@ function renderIdle(lines: string[], idle: IdleSample): void {
     `- Tree RSS: final ${formatKiB(idle.treeRssFinalKiB)}, peak ${formatKiB(idle.treeRssPeakKiB)} ` +
       `(${idle.processes.length} process(es))`,
   );
+
   for (const note of idle.notes) {
     lines.push(`- ${note}`);
   }
+
   lines.push('');
 
   lines.push('| PID | PPID | Role | CPU | RSS final | RSS peak | Coverage | Executable |');
   lines.push('| --- | --- | --- | --- | --- | --- | --- | --- |');
+
   for (const process of idle.processes) {
     const coverage = [
       process.presentInAllSnapshots ? 'all snapshots' : 'partial',
@@ -535,6 +584,7 @@ function renderIdle(lines: string[], idle: IdleSample): void {
     ]
       .filter((label) => label.length > 0)
       .join(', ');
+
     lines.push(
       markdownRow([
         String(process.pid),
@@ -548,10 +598,12 @@ function renderIdle(lines: string[], idle: IdleSample): void {
       ]),
     );
   }
+
   lines.push('');
 
   lines.push('#### WebKit processes outside the measured tree');
   lines.push('');
+
   if (idle.unattributableWebKit.length === 0) {
     lines.push('None observed.');
   } else {
@@ -560,6 +612,7 @@ function renderIdle(lines: string[], idle: IdleSample): void {
         'may be shared with other applications and are excluded from tree totals.',
     );
     lines.push('');
+
     for (const process of idle.unattributableWebKit) {
       lines.push(
         `- pid ${process.pid} (ppid ${process.ppid}), RSS ${formatKiB(process.rssKiB)}: ` +
@@ -567,6 +620,7 @@ function renderIdle(lines: string[], idle: IdleSample): void {
       );
     }
   }
+
   lines.push('');
 }
 
@@ -574,6 +628,7 @@ function renderTimingSummary(label: string, stats: TimingStats): string {
   if (stats.warmMedianMs === null) {
     return `- ${label}: warm median unavailable; cold ${formatMs(stats.coldMs)}.`;
   }
+
   return (
     `- ${label}: warm median ${formatMs(stats.warmMedianMs)}, ` +
     `range ${formatRangeMs(stats)}, cold ${formatMs(stats.coldMs)}.`
@@ -583,6 +638,7 @@ function renderTimingSummary(label: string, stats: TimingStats): string {
 function externalTimingStats(launches: LaunchRecord[]): TimingStats {
   const coldMs = launches[0]?.externalReadyMs ?? null;
   const warm = launches.slice(1).map((launch) => launch.externalReadyMs);
+
   return summarizeTiming(coldMs, warm);
 }
 
@@ -592,6 +648,7 @@ function internalTimingStats(launches: LaunchRecord[]): TimingStats {
     .slice(1)
     .map((launch) => launch.internalTrayReadyMs)
     .filter((value): value is number => value !== null);
+
   return summarizeTiming(coldMs, warm);
 }
 
@@ -599,6 +656,7 @@ function summarizeTiming(coldMs: number | null, warm: number[]): TimingStats {
   if (warm.length === 0) {
     return { coldMs, warmMedianMs: null, warmMinMs: null, warmMaxMs: null };
   }
+
   return {
     coldMs,
     warmMedianMs: median(warm),
@@ -610,9 +668,11 @@ function summarizeTiming(coldMs: number | null, warm: number[]): TimingStats {
 function median(values: number[]): number {
   const ordered = [...values].sort((left, right) => left - right);
   const middle = Math.floor(ordered.length / 2);
+
   if (ordered.length % 2 === 1) {
     return ordered[middle];
   }
+
   return (ordered[middle - 1] + ordered[middle]) / 2;
 }
 
@@ -620,6 +680,7 @@ function formatRangeMs(stats: TimingStats): string {
   if (stats.warmMinMs === null || stats.warmMaxMs === null) {
     return '—';
   }
+
   return `${formatMs(stats.warmMinMs)}–${formatMs(stats.warmMaxMs)}`;
 }
 
@@ -639,12 +700,15 @@ function formatBytes(value: number): string {
   if (value >= 1_024 ** 3) {
     return `${(value / 1_024 ** 3).toFixed(0)} GiB`;
   }
+
   if (value >= 1_024 ** 2) {
     return `${(value / 1_024 ** 2).toFixed(1)} MiB`;
   }
+
   if (value >= 1_024) {
     return `${(value / 1_024).toFixed(0)} KiB`;
   }
+
   return `${value} B`;
 }
 
@@ -652,6 +716,7 @@ function formatDisplays(run: MeasurementRun): string {
   if (run.environment.displays.length === 0) {
     return 'none reported';
   }
+
   return run.environment.displays
     .map((display) => {
       const name = display.name ?? 'unnamed display';
@@ -663,6 +728,7 @@ function formatDisplays(run: MeasurementRun): string {
       ]
         .filter((flag) => flag.length > 0)
         .join(', ');
+
       return `${name} (${resolution}; ${flags})`;
     })
     .join('; ');
@@ -687,6 +753,7 @@ function statusDetail(failure: string | null): string {
   if (failure === null) {
     return '';
   }
+
   return ` — ${escapeCell(failure.split('\n')[0] ?? failure)}`;
 }
 

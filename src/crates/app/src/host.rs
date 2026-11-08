@@ -8,9 +8,10 @@
 //!
 //! Setup order is deliberate: the application creates the tray first, then
 //! starts this driver. The driver loads configuration, registers factories,
-//! starts modules, opens the control socket and only then executes
-//! `execOnStartup` once. A shutdown requested before or during setup is
-//! processed without starting new modules.
+//! starts modules and opens the control socket. `execOnStartup` runs once per
+//! launch, after the Accessibility gate first opens (see [`crate::access`]).
+//! A shutdown requested before or during setup is processed without starting
+//! new modules.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -46,7 +47,7 @@ use stache_sdk::{
     ConfigStore, ConfigStoreError, ConfigWatcher, EventBus, Initial, LogFilter, Logger,
     MainThreadExecutor, Module, ModuleConfig, ModuleHandle, ModuleId, ModuleSnapshot, ModuleStatus,
     PathEntry, Permission, PermissionProvider, PermissionRequirement, PermissionStatus, Registry,
-    RegistryError, RegistryResult, ReloadOutcome, WatchError, WindowBackend, WindowError,
+    RegistryError, RegistryResult, ReloadOutcome, WatchError, WindowBackend, WindowError, WindowId,
     WindowKey, WindowKind, WindowRequest, WindowSize, inspect_paths,
 };
 
@@ -79,7 +80,11 @@ pub mod input_context {
     pub const CURRENT_PROCESS: ExemptionFlags = ExemptionFlags(1 << 1);
 }
 
-use crate::bindings::{HostStatus, ModuleStatusView, config_file_view};
+use crate::access::{
+    AccessCell, AccessGate, AccessGateState, AccessTransition, GatedHandler, SettingsOpener,
+    enclosing_app,
+};
+use crate::bindings::{AccessState, AccessView, HostStatus, ModuleStatusView, config_file_view};
 use crate::config_edit::{CommitOutcome, EnableEditError, plan_enabled};
 use crate::keep_awake::KeepAwakeIpc;
 use crate::permissions::{
@@ -97,6 +102,10 @@ use crate::windows::HOST_OWNER;
 struct RegistryPermissions {
     registry: Arc<Registry>,
     logger: Arc<dyn Logger>,
+    /// The socket gate cell of a gated host. A lost Accessibility status closes
+    /// it before the registry stops modules, so a slow stop never leaves the
+    /// socket open to a module that is losing trust.
+    access: Option<AccessCell>,
 }
 
 impl PermissionHost for RegistryPermissions {
@@ -110,6 +119,12 @@ impl PermissionHost for RegistryPermissions {
     }
 
     fn apply(&self, permission: Permission, status: PermissionStatus) {
+        if permission == Permission::Accessibility
+            && status != PermissionStatus::Granted
+            && let Some(cell) = &self.access
+        {
+            cell.close();
+        }
         if let Err(error) = self.registry.on_permission_change(permission, status) {
             self.logger.log(stache_sdk::LogRecord {
                 level: stache_sdk::LogLevel::Warn,
@@ -126,16 +141,42 @@ impl PermissionHost for RegistryPermissions {
 struct HostCore {
     core: ConfigCore,
     sender: Sender<HostCommand>,
+    access: AccessCell,
 }
 
 impl CoreHandler for HostCore {
     fn reload(&self) -> HandlerResult<CoreReload> {
-        let result = self.core.reload();
+        let result = self.core.reload().map(|mut report| {
+            report.access = Some(self.access.report());
+            report
+        });
         let _ = self.sender.send(HostCommand::Refresh);
         result
     }
 
-    fn status(&self) -> HandlerResult<CoreStatus> { self.core.status() }
+    fn status(&self) -> HandlerResult<CoreStatus> {
+        self.core.status().map(|mut status| {
+            status.access = Some(self.access.report());
+            status
+        })
+    }
+}
+
+/// Builds the socket router: the core service plus every factory-contributed
+/// handler, each wrapped so it answers `unavailable` while the gate is closed.
+fn build_router(
+    core: Arc<dyn CoreHandler>,
+    access: &AccessCell,
+    factories: &ModuleFactories,
+    context: &FactoryContext,
+) -> Result<Router, RouterError> {
+    let mut router = Router::new(core);
+    for factory in factories.entries() {
+        for (name, handler) in factory.ipc_handlers(context) {
+            router.register(name, Arc::new(GatedHandler::new(access.clone(), handler)))?;
+        }
+    }
+    Ok(router)
 }
 
 /// A type-erased control surface for one registered module.
@@ -709,6 +750,12 @@ pub struct HostServices {
     pub commands: Arc<dyn CommandRunner>,
     /// Permission polling delays.
     pub poll: PermissionPoll,
+    /// Host-level baseline permission requirements merged into every module.
+    /// A baseline with Accessibility turns the launch gate on; an empty one
+    /// (host test fixtures) leaves the host ungated.
+    pub baseline: Vec<PermissionRequirement>,
+    /// Opens System Settings for the guidance actions.
+    pub settings: Arc<dyn SettingsOpener>,
 }
 
 /// What the host tells the application shell.
@@ -852,9 +899,18 @@ impl HostHandle {
     }
 
     /// Prompts for a needed permission from an explicit user action.
+    ///
+    /// While the Accessibility gate is open this requests nothing.
     pub fn request_permission(&self) {
         self.send(HostCommand::RefreshPermissions(RefreshTrigger::Explicit));
     }
+
+    /// Opens the Accessibility pane of System Settings while the gate is not open.
+    pub fn open_accessibility_settings(&self) { self.send(HostCommand::OpenAccessibilitySettings); }
+
+    /// Opens or focuses the Accessibility guidance window while the gate is not
+    /// open.
+    pub fn open_access_guide(&self) { self.send(HostCommand::OpenAccessGuide); }
 
     /// Opens the explicit developer test window. Launch never calls this.
     pub fn open_test_window(&self) { self.send(HostCommand::OpenTestWindow); }
@@ -1310,6 +1366,9 @@ impl HostDriver {
         if let Some(input) = self.input {
             registry = registry.with_input_service(input);
         }
+        if !services.baseline.is_empty() {
+            registry = registry.with_baseline_requirements(services.baseline.clone())?;
+        }
         let registry = Arc::new(registry);
         let monitors = Arc::new(MonitorCells::default());
         let setup_failed = Arc::new(AtomicBool::new(false));
@@ -1360,6 +1419,8 @@ enum HostCommand {
     ConfigChanges(ChangeSet),
     WatcherFailed(String),
     OpenTestWindow,
+    OpenAccessibilitySettings,
+    OpenAccessGuide,
     Shutdown,
 }
 
@@ -1384,6 +1445,30 @@ struct Runner {
     last_action_error: Option<String>,
     ready: bool,
     recovery: Option<Arc<dyn StartupRecovery>>,
+    /// The Accessibility launch gate, fed from every permission refresh.
+    gate: AccessGate,
+    /// Whether the baseline requires Accessibility. Without it the host is
+    /// ungated: `access` reads open and nothing is deferred.
+    gated: bool,
+    /// The lock-free copy of the gate state the socket handlers read.
+    access_cell: AccessCell,
+    /// Where `execOnStartup` stands in this launch.
+    commands: StartupCommandsPhase,
+    app_path: Option<String>,
+    /// The guidance window of the current gated episode, if one was opened. A
+    /// user close leaves the id stale; closing a stale id is a no-op.
+    access_window: Option<WindowId>,
+}
+
+/// When `execOnStartup` may run: once per launch, after setup and the gate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StartupCommandsPhase {
+    /// Setup is not complete yet.
+    Setup,
+    /// Setup is complete; waiting for the gate to open.
+    Armed,
+    /// Already started in this launch.
+    Started,
 }
 
 struct WatcherJob {
@@ -1448,6 +1533,11 @@ impl Runner {
         ));
         let schedule = PollSchedule::new(services.poll);
         let permissions = PermissionManager::new(Arc::clone(&services.permissions));
+        let gated = services
+            .baseline
+            .iter()
+            .any(|requirement| requirement.permission() == Permission::Accessibility);
+        let app_path = std::env::current_exe().ok().and_then(|path| enclosing_app(&path));
         Self {
             settings,
             services,
@@ -1465,6 +1555,16 @@ impl Runner {
             last_action_error: None,
             ready: false,
             recovery: None,
+            gate: AccessGate::new(),
+            gated,
+            access_cell: if gated {
+                AccessCell::checking()
+            } else {
+                AccessCell::open()
+            },
+            commands: StartupCommandsPhase::Setup,
+            app_path,
+            access_window: None,
         }
     }
 
@@ -1527,6 +1627,8 @@ impl Runner {
                 }
                 HostCommand::ConfigChanges(changes) => self.apply_config(&changes),
                 HostCommand::OpenTestWindow => self.open_test_window(),
+                HostCommand::OpenAccessibilitySettings => self.open_accessibility_settings(),
+                HostCommand::OpenAccessGuide => self.open_access_guide(),
             }
         }
         self.finish(true);
@@ -1591,6 +1693,14 @@ impl Runner {
         if let Initial::Invalid(diagnostic) = self.store.load_global() {
             self.log_warn(format!("global configuration is invalid: {diagnostic}"));
         }
+        // The first nonprompting Accessibility check runs before any module
+        // starts. It publishes nothing; the registry's own per-slot check still
+        // guards every start, so a racing grant or revocation cannot start a
+        // module without trust.
+        self.check_permissions(RefreshTrigger::Startup);
+        if self.handle.shutdown_requested() {
+            return Ok(());
+        }
         if let Err(error) = self.registry.start_all() {
             self.log_warn(format!("one or more modules failed to start: {error}"));
         }
@@ -1598,15 +1708,16 @@ impl Runner {
             return Ok(());
         }
         let context = FactoryContext::new(Arc::clone(&self.registry), Arc::clone(&self.store));
-        let mut router = Router::new(Arc::new(HostCore {
-            core: ConfigCore::new(Arc::clone(&self.store)),
-            sender: self.handle.sender.clone(),
-        }));
-        for factory in self.settings.factories.entries() {
-            for (name, handler) in factory.ipc_handlers(&context) {
-                router.register(name, handler)?;
-            }
-        }
+        let router = build_router(
+            Arc::new(HostCore {
+                core: ConfigCore::new(Arc::clone(&self.store)),
+                sender: self.handle.sender.clone(),
+                access: self.access_cell.clone(),
+            }),
+            &self.access_cell,
+            &self.settings.factories,
+            &context,
+        )?;
         if self.handle.shutdown_requested() {
             return Ok(());
         }
@@ -1619,9 +1730,8 @@ impl Runner {
         self.start_watcher()?;
         self.start_ticker();
         self.refresh_permissions(RefreshTrigger::Startup);
-        if !self.handle.shutdown_requested() {
-            self.start_startup_commands();
-        }
+        self.commands = StartupCommandsPhase::Armed;
+        self.start_startup_commands_once();
         Ok(())
     }
 
@@ -1675,6 +1785,19 @@ impl Runner {
             }
             Err(error) => self.log_warn(format!("permission polling is unavailable: {error}")),
         }
+    }
+
+    /// Starts `execOnStartup` at most once per launch, and only once setup is
+    /// complete and the gate is open (or the host is ungated).
+    fn start_startup_commands_once(&mut self) {
+        if self.commands != StartupCommandsPhase::Armed
+            || !self.access_open()
+            || self.handle.shutdown_requested()
+        {
+            return;
+        }
+        self.commands = StartupCommandsPhase::Started;
+        self.start_startup_commands();
     }
 
     fn start_startup_commands(&mut self) {
@@ -1843,26 +1966,96 @@ impl Runner {
         self.refresh_permissions(RefreshTrigger::Tick);
     }
 
-    fn refresh_permissions(&mut self, trigger: RefreshTrigger) -> RefreshReport {
+    /// Whether trust is present: the gate is open, or the host is ungated.
+    const fn access_open(&self) -> bool { !self.gated || self.gate.is_open() }
+
+    /// Reads fresh statuses through the permission manager and feeds the gate.
+    ///
+    /// An explicit request while the gate is open requests nothing. Returns the
+    /// report with `waiting` true while the gate is not open, so the ticker
+    /// keeps the 1 s delay even when every module is disabled.
+    fn check_permissions(&mut self, trigger: RefreshTrigger) -> (RefreshReport, AccessTransition) {
         if self.handle.shutdown_requested() {
             // A late refresh could prompt or apply a status after invalidation.
-            return RefreshReport::default();
+            return (RefreshReport::default(), AccessTransition::None);
         }
+        let trigger = if trigger == RefreshTrigger::Explicit && self.gated && self.gate.is_open() {
+            RefreshTrigger::Tick
+        } else {
+            trigger
+        };
         let host = RegistryPermissions {
             registry: Arc::clone(&self.registry),
             logger: Arc::clone(&self.services.logger),
+            access: self.gated.then(|| self.access_cell.clone()),
         };
-        let report = self.permissions.refresh(&host, trigger);
+        let mut report = self.permissions.refresh(&host, trigger);
+        let transition = self.observe_access(&report);
+        report.waiting |= !self.access_open();
+        (report, transition)
+    }
+
+    fn observe_access(&mut self, report: &RefreshReport) -> AccessTransition {
+        if !self.gated {
+            return AccessTransition::None;
+        }
+        let Some(status) = report
+            .statuses
+            .iter()
+            .find(|(permission, _)| *permission == Permission::Accessibility)
+            .map(|(_, status)| *status)
+        else {
+            return AccessTransition::None;
+        };
+        let transition = self.gate.observe(status);
+        self.access_cell.store(self.gate.state());
+        match transition {
+            AccessTransition::None => {}
+            AccessTransition::Blocked => {
+                let reason = if status == PermissionStatus::Denied {
+                    "denied"
+                } else {
+                    "unknown"
+                };
+                self.log(
+                    stache_sdk::LogLevel::Info,
+                    format!("access: blocked (accessibility {reason})"),
+                );
+                self.show_access_window();
+            }
+            AccessTransition::Opened { .. } => {
+                self.log(stache_sdk::LogLevel::Info, "access: open".to_owned());
+                self.close_access_window();
+                // The phase guard keeps this at most once per launch.
+                self.start_startup_commands_once();
+            }
+            AccessTransition::Revoked => {
+                self.log(stache_sdk::LogLevel::Info, "access: revoked".to_owned());
+                self.show_access_window();
+            }
+        }
+        transition
+    }
+
+    fn set_ticker_delay(&mut self, waiting: bool) {
+        if let Some(ticker) =
+            self.monitors.ticker.lock().unwrap_or_else(PoisonError::into_inner).as_ref()
+        {
+            ticker.set_delay(self.schedule.next(waiting));
+        }
+    }
+
+    fn refresh_permissions(&mut self, trigger: RefreshTrigger) -> RefreshReport {
+        if self.handle.shutdown_requested() {
+            return RefreshReport::default();
+        }
+        let (report, _) = self.check_permissions(trigger);
         if let Some(error) = &report.prompt_error {
             self.last_action_error = Some(format!("permission request failed: {error}"));
         } else if report.changed || report.prompted.is_some() {
             self.last_action_error = None;
         }
-        if let Some(ticker) =
-            self.monitors.ticker.lock().unwrap_or_else(PoisonError::into_inner).as_ref()
-        {
-            ticker.set_delay(self.schedule.next(report.waiting));
-        }
+        self.set_ticker_delay(report.waiting);
         self.publish();
         report
     }
@@ -1871,22 +2064,88 @@ impl Runner {
         if self.handle.shutdown_requested() {
             return;
         }
-        let host = RegistryPermissions {
-            registry: Arc::clone(&self.registry),
-            logger: Arc::clone(&self.services.logger),
-        };
-        let report = self.permissions.refresh(&host, RefreshTrigger::Tick);
-        if let Some(ticker) =
-            self.monitors.ticker.lock().unwrap_or_else(PoisonError::into_inner).as_ref()
-        {
-            ticker.set_delay(self.schedule.next(report.waiting));
-        }
+        let (report, transition) = self.check_permissions(RefreshTrigger::Tick);
+        self.set_ticker_delay(report.waiting);
         if let Some(error) = &report.prompt_error {
             self.last_action_error = Some(format!("permission request failed: {error}"));
             self.publish();
-        } else if report.changed || report.prompted.is_some() {
+        } else if report.changed
+            || report.prompted.is_some()
+            || transition != AccessTransition::None
+        {
             self.publish();
         }
+    }
+
+    fn open_accessibility_settings(&mut self) {
+        if self.handle.shutdown_requested() || self.access_open() {
+            return;
+        }
+        match self.services.settings.open_accessibility_settings() {
+            Ok(()) => self.clear_action_error(),
+            Err(error) => {
+                self.last_action_error =
+                    Some(format!("cannot open Accessibility settings: {error}"));
+            }
+        }
+        self.publish();
+    }
+
+    /// Opens (or focuses) the guidance window once for a gated episode.
+    fn show_access_window(&mut self) {
+        if self.handle.shutdown_requested() {
+            return;
+        }
+        let request = match crate::windows::access_window_request() {
+            Ok(request) => request,
+            Err(error) => {
+                self.log_warn(format!("cannot build the guidance window request: {error}"));
+                return;
+            }
+        };
+        match self.services.windows.open(HOST_OWNER, &request) {
+            Ok(id) => {
+                self.access_window = Some(id);
+                self.log(
+                    stache_sdk::LogLevel::Info,
+                    "access: guidance window requested".to_owned(),
+                );
+            }
+            Err(error) => {
+                self.log_warn(format!("cannot open the guidance window: {error}"));
+            }
+        }
+    }
+
+    /// Closes the guidance window through the existing release path.
+    fn close_access_window(&mut self) {
+        if let Some(id) = self.access_window.take() {
+            self.services.windows.close(id);
+        }
+    }
+
+    /// The tray row: opens or focuses the guidance window while the gate is not
+    /// open. A user close does not reopen it; only this row or the next
+    /// episode does.
+    fn open_access_guide(&mut self) {
+        if self.handle.shutdown_requested() || self.access_open() {
+            return;
+        }
+        let request = match crate::windows::access_window_request() {
+            Ok(request) => request,
+            Err(error) => {
+                self.record_action_error(error.to_string());
+                return;
+            }
+        };
+        match self.services.windows.open(HOST_OWNER, &request) {
+            Ok(id) => {
+                self.access_window = Some(id);
+                self.clear_action_error();
+            }
+            Err(error) => self.last_action_error = Some(error.to_string()),
+        }
+        self.publish();
     }
 
     fn apply_config(&mut self, changes: &ChangeSet) {
@@ -1965,9 +2224,27 @@ impl Runner {
                 Some(&self.store),
             ),
             config: self.config_views(),
+            access: self.access_view(),
         };
         self.handle.publish(status.clone());
         self.ui.status(&status);
+    }
+
+    fn access_view(&self) -> AccessView {
+        let (state, revoked) = if self.gated {
+            match self.gate.state() {
+                AccessGateState::Checking => (AccessState::Checking, false),
+                AccessGateState::Blocked { revoked } => (AccessState::Blocked, revoked),
+                AccessGateState::Open => (AccessState::Open, false),
+            }
+        } else {
+            (AccessState::Open, false)
+        };
+        AccessView {
+            state,
+            revoked,
+            app_path: self.app_path.clone(),
+        }
     }
 
     fn config_views(&self) -> Vec<crate::bindings::ConfigFileView> {
@@ -2122,6 +2399,8 @@ mod tests {
                 backoff_start: Duration::from_millis(1),
                 backoff_max: Duration::from_millis(1),
             },
+            baseline: Vec::new(),
+            settings: Arc::new(crate::access::UnavailableSettings),
         };
         let mut registry = Registry::new(
             Arc::new(DiscardLogger),
@@ -2145,6 +2424,254 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
         );
         (runner, driver.receiver)
+    }
+
+    /// Counts requests over a status that tests change between refreshes.
+    struct Counted {
+        status: Mutex<PermissionStatus>,
+        requests: AtomicUsize,
+    }
+
+    impl Counted {
+        fn new(status: PermissionStatus) -> Arc<Self> {
+            Arc::new(Self {
+                status: Mutex::new(status),
+                requests: AtomicUsize::new(0),
+            })
+        }
+
+        fn set(&self, status: PermissionStatus) { *self.status.lock().expect("status") = status; }
+
+        fn requests(&self) -> usize { self.requests.load(Ordering::SeqCst) }
+    }
+
+    impl PermissionProvider for Counted {
+        fn status(&self, _: Permission) -> PermissionStatus { *self.status.lock().expect("status") }
+
+        fn request(&self, _: Permission) -> Result<PermissionStatus, PermissionError> {
+            self.requests.fetch_add(1, Ordering::SeqCst);
+            Ok(*self.status.lock().expect("status"))
+        }
+    }
+
+    #[derive(Default)]
+    struct Opens {
+        calls: AtomicUsize,
+        fail: AtomicBool,
+    }
+
+    impl SettingsOpener for Opens {
+        fn open_accessibility_settings(&self) -> Result<(), String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if self.fail.load(Ordering::SeqCst) {
+                Err("denied by test".to_owned())
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    /// A runner over the production baseline: Accessibility gates the host.
+    fn gated_runner(
+        root: &Path,
+        permissions: Arc<dyn PermissionProvider>,
+        opener: Arc<Opens>,
+    ) -> Runner {
+        let mut catalog = ConfigCatalog::new();
+        catalog
+            .register::<stache_sdk::GlobalConfig>(stache_sdk::GlobalConfig::ID)
+            .expect("global config");
+        let (mut runner, _) = runner_over(
+            root,
+            ModuleFactories::new(),
+            catalog,
+            Arc::clone(&permissions),
+            None,
+        );
+        let baseline = vec![PermissionRequirement::user_only(Permission::Accessibility)];
+        let registry = Registry::new(
+            Arc::new(DiscardLogger),
+            Arc::new(EventBus::new()),
+            Arc::new(NoMainThread),
+            permissions,
+            Arc::new(NoWindows),
+        )
+        .with_baseline_requirements(baseline.clone())
+        .expect("baseline");
+        runner.registry = Arc::new(registry);
+        runner.gated = true;
+        runner.services.baseline = baseline;
+        runner.services.settings = opener;
+        runner
+    }
+
+    #[test]
+    fn ag_02_02_a_closed_gate_keeps_the_waiting_poll_with_every_module_disabled() {
+        let root = tempfile::tempdir().expect("root");
+        let permissions = Counted::new(PermissionStatus::Denied);
+        let mut runner = gated_runner(root.path(), permissions.clone(), Arc::default());
+        let (report, transition) = runner.check_permissions(RefreshTrigger::Startup);
+        assert_eq!(transition, AccessTransition::Blocked);
+        assert!(report.waiting, "no module exists, yet the closed gate waits");
+        assert_eq!(runner.access_view().state, AccessState::Blocked);
+        // `set_ticker_delay` hands the ticker `schedule.next(waiting)`: the
+        // waiting delay while gated, even with no module enabled.
+        let waiting_delay = Duration::from_millis(7);
+        runner.schedule = PollSchedule::new(PermissionPoll {
+            waiting: waiting_delay,
+            backoff_start: Duration::from_millis(100),
+            backoff_max: Duration::from_millis(200),
+        });
+        assert_eq!(runner.schedule.next(report.waiting), waiting_delay);
+
+        permissions.set(PermissionStatus::Granted);
+        let (report, transition) = runner.check_permissions(RefreshTrigger::Tick);
+        assert_eq!(transition, AccessTransition::Opened { first: true });
+        assert!(!report.waiting, "an open gate with nothing waiting backs off");
+        assert_eq!(
+            runner.schedule.next(report.waiting),
+            Duration::from_millis(100),
+            "an open gate returns to the backoff delay"
+        );
+        assert_eq!(permissions.requests(), 0);
+    }
+
+    /// Counts the startup commands the host runs.
+    #[derive(Default)]
+    struct CountingCommands {
+        runs: AtomicUsize,
+    }
+
+    impl CommandRunner for CountingCommands {
+        fn run(&self, _: &[String], _: &CancellationToken) -> Result<(), String> {
+            self.runs.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    fn wait_for_runs(commands: &CountingCommands, expected: usize) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while commands.runs.load(Ordering::SeqCst) < expected {
+            assert!(Instant::now() < deadline, "startup commands did not run");
+            thread::sleep(Duration::from_millis(5));
+        }
+        // Give a wrongful extra run time to show up.
+        thread::sleep(Duration::from_millis(50));
+        assert_eq!(commands.runs.load(Ordering::SeqCst), expected);
+    }
+
+    #[test]
+    fn ag_02_01_startup_commands_run_once_even_when_the_first_opening_precedes_arming() {
+        let root = tempfile::tempdir().expect("root");
+        std::fs::create_dir_all(root.path().join("config")).expect("config dir");
+        std::fs::write(
+            root.path().join("config/global.jsonc"),
+            "{ \"execOnStartup\": [\"true\"] }\n",
+        )
+        .expect("global config");
+        let permissions = Counted::new(PermissionStatus::Granted);
+        let mut runner = gated_runner(root.path(), permissions.clone(), Arc::default());
+        let commands = Arc::new(CountingCommands::default());
+        runner.services.commands = commands.clone();
+        runner.store.load_global();
+
+        // The first opening lands while setup is still incomplete: no-op.
+        let (_, transition) = runner.check_permissions(RefreshTrigger::Startup);
+        assert_eq!(transition, AccessTransition::Opened { first: true });
+        assert_eq!(runner.commands, StartupCommandsPhase::Setup);
+        // Trust is lost before arming.
+        permissions.set(PermissionStatus::Denied);
+        let (_, transition) = runner.check_permissions(RefreshTrigger::Tick);
+        assert_eq!(transition, AccessTransition::Revoked);
+        runner.commands = StartupCommandsPhase::Armed;
+        runner.start_startup_commands_once();
+        assert_eq!(runner.commands, StartupCommandsPhase::Armed, "still gated");
+
+        // The next grant is not `first`, yet it must run the commands once.
+        permissions.set(PermissionStatus::Granted);
+        let (_, transition) = runner.check_permissions(RefreshTrigger::Tick);
+        assert_eq!(transition, AccessTransition::Opened { first: false });
+        assert_eq!(runner.commands, StartupCommandsPhase::Started);
+        wait_for_runs(&commands, 1);
+
+        // A later revoke and re-grant does not rerun them.
+        permissions.set(PermissionStatus::Denied);
+        runner.check_permissions(RefreshTrigger::Tick);
+        permissions.set(PermissionStatus::Granted);
+        runner.check_permissions(RefreshTrigger::Tick);
+        wait_for_runs(&commands, 1);
+        let job = runner.monitors.startup.lock().expect("cell").take();
+        if let Some(job) = job {
+            job.stop_bounded(&LateReapWait::new());
+        }
+    }
+
+    #[test]
+    fn ag_02_07_an_explicit_request_while_open_is_downgraded_to_a_check() {
+        let root = tempfile::tempdir().expect("root");
+        let permissions = Counted::new(PermissionStatus::Denied);
+        let mut runner = gated_runner(root.path(), permissions.clone(), Arc::default());
+        runner.check_permissions(RefreshTrigger::Startup);
+        runner.check_permissions(RefreshTrigger::Tick);
+        assert_eq!(permissions.requests(), 0);
+        runner.check_permissions(RefreshTrigger::Explicit);
+        assert_eq!(permissions.requests(), 1);
+
+        permissions.set(PermissionStatus::Granted);
+        runner.check_permissions(RefreshTrigger::Tick);
+        assert!(runner.gate.is_open());
+        // The status turns Denied right before the explicit click: the gate is
+        // still open, so the click only detects the revocation.
+        permissions.set(PermissionStatus::Denied);
+        let (_, transition) = runner.check_permissions(RefreshTrigger::Explicit);
+        assert_eq!(transition, AccessTransition::Revoked);
+        assert_eq!(permissions.requests(), 1);
+        assert!(runner.access_view().revoked);
+    }
+
+    #[test]
+    fn ag_02_08_a_settings_failure_is_the_action_error_until_the_next_success() {
+        let root = tempfile::tempdir().expect("root");
+        let opener = Arc::new(Opens::default());
+        let mut runner = gated_runner(
+            root.path(),
+            Counted::new(PermissionStatus::Denied),
+            opener.clone(),
+        );
+        runner.check_permissions(RefreshTrigger::Startup);
+        opener.fail.store(true, Ordering::SeqCst);
+        runner.open_accessibility_settings();
+        assert!(runner.error_text().expect("error").contains("denied by test"));
+        opener.fail.store(false, Ordering::SeqCst);
+        runner.open_accessibility_settings();
+        assert_eq!(runner.error_text(), None);
+        assert_eq!(opener.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn ag_02_11_after_a_shutdown_request_nothing_is_requested_opened_or_checked() {
+        let root = tempfile::tempdir().expect("root");
+        let permissions = Counted::new(PermissionStatus::Denied);
+        let opener = Arc::new(Opens::default());
+        let mut runner = gated_runner(root.path(), permissions.clone(), opener.clone());
+        runner.check_permissions(RefreshTrigger::Startup);
+        runner.handle.request_shutdown();
+        let (report, transition) = runner.check_permissions(RefreshTrigger::Explicit);
+        runner.open_accessibility_settings();
+        assert_eq!(report, RefreshReport::default());
+        assert_eq!(transition, AccessTransition::None);
+        assert_eq!(permissions.requests(), 0);
+        assert_eq!(opener.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn an_ungated_host_reads_open_and_ignores_the_gate() {
+        let root = tempfile::tempdir().expect("root");
+        let mut runner = runner(root.path());
+        let (report, transition) = runner.check_permissions(RefreshTrigger::Startup);
+        assert_eq!(transition, AccessTransition::None);
+        assert!(!report.waiting);
+        assert_eq!(runner.access_view().state, AccessState::Open);
     }
 
     /// A recovery step with a scripted result that records its runs and whether
@@ -2699,6 +3226,7 @@ mod tests {
         let host = RegistryPermissions {
             registry: Arc::clone(&registry),
             logger: Arc::new(DiscardLogger),
+            access: None,
         };
         let mut manager = PermissionManager::new(provider);
         let requests = || trust.requests.load(Ordering::SeqCst);
@@ -3375,12 +3903,18 @@ mod tests {
         struct NoCore;
 
         impl CoreHandler for NoCore {
-            fn reload(&self) -> HandlerResult<CoreReload> { Ok(CoreReload { files: Vec::new() }) }
+            fn reload(&self) -> HandlerResult<CoreReload> {
+                Ok(CoreReload {
+                    files: Vec::new(),
+                    access: None,
+                })
+            }
 
             fn status(&self) -> HandlerResult<CoreStatus> {
                 Ok(CoreStatus {
                     directory: "/config".into(),
                     files: Vec::new(),
+                    access: None,
                 })
             }
         }

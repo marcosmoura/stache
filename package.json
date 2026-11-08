@@ -25,6 +25,8 @@
     "test:native": "cargo nextest run --workspace --features stache-app/dev-tools"
   },
   "dependencies": {
+    "@hugeicons/core-free-icons": "4.4.0",
+    "@hugeicons/react": "1.1.10",
     "@tanstack/react-query": "5.105.3",
     "@tauri-apps/api": "2.12.4",
     "react": "19.3.1",
@@ -35,6 +37,7 @@
     "@linaria/core": "8.2.0",
     "@rolldown/plugin-babel": "0.3.0",
     "@styled/typescript-styled-plugin": "1.1.1",
+    "@stylistic/eslint-plugin": "5.10.0",
     "@tanstack/eslint-plugin-query": "5.105.3",
     "@tauri-apps/cli": "2.12.4",
     "@types/node": "26.6.6",

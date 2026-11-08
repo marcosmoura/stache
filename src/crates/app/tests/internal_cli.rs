@@ -168,12 +168,18 @@ fn explicit_config_arguments_and_empty_arguments_survive_the_rewrite() {
 struct FakeCore;
 
 impl CoreHandler for FakeCore {
-    fn reload(&self) -> HandlerResult<CoreReload> { Ok(CoreReload { files: Vec::new() }) }
+    fn reload(&self) -> HandlerResult<CoreReload> {
+        Ok(CoreReload {
+            files: Vec::new(),
+            access: None,
+        })
+    }
 
     fn status(&self) -> HandlerResult<CoreStatus> {
         Ok(CoreStatus {
             directory: PathBuf::new(),
             files: Vec::new(),
+            access: None,
         })
     }
 }

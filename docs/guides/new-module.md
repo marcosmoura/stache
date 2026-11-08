@@ -323,7 +323,9 @@ its crate and everything host-owned behind an injected seam, so the crate never
 depends on the app crate:
 
 - Declare `PermissionRequirement::shared_input(Permission::Accessibility)` from
-  `required_permissions` while enabled; nothing else prompts.
+  `required_permissions` while enabled; nothing else prompts. Accessibility is also the host-wide
+  baseline requirement, so every module already waits for it; the declaration stays for future,
+  non-baseline permissions and costs nothing.
 - Register through `register_module_observed` and install the typed
   `AcceptedWatch` before the registry starts. A host-lifetime runtime service
   (`HoldToQuitRuntime`) is built inert by a `compose` function, and the factory
@@ -420,7 +422,10 @@ mod tests {
 
 Register a fake host in tests with an injected logger, event bus, main-thread
 executor, permission provider and window backend. Never prompt for a real
-permission in a test.
+permission in a test. A module registers behind the app-wide Accessibility gate in
+production: a registry built with `Registry::with_baseline_requirements` (or a `HostServices`
+whose `baseline` holds `PermissionRequirement::user_only(Permission::Accessibility)`) leaves it
+`waitingForPermission` until trust exists. Fixtures keep the empty baseline unless a test opts in.
 For executable checks, use a name that is guaranteed absent instead of a tool
 that may or may not be installed on the machine.
 

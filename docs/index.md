@@ -20,7 +20,7 @@ Read when navigating the shipped foundation, explicitly planned rewrites or the 
 | Keep Awake (shipped)                      | [feature](features/keep-awake.md), [spec](specs/2026-11-03-keep-awake/00-overview.md)       |
 | Wallpapers (shipped, CLI and host IPC)    | [feature](features/wallpapers.md), [spec](specs/2026-11-03-wallpapers/00-overview.md)       |
 | Keybindings (runtime)                     | [feature](features/keybindings.md), [spec](specs/2026-11-03-keybindings/00-overview.md)     |
-| Accessibility launch gate (planned)       | [spec](specs/2026-11-07-accessibility-gate/00-overview.md)                                  |
+| Accessibility launch gate (shipped)       | [spec](specs/2026-11-07-accessibility-gate/00-overview.md)                                  |
 | Hold-to-Quit (runtime)                    | [feature](features/hold-to-quit.md), [spec](specs/2026-11-03-hold-to-quit/00-overview.md)   |
 | MenuAnywhere (runtime, native unverified) | [feature](features/menu-anywhere.md), [spec](specs/2026-11-03-menu-anywhere/00-overview.md) |
 | Bar foundation (planned)                  | [spec](specs/2026-11-08-bar-foundation/00-overview.md)                                      |

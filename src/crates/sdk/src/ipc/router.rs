@@ -3,6 +3,11 @@
 //! A [`Router`] owns exactly one handler per module name. The SDK never
 //! switches on a module identifier: modules contribute handlers from the
 //! composition root, and `core` is the only reserved name.
+//!
+//! The router has no notion of the host's Accessibility gate. The host wraps
+//! each contributed handler before registration so it answers `unavailable`
+//! while the gate is closed, and its core service fills the additive `access`
+//! field of [`CoreReload`] and [`CoreStatus`]; [`ConfigCore`] leaves it `None`.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -331,7 +336,7 @@ impl CoreHandler for ConfigCore {
                 }
             })
             .collect();
-        Ok(CoreReload { files })
+        Ok(CoreReload { files, access: None })
     }
 
     fn status(&self) -> HandlerResult<CoreStatus> {
@@ -365,6 +370,7 @@ impl CoreHandler for ConfigCore {
         Ok(CoreStatus {
             directory: report.directory,
             files,
+            access: None,
         })
     }
 }
@@ -391,12 +397,18 @@ mod tests {
     struct NoCore;
 
     impl CoreHandler for NoCore {
-        fn reload(&self) -> HandlerResult<CoreReload> { Ok(CoreReload { files: Vec::new() }) }
+        fn reload(&self) -> HandlerResult<CoreReload> {
+            Ok(CoreReload {
+                files: Vec::new(),
+                access: None,
+            })
+        }
 
         fn status(&self) -> HandlerResult<CoreStatus> {
             Ok(CoreStatus {
                 directory: "/config".into(),
                 files: Vec::new(),
+                access: None,
             })
         }
     }
@@ -629,6 +641,8 @@ mod tests {
         )
         .expect("global file");
         let report = core.reload().expect("reload");
+        assert_eq!(report.access, None, "a plain configuration core reports no gate");
+        assert_eq!(core.status().expect("status").access, None);
         assert_eq!(report.files.len(), 2);
         assert!(!report.has_failures(), "{report:?}");
         assert!(matches!(

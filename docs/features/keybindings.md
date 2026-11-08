@@ -8,10 +8,13 @@ registration, a disabled file and a pause create no hotkey, tap, remap or worker
 empty `bindings` map is valid and inactive. Commands run directly (no shell) through the shared
 runner, sequentially inside one accepted press and stopping at the first failure; an empty command
 list captures the shortcut without spawning. Ordinary and `§` shortcuts use Carbon hotkeys on the main
-thread and need **no** Accessibility permission. Only `CapsLock+<key>` bindings use the shared
+thread and need no Accessibility permission of their own (the app-wide gate still holds them until it is granted). Only `CapsLock+<key>` bindings use the shared
 suppressing input tap and the global Caps Lock to F18 remap, and only they require Accessibility; that
 permission is **user-prompt-only** (the host never prompts on startup, enable, reload, tick or
-activation; the tray request prompts). A configuration that newly needs it is accepted and waits;
+activation; the tray request prompts). Accessibility is also a launch requirement of the whole app,
+so while it is missing the Keybindings module waits too and ordinary shortcuts register only after
+the grant; see the launch gate in [overview.md](../architecture/overview.md). A configuration that
+newly needs it is accepted and waits;
 a trusted but failed tap is a start failure, not a missing permission. Granting starts it; revoking
 stops all Caps activity and restores the mapping.
 

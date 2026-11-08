@@ -10,8 +10,8 @@ use clap::{Arg, ArgMatches, Command};
 use stache_cli::{CliEnvironment, run_with_io};
 use stache_sdk::config::ConfigEnvironment;
 use stache_sdk::ipc::{
-    CoreApplyOutcome, CoreFileOutcome, CoreFileState, CoreFileStatus, CoreHandler, CoreReload,
-    CoreStatus, HandlerResult, IpcClient, IpcServer, Router,
+    CoreAccess, CoreAccessState, CoreApplyOutcome, CoreFileOutcome, CoreFileState, CoreFileStatus,
+    CoreHandler, CoreReload, CoreStatus, HandlerResult, IpcClient, IpcServer, Router,
 };
 use stache_sdk::{
     AppEnvironment, CliContribution, CliExecutor, CommandCatalog, ConfigCatalog, GlobalConfig,
@@ -78,12 +78,18 @@ fn server(environment: &CliEnvironment, reload: CoreReload, status: CoreStatus) 
     IpcServer::start(&paths, Arc::new(router)).expect("server")
 }
 
-const fn empty_reload() -> CoreReload { CoreReload { files: Vec::new() } }
+const fn empty_reload() -> CoreReload {
+    CoreReload {
+        files: Vec::new(),
+        access: None,
+    }
+}
 
 fn empty_status(root: &Path) -> CoreStatus {
     CoreStatus {
         directory: root.join(".config").join("stache"),
         files: Vec::new(),
+        access: None,
     }
 }
 
@@ -101,6 +107,7 @@ fn host_path_diagnostics_go_to_stderr_without_changing_path_markers() {
             diagnostic: Some("global.jsonc: rejected by host".to_owned()),
             warnings: Vec::new(),
         }],
+        access: None,
     });
     let (code, out, err) = run(
         &["stache", "config", "path"],
@@ -277,6 +284,7 @@ fn a_rejected_file_is_reported_and_exits_one() {
                 diagnostic: Some("/config/proxyAudio.jsonc: unknown variant `fuzzy`".to_owned()),
             },
         ],
+        access: None,
     };
     let _server = server(&environment, reload, empty_status(root.path()));
     let (code, out, err) = run(
@@ -319,6 +327,7 @@ fn config_path_reports_active_files_from_a_reachable_host() {
                 warnings: Vec::new(),
             },
         ],
+        access: None,
     };
     let _server = server(&environment, empty_reload(), status);
     let (code, out, err) = run(
@@ -488,4 +497,100 @@ fn an_unexpected_host_payload_is_reported() {
     assert_eq!(code, ExitCode::FAILURE);
     assert!(out.is_empty());
     assert!(err.contains("invalid response"), "{err}");
+}
+
+const NOTICE: &str = "stache: modules are waiting for Accessibility permission\n";
+
+const fn waiting(state: CoreAccessState) -> CoreAccess { CoreAccess { state, revoked: false } }
+
+fn rejected_file() -> CoreFileOutcome {
+    CoreFileOutcome {
+        file: "proxyAudio.jsonc".to_owned(),
+        outcome: CoreApplyOutcome::Rejected,
+        diagnostic: Some("/config/proxyAudio.jsonc: bad value".to_owned()),
+    }
+}
+
+fn reload_with(
+    access: Option<CoreAccess>,
+    files: Vec<CoreFileOutcome>,
+) -> (ExitCode, String, String) {
+    let root = tempfile::tempdir().expect("temp dir");
+    let environment = environment(root.path());
+    let _server = server(
+        &environment,
+        CoreReload { files, access },
+        empty_status(root.path()),
+    );
+    run(
+        &["stache", "reload"],
+        &config_catalog(),
+        &CommandCatalog::new(),
+        &environment,
+        false,
+    )
+}
+
+#[test]
+fn reload_prints_the_accessibility_notice_when_blocked_or_checking_and_exits_zero() {
+    for state in [CoreAccessState::Blocked, CoreAccessState::Checking] {
+        let (code, out, err) = reload_with(Some(waiting(state)), Vec::new());
+        assert_eq!(code, ExitCode::SUCCESS, "{err}");
+        assert!(out.is_empty());
+        assert_eq!(err, NOTICE);
+    }
+}
+
+#[test]
+fn reload_prints_no_notice_when_open_or_unreported() {
+    for access in [Some(waiting(CoreAccessState::Open)), None] {
+        let (code, out, err) = reload_with(access, Vec::new());
+        assert_eq!(code, ExitCode::SUCCESS, "{err}");
+        assert!(out.is_empty());
+        assert!(err.is_empty(), "{err}");
+    }
+}
+
+#[test]
+fn a_rejected_file_with_a_blocked_gate_exits_one_and_prints_both_diagnostics_first() {
+    let (code, out, err) =
+        reload_with(Some(waiting(CoreAccessState::Blocked)), vec![rejected_file()]);
+    assert_eq!(code, ExitCode::FAILURE);
+    assert!(out.is_empty());
+    assert_eq!(
+        err,
+        format!("stache: /config/proxyAudio.jsonc: bad value\n{NOTICE}")
+    );
+}
+
+#[test]
+fn config_path_prints_the_notice_after_the_host_diagnostics() {
+    let root = tempfile::tempdir().expect("root");
+    let environment = environment(root.path());
+    let directory = root.path().join(".config/stache");
+    let status = CoreStatus {
+        directory: directory.clone(),
+        files: vec![CoreFileStatus {
+            file: "global.jsonc".to_owned(),
+            state: CoreFileState::Valid,
+            active: false,
+            diagnostic: Some("global.jsonc: rejected by host".to_owned()),
+            warnings: Vec::new(),
+        }],
+        access: Some(waiting(CoreAccessState::Blocked)),
+    };
+    let _server = server(&environment, empty_reload(), status);
+    let (code, out, err) = run(
+        &["stache", "config", "path"],
+        &config_catalog(),
+        &CommandCatalog::new(),
+        &environment,
+        false,
+    );
+    assert_eq!(code, ExitCode::SUCCESS);
+    assert_eq!(
+        out,
+        format!("{}\n  global.jsonc (exists, offline)\n", directory.display())
+    );
+    assert_eq!(err, format!("stache: global.jsonc: rejected by host\n{NOTICE}"));
 }

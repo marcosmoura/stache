@@ -190,6 +190,32 @@ pub struct ConfigFileView {
     pub warnings: Vec<String>,
 }
 
+/// The Accessibility launch gate as the UI and tray observe it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum AccessState {
+    /// No Accessibility status has been observed yet.
+    #[default]
+    Checking,
+    /// Accessibility is missing; no module runs.
+    Blocked,
+    /// Accessibility is granted.
+    Open,
+}
+
+/// Accessibility gate status published with [`HostStatus`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AccessView {
+    /// Gate state.
+    pub state: AccessState,
+    /// Whether trust was present earlier in this launch and then lost.
+    pub revoked: bool,
+    /// The enclosing `.app` bundle path of the running executable, or `None`
+    /// for an unbundled binary.
+    pub app_path: Option<String>,
+}
+
 /// Point-in-time status published to the tray and the test window.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -199,6 +225,9 @@ pub struct HostStatus {
     /// Persistent host conditions followed by the last action failure, joined
     /// with `"; "`. A later successful action clears only its own part.
     pub error: Option<String>,
+    /// The Accessibility launch gate. A gated host is `ready` with
+    /// `access.state = blocked`.
+    pub access: AccessView,
     /// Every registered module, in registration order.
     pub modules: Vec<ModuleStatusView>,
     /// Every catalog file in file order.
@@ -219,6 +248,31 @@ pub struct StatusChanged {
 #[allow(clippy::needless_pass_by_value)] // Tauri injects managed state by value.
 #[must_use]
 pub fn host_status(state: tauri::State<'_, HostState>) -> HostStatus { state.0.status() }
+
+/// Explicitly requests Accessibility from the guidance window.
+///
+/// Returns immediately; the result arrives through `status-changed`. While the
+/// gate is open the host downgrades the request to a plain check.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)] // Tauri injects managed state by value.
+pub fn request_accessibility(state: tauri::State<'_, HostState>) { state.0.request_permission(); }
+
+/// Opens the Accessibility pane of System Settings from the guidance window.
+///
+/// Returns immediately; a failure arrives through `status-changed`.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)] // Tauri injects managed state by value.
+pub fn open_accessibility_settings(state: tauri::State<'_, HostState>) {
+    state.0.open_accessibility_settings();
+}
+
+/// Quits through the shared shutdown coordinator, like the tray row.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::needless_pass_by_value)] // Tauri injects managed state by value.
+pub fn quit_app(state: tauri::State<'_, HostState>) { state.0.request_shutdown(); }
 
 /// Converts a catalog path entry into its wire view.
 #[must_use]
@@ -257,8 +311,16 @@ pub fn config_file_view(
 #[must_use]
 pub fn builder() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new()
-        .commands(collect_commands![app_info, host_status])
+        .commands(collect_commands![
+            app_info,
+            host_status,
+            request_accessibility,
+            open_accessibility_settings,
+            quit_app
+        ])
         .events(collect_events![StatusChanged])
+        .typ::<AccessView>()
+        .typ::<AccessState>()
         .typ::<GlobalConfig>()
         .typ::<CommandQuitConfig>()
         .typ::<KeepAwakeConfig>()

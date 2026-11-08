@@ -38,26 +38,32 @@ export async function sampleIdle(
   const snapshots = await takeSnapshots(rootPid, durationSeconds, isInterrupted);
   const first = snapshots[0];
   const last = snapshots[snapshots.length - 1];
+
   if (first === undefined || last === undefined) {
     throw new Error('idle sampling produced no process snapshots');
   }
 
   const appearances = new Map<number, Appearance[]>();
+
   for (const [snapshotIndex, snapshot] of snapshots.entries()) {
     for (const row of snapshot.processes) {
       const entries = appearances.get(row.pid) ?? [];
+
       entries.push({ snapshotIndex, takenAtMs: snapshot.takenAtMs, row });
       appearances.set(row.pid, entries);
     }
   }
 
   const processes: IdleProcess[] = [];
+
   for (const [pid, entries] of appearances) {
     processes.push(buildIdleProcess(pid, rootPid, entries, snapshots.length));
   }
+
   processes.sort((left, right) => left.pid - right.pid);
 
   const host = processes.find((process) => process.pid === rootPid);
+
   if (host === undefined) {
     throw new Error(`host pid ${rootPid} disappeared during idle sampling`);
   }
@@ -74,12 +80,14 @@ export async function sampleIdle(
   const joinedLate = processes.filter(
     (process) => process.role === 'descendant' && !process.presentInAllSnapshots,
   );
+
   if (joinedLate.length > 0) {
     notes.push(
       `${joinedLate.length} descendant(s) were absent from at least one snapshot; their CPU ` +
         'average uses only the interval in which they were observed.',
     );
   }
+
   notes.push('RSS is the sum of resident sizes; shared pages are counted once per process.');
 
   return {
@@ -113,26 +121,34 @@ async function takeSnapshots(
     throwIfInterrupted(isInterrupted, 'interrupted during idle sampling');
     const takenAtMs = Date.now();
     const processes = readProcessTree(rootPid);
+
     if (processes.length === 0) {
       throw new Error(`host pid ${rootPid} exited during idle sampling`);
     }
+
     snapshots.push({ takenAtMs, takenAt: new Date(takenAtMs).toISOString(), processes });
   };
 
   take();
+
   while (Date.now() - startedAt < durationMs) {
     const remaining = durationMs - (Date.now() - startedAt);
+
     if (remaining <= 0) {
       break;
     }
+
     await sleep(Math.min(IDLE_SAMPLE_INTERVAL_MS, remaining));
     take();
   }
+
   const elapsed = Date.now() - startedAt;
+
   if (elapsed < durationMs) {
     await sleep(durationMs - elapsed);
     take();
   }
+
   return snapshots;
 }
 
@@ -146,6 +162,7 @@ function buildIdleProcess(
   const last = entries[entries.length - 1];
   const observedSeconds = Math.max((last.takenAtMs - first.takenAtMs) / 1_000, 0.001);
   const cpuDelta = Math.max(last.row.cpuTimeSeconds - first.row.cpuTimeSeconds, 0);
+
   return {
     pid,
     ppid: last.row.ppid,
@@ -161,6 +178,7 @@ function buildIdleProcess(
 
 function observedWebKitOutsideTree(rootPid: number): ObservedProcess[] {
   const treePids = new Set(readProcessTree(rootPid).map((row) => row.pid));
+
   return listProcesses()
     .filter((row) => !treePids.has(row.pid) && WEBKIT_PROCESS.test(row.executable))
     .map((row) => ({

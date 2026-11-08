@@ -162,6 +162,7 @@ pub(crate) fn render_core_status<W: Write, E: Write>(
             let _ = writeln!(out, "    warning: unknown key `{warning}` is ignored");
         }
     }
+    crate::write_access_notice(err, status.access.as_ref());
 }
 
 /// Renders the offline `config path` report.

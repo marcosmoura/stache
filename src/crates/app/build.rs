@@ -7,5 +7,15 @@ fn main() {
         eprintln!("stache-app: release builds require `--features custom-protocol`");
         std::process::exit(1);
     }
-    tauri_build::build();
+    // Only the Accessibility guidance commands are ACL-gated: the `access-window`
+    // capability grants them to `stache-access-*` and no other window. Read-only
+    // `app_info` and `host_status` stay available to every host window.
+    tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
+        tauri_build::AppManifest::new().commands(&[
+            "request_accessibility",
+            "open_accessibility_settings",
+            "quit_app",
+        ]),
+    ))
+    .expect("failed to run the Tauri build script");
 }

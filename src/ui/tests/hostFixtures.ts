@@ -15,6 +15,7 @@ export function hostStatus(overrides: Partial<HostStatus> = {}): HostStatus {
   return {
     ready: true,
     error: null,
+    access: { state: 'open', revoked: false, appPath: null },
     modules: [],
     config: [],
     ...overrides,

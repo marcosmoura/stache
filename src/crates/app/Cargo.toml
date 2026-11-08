@@ -56,7 +56,7 @@ stache-notunes = { path = "../modules/notunes" }
 stache-proxy-audio = { path = "../modules/proxy-audio" }
 stache-sdk = { path = "../sdk" }
 stache-wallpapers = { path = "../modules/wallpapers" }
-tauri = { version = "=2.12.5", default-features = false, features = ["specta", "tray-icon", "wry"] }
+tauri = { version = "=2.12.5", default-features = false, features = ["macos-private-api", "specta", "tray-icon", "wry"] }
 tauri-specta = { version = "=2.0.0-rc.26", features = ["derive", "typescript"] }
 tempfile = "3.27.0"
 

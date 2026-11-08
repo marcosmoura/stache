@@ -9,6 +9,21 @@ export const commands = {
 	appInfo: () => __TAURI_INVOKE<AppInfo>("app_info"),
 	/**  Returns the last published host status without touching module locks. */
 	hostStatus: () => __TAURI_INVOKE<HostStatus_Serialize>("host_status"),
+	/**
+	 *  Explicitly requests Accessibility from the guidance window.
+	 *
+	 *  Returns immediately; the result arrives through `status-changed`. While the
+	 *  gate is open the host downgrades the request to a plain check.
+	 */
+	requestAccessibility: () => __TAURI_INVOKE<void>("request_accessibility"),
+	/**
+	 *  Opens the Accessibility pane of System Settings from the guidance window.
+	 *
+	 *  Returns immediately; a failure arrives through `status-changed`.
+	 */
+	openAccessibilitySettings: () => __TAURI_INVOKE<void>("open_accessibility_settings"),
+	/**  Quits through the shared shutdown coordinator, like the tray row. */
+	quitApp: () => __TAURI_INVOKE<void>("quit_app"),
 };
 
 /** Events */
@@ -17,6 +32,44 @@ export const events = {
 };
 
 /* Types */
+/**  The Accessibility launch gate as the UI and tray observe it. */
+export type AccessState =
+/**  No Accessibility status has been observed yet. */
+"checking" |
+/**  Accessibility is missing; no module runs. */
+"blocked" |
+/**  Accessibility is granted. */
+"open";
+
+/**  Accessibility gate status published with [`HostStatus`]. */
+export type AccessView = AccessView_Serialize | AccessView_Deserialize;
+
+/**  Accessibility gate status published with [`HostStatus`]. */
+export type AccessView_Deserialize = {
+	/**  Gate state. */
+	state: AccessState,
+	/**  Whether trust was present earlier in this launch and then lost. */
+	revoked: boolean,
+	/**
+	 *  The enclosing `.app` bundle path of the running executable, or `None`
+	 *  for an unbundled binary.
+	 */
+	appPath?: string | null,
+};
+
+/**  Accessibility gate status published with [`HostStatus`]. */
+export type AccessView_Serialize = {
+	/**  Gate state. */
+	state: AccessState,
+	/**  Whether trust was present earlier in this launch and then lost. */
+	revoked: boolean,
+	/**
+	 *  The enclosing `.app` bundle path of the running executable, or `None`
+	 *  for an unbundled binary.
+	 */
+	appPath: string | null,
+};
+
 /**  Application identity shown by the test window. */
 export type AppInfo = {
 	/**  Product name. */
@@ -344,6 +397,11 @@ export type HostStatus_Deserialize = {
 	 *  with `"; "`. A later successful action clears only its own part.
 	 */
 	error?: string | null,
+	/**
+	 *  The Accessibility launch gate. A gated host is `ready` with
+	 *  `access.state = blocked`.
+	 */
+	access: AccessView_Deserialize,
 	/**  Every registered module, in registration order. */
 	modules: ModuleStatusView_Deserialize[],
 	/**  Every catalog file in file order. */
@@ -359,6 +417,11 @@ export type HostStatus_Serialize = {
 	 *  with `"; "`. A later successful action clears only its own part.
 	 */
 	error: string | null,
+	/**
+	 *  The Accessibility launch gate. A gated host is `ready` with
+	 *  `access.state = blocked`.
+	 */
+	access: AccessView_Serialize,
 	/**  Every registered module, in registration order. */
 	modules: ModuleStatusView_Serialize[],
 	/**  Every catalog file in file order. */

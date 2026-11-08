@@ -134,6 +134,10 @@ impl fmt::Display for WireErrorKind {
 pub struct CoreReload {
     /// One entry per registered configuration file, in file order.
     pub files: Vec<CoreFileOutcome>,
+    /// The Accessibility gate as the host sees it. `None` means the host does
+    /// not report it (a plain configuration core or an older host).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access: Option<CoreAccess>,
 }
 
 impl CoreReload {
@@ -175,6 +179,36 @@ pub struct CoreStatus {
     pub directory: PathBuf,
     /// One entry per registered file, in file order.
     pub files: Vec<CoreFileStatus>,
+    /// The Accessibility gate as the host sees it. `None` means not reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access: Option<CoreAccess>,
+}
+
+/// The Accessibility launch gate as reported over the socket.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoreAccess {
+    /// The gate state.
+    pub state: CoreAccessState,
+    /// Whether trust was present earlier in this launch and then lost.
+    pub revoked: bool,
+}
+
+impl CoreAccess {
+    /// Whether modules are waiting for Accessibility permission.
+    #[must_use]
+    pub const fn is_waiting(&self) -> bool { !matches!(self.state, CoreAccessState::Open) }
+}
+
+/// The state of the Accessibility launch gate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CoreAccessState {
+    /// No status has been observed yet.
+    Checking,
+    /// Accessibility is missing.
+    Blocked,
+    /// Accessibility is granted.
+    Open,
 }
 
 /// The local state of one file reported by the host.
@@ -265,6 +299,7 @@ mod tests {
                     diagnostic: Some("bad value".to_owned()),
                 },
             ],
+            access: None,
         };
         let json = serde_json::to_string(&reload).expect("json");
         assert!(json.contains(r#""status":"rejected""#));
@@ -280,9 +315,63 @@ mod tests {
                 diagnostic: None,
                 warnings: vec!["enable".to_owned()],
             }],
+            access: None,
         };
         let json = serde_json::to_string(&status).expect("json");
         assert_eq!(serde_json::from_str::<CoreStatus>(&json).expect("parse"), status);
+    }
+
+    #[test]
+    fn core_access_round_trips_and_is_omitted_when_not_reported() {
+        let access = CoreAccess {
+            state: CoreAccessState::Blocked,
+            revoked: true,
+        };
+        let reload = CoreReload {
+            files: Vec::new(),
+            access: Some(access),
+        };
+        let json = serde_json::to_string(&reload).expect("json");
+        assert_eq!(
+            json,
+            r#"{"files":[],"access":{"state":"blocked","revoked":true}}"#
+        );
+        assert_eq!(serde_json::from_str::<CoreReload>(&json).expect("parse"), reload);
+        assert!(access.is_waiting());
+
+        let status = CoreStatus {
+            directory: PathBuf::from("/config"),
+            files: Vec::new(),
+            access: Some(CoreAccess {
+                state: CoreAccessState::Checking,
+                revoked: false,
+            }),
+        };
+        let json = serde_json::to_string(&status).expect("json");
+        assert!(
+            json.contains(r#""access":{"state":"checking","revoked":false}"#),
+            "{json}"
+        );
+        assert_eq!(serde_json::from_str::<CoreStatus>(&json).expect("parse"), status);
+
+        let silent = CoreStatus { access: None, ..status };
+        assert!(!serde_json::to_string(&silent).expect("json").contains("access"));
+        assert!(
+            !CoreAccess {
+                state: CoreAccessState::Open,
+                revoked: false
+            }
+            .is_waiting()
+        );
+    }
+
+    #[test]
+    fn core_reports_without_access_still_decode() {
+        let reload: CoreReload = serde_json::from_str(r#"{"files":[]}"#).expect("reload");
+        assert_eq!(reload.access, None);
+        let status: CoreStatus =
+            serde_json::from_str(r#"{"directory":"/config","files":[]}"#).expect("status");
+        assert_eq!(status.access, None);
     }
 
     #[test]

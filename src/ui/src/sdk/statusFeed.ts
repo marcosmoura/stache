@@ -24,6 +24,7 @@ function setStatusError(client: QueryClient, error: unknown) {
   const query = client.getQueryCache().build(client, {
     queryKey: HOST_STATUS_QUERY_KEY,
   });
+
   query.setState({
     status: 'error',
     error: normalized,
@@ -50,38 +51,56 @@ export function connectHostStatus({
   let liveVersion = 0;
 
   const publish = (status: HostStatus) => {
-    if (disposed) return;
+    if (disposed) {
+      return;
+    }
+
     liveVersion += 1;
     client.setQueryData(HOST_STATUS_QUERY_KEY, status);
   };
 
   const fail = (error: unknown) => {
-    if (disposed) return;
+    if (disposed) {
+      return;
+    }
+
     setStatusError(client, error);
   };
 
   const start = async () => {
     let stop: () => void;
+
     try {
       stop = await subscribe(publish);
     } catch (error) {
       fail(error);
+
       return;
     }
 
     if (disposed) {
       stop();
+
       return;
     }
+
     unlisten = stop;
 
     const version = liveVersion;
+
     try {
       const snapshot = await read();
-      if (disposed || liveVersion !== version) return;
+
+      if (disposed || liveVersion !== version) {
+        return;
+      }
+
       client.setQueryData(HOST_STATUS_QUERY_KEY, snapshot);
     } catch (error) {
-      if (disposed || liveVersion !== version) return;
+      if (disposed || liveVersion !== version) {
+        return;
+      }
+
       setStatusError(client, error);
     }
   };
@@ -90,7 +109,10 @@ export function connectHostStatus({
 
   return {
     dispose() {
-      if (disposed) return;
+      if (disposed) {
+        return;
+      }
+
       disposed = true;
       unlisten?.();
       unlisten = undefined;

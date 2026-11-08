@@ -12,13 +12,14 @@ use std::time::{Duration, Instant};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use stache_app::bindings::{HostStatus, ModuleState};
+use stache_app::access::SettingsOpener;
+use stache_app::bindings::{AccessState, HostStatus, ModuleState};
 use stache_app::caps_recovery::KeybindingsCapsRecovery;
 use stache_app::hold_to_quit::{HoldToQuitFactory, HudOwner};
 use stache_app::host::{
-    FactoryContext, HostDriver, HostHandle, HostServices, HostSettings, HostUi,
-    MenuAnywhereFactory, ModuleFactories, ModuleFactory, NoTunesFactory, StartupRecovery, new_host,
-    register_module,
+    FactoryContext, HostDriver, HostHandle, HostServices, HostSettings, HostUi, KeepAwakeFactory,
+    MenuAnywhereFactory, ModuleFactories, ModuleFactory, NoTunesFactory, ProxyAudioFactory,
+    StartupRecovery, new_host, register_module,
 };
 use stache_app::permissions::PermissionPoll;
 use stache_app::shutdown::{
@@ -35,10 +36,14 @@ use stache_app::windows::{
 };
 use stache_cli::CliEnvironment;
 use stache_hold_to_quit::test_support::Fakes;
+use stache_macos::audio::{
+    AudioBackend, AudioChangeSubscription, AudioDevice, AudioDirection, AudioError, AudioWakeup,
+};
 use stache_macos::{
-    ApplicationControl, DesktopBackend, DesktopError, DesktopOperation, DisplayEntry, DisplayFrame,
-    DisplayId, DisplaySnapshot, FakeApplicationBackend, FakeDesktop, GuardedDesktopBackend,
-    ManualExecutor,
+    ApplicationControl, AssertionOwner, DesktopBackend, DesktopError, DesktopOperation,
+    DisplayEntry, DisplayFrame, DisplayId, DisplaySnapshot, FakeApplicationBackend,
+    FakeAssertionBackend, FakeDesktop, FakeLockObservationBackend, FakeLockProbe,
+    GuardedDesktopBackend, LockObservationInstaller, LockState as NativeLockState, ManualExecutor,
 };
 use stache_menu_anywhere::test_support::Fakes as MenuFakes;
 use stache_sdk::input::{
@@ -51,8 +56,8 @@ use stache_sdk::{
     AppEnvironment, AppPaths, CommandCatalog, ConfigCatalog, ConfigEnvironment, ConfigError,
     ConfigPaths, DiscardLogger, EventBus, LogFilter, MainThreadExecutor, Module, ModuleConfig,
     ModuleContext, ModuleDescriptor, ModuleId, ModuleResult, Permission, PermissionError,
-    PermissionProvider, PermissionStatus, SurfaceId, ThreadError, WindowBackend, WindowError,
-    WindowId, WindowRequest,
+    PermissionProvider, PermissionRequirement, PermissionStatus, SurfaceId, ThreadError,
+    WindowBackend, WindowError, WindowId, WindowRequest,
 };
 use stache_wallpapers::cli::{
     IpcTransport, SetTransport, WallpapersCliEnv, contribution as wallpaper_contribution,
@@ -237,6 +242,24 @@ impl PermissionProvider for FakePermissions {
             self.set(PermissionStatus::Granted);
         }
         Ok(self.status(permission))
+    }
+}
+
+/// Records System Settings opens and can fail on demand.
+#[derive(Default)]
+struct RecordingSettings {
+    calls: AtomicUsize,
+    fail: AtomicBool,
+}
+
+impl SettingsOpener for RecordingSettings {
+    fn open_accessibility_settings(&self) -> Result<(), String> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if self.fail.load(Ordering::SeqCst) {
+            Err("injected open failure".to_owned())
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -695,6 +718,10 @@ struct Harness {
     windows: Arc<dyn WindowBackend>,
     recovery: Option<Arc<dyn StartupRecovery>>,
     input: Option<Arc<InputService>>,
+    /// Builds the host with the Accessibility baseline (the production gate).
+    gated: bool,
+    settings: Arc<RecordingSettings>,
+    poll: PermissionPoll,
 }
 
 impl Harness {
@@ -733,6 +760,13 @@ impl Harness {
             windows,
             recovery: None,
             input: None,
+            gated: false,
+            settings: Arc::new(RecordingSettings::default()),
+            poll: PermissionPoll {
+                waiting: Duration::from_millis(5),
+                backoff_start: Duration::from_millis(5),
+                backoff_max: Duration::from_millis(5),
+            },
         }
     }
 
@@ -777,11 +811,13 @@ impl Harness {
             permissions,
             windows: Arc::clone(&self.windows),
             commands,
-            poll: PermissionPoll {
-                waiting: Duration::from_millis(5),
-                backoff_start: Duration::from_millis(5),
-                backoff_max: Duration::from_millis(5),
+            poll: self.poll,
+            baseline: if self.gated {
+                vec![PermissionRequirement::user_only(Permission::Accessibility)]
+            } else {
+                Vec::new()
             },
+            settings: self.settings.clone(),
         };
         let settings = HostSettings {
             app: fixture.app.clone(),
@@ -4727,6 +4763,921 @@ fn hq_04_01_the_hud_owner_release_never_waits_on_a_settle_holding_the_retained_l
         assert!(Instant::now() < deadline, "the owner never answered");
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+// ---------------------------------------------------------------------------
+// Accessibility launch gate (spec 2026-11-07-accessibility-gate, part 02)
+// ---------------------------------------------------------------------------
+
+static ORDER_SERVICE: [stache_sdk::ServiceId; 1] = [stache_sdk::ServiceId::new("gateOrder")];
+
+/// Defines one recording module, its config and its factory.
+macro_rules! order_module {
+    ($config:ident, $module:ident, $factory:ident, $id:literal, $provides:expr, $requires:expr) => {
+        #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+        #[serde(default, rename_all = "camelCase")]
+        struct $config {
+            enabled: bool,
+        }
+
+        impl $config {
+            const ID: ModuleId = ModuleId::new($id);
+        }
+
+        impl ModuleConfig for $config {
+            fn enabled(&self) -> bool { self.enabled }
+
+            fn validate(&self) -> Result<(), ConfigError> { Ok(()) }
+        }
+
+        struct $module {
+            events: Arc<Mutex<Vec<String>>>,
+        }
+
+        impl Module for $module {
+            type Config = $config;
+
+            fn descriptor(&self) -> ModuleDescriptor {
+                ModuleDescriptor {
+                    id: $config::ID,
+                    provides: $provides,
+                    requires: $requires,
+                    permissions: &[],
+                    executables: &[],
+                    surfaces: &[],
+                }
+            }
+
+            fn configure(&mut self, _: &$config, _: &ModuleContext) -> ModuleResult<()> {
+                self.events.lock().expect("events").push(format!("configure:{}", $id));
+                Ok(())
+            }
+
+            fn start(&mut self, _: &ModuleContext) -> ModuleResult<()> {
+                self.events.lock().expect("events").push(format!("start:{}", $id));
+                Ok(())
+            }
+
+            fn reconfigure(&mut self, _: &$config, _: &ModuleContext) -> ModuleResult<()> { Ok(()) }
+
+            fn stop(&mut self, _: &ModuleContext) -> ModuleResult<()> {
+                self.events.lock().expect("events").push(format!("stop:{}", $id));
+                Ok(())
+            }
+        }
+
+        struct $factory {
+            events: Arc<Mutex<Vec<String>>>,
+        }
+
+        impl ModuleFactory for $factory {
+            fn id(&self) -> ModuleId { $config::ID }
+
+            fn register(
+                &self,
+                registry: &stache_sdk::Registry,
+                store: &stache_sdk::ConfigStore,
+            ) -> Result<Arc<dyn stache_app::host::ModuleControl>, stache_app::host::HostError> {
+                register_module(registry, store, $module {
+                    events: Arc::clone(&self.events),
+                })
+            }
+        }
+    };
+}
+
+order_module!(
+    AlphaConfig,
+    AlphaModule,
+    AlphaFactory,
+    "gateAlpha",
+    &ORDER_SERVICE,
+    &[]
+);
+order_module!(
+    BetaConfig,
+    BetaModule,
+    BetaFactory,
+    "gateBeta",
+    &[],
+    &ORDER_SERVICE
+);
+
+/// A gated host over two recording modules where `gateBeta` needs `gateAlpha`.
+struct GateHarness {
+    harness: Harness,
+    fixture: Fixture,
+    events: Arc<Mutex<Vec<String>>>,
+    commands: Arc<FakeCommands>,
+    permissions: Arc<FakePermissions>,
+}
+
+impl GateHarness {
+    fn new(permissions: Arc<FakePermissions>) -> Self {
+        let mut fixture = fixture();
+        fixture.catalog.register::<AlphaConfig>(AlphaConfig::ID).expect("alpha");
+        fixture.catalog.register::<BetaConfig>(BetaConfig::ID).expect("beta");
+        fixture.write("gateAlpha.jsonc", "{ \"enabled\": true }\n");
+        fixture.write("gateBeta.jsonc", "{ \"enabled\": true }\n");
+        fixture.write("global.jsonc", "{ \"execOnStartup\": [\"open -a Terminal\"] }\n");
+        let commands = Arc::new(FakeCommands::default());
+        let mut harness = Harness::new(
+            permissions.clone(),
+            Arc::new(InlineMain),
+            commands.clone(),
+            Arc::new(RecordingWindows::default()),
+        );
+        harness.gated = true;
+        Self {
+            harness,
+            fixture,
+            events: Arc::new(Mutex::new(Vec::new())),
+            commands,
+            permissions,
+        }
+    }
+
+    fn start(&mut self) {
+        let factories = ModuleFactories::new()
+            .with(AlphaFactory {
+                events: Arc::clone(&self.events),
+            })
+            .with(BetaFactory {
+                events: Arc::clone(&self.events),
+            });
+        self.harness.start_with_factories(&self.fixture, factories);
+        self.harness.wait_ready();
+    }
+
+    fn lifecycle(&self) -> Vec<String> { event_log(&self.events) }
+
+    fn access(&self) -> stache_app::bindings::AccessView { self.harness.handle.status().access }
+
+    fn wait_access(&self, state: AccessState) {
+        wait_for(&self.harness.handle, &format!("access {state:?}"), |status| {
+            status.access.state == state
+        });
+    }
+
+    fn wait_running(&self) {
+        wait_for(&self.harness.handle, "both modules running", |status| {
+            status.modules.len() == 2
+                && status.modules.iter().all(|module| module.state == ModuleState::Running)
+        });
+    }
+
+    fn startup_runs(&self) -> usize { self.commands.runs.lock().expect("runs").len() }
+
+    /// The distinct consecutive `(state, revoked)` pairs the UI was shown.
+    fn access_sequence(&self) -> Vec<(AccessState, bool)> {
+        let mut sequence: Vec<(AccessState, bool)> = Vec::new();
+        for status in self.harness.world.statuses.lock().expect("statuses").iter() {
+            let pair = (status.access.state, status.access.revoked);
+            if sequence.last() != Some(&pair) {
+                sequence.push(pair);
+            }
+        }
+        sequence
+    }
+
+    /// How many publishes changed the access state against the publish before
+    /// them (the first publish counts against no access state).
+    fn access_changing_publishes(&self) -> usize {
+        let statuses = self.harness.world.statuses.lock().expect("statuses");
+        let mut previous = None;
+        let mut changes = 0;
+        for status in statuses.iter() {
+            let pair = (status.access.state, status.access.revoked);
+            if previous != Some(pair) {
+                changes += 1;
+            }
+            previous = Some(pair);
+        }
+        drop(statuses);
+        changes
+    }
+
+    fn processed(&self, publishes: usize) {
+        let before = self.harness.world.statuses.lock().expect("statuses").len();
+        wait_for_publish(&self.harness.world, before + publishes);
+    }
+
+    fn shutdown(&self) {
+        self.harness.handle.request_shutdown();
+        assert!(self.harness.wait_exit());
+    }
+}
+
+#[test]
+fn ag_02_01_an_untrusted_launch_blocks_every_module_before_any_lifecycle_call() {
+    let mut gate = GateHarness::new(FakePermissions::new(PermissionStatus::Denied));
+    gate.start();
+    let first_ready = gate
+        .harness
+        .world
+        .statuses
+        .lock()
+        .expect("statuses")
+        .iter()
+        .find(|status| status.ready)
+        .cloned()
+        .expect("a ready status");
+    assert_eq!(first_ready.access.state, AccessState::Blocked);
+    assert!(!first_ready.access.revoked);
+    assert_eq!(first_ready.modules.len(), 2);
+    assert!(
+        first_ready
+            .modules
+            .iter()
+            .all(|module| module.state == ModuleState::WaitingForPermission),
+        "{:?}",
+        first_ready.modules
+    );
+    assert!(first_ready.error.is_none(), "{:?}", first_ready.error);
+    // Let several 5 ms ticks pass: nothing starts and nothing is requested.
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(gate.lifecycle(), Vec::<String>::new());
+    assert_eq!(gate.permissions.requests.load(Ordering::SeqCst), 0);
+    assert_eq!(gate.startup_runs(), 0, "execOnStartup waits for the first grant");
+    gate.shutdown();
+}
+
+#[test]
+fn ag_02_01_a_gated_test_module_never_configures_or_starts() {
+    let fixture = fixture();
+    fixture.write("testModule.jsonc", "{ \"enabled\": true }\n");
+    let permissions = FakePermissions::new(PermissionStatus::Denied);
+    let mut harness = Harness::new(
+        permissions.clone(),
+        Arc::new(InlineMain),
+        Arc::new(FakeCommands::default()),
+        Arc::new(RecordingWindows::default()),
+    );
+    harness.gated = true;
+    // The module itself declares no permission: the baseline alone gates it.
+    harness.start(&fixture, false, None);
+    harness.wait_ready();
+    wait_for(&harness.handle, "waiting", |status| {
+        status
+            .modules
+            .iter()
+            .any(|module| module.state == ModuleState::WaitingForPermission)
+    });
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(harness.counters.configure.load(Ordering::SeqCst), 0);
+    assert_eq!(harness.counters.start.load(Ordering::SeqCst), 0);
+    assert_eq!(permissions.requests.load(Ordering::SeqCst), 0);
+    harness.handle.request_shutdown();
+    assert!(harness.wait_exit());
+}
+
+#[test]
+fn ag_02_02_with_every_module_disabled_the_gate_still_blocks_and_polls_fast() {
+    let fixture = fixture();
+    fixture.write("testModule.jsonc", "{ \"enabled\": false }\n");
+    let permissions = FakePermissions::new(PermissionStatus::Denied);
+    let mut harness = Harness::new(
+        permissions.clone(),
+        Arc::new(InlineMain),
+        Arc::new(FakeCommands::default()),
+        Arc::new(RecordingWindows::default()),
+    );
+    harness.gated = true;
+    harness.start(&fixture, false, None);
+    harness.wait_ready();
+    assert_eq!(harness.handle.status().access.state, AccessState::Blocked);
+    // The gate polls without any module waiting: a grant opens it unprompted.
+    permissions.set(PermissionStatus::Granted);
+    wait_for(&harness.handle, "open", |status| {
+        status.access.state == AccessState::Open
+    });
+    assert_eq!(permissions.requests.load(Ordering::SeqCst), 0);
+    harness.handle.request_shutdown();
+    assert!(harness.wait_exit());
+}
+
+#[test]
+fn ag_02_03_denied_denied_granted_opens_without_restart_in_dependency_order() {
+    // The registry's own per-slot checks also read the provider, so a queue
+    // consumed per call would be order-fragile: the status is changed between
+    // observed ticks instead (Denied at launch, Denied on ticks, then Granted).
+    let permissions = FakePermissions::new(PermissionStatus::Denied);
+    let mut gate = GateHarness::new(permissions.clone());
+    gate.start();
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(gate.access().state, AccessState::Blocked);
+    assert_eq!(gate.lifecycle(), Vec::<String>::new());
+    assert_eq!(gate.startup_runs(), 0);
+    permissions.set(PermissionStatus::Granted);
+    gate.wait_running();
+    assert_eq!(gate.lifecycle(), [
+        "configure:gateAlpha",
+        "start:gateAlpha",
+        "configure:gateBeta",
+        "start:gateBeta"
+    ]);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while gate.startup_runs() == 0 {
+        assert!(
+            Instant::now() < deadline,
+            "execOnStartup did not run after the grant"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(gate.startup_runs(), 1, "exactly once");
+    assert_eq!(gate.access_sequence(), [
+        (AccessState::Blocked, false),
+        (AccessState::Open, false)
+    ]);
+    // One access-changing publish per transition: Blocked once, Open once.
+    assert_eq!(gate.access_changing_publishes(), 2);
+    assert_eq!(gate.permissions.requests.load(Ordering::SeqCst), 0);
+    gate.shutdown();
+}
+
+#[test]
+fn ag_02_04_an_activation_refresh_opens_the_gate_before_the_next_tick() {
+    let permissions = FakePermissions::new(PermissionStatus::Denied);
+    let mut gate = GateHarness::new(permissions.clone());
+    // Ticks are a minute apart, so only the activation refresh can open it.
+    gate.harness.poll = PermissionPoll {
+        waiting: Duration::from_secs(60),
+        backoff_start: Duration::from_secs(60),
+        backoff_max: Duration::from_secs(60),
+    };
+    gate.start();
+    assert_eq!(gate.access().state, AccessState::Blocked);
+    permissions.set(PermissionStatus::Granted);
+    gate.harness.handle.refresh_permissions();
+    gate.wait_access(AccessState::Open);
+    gate.wait_running();
+    gate.shutdown();
+}
+
+#[test]
+fn ag_02_05_revocation_stops_in_reverse_order_and_a_second_grant_restarts_without_startup_commands()
+{
+    let permissions = FakePermissions::new(PermissionStatus::Granted);
+    let mut gate = GateHarness::new(permissions.clone());
+    gate.start();
+    gate.wait_running();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while gate.startup_runs() == 0 {
+        assert!(Instant::now() < deadline, "execOnStartup did not run");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    permissions.set(PermissionStatus::Denied);
+    wait_for(&gate.harness.handle, "revoked", |status| {
+        status.access.state == AccessState::Blocked && status.access.revoked
+    });
+    assert_eq!(&gate.lifecycle()[4..], ["stop:gateBeta", "stop:gateAlpha"]);
+    assert!(
+        gate.harness
+            .handle
+            .status()
+            .modules
+            .iter()
+            .all(|module| module.state == ModuleState::WaitingForPermission)
+    );
+
+    permissions.set(PermissionStatus::Granted);
+    gate.wait_running();
+    assert_eq!(&gate.lifecycle()[6..], [
+        "configure:gateAlpha",
+        "start:gateAlpha",
+        "configure:gateBeta",
+        "start:gateBeta"
+    ]);
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(gate.startup_runs(), 1, "reopening never reruns execOnStartup");
+    assert_eq!(gate.access_sequence(), [
+        (AccessState::Open, false),
+        (AccessState::Blocked, true),
+        (AccessState::Open, false)
+    ]);
+    assert_eq!(gate.permissions.requests.load(Ordering::SeqCst), 0);
+    gate.shutdown();
+}
+
+#[test]
+fn ag_02_06_unknown_behaves_as_denied() {
+    let permissions = FakePermissions::new(PermissionStatus::Unknown);
+    let mut gate = GateHarness::new(permissions.clone());
+    gate.start();
+    assert_eq!(gate.access().state, AccessState::Blocked);
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(gate.lifecycle(), Vec::<String>::new());
+
+    permissions.set(PermissionStatus::Granted);
+    gate.wait_running();
+    permissions.set(PermissionStatus::Unknown);
+    wait_for(&gate.harness.handle, "revoked", |status| {
+        status.access.state == AccessState::Blocked && status.access.revoked
+    });
+    assert_eq!(&gate.lifecycle()[4..], ["stop:gateBeta", "stop:gateAlpha"]);
+    gate.shutdown();
+}
+
+#[test]
+fn ag_02_07_only_an_explicit_request_while_blocked_calls_request() {
+    let permissions = FakePermissions::new(PermissionStatus::Denied);
+    let mut gate = GateHarness::new(permissions.clone());
+    gate.start();
+    let requests = || permissions.requests.load(Ordering::SeqCst);
+    // Activation, enable (a reload of one file), config apply: zero requests.
+    gate.harness.handle.refresh_permissions();
+    gate.harness.handle.set_enabled("gateAlpha", false);
+    gate.harness.handle.set_enabled("gateAlpha", true);
+    gate.fixture.write("gateBeta.jsonc", "{ \"enabled\": true }\n// reload\n");
+    gate.processed(3);
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(
+        requests(),
+        0,
+        "startup, ticks, activation, enable and reload never request"
+    );
+
+    gate.harness.handle.request_permission();
+    gate.processed(1);
+    assert_eq!(requests(), 1);
+    gate.harness.handle.request_permission();
+    gate.processed(1);
+    assert_eq!(requests(), 2, "one request per explicit action");
+
+    permissions.set(PermissionStatus::Granted);
+    gate.wait_access(AccessState::Open);
+    gate.harness.handle.request_permission();
+    gate.processed(1);
+    assert_eq!(requests(), 2, "an explicit request while open requests nothing");
+    gate.shutdown();
+}
+
+#[test]
+fn ag_02_08_the_settings_opener_runs_only_while_blocked_and_failures_are_cleared_by_success() {
+    let permissions = FakePermissions::new(PermissionStatus::Denied);
+    let mut gate = GateHarness::new(permissions.clone());
+    gate.start();
+    let calls = || gate.harness.settings.calls.load(Ordering::SeqCst);
+
+    gate.harness.handle.open_accessibility_settings();
+    gate.processed(1);
+    assert_eq!(calls(), 1);
+    assert!(gate.harness.handle.status().error.is_none());
+
+    gate.harness.settings.fail.store(true, Ordering::SeqCst);
+    gate.harness.handle.open_accessibility_settings();
+    gate.processed(1);
+    assert_eq!(calls(), 2);
+    let error = gate.harness.handle.status().error.expect("the opener failure is reported");
+    assert!(error.contains("injected open failure"), "{error}");
+
+    gate.harness.settings.fail.store(false, Ordering::SeqCst);
+    gate.harness.handle.open_accessibility_settings();
+    gate.processed(1);
+    assert_eq!(calls(), 3);
+    assert!(
+        gate.harness.handle.status().error.is_none(),
+        "a successful action clears it"
+    );
+
+    permissions.set(PermissionStatus::Granted);
+    gate.wait_access(AccessState::Open);
+    gate.harness.handle.open_accessibility_settings();
+    // Commands run in order: this publishing refresh proves the open was handled.
+    gate.harness.handle.refresh_permissions();
+    gate.processed(1);
+    assert_eq!(calls(), 3, "the opener is not called while open");
+    gate.shutdown();
+}
+
+#[test]
+fn ag_02_11_a_shutdown_while_blocked_never_requests_or_opens_settings_afterwards() {
+    let permissions = FakePermissions::new(PermissionStatus::Denied);
+    let mut gate = GateHarness::new(permissions.clone());
+    gate.start();
+    gate.harness.handle.request_shutdown();
+    gate.harness.handle.request_permission();
+    gate.harness.handle.open_accessibility_settings();
+    gate.harness.handle.refresh_permissions();
+    assert!(gate.harness.wait_exit());
+    let outcome = gate.harness.wait_teardown();
+    gate.harness.wait_terminal();
+    assert_eq!(outcome.result, TeardownResult::Clean, "{outcome}");
+    assert_eq!(permissions.requests.load(Ordering::SeqCst), 0);
+    assert_eq!(gate.harness.settings.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(gate.lifecycle(), Vec::<String>::new());
+    assert!(!gate.harness.handle.status().ready);
+}
+
+#[test]
+fn a_gated_host_is_ready_with_a_blocked_access_view() {
+    let mut gate = GateHarness::new(FakePermissions::new(PermissionStatus::Denied));
+    gate.start();
+    let status = gate.harness.handle.status();
+    assert!(status.ready);
+    assert_eq!(status.access.state, AccessState::Blocked);
+    gate.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// AG-03: the socket while the Accessibility gate is closed
+// ---------------------------------------------------------------------------
+
+const GATE_MESSAGE: &str = "Stache Next is waiting for Accessibility permission. Grant it in System Settings > Privacy & Security > Accessibility.";
+
+struct EmptyAudio;
+
+impl AudioBackend for EmptyAudio {
+    fn devices(&self) -> Vec<AudioDevice> { Vec::new() }
+
+    fn default_device(&self, _: AudioDirection) -> Option<AudioDevice> { None }
+
+    fn set_default_device(&self, _: AudioDirection, _: u32) -> Result<(), AudioError> {
+        Err(AudioError::new("set default audio device", -1))
+    }
+
+    fn is_hdmi(&self, _: u32) -> bool { false }
+
+    fn subscribe(&self, _: AudioWakeup) -> Result<Box<dyn AudioChangeSubscription>, AudioError> {
+        Err(AudioError::new("add audio property listener", -1))
+    }
+}
+
+fn socket_client(fixture: &Fixture) -> IpcClient {
+    IpcClient::with_options(
+        fixture.app.socket_path().expect("socket"),
+        RetryPolicy::single(),
+        Duration::from_secs(5),
+    )
+}
+
+fn assert_gate_refusal(response: Response) {
+    match response {
+        Response::Error { error } => {
+            assert_eq!(error.kind, stache_sdk::ipc::WireErrorKind::Unavailable);
+            assert_eq!(error.message, GATE_MESSAGE);
+        }
+        Response::Ok { data } => panic!("a gated method answered ok: {data}"),
+    }
+}
+
+fn gated_harness(permissions: Arc<FakePermissions>) -> Harness {
+    let mut harness = Harness::new(
+        permissions,
+        Arc::new(InlineMain),
+        Arc::new(FakeCommands::default()),
+        Arc::new(RecordingWindows::default()),
+    );
+    harness.gated = true;
+    harness
+}
+
+#[test]
+fn ag_03_02_module_methods_answer_unavailable_through_a_real_router_while_blocked() {
+    let fixture = fixture();
+    fixture.write(
+        "wallpapers.jsonc",
+        "{ \"enabled\": false, \"list\": [\"wall.png\"] }\n",
+    );
+    let image = fixture.paths.directory().join("wall.png");
+    write_wallpaper_png(&image);
+    let desktop = FakeDesktop::with_snapshot(wallpaper_snapshot());
+    let backend: Arc<dyn GuardedDesktopBackend> = Arc::new(desktop.clone());
+    let wallpapers = WallpapersFactory::with_service(wallpapers_service(&fixture, backend));
+    let keep_awake = KeepAwakeFactory::new(
+        AssertionOwner::new(Arc::new(FakeAssertionBackend::new())),
+        Arc::new(FakeLockProbe::new(NativeLockState::Unlocked)),
+        LockObservationInstaller::new(
+            Arc::new(InlineMain),
+            Arc::new(FakeLockObservationBackend::new()),
+        ),
+    );
+    let permissions = FakePermissions::new(PermissionStatus::Denied);
+    let mut harness = gated_harness(permissions.clone());
+    harness.start_with_factories(
+        &fixture,
+        ModuleFactories::new()
+            .with(keep_awake)
+            .with(ProxyAudioFactory::new(Arc::new(EmptyAudio)))
+            .with(wallpapers),
+    );
+    harness.wait_ready();
+    let client = socket_client(&fixture);
+
+    let params = WallpapersSetParams {
+        config_directory: fixture.paths.directory().display().to_string(),
+        selection: WallpaperSelection::File {
+            path: image.display().to_string(),
+        },
+        screen: WallpaperScreen::All,
+    };
+    let requests = [
+        Request::without_params("keepAwake", "status"),
+        Request::without_params("proxyAudio", "list"),
+        Request::new("wallpapers", "set", &params).expect("request"),
+    ];
+    for request in &requests {
+        assert_gate_refusal(client.request(request).expect("answered"));
+    }
+    assert!(
+        desktop.calls().is_empty(),
+        "the refused set never reaches the desktop"
+    );
+
+    // core calls keep working and report the gate.
+    let status = client.status().expect("core.status");
+    let access = status.access.expect("host reports access");
+    assert_eq!(access.state, stache_sdk::ipc::CoreAccessState::Blocked);
+    assert!(!access.revoked);
+
+    // Once trust arrives the same router delegates unchanged.
+    permissions.set(PermissionStatus::Granted);
+    wait_for(&harness.handle, "open", |status| {
+        status.access.state == AccessState::Open
+    });
+    assert_eq!(
+        client.status().expect("core.status").access.map(|access| access.state),
+        Some(stache_sdk::ipc::CoreAccessState::Open)
+    );
+    match client
+        .request(&Request::without_params("proxyAudio", "list"))
+        .expect("answered")
+    {
+        Response::Ok { data } => assert_eq!(data, serde_json::json!([])),
+        Response::Error { error } => panic!("an open gate refused: {error:?}"),
+    }
+    let outcome = match client.request(&requests[2]).expect("answered") {
+        Response::Ok { data } => {
+            serde_json::from_value::<WallpapersSetOutcome>(data).expect("typed outcome")
+        }
+        Response::Error { error } => panic!("an open gate refused: {error:?}"),
+    };
+    assert_eq!(outcome.status, WallpapersOutcomeStatus::FullSuccess);
+
+    // Revocation closes the cell again, with the revoked flag.
+    permissions.set(PermissionStatus::Denied);
+    wait_for(&harness.handle, "revoked", |status| {
+        status.access.state == AccessState::Blocked
+    });
+    assert_gate_refusal(client.request(&requests[1]).expect("answered"));
+    let access = client.reload().expect("core.reload").access.expect("access");
+    assert_eq!(access.state, stache_sdk::ipc::CoreAccessState::Blocked);
+    assert!(access.revoked);
+
+    harness.handle.request_shutdown();
+    assert!(harness.wait_exit());
+}
+
+struct ProbeHandler {
+    calls: Arc<AtomicUsize>,
+}
+
+impl IpcHandler for ProbeHandler {
+    fn handle(&self, _: &str, _: serde_json::Value) -> HandlerResult<serde_json::Value> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(serde_json::Value::Null)
+    }
+}
+
+/// A module whose start blocks (holding its slot and lifecycle work) plus a
+/// counting socket handler.
+struct BusyStartFactory {
+    counters: Arc<Counters>,
+    start_gate: Arc<Gate>,
+    calls: Arc<AtomicUsize>,
+}
+
+impl ModuleFactory for BusyStartFactory {
+    fn id(&self) -> ModuleId { TestConfig::ID }
+
+    fn register(
+        &self,
+        registry: &stache_sdk::Registry,
+        store: &stache_sdk::ConfigStore,
+    ) -> Result<Arc<dyn stache_app::host::ModuleControl>, stache_app::host::HostError> {
+        register_module(registry, store, TestModule {
+            counters: Arc::clone(&self.counters),
+            permission: false,
+            gate: Some(Arc::clone(&self.start_gate)),
+            configure_gate: None,
+        })
+    }
+
+    fn ipc_handlers(&self, _: &FactoryContext) -> Vec<(&'static str, Arc<dyn IpcHandler>)> {
+        vec![(
+            TestConfig::ID.as_str(),
+            Arc::new(ProbeHandler { calls: Arc::clone(&self.calls) }),
+        )]
+    }
+}
+
+#[test]
+fn ag_03_06_a_gated_request_answers_while_the_lifecycle_lock_and_host_worker_are_busy() {
+    let fixture = fixture();
+    fixture.write("testModule.jsonc", "{ \"enabled\": true }\n");
+    let counters = Arc::new(Counters::default());
+    let start_gate = Gate::new();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let permissions = FakePermissions::new(PermissionStatus::Denied);
+    let mut harness = gated_harness(permissions.clone());
+    harness.start_with_factories(
+        &fixture,
+        ModuleFactories::new().with(BusyStartFactory {
+            counters: Arc::clone(&counters),
+            start_gate: Arc::clone(&start_gate),
+            calls: Arc::clone(&calls),
+        }),
+    );
+    harness.wait_ready();
+
+    // Granting makes the worker start the module, and the start blocks inside
+    // the registry with its slot held while the gate cell still reads closed.
+    permissions.set(PermissionStatus::Granted);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while counters.start.load(Ordering::SeqCst) == 0 {
+        assert!(Instant::now() < deadline, "the module never entered start");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_ne!(harness.handle.status().access.state, AccessState::Open);
+
+    let client = IpcClient::with_options(
+        fixture.app.socket_path().expect("socket"),
+        RetryPolicy::single(),
+        Duration::from_secs(2),
+    );
+    let request = Request::without_params(TestConfig::ID.as_str(), "anything");
+    let started = Instant::now();
+    let response = client.request(&request).expect("answered while the worker is busy");
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_gate_refusal(response);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "the module handler was never called"
+    );
+
+    start_gate.open();
+    harness.handle.request_shutdown();
+    assert!(harness.wait_exit());
+}
+
+/// A gated host over the real window bookkeeping and a recording native host.
+fn guide_harness(
+    permissions: Arc<FakePermissions>,
+    gated: bool,
+) -> (Harness, Arc<NativeWindows>, Arc<FakeWindowHost>) {
+    let host = Arc::new(FakeWindowHost::default());
+    let windows = Arc::new(NativeWindows::new(
+        Arc::new(InlineMain),
+        host.clone(),
+        Arc::new(DiscardLogger),
+    ));
+    let mut harness = Harness::new(
+        permissions,
+        Arc::new(InlineMain),
+        Arc::new(FakeCommands::default()),
+        windows.clone(),
+    );
+    harness.gated = gated;
+    (harness, windows, host)
+}
+
+fn access_labels(host: &FakeWindowHost) -> Vec<String> {
+    host.opened
+        .lock()
+        .expect("opened")
+        .iter()
+        .filter(|spec| spec.surface == stache_app::windows::ACCESS_SURFACE)
+        .map(|spec| spec.label.clone())
+        .collect()
+}
+
+fn wait_until(label: &str, condition: impl Fn() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !condition() {
+        assert!(Instant::now() < deadline, "timed out waiting for {label}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn ag_04_01_blocked_opens_one_window_a_grant_closes_it_and_a_revocation_opens_one_again() {
+    let fixture = fixture();
+    let permissions = FakePermissions::new(PermissionStatus::Denied);
+    let (mut harness, windows, host) = guide_harness(permissions.clone(), true);
+    harness.start(&fixture, false, None);
+    harness.wait_ready();
+    wait_until("the guidance window", || access_labels(&host).len() == 1);
+    // Many more blocked ticks open nothing else.
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(access_labels(&host).len(), 1);
+    assert_eq!(windows.len(), 1);
+    let first = access_labels(&host)[0].clone();
+    assert!(first.starts_with("stache-access-"), "{first}");
+
+    permissions.set(PermissionStatus::Granted);
+    wait_until("the grant to close the window", || {
+        host.closed.lock().expect("closed").contains(&first)
+    });
+    windows.window_closed(&first);
+    assert!(windows.is_empty());
+
+    permissions.set(PermissionStatus::Denied);
+    wait_until("the revocation window", || access_labels(&host).len() == 2);
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(access_labels(&host).len(), 2, "one window per episode");
+    harness.handle.request_shutdown();
+    assert!(harness.wait_exit());
+}
+
+#[test]
+fn ag_04_01_a_user_close_is_not_reopened_by_more_blocked_ticks() {
+    let fixture = fixture();
+    let permissions = FakePermissions::new(PermissionStatus::Denied);
+    let (mut harness, windows, host) = guide_harness(permissions, true);
+    harness.start(&fixture, false, None);
+    harness.wait_ready();
+    wait_until("the guidance window", || access_labels(&host).len() == 1);
+    let label = access_labels(&host)[0].clone();
+    windows.window_closed(&label);
+    assert!(windows.is_empty());
+    std::thread::sleep(Duration::from_millis(150));
+    assert_eq!(access_labels(&host).len(), 1, "same episode: no reopen");
+    assert!(windows.is_empty());
+    harness.handle.request_shutdown();
+    assert!(harness.wait_exit());
+}
+
+#[test]
+fn ag_04_04_the_tray_command_reopens_after_a_user_close_and_focuses_an_open_window() {
+    let fixture = fixture();
+    let permissions = FakePermissions::new(PermissionStatus::Denied);
+    let (mut harness, windows, host) = guide_harness(permissions.clone(), true);
+    harness.start(&fixture, false, None);
+    harness.wait_ready();
+    wait_until("the guidance window", || access_labels(&host).len() == 1);
+
+    harness.handle.open_access_guide();
+    wait_until("the focus", || host.focused.lock().expect("focused").len() == 1);
+    assert_eq!(
+        access_labels(&host).len(),
+        1,
+        "an open window is focused, not duplicated"
+    );
+
+    let label = access_labels(&host)[0].clone();
+    windows.window_closed(&label);
+    harness.handle.open_access_guide();
+    wait_until("the reopened window", || access_labels(&host).len() == 2);
+
+    // The reopened window is the one a grant closes.
+    let second = access_labels(&host)[1].clone();
+    permissions.set(PermissionStatus::Granted);
+    wait_until("the grant to close the reopened window", || {
+        host.closed.lock().expect("closed").contains(&second)
+    });
+    // Open: the row is absent and a late command opens nothing.
+    harness.handle.open_access_guide();
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(access_labels(&host).len(), 2);
+    harness.handle.request_shutdown();
+    assert!(harness.wait_exit());
+}
+
+#[test]
+fn ag_04_02_a_trusted_launch_and_an_ungated_host_open_no_window() {
+    for gated in [true, false] {
+        let fixture = fixture();
+        let permissions = FakePermissions::new(PermissionStatus::Granted);
+        let (mut harness, windows, host) = guide_harness(permissions, gated);
+        harness.start(&fixture, false, None);
+        harness.wait_ready();
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(host.opened.lock().expect("opened").is_empty(), "gated={gated}");
+        assert!(host.closed.lock().expect("closed").is_empty());
+        assert!(windows.is_empty());
+        harness.handle.request_shutdown();
+        assert!(harness.wait_exit());
+    }
+}
+
+#[test]
+fn ag_04_02_an_ungated_host_with_a_missing_permission_still_opens_no_window() {
+    let fixture = fixture();
+    let permissions = FakePermissions::new(PermissionStatus::Denied);
+    let (mut harness, _windows, host) = guide_harness(permissions, false);
+    harness.start(&fixture, false, None);
+    harness.wait_ready();
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(host.opened.lock().expect("opened").is_empty());
+    harness.handle.request_shutdown();
+    assert!(harness.wait_exit());
 }
 
 // ---------------------------------------------------------------------------

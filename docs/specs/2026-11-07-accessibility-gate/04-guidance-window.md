@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 04 — Guidance window
@@ -20,7 +20,7 @@ Depends on part 02. Implements Decision 5; if the user picks `NSAlert` instead, 
 2. On each `Blocked` transition (first check or revocation) the runner opens the window once for that gated episode and brings the app forward so the window is frontmost despite the Accessory policy. Closing it by the user does not reopen it during the same episode.
 3. On `Opened` the runner closes the window through the existing release path. The window also reacts to the `status-changed` event (step 9) so it never shows stale guidance if the close races.
 4. The tray, while blocked, gains `access-guide` **Show Accessibility Help…** as its first gate row, which opens or focuses the window (same owner/key reuse as the test window).
-5. A trusted launch creates no webview; `startup: tray ready after N ms, webviews=0` is unchanged on that path. A gated launch reports the webview it created.
+5. A trusted launch creates no webview; `startup: tray ready after N ms, webviews=0` is unchanged on that path. The startup record is written before the first Accessibility check, so it stays `webviews=0` on every path; a gated launch instead logs `access: guidance window requested` when it creates the window (implementation decision, 2026-11-07).
 
 ### Commands and capability
 

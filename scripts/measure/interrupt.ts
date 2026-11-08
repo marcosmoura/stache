@@ -23,12 +23,15 @@ export async function sleepUnlessInterrupted(
   isInterrupted: () => boolean,
 ): Promise<void> {
   const deadline = Date.now() + milliseconds;
+
   for (;;) {
     throwIfInterrupted(isInterrupted, 'interrupted during a wait');
     const remaining = deadline - Date.now();
+
     if (remaining <= 0) {
       return;
     }
+
     await sleep(Math.min(INTERRUPT_POLL_MS, remaining));
   }
 }
