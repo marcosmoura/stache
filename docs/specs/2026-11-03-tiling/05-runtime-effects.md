@@ -4,7 +4,7 @@ status: draft
 
 # 05 — Frame effects and core runtime lifecycle
 
-Read when implementing after 04 and separate approval. Factory is compiled/inert but not production-registered until 06; no incomplete public command success.
+Read when implementing after 04, after Bar foundation has merged and this branch has rebased onto it, and separate approval. Factory is compiled/inert but not production-registered until 06; no incomplete public command success.
 
 ## Scope
 
