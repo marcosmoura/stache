@@ -144,6 +144,8 @@ impl Module for ProxyAudioModule {
             permissions: &[],
             executables: &[],
             surfaces: &[],
+            observes: &[],
+            reserves_screen: false,
         }
     }
 

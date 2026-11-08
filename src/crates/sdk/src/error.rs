@@ -228,6 +228,13 @@ pub enum RegistryError {
     },
     /// The baseline permission requirements were set after a module registered.
     BaselineAfterRegistration,
+    /// A published-state schema was registered after a module registered.
+    StateSchemaAfterRegistration,
+    /// A provider already has a published-state schema.
+    DuplicateStateSchema {
+        /// The provider with two schemas.
+        provider: ModuleId,
+    },
     /// The registry is shutting down or has already shut down.
     ShuttingDown,
     /// A module operation failed; the module snapshot records the same failure.
@@ -270,6 +277,15 @@ impl fmt::Display for RegistryError {
             }
             Self::BaselineAfterRegistration => {
                 f.write_str("baseline permission requirements must be set before any registration")
+            }
+            Self::StateSchemaAfterRegistration => f.write_str(
+                "published-state schemas must be registered before any module registration",
+            ),
+            Self::DuplicateStateSchema { provider } => {
+                write!(
+                    f,
+                    "provider `{provider}` already registered a published-state schema"
+                )
             }
             Self::ShuttingDown => f.write_str("the registry is shut down"),
             Self::Module(error) => error.fmt(f),

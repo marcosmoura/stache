@@ -5,6 +5,7 @@ use std::fs;
 use std::path::Path;
 use std::process::ExitCode;
 
+use stache_bar::{BarConfig, WeatherProvider};
 use stache_hold_to_quit::{CommandQuitConfig, HudAnimation, HudPosition};
 use stache_keep_awake::KeepAwakeConfig;
 use stache_keybindings::KeybindingsConfig;
@@ -24,6 +25,7 @@ fn the_catalog_owns_the_global_and_module_files() {
     let ids: Vec<&str> = catalog.ids().map(stache_sdk::ModuleId::as_str).collect();
     assert_eq!(ids, [
         "global",
+        "bar",
         "commandQuit",
         "keepAwake",
         "keybindings",
@@ -36,6 +38,7 @@ fn the_catalog_owns_the_global_and_module_files() {
         catalog.file_name(GlobalConfig::ID).as_deref(),
         Some("global.jsonc")
     );
+    assert_eq!(catalog.file_name(BarConfig::ID).as_deref(), Some("bar.jsonc"));
     assert_eq!(
         catalog.file_name(CommandQuitConfig::ID).as_deref(),
         Some("commandQuit.jsonc")
@@ -246,9 +249,8 @@ fn migration_converts_the_legacy_fixture_into_valid_typed_files() {
     let decoded: WallpapersConfig = serde_json::from_str(&wallpapers).expect("typed wallpapers");
     assert!(!decoded.enabled, "migration never enables Wallpapers");
     assert_migrated_command_quit_keeps_legacy_keys(&catalog, &destination);
-    for name in ["bar.jsonc", "tiling.jsonc"] {
-        assert!(destination.join(name).exists(), "{name}");
-    }
+    assert!(destination.join("tiling.jsonc").exists());
+    assert_migrated_bar_is_typed(&catalog, &destination);
     assert_migrated_menu_anywhere_is_disabled(&catalog, &destination);
     let keybindings_path = destination.join("keybindings.jsonc");
     let keybindings = fs::read_to_string(&keybindings_path).expect("keybindings");
@@ -276,12 +278,10 @@ fn migration_converts_the_legacy_fixture_into_valid_typed_files() {
     assert!(!out.contains("copied wallpapers"));
     assert!(out.contains("validated commandQuit -> commandQuit.jsonc"));
     assert!(!out.contains("copied commandQuit"));
-    for unported in ["bar", "tiling"] {
-        assert!(
-            out.contains(&format!("copied {unported} -> {unported}.jsonc")),
-            "{unported}"
-        );
-    }
+    assert!(out.contains("copied tiling -> tiling.jsonc"));
+    assert!(out.contains("validated bar -> bar.jsonc"), "{out}");
+    assert!(!out.contains("copied bar"));
+    assert!(out.contains("warning: bar `padding` was omitted"), "{out}");
     assert!(out.contains("warning: dropped widgets (not ported)"));
     assert!(out.contains("warning: unknown key `futureKey` was not migrated"));
 }
@@ -458,11 +458,15 @@ fn keep_awake_migration_always_emits_the_disabled_default() {
                 .expect("bar JSON");
                 assert_eq!(
                     bar,
-                    serde_json::json!({ "enabled": label == "enabled" }),
-                    "{label}: the unported section stays verbatim"
+                    serde_json::json!({ "enabled": label == "enabled", "height": 28, "padding": 12 }),
+                    "{label}: omitted dimensions are materialized"
                 );
             }
-            _ => assert!(!destination.join("bar.jsonc").exists(), "{label}"),
+            _ => assert_eq!(
+                fs::read_to_string(destination.join("bar.jsonc")).expect("bar"),
+                catalog().template(BarConfig::ID).expect("bar template"),
+                "{label}: a missing section emits the disabled template"
+            ),
         }
     }
 }
@@ -1443,4 +1447,81 @@ fn menu_anywhere_is_catalogued_inert_and_never_marked_active_while_unbound() {
     let (code, out, err) = run_args(&["stache", "schema", "menuAnywhere"]);
     assert_eq!(code, ExitCode::SUCCESS, "{err}");
     assert!(out.contains("/schemas/menuAnywhere.schema.json"), "{out}");
+}
+
+fn assert_migrated_bar_is_typed(catalog: &ConfigCatalog, destination: &Path) {
+    let path = destination.join("bar.jsonc");
+    let text = fs::read_to_string(&path).expect("bar");
+    catalog.inspect(BarConfig::ID, &path, &text).expect("migrated bar validates");
+    let decoded: BarConfig = serde_json::from_str(&text).expect("typed bar");
+    assert!(decoded.enabled, "explicit enabled is kept; nothing runs");
+    assert_eq!(decoded.height, 32, "explicit height is kept");
+    assert_eq!(decoded.padding, 12, "omitted padding is materialized");
+    assert_eq!(decoded.weather.provider, WeatherProvider::Auto);
+}
+
+fn bar_migration(legacy_bar: &str) -> (ExitCode, String, String, serde_json::Value) {
+    let root = tempfile::tempdir().expect("temp dir");
+    let source = root.path().join("legacy.jsonc");
+    let destination = root.path().join("config");
+    fs::write(&source, format!(r#"{{ "bar": {legacy_bar} }}"#)).expect("source");
+    let (code, out, err) = migrate(&source, &destination, false);
+    let bar = fs::read_to_string(destination.join("bar.jsonc"))
+        .ok()
+        .map_or(serde_json::Value::Null, |text| {
+            serde_json::from_str(&text).expect("bar JSON")
+        });
+    (code, out, err, bar)
+}
+
+#[test]
+fn bar_migration_keeps_explicit_zero_and_max_values_without_warnings() {
+    let (code, out, err, bar) = bar_migration(r#"{ "height": 0, "padding": 65535 }"#);
+    assert_eq!(code, ExitCode::SUCCESS, "{err}");
+    assert_eq!(bar["height"], 0);
+    assert_eq!(bar["padding"], 65535);
+    assert!(!out.contains("warning: bar"), "{out}");
+}
+
+#[test]
+fn bar_migration_materializes_omissions_retains_unknown_keys_and_warns() {
+    let (code, out, err, bar) = bar_migration(
+        r#"{ "future": 1, "widgets": [], "weather": { "provider": "open-meteo", "apiKeys": ".env" } }"#,
+    );
+    assert_eq!(code, ExitCode::SUCCESS, "{err}");
+    assert_eq!((&bar["height"], &bar["padding"]), (&28.into(), &12.into()));
+    assert_eq!(bar["future"], 1);
+    assert_eq!(bar["weather"]["apiKeys"], ".env", "relative text is retained");
+    assert!(out.contains("warning: bar `height` was omitted"), "{out}");
+    assert!(out.contains("warning: bar `padding` was omitted"), "{out}");
+    assert!(
+        out.contains("warning: bar `weather.apiKeys` value `.env` is relative"),
+        "{out}"
+    );
+    assert!(
+        out.contains("warning: unknown bar key `future` is preserved in bar.jsonc"),
+        "{out}"
+    );
+}
+
+#[test]
+fn bar_migration_rejects_invalid_values_before_writing_anything() {
+    for invalid in [
+        r#"{ "height": -1 }"#,
+        r#"{ "padding": 65536 }"#,
+        r#"{ "enabled": "yes" }"#,
+        r#"{ "weather": { "provider": "other" } }"#,
+    ] {
+        let (code, _out, err, _bar) = bar_migration(invalid);
+        assert_eq!(code, ExitCode::FAILURE, "{invalid}");
+        assert!(err.contains("cannot convert bar"), "{invalid}: {err}");
+    }
+}
+
+#[test]
+fn bar_registration_adds_no_runtime_command_or_active_state() {
+    let catalog = catalog();
+    assert!(catalog.contains(BarConfig::ID));
+    let template = catalog.template(BarConfig::ID).expect("template");
+    assert!(template.contains(r#""enabled": false"#), "{template}");
 }

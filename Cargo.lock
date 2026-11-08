@@ -3280,6 +3280,7 @@ dependencies = [
  "signal-hook",
  "specta",
  "specta-typescript",
+ "stache-bar",
  "stache-cli",
  "stache-hold-to-quit",
  "stache-keep-awake",
@@ -3294,6 +3295,17 @@ dependencies = [
  "tauri-build",
  "tauri-specta",
  "tempfile",
+]
+
+[[package]]
+name = "stache-bar"
+version = "0.25.0"
+dependencies = [
+ "schemars 1.2.3",
+ "serde",
+ "serde_json",
+ "specta",
+ "stache-sdk",
 ]
 
 [[package]]

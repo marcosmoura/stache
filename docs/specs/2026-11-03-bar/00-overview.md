@@ -38,7 +38,7 @@ Approved by the user; parts must not re-decide them.
 14. **Module→UI data** through tauri-specta generated commands/events, delivered by a host bridge (the SDK bus is pull-only).
 15. **Tests** never open real windows/panels, spawn the media adapter, hit the network or prompt permissions; manual native gates need per-run approval.
 16. **Zero size** (confirmed 2026-11-08): explicit `height: 0`, or a computed panel width `<= 0`, stays valid config. Bar runs with no panel: typed status "no panel: zero size", no window, no screen reservation. Shared window validation (`src/crates/sdk/src/windows.rs:372-381`, `src/crates/app/src/windows.rs:361-368`) stays unchanged. Part 03 owns it.
-17. **Accessibility gate** (confirmed 2026-11-08): Bar waits behind the planned [Accessibility launch gate](../2026-11-07-accessibility-gate/00-overview.md) like every module but does not depend on it. See [Accessibility gate interaction](#accessibility-gate-interaction).
+17. **Accessibility gate** (confirmed 2026-11-08): Bar waits behind the shipped [Accessibility launch gate](../2026-11-07-accessibility-gate/00-overview.md) like every module but does not depend on it. See [Accessibility gate interaction](#accessibility-gate-interaction).
 
 ## Parts
 
@@ -63,7 +63,7 @@ Reuse these landed facilities; do not recreate them:
 - Accepted-config watch: `Registry::accepted_watch` (`src/crates/sdk/src/registry.rs:1026`) and `AcceptedWatch::wait_for_change` (`src/crates/sdk/src/config/accepted.rs:299`), via `register_module_observed`.
 - `CommandExecutor::run_captured`/`run_captured_prepared` (`src/crates/sdk/src/commands.rs:847,864`): one-shot captured only, no streaming mode (part 07 adds a minimal bounded streaming extension).
 - `NativeOwner` (`src/crates/app/src/shutdown.rs:336-345`).
-- `ApplicationControl` open (`src/crates/macos/src/applications.rs:588`); `open` takes only a file `Path` (`:1337-1341`), so part 05's fixed settings-URL operation is new.
+- `ApplicationControl` open (`src/crates/macos/src/applications.rs:588`); `open` takes only a file `Path` (`:1337-1341`). Settings URLs reuse the gate's `stache-macos` `settings` opener (`src/crates/macos/src/settings.rs`), extended with part 05's two fixed targets.
 - Per-module typed status overlay on `ModuleStatusView` (`src/crates/app/src/bindings.rs` ~97-128, e.g. `keybindings: Option<KeybindingsRuntimeStatus>`); bindings builder `collect_commands![app_info, host_status]`/`collect_events![StatusChanged]` (`bindings.rs:258-291`); `AppUi::status` emits `StatusChanged` (`src/crates/app/src/lib.rs:90-96`).
 - Session pause/resume exists host-side only (`ModuleControl::pause/resume` `host.rs:150-172`, `HostHandle::pause/resume` `host.rs:844-847`, tray rows `tray.rs:206-214`); not exposed to modules/UI, so part 08's generated session-action command is new.
 
@@ -73,12 +73,13 @@ Dependency chain: parts 03–08 start only after [Bar foundation](../2026-11-08-
 
 ## Accessibility gate interaction
 
-The [Accessibility launch gate](../2026-11-07-accessibility-gate/00-overview.md) is specified, not implemented; either may land first and Bar does not depend on it. Bar needs no Accessibility permission itself. Whenever the gate exists:
+The [Accessibility launch gate](../2026-11-07-accessibility-gate/00-overview.md) shipped on main (`f0fc70a`): the registry merges a host baseline Accessibility requirement into every module (`Registry::with_baseline_requirements`, `src/crates/sdk/src/registry.rs`). Bar inherits it with no Bar code and needs no Accessibility permission itself. Consequences:
 
 - While gated, Bar creates zero windows/webviews (it is never started).
 - Bar's panel teardown is the normal stop path, reachable from the revocation stop (`on_permission_change`).
 - Bar's Tauri bridge commands return a typed unavailable while Bar is not running, gated or otherwise (part 03).
-- Both specs add to `SURFACES` (`src/ui/src/shell/components/WindowRouter/surface.ts:1`); the change is additive and whichever lands second rebases.
+- UI surfaces are now the `WINDOWS` map in `src/ui/src/shell/Shell.tsx` with one directory per window under `src/ui/src/shell/windows/`; Bar adds `bar` additively next to `access`/`test`.
+- Reuse the gate's landed pieces instead of new plumbing: per-surface native chrome `WindowChrome`/`chrome_for` (`src/crates/app/src/windows.rs`, part 03) and the safe main-thread `x-apple.systempreferences:` opener `stache-macos` `settings` (`src/crates/macos/src/settings.rs`, part 05).
 
 ## Wallpapers review lessons applied
 

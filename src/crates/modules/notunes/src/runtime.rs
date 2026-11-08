@@ -188,6 +188,8 @@ impl Module for NoTunesModule {
             permissions: &[],
             executables: &[],
             surfaces: &[],
+            observes: &[],
+            reserves_screen: false,
         }
     }
 

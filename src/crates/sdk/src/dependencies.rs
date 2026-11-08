@@ -143,6 +143,8 @@ mod tests {
             permissions: &[],
             executables: &[],
             surfaces: &[],
+            observes: &[],
+            reserves_screen: false,
         }
     }
 

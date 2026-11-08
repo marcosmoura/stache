@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 01 — Config, catalog and migration
@@ -20,10 +20,10 @@ Add `src/crates/modules/bar/{Cargo.toml,src/lib.rs,src/config.rs}` (`stache-bar`
 
 ## Acceptance criteria
 
-- [ ] BAR-01-01: Authoritative defaults/field shapes/schema/templates/bindings agree, compile and add no runtime activity or command grammar.
-- [ ] BAR-01-02: Typed migration preserves explicit values, corrects omissions with warnings, preserves source/collision/modes/unknown keys and existing modules' behavior.
-- [ ] BAR-01-03: Path normalization is deterministic with injected home/config context and ambiguity warning; config-only operations read no secrets or native state.
-- [ ] BAR-01-04: Generated drift checks and targeted config/CLI tests pass; config/feature docs describe only this slice as shipped.
+- [x] BAR-01-01: Authoritative defaults/field shapes/schema/templates/bindings agree, compile and add no runtime activity or command grammar.
+- [x] BAR-01-02: Typed migration preserves explicit values, corrects omissions with warnings, preserves source/collision/modes/unknown keys and existing modules' behavior.
+- [x] BAR-01-03: Path normalization is deterministic with injected home/config context and ambiguity warning; config-only operations read no secrets or native state.
+- [x] BAR-01-04: Generated drift checks and targeted config/CLI tests pass; config/feature docs describe only this slice as shipped.
 
 ## Tests
 

@@ -47,8 +47,9 @@ use stache_sdk::{
     ConfigStore, ConfigStoreError, ConfigWatcher, EventBus, Initial, LogFilter, Logger,
     MainThreadExecutor, Module, ModuleConfig, ModuleHandle, ModuleId, ModuleSnapshot, ModuleStatus,
     PathEntry, Permission, PermissionProvider, PermissionRequirement, PermissionStatus, Registry,
-    RegistryError, RegistryResult, ReloadOutcome, WatchError, WindowBackend, WindowError, WindowId,
-    WindowKey, WindowKind, WindowRequest, WindowSize, inspect_paths,
+    RegistryError, RegistryResult, ReloadOutcome, StateObserver, StateSchemas, WatchError,
+    WindowBackend, WindowError, WindowId, WindowKey, WindowKind, WindowRequest, WindowSize,
+    inspect_paths,
 };
 
 /// Host-assigned generic input priorities.
@@ -262,6 +263,30 @@ impl FactoryContext {
         handle: ModuleHandle<C>,
     ) -> RegistryResult<AcceptedWatch<C>> {
         self.registry.accepted_watch(handle)
+    }
+
+    /// A read-only observer of one provider's published state.
+    ///
+    /// An unknown provider, or one with no registered schema, reads absent. The
+    /// observer takes no registry, module or lifecycle lock and cannot publish.
+    /// Decode a payload with the provider's own type through
+    /// [`stache_sdk::StateEnvelope::decode`], or project it for the frontend
+    /// with [`crate::published_state::PublishedStateView`].
+    #[must_use]
+    pub fn observe_state(&self, provider: ModuleId) -> StateObserver {
+        self.registry.observe_state(provider)
+    }
+
+    /// A read-only observer of the host's aggregated screen reservations.
+    ///
+    /// Subscribe before fetch: `read()` the snapshot, then `wait_for_change`
+    /// with its revision. The snapshot carries the display topology generation,
+    /// each display's maximum-aggregated edge insets and the exact owner and
+    /// generation of every contribution. It cannot stage or remove anything and
+    /// never reads a producer's configuration.
+    #[must_use]
+    pub fn observe_screen_reservations(&self) -> stache_sdk::ScreenReservationObserver {
+        self.registry.observe_screen_reservations()
     }
 }
 
@@ -1007,6 +1032,7 @@ pub fn new_host(teardown: Arc<Teardown>) -> (HostHandle, HostDriver) {
         receiver,
         handle,
         input: None,
+        state_schemas: None,
         recovery: None,
     })
 }
@@ -1314,6 +1340,7 @@ pub struct HostDriver {
     receiver: Receiver<HostCommand>,
     handle: HostHandle,
     input: Option<Arc<InputService>>,
+    state_schemas: Option<StateSchemas>,
     recovery: Option<Arc<dyn StartupRecovery>>,
 }
 
@@ -1325,6 +1352,20 @@ impl HostDriver {
     #[must_use]
     pub fn with_input_service(mut self, input: Arc<InputService>) -> Self {
         self.input = Some(input);
+        self
+    }
+}
+
+impl HostDriver {
+    /// Registers the provider published-state schemas the app composed from the
+    /// owning module crates.
+    ///
+    /// They are applied to the registry before any module registers, so a
+    /// provider can only publish the type registered here. Without them (the
+    /// default) no module publishes state and every observer reads absent.
+    #[must_use]
+    pub fn with_state_schemas(mut self, schemas: StateSchemas) -> Self {
+        self.state_schemas = Some(schemas);
         self
     }
 }
@@ -1368,6 +1409,9 @@ impl HostDriver {
         }
         if !services.baseline.is_empty() {
             registry = registry.with_baseline_requirements(services.baseline.clone())?;
+        }
+        if let Some(schemas) = &self.state_schemas {
+            registry = registry.with_state_schemas(schemas)?;
         }
         let registry = Arc::new(registry);
         let monitors = Arc::new(MonitorCells::default());
@@ -2852,6 +2896,10 @@ mod tests {
             ],
             "production registers the audio pilot, the blocker, Keep Awake and MenuAnywhere"
         );
+        assert!(
+            !ids.contains(&stache_bar::BarConfig::ID),
+            "Bar is configuration-only until its runtime part ships: no production factory"
+        );
 
         for factory in factories.entries() {
             let id = factory.id();
@@ -2894,6 +2942,16 @@ mod tests {
         let handlers = factories.entries()[2].ipc_handlers(&context);
         assert_eq!(handlers.len(), 1);
         assert_eq!(handlers[0].0, "keepAwake");
+
+        // The same context exposes the host's read-only reservation snapshot.
+        let reservations = context.observe_screen_reservations().read();
+        assert_eq!(reservations.revision, 0);
+        assert!(reservations.displays.is_empty());
+        assert_eq!(
+            reservations,
+            registry.observe_screen_reservations().read(),
+            "the factory context and the registry read one hub"
+        );
     }
 
     #[test]
@@ -3063,6 +3121,8 @@ mod tests {
                 permissions: &[],
                 executables: &[],
                 surfaces: &[],
+                observes: &[],
+                reserves_screen: false,
             }
         }
 
@@ -3148,6 +3208,8 @@ mod tests {
                 permissions: &[],
                 executables: &[],
                 surfaces: &[],
+                observes: &[],
+                reserves_screen: false,
             }
         }
 

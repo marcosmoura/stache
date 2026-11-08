@@ -145,6 +145,8 @@ impl Module for TestModule {
             permissions: if self.permission { &ACCESS } else { &[] },
             executables: &[],
             surfaces: &SURFACES,
+            observes: &[],
+            reserves_screen: false,
         }
     }
 
@@ -4805,6 +4807,8 @@ macro_rules! order_module {
                     permissions: &[],
                     executables: &[],
                     surfaces: &[],
+                    observes: &[],
+                    reserves_screen: false,
                 }
             }
 

@@ -9,11 +9,16 @@ use std::sync::Arc;
 
 use crate::error::{ErrorCategory, ModuleError, ModuleResult};
 use crate::events::EventBus;
+use crate::generation::GenerationScope;
 use crate::input::InputCapability;
 use crate::logging::ScopedLogger;
 use crate::module::ModuleId;
 use crate::permissions::PermissionProvider;
+use crate::published_state::{PublishedState, StateError, StateHub, StateObserver, StatePublisher};
 use crate::registry::ModuleInvalidation;
+use crate::screen_reservations::{
+    ReservationHub, ScreenReservationError, ScreenReservationObserver, ScreenReservations,
+};
 use crate::threading::{CancellationToken, MainThreadExecutor, WorkerHandle};
 use crate::windows::WindowCapability;
 
@@ -29,6 +34,11 @@ pub struct ModuleContext {
     invalidation: ModuleInvalidation,
     windows: WindowCapability,
     input: InputCapability,
+    generation: GenerationScope,
+    states: Arc<StateHub>,
+    observes: &'static [ModuleId],
+    reservations: Arc<ReservationHub>,
+    reserves_screen: bool,
 }
 
 /// Host services shared by every context of one registry.
@@ -38,6 +48,10 @@ pub(crate) struct ContextServices {
     pub permissions: Arc<dyn PermissionProvider>,
     pub windows: WindowCapability,
     pub input: InputCapability,
+    pub states: Arc<StateHub>,
+    pub observes: &'static [ModuleId],
+    pub reservations: Arc<ReservationHub>,
+    pub reserves_screen: bool,
 }
 
 impl ModuleContext {
@@ -47,6 +61,7 @@ impl ModuleContext {
         workers: WorkerHandle,
         cancellation: CancellationToken,
         invalidation: ModuleInvalidation,
+        generation: GenerationScope,
         services: ContextServices,
     ) -> Self {
         Self {
@@ -60,6 +75,11 @@ impl ModuleContext {
             invalidation,
             windows: services.windows,
             input: services.input,
+            generation,
+            states: services.states,
+            observes: services.observes,
+            reservations: services.reservations,
+            reserves_screen: services.reserves_screen,
         }
     }
 
@@ -140,4 +160,70 @@ impl ModuleContext {
     /// host attached a native owner.
     #[must_use]
     pub const fn input(&self) -> &InputCapability { &self.input }
+
+    /// The generation scope of the runtime this context belongs to.
+    ///
+    /// The registry ends it before any cleanup wait when the runtime stops,
+    /// pauses, is disabled or fails. Capabilities that must not outlive their
+    /// runtime listen on it.
+    #[must_use]
+    pub(crate) const fn generation(&self) -> &GenerationScope { &self.generation }
+
+    /// A typed publisher for this module's registered state schema, bound to
+    /// this runtime generation.
+    ///
+    /// # Errors
+    /// Returns [`StateError::NotRegistered`] when no schema is registered,
+    /// [`StateError::SchemaMismatch`] when `T` is not the schema registered for
+    /// this module and [`StateError::Unauthorized`] when `T` is registered for
+    /// another provider.
+    pub fn state_publisher<T: PublishedState>(&self) -> Result<StatePublisher<T>, StateError> {
+        self.states.publisher::<T>(self.id, &self.generation)
+    }
+
+    /// A read-only observer of `provider`'s published state.
+    ///
+    /// The provider must be listed in this module's
+    /// [`crate::ModuleDescriptor::observes`]. An unknown or stopped provider is
+    /// valid and reads absent or unavailable; observing never changes this
+    /// module's lifecycle.
+    ///
+    /// # Errors
+    /// Returns [`StateError::NotObserved`] for an undeclared provider.
+    pub fn observe_state(&self, provider: ModuleId) -> Result<StateObserver, StateError> {
+        if !self.observes.contains(&provider) {
+            return Err(StateError::NotObserved { module: self.id, provider });
+        }
+        Ok(StateObserver::new(self.states.cell(provider)))
+    }
+
+    /// The screen-reservation capability, bound to this runtime generation.
+    ///
+    /// The module must declare [`crate::ModuleDescriptor::reserves_screen`].
+    /// When the generation ends (stop, pause, disable or failure, including a
+    /// failed start) the host removes exactly this owner's reservations from
+    /// this generation before any cleanup wait; a retained handle can never
+    /// touch a successor's set.
+    ///
+    /// # Errors
+    /// Returns [`ScreenReservationError::NotDeclared`] without the declaration.
+    pub fn screen_reservations(&self) -> Result<ScreenReservations, ScreenReservationError> {
+        if !self.reserves_screen {
+            return Err(ScreenReservationError::NotDeclared { module: self.id });
+        }
+        Ok(ScreenReservations::new(
+            Arc::clone(&self.reservations),
+            self.id,
+            self.generation().clone(),
+        ))
+    }
+
+    /// A read-only observer of the host's aggregated screen reservations.
+    ///
+    /// Any module may read; only a declared owner may write. Subscribe before
+    /// fetch: `read()` the snapshot, then `wait_for_change` with its revision.
+    #[must_use]
+    pub fn observe_screen_reservations(&self) -> ScreenReservationObserver {
+        ScreenReservationObserver::new(Arc::clone(&self.reservations))
+    }
 }

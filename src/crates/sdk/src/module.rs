@@ -99,6 +99,20 @@ pub struct ModuleDescriptor {
     /// An empty list means the module may not request a window. Surfaces name
     /// shipped routes; they are never URLs supplied at runtime.
     pub surfaces: &'static [crate::windows::SurfaceId],
+    /// Providers whose published state this module reads through
+    /// [`ModuleContext::observe_state`].
+    ///
+    /// Observation is not a dependency: an unknown or stopped provider reads
+    /// absent or unavailable, the observer's lifecycle never changes, and
+    /// nothing here affects `requires` ordering or readiness.
+    pub observes: &'static [ModuleId],
+    /// Whether this module reserves screen area through
+    /// [`ModuleContext::screen_reservations`].
+    ///
+    /// Without the declaration the capability is refused with
+    /// [`crate::ScreenReservationError::NotDeclared`]. Reservations are
+    /// logical host state, not a dependency: they never affect `requires`.
+    pub reserves_screen: bool,
 }
 
 /// One module's lifecycle implementation.

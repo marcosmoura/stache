@@ -1,0 +1,20 @@
+[package]
+name = "stache-bar"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Stache Bar configuration (inert, config-only)"
+readme = "../../../../README.md"
+keywords = ["stache", "bar", "configuration"]
+categories = ["config"]
+
+[dependencies]
+schemars = "1.2.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+specta = { version = "=2.0.0-rc.26", features = ["derive"] }
+stache-sdk = { path = "../../sdk" }
+
+[lints]
+workspace = true

@@ -88,6 +88,8 @@ impl Module for Ticker {
             permissions: &[],
             executables: &[],
             surfaces: &[],
+            observes: &[],
+            reserves_screen: false,
         }
     }
 
@@ -191,6 +193,61 @@ window and shares a lease: dropping each `OwnedWindow` releases only that lease,
 and the window closes with the last one. A retained capability from a stopped
 runtime rejects new requests; the registry still releases all of the module's
 windows when it stops, including after a failed start.
+
+## Publishing and observing state
+
+A provider that other modules or the UI read publishes a typed value instead of
+being polled. The type lives in the provider crate and implements
+`PublishedState`; the app registers it for the provider before modules register.
+The runnable example is in the `stache_sdk::published_state` module docs.
+
+```rust
+use stache_sdk::{PublishedState, StateSchema};
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct MeterState {
+    pub value: u32,
+}
+
+impl PublishedState for MeterState {
+    const SCHEMA: StateSchema = StateSchema { name: "meter", version: 1 };
+}
+
+// Provider: in `start`, keep the handle; publish after the state changes,
+// labelled with the accepted revision the value was derived from.
+let publisher = ctx.state_publisher::<MeterState>()?;
+publisher.publish(accepted.revision, &MeterState { value: 3 })?;
+
+// Consumer: list the provider in `ModuleDescriptor::observes`, then read.
+let meter = ctx.observe_state(ModuleId::new("meter"))?;
+let latest = meter.read(); // Absent, Unavailable { reason } or Available(envelope)
+```
+
+Observation is not a dependency: leave `requires` for services that must run
+first. Publishing is generation-scoped; a handle from a stopped runtime is
+rejected, so request a fresh publisher in every `start`. `accepted.revision`
+comes from the `AcceptedConfig` your worker read from its `AcceptedWatch`: keep
+labelling with the revision you computed with, and switch only after reading the
+new one. An older revision than one already published, or one not yet accepted, is
+rejected; publications made inside `start` are held until it succeeds.
+
+## Reserving screen area
+
+Set `reserves_screen: true` in the descriptor, then request the capability in
+`start` and stage logical edge insets for displays of the topology you observed:
+
+```rust,ignore
+let reservations = ctx.screen_reservations()?;
+let inset = EdgeInsets::new(32.0, 0.0, 0.0, 0.0)?; // top, left, bottom, right
+reservations.replace(topology, &[(display, inset)])?; // atomic, whole set
+```
+
+The host takes the per-edge maximum across modules, removes your set the moment
+the runtime stops, pauses, is disabled or fails (before `stop` runs), and rejects
+writes from an ended handle, so request a fresh capability in every `start`. A
+reservation is logical host state, not proof that a panel exists. Consumers read
+`ctx.observe_screen_reservations()` (or `FactoryContext::observe_screen_reservations`), never your configuration. See
+[sdk.md](../architecture/sdk.md#screen-reservations-and-display-identity).
 
 ## Lifecycle rules
 

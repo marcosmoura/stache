@@ -199,6 +199,33 @@ export type AudioListParams_Serialize = {
 	kind: AudioListKind,
 };
 
+/**  Status bar configuration (inert: nothing consumes it yet). */
+export type BarConfig = BarConfig_Serialize | BarConfig_Deserialize;
+
+/**  Status bar configuration (inert: nothing consumes it yet). */
+export type BarConfig_Deserialize = {
+	/**  Whether the status bar is enabled. Validates today but starts nothing. */
+	enabled?: boolean,
+	/**  Height of the status bar in pixels. Zero is preserved, not replaced. */
+	height?: number,
+	/**  Padding around the status bar in pixels. Zero is preserved, not replaced. */
+	padding?: number,
+	/**  Weather status bar configuration. */
+	weather?: WeatherConfig_Deserialize,
+};
+
+/**  Status bar configuration (inert: nothing consumes it yet). */
+export type BarConfig_Serialize = {
+	/**  Whether the status bar is enabled. Validates today but starts nothing. */
+	enabled: boolean,
+	/**  Height of the status bar in pixels. Zero is preserved, not replaced. */
+	height: number,
+	/**  Padding around the status bar in pixels. Zero is preserved, not replaced. */
+	padding: number,
+	/**  Weather status bar configuration. */
+	weather: WeatherConfig_Serialize,
+};
+
 /**  How a binding is delivered. */
 export type BindingRoute =
 /**  A physical chord through the Carbon hotkey adapter. */
@@ -1333,6 +1360,60 @@ message: string } |
 reason: WallpapersTargetFailure;
 /**  The actionable reason. */
 message: string };
+
+/**  Weather settings for the status bar. */
+export type WeatherConfig = WeatherConfig_Serialize | WeatherConfig_Deserialize;
+
+/**  Weather settings for the status bar. */
+export type WeatherConfig_Deserialize = {
+	/**  Weather data provider. */
+	provider?: WeatherProvider,
+	/**
+	 *  Path to an environment file containing API keys (for example
+	 *  `VISUAL_CROSSING_API_KEY=...`).
+	 *
+	 *  The value is trimmed. `~` and `~/...` expand to the home directory,
+	 *  absolute paths are used as written and anything else is relative to the
+	 *  configuration directory. Environment variables and shell syntax are not
+	 *  expanded, and the process working directory is never used.
+	 */
+	apiKeys?: string,
+	/**
+	 *  Default location for weather data when geolocation fails.
+	 *  Can be a city name, address, or coordinates.
+	 */
+	defaultLocation?: string,
+};
+
+/**  Weather settings for the status bar. */
+export type WeatherConfig_Serialize = {
+	/**  Weather data provider. */
+	provider: WeatherProvider,
+	/**
+	 *  Path to an environment file containing API keys (for example
+	 *  `VISUAL_CROSSING_API_KEY=...`).
+	 *
+	 *  The value is trimmed. `~` and `~/...` expand to the home directory,
+	 *  absolute paths are used as written and anything else is relative to the
+	 *  configuration directory. Environment variables and shell syntax are not
+	 *  expanded, and the process working directory is never used.
+	 */
+	apiKeys: string,
+	/**
+	 *  Default location for weather data when geolocation fails.
+	 *  Can be a city name, address, or coordinates.
+	 */
+	defaultLocation: string,
+};
+
+/**  Weather data provider. */
+export type WeatherProvider =
+/**  Use Visual Crossing when an API key file is configured, otherwise Open Meteo. */
+"auto" |
+/**  Force Visual Crossing (requires an API key file). */
+"visual-crossing" |
+/**  Use Open Meteo (free, no API key required). */
+"open-meteo";
 
 /* Tauri Specta runtime */
 type EventEmit<T> = [T] extends [null] ? () => Promise<void> : (payload: T) => Promise<void>;

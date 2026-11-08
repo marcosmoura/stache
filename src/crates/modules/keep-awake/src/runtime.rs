@@ -303,6 +303,8 @@ impl Module for KeepAwakeModule {
             permissions: &[],
             executables: &[],
             surfaces: &[],
+            observes: &[],
+            reserves_screen: false,
         }
     }
 

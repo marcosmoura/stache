@@ -57,6 +57,18 @@ three-assertion behavior, notification delivery, manual lock/unlock, resume and
 forced-sleep checks remain **unverified**; they require approval for each run and
 the [spec's power protocol](../specs/2026-11-03-keep-awake/00-overview.md#validation-and-safety).
 
+Published state and screen reservations (`stache_sdk` `published_state/tests.rs`,
+`screen_reservations/tests.rs`) use scripted fake modules (`on_start`, `on_reconfigure`,
+`on_stop`) and channels as barriers instead of sleeps: a blocked `reconfigure` plays the
+window where a worker still computes with the old config, `StateCell::set_before_wait` /
+`ReservationHub::set_before_wait` land a write between the wait check and the sleep, and
+`StateCell::set_after_advance` runs between the cell learning a revision and the accepted watch
+showing it. Tests assert that envelope revisions are the provider's label, that unaccepted or older
+revisions are rejected, that a failed reconfigure changes nothing, that never-started providers read
+their registry status, that stops by disable, pause, permission revocation (`on_permission_change`)
+and dependency loss (`service_failed`) remove exactly the ending generation's reservations, and
+that repeated capability requests keep one end listener.
+
 The shared input contract (`stache_sdk::input`) is tested only with fakes: a fake
 clock that advances instead of sleeping, a fake native owner over the real
 256-request control queue (acknowledge, fail, hold, delay, drop or reject

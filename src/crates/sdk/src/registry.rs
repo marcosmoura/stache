@@ -38,10 +38,16 @@ use crate::error::{
     ErrorCategory, ModuleError, ModuleResult, Operation, RegistryError, RegistryResult,
 };
 use crate::events::EventBus;
+use crate::generation::{GenerationScope, RuntimeEnd};
 use crate::input::{InputCapability, InputService};
 use crate::logging::{Logger, ScopedLogger};
 use crate::module::{Module, ModuleConfig, ModuleDescriptor, ModuleId, ServiceId};
 use crate::permissions::{Permission, PermissionProvider, PermissionRequirement, PermissionStatus};
+use crate::published_state::{GenerationBinding, StateCell, StateHub, StateObserver, StateSchemas};
+use crate::screen_reservations::{
+    DisplayId, ReservationHub, ScreenReservationError, ScreenReservationObserver,
+    TopologyGeneration,
+};
 use crate::shutdown::ShutdownWait;
 use crate::status::{
     ConfigDiagnostic, ModuleFailure, ModuleSnapshot, ModuleStatus, UnavailableReason,
@@ -227,11 +233,17 @@ struct Runtime {
     cancellation: CancellationToken,
     windows: WindowCapability,
     input: InputCapability,
+    /// This runtime's generation. Ended before any cleanup wait; every
+    /// generation-scoped capability listens on it.
+    scope: GenerationScope,
+    /// The published-state binding, when the module has a registered schema.
+    state: Option<GenerationBinding>,
 }
 
 impl Runtime {
     fn new(
         id: ModuleId,
+        generation: u64,
         surfaces: &'static [SurfaceId],
         backend: Arc<dyn WindowBackend>,
         input: Arc<InputService>,
@@ -245,8 +257,14 @@ impl Runtime {
             cancellation,
             windows,
             input,
+            scope: GenerationScope::new(generation),
+            state: None,
         }
     }
+
+    /// Ends the generation so scoped capabilities reject late work and publish
+    /// their tombstones. The first end wins.
+    fn end_generation(&self, end: RuntimeEnd) { self.scope.invalidate(end); }
 
     fn invalidate_windows(&self) {
         self.windows.invalidate();
@@ -364,6 +382,8 @@ struct ModuleSlot {
     /// Permission requirements of the accepted configuration, readable by the
     /// host without the state lock.
     requirements: Mutex<Vec<PermissionRequirement>>,
+    /// The provider's published-state cell, present when a schema is registered.
+    state_cell: Option<Arc<StateCell>>,
 }
 
 /// Stop metadata for one slot, kept outside the slot state lock.
@@ -384,6 +404,9 @@ impl ModuleSlot {
     fn publish(&self, state: &ModuleState) {
         *lock(&self.published) = state.snapshot(self.descriptor.id);
         lock(&self.requirements).clone_from(&state.requirements);
+        if let Some(cell) = &self.state_cell {
+            cell.note_status(status_end(&state.status));
+        }
     }
 
     /// Locks the module state and republishes it when the guard drops.
@@ -515,6 +538,9 @@ pub struct Registry {
     shutting_down: AtomicBool,
     started: AtomicBool,
     next_sequence: AtomicU64,
+    next_generation: AtomicU64,
+    states: Arc<StateHub>,
+    reservations: Arc<ReservationHub>,
 }
 
 impl Registry {
@@ -541,6 +567,9 @@ impl Registry {
             shutting_down: AtomicBool::new(false),
             started: AtomicBool::new(false),
             next_sequence: AtomicU64::new(0),
+            next_generation: AtomicU64::new(0),
+            states: Arc::new(StateHub::default()),
+            reservations: Arc::new(ReservationHub::default()),
         }
     }
 
@@ -550,6 +579,77 @@ impl Registry {
     pub fn with_input_service(mut self, input: Arc<InputService>) -> Self {
         self.input = input;
         self
+    }
+
+    /// Registers the published-state contracts of provider modules.
+    ///
+    /// Like the baseline, schemas are immutable once the first module is
+    /// registered, so this consuming builder must run before the first
+    /// `register`. The application builds the set from the owning crates' types;
+    /// the SDK never imports them.
+    ///
+    /// # Errors
+    /// Returns [`RegistryError::StateSchemaAfterRegistration`] when a module is
+    /// already registered and [`RegistryError::DuplicateStateSchema`] when a
+    /// provider would get a second schema.
+    pub fn with_state_schemas(self, schemas: &StateSchemas) -> RegistryResult<Self> {
+        if !lock(&self.slots).is_empty() {
+            return Err(RegistryError::StateSchemaAfterRegistration);
+        }
+        for schema in schemas.entries() {
+            if self.states.register(*schema).is_err() {
+                return Err(RegistryError::DuplicateStateSchema { provider: schema.provider() });
+            }
+        }
+        Ok(self)
+    }
+
+    /// Registers the published-state contract `T` for `provider`.
+    ///
+    /// # Errors
+    /// The same errors as [`Registry::with_state_schemas`].
+    pub fn with_state_schema<T: crate::published_state::PublishedState>(
+        self,
+        provider: ModuleId,
+    ) -> RegistryResult<Self> {
+        self.with_state_schemas(&StateSchemas::new().with::<T>(provider))
+    }
+
+    /// A read-only observer of one provider's published state.
+    ///
+    /// An unknown provider, or one without a registered schema, reads
+    /// [`crate::StateReading::Absent`]; this never fails and takes no module,
+    /// lifecycle or reload lock. Hosts use it for app-level reads; modules use
+    /// [`ModuleContext::observe_state`] and declare `observes`.
+    #[must_use]
+    pub fn observe_state(&self, provider: ModuleId) -> StateObserver {
+        StateObserver::new(self.states.cell(provider))
+    }
+
+    /// A read-only observer of the aggregated screen reservations.
+    ///
+    /// Subscribe before fetch: `read()` the snapshot, then `wait_for_change`
+    /// with its revision. Takes no module or lifecycle lock.
+    #[must_use]
+    pub fn observe_screen_reservations(&self) -> ScreenReservationObserver {
+        ScreenReservationObserver::new(Arc::clone(&self.reservations))
+    }
+
+    /// Applies a new display topology reported by the host.
+    ///
+    /// Reservations of displays the topology omits are dropped and never
+    /// resurrected if the numeric ID returns. Returns the new snapshot revision.
+    ///
+    /// # Errors
+    /// Returns [`ScreenReservationError::NonMonotonicTopology`] unless
+    /// `generation` is newer than the current one and
+    /// [`ScreenReservationError::NullDisplay`] for display `0`.
+    pub fn apply_screen_topology(
+        &self,
+        generation: TopologyGeneration,
+        displays: &[DisplayId],
+    ) -> Result<u64, ScreenReservationError> {
+        self.reservations.apply_topology(generation, displays)
     }
 
     /// Sets host-level permission requirements merged into every module.
@@ -678,6 +778,11 @@ impl Registry {
         };
         let published = Mutex::new(state.snapshot(id));
         let requirements = Mutex::new(state.requirements.clone());
+        let state_cell = self.states.schema_cell(id);
+        if let Some(cell) = &state_cell {
+            cell.mark_registered();
+            cell.note_status(status_end(&state.status));
+        }
         let accepted = Arc::new(AcceptedCell::new(
             std::any::TypeId::of::<M::Config>(),
             std::any::type_name::<M::Config>(),
@@ -693,6 +798,7 @@ impl Registry {
             invalidation: ModuleInvalidation::new(),
             accepted: Arc::clone(&accepted),
             requirements,
+            state_cell,
         });
         {
             let cell = Arc::clone(&accepted);
@@ -995,20 +1101,7 @@ impl Registry {
             // configuration it is about to release.
             if enabled {
                 if was_running {
-                    let ctx = {
-                        let Some(runtime) = state.runtime.as_ref() else {
-                            return Err(RegistryError::Module(ModuleError::new(
-                                slot.descriptor.id,
-                                Operation::Reconfigure,
-                                ErrorCategory::Lifecycle,
-                                "running module has no runtime",
-                            )));
-                        };
-                        self.context(slot, runtime, Operation::Reconfigure)
-                    };
-                    if blocked.is_none() {
-                        state.module.reconfigure(candidate.as_ref(), &ctx)?;
-                    }
+                    self.reconfigure_running(slot, state, candidate.as_ref(), blocked.is_some())?;
                 } else if state.needs_stop {
                     self.quiesce(slot, state)?;
                 }
@@ -1019,6 +1112,14 @@ impl Registry {
             // Publish the coherent pair before any later stop work, so a
             // configuration committed despite a start or stop error is visible
             // and readers never wait on module or native cleanup.
+            // The published-state cell learns the revision first, so no
+            // envelope can carry a revision that has not been accepted. A
+            // provider that labels payloads only with revisions read from the
+            // watch never runs ahead of it; the cell may briefly accept a
+            // revision the watch does not show yet.
+            if let Some(cell) = &slot.state_cell {
+                cell.advance_accepted(state.revision);
+            }
             slot.accepted.publish(state.revision, published);
         }
         if !state.enabled && enabled {
@@ -1061,6 +1162,31 @@ impl Registry {
         } else {
             ReloadStatus::Unchanged
         })
+    }
+
+    /// Applies a candidate to the running module. A failure changes nothing:
+    /// published state carries provider-labelled revisions and has no hold.
+    fn reconfigure_running(
+        &self,
+        slot: &ModuleSlot,
+        state: &mut ModuleState,
+        candidate: &dyn ErasedConfig,
+        blocked: bool,
+    ) -> RegistryResult<()> {
+        let Some(runtime) = state.runtime.as_ref() else {
+            return Err(RegistryError::Module(ModuleError::new(
+                slot.descriptor.id,
+                Operation::Reconfigure,
+                ErrorCategory::Lifecycle,
+                "running module has no runtime",
+            )));
+        };
+        let ctx = self.context(slot, runtime, Operation::Reconfigure);
+        if blocked {
+            return Ok(());
+        }
+        state.module.reconfigure(candidate, &ctx)?;
+        Ok(())
     }
 
     /// Returns a typed view over this module's accepted configuration.
@@ -1362,6 +1488,8 @@ impl Registry {
         for slot in self.slots_snapshot() {
             slot.invalidation.invalidate();
         }
+        self.states.close_all();
+        self.reservations.close();
     }
 
     /// Snapshots stop targets in reverse start order from slot metadata only.
@@ -1507,12 +1635,13 @@ impl Registry {
             meta.sequence = Some(sequence);
             meta.needs_stop = true;
         }
-        state.runtime = Some(Runtime::new(
-            slot.descriptor.id,
-            slot.descriptor.surfaces,
-            Arc::clone(&self.windows),
-            Arc::clone(&self.input),
-        ));
+        let mut runtime = self.new_runtime(slot);
+        if let Some(cell) = &slot.state_cell {
+            // Bound to the revision this start actually runs with. Held until
+            // the start succeeds, so a failed start never exposes state.
+            runtime.state = Some(GenerationBinding::begin(cell, &runtime.scope, state.revision));
+        }
+        state.runtime = Some(runtime);
         state.needs_stop = true;
         match self.configure_and_start(slot, state) {
             Ok(()) => {
@@ -1529,14 +1658,25 @@ impl Registry {
                     let _cleanup = self.quiesce(slot, state);
                     return Err(RegistryError::ShuttingDown);
                 }
+                if let Some(binding) = state.runtime.as_ref().and_then(|r| r.state.as_ref()) {
+                    binding.activate();
+                }
                 state.status = ModuleStatus::Running;
                 Ok(())
             }
             Err(error) => {
-                // Release partial resources now. A cleanup failure leaves
-                // `needs_stop` set, but never masks the configure/start error.
+                if let Some(runtime) = state.runtime.as_ref() {
+                    runtime.end_generation(RuntimeEnd::Failed);
+                }
+                // Publish the failure before cleanup so every observer reads
+                // Failed, never the status from before this start. Then release
+                // partial resources. A cleanup failure leaves `needs_stop` set,
+                // but never masks the configure/start error, so the start
+                // failure is restored after cleanup.
+                let failure = ModuleStatus::Failed(ModuleFailure::from_error(&error));
+                state.status = failure.clone();
                 let _cleanup = self.quiesce(slot, state);
-                state.status = ModuleStatus::Failed(ModuleFailure::from_error(&error));
+                state.status = failure;
                 Err(RegistryError::Module(error))
             }
         }
@@ -1600,14 +1740,11 @@ impl Registry {
             "a stopping module must publish a non-running status first"
         );
         slot.publish(state);
-        let runtime = state.runtime.take().unwrap_or_else(|| {
-            Runtime::new(
-                slot.descriptor.id,
-                slot.descriptor.surfaces,
-                Arc::clone(&self.windows),
-                Arc::clone(&self.input),
-            )
-        });
+        let runtime = state.runtime.take().unwrap_or_else(|| self.new_runtime(slot));
+        // End the generation first: scoped capabilities reject late writes and
+        // publish their tombstones before any cancellation, module stop or
+        // worker join can wait.
+        runtime.end_generation(end_for_status(&state.status));
         runtime.cancellation.cancel();
         runtime.invalidate_windows();
         let needs_stop = state.needs_stop;
@@ -1661,6 +1798,16 @@ impl Registry {
         provider.is_some_and(|slot| slot.published_snapshot().status == ModuleStatus::Running)
     }
 
+    fn new_runtime(&self, slot: &ModuleSlot) -> Runtime {
+        Runtime::new(
+            slot.descriptor.id,
+            self.next_generation.fetch_add(1, Ordering::Relaxed) + 1,
+            slot.descriptor.surfaces,
+            Arc::clone(&self.windows),
+            Arc::clone(&self.input),
+        )
+    }
+
     fn context(&self, slot: &ModuleSlot, runtime: &Runtime, operation: Operation) -> ModuleContext {
         ModuleContext::new(
             slot.descriptor.id,
@@ -1668,7 +1815,12 @@ impl Registry {
             runtime.workers.handle(),
             runtime.cancellation.clone(),
             slot.invalidation.clone(),
+            runtime.scope.clone(),
             crate::context::ContextServices {
+                states: Arc::clone(&self.states),
+                observes: slot.descriptor.observes,
+                reservations: Arc::clone(&self.reservations),
+                reserves_screen: slot.descriptor.reserves_screen,
                 events: Arc::clone(&self.events),
                 main_thread: Arc::clone(&self.main_thread),
                 permissions: Arc::clone(&self.permissions),
@@ -1686,6 +1838,32 @@ impl Registry {
     }
 
     fn slots_snapshot(&self) -> Vec<Arc<ModuleSlot>> { lock(&self.slots).clone() }
+
+    #[cfg(test)]
+    pub(crate) const fn reservation_hub(&self) -> &Arc<ReservationHub> { &self.reservations }
+
+    #[cfg(test)]
+    pub(crate) const fn state_hub(&self) -> &Arc<StateHub> { &self.states }
+}
+
+/// The reason a never-started provider reads unavailable for `status`.
+const fn status_end(status: &ModuleStatus) -> Option<RuntimeEnd> {
+    match status {
+        ModuleStatus::Stopped | ModuleStatus::Running => None,
+        other => Some(end_for_status(other)),
+    }
+}
+
+/// The generation end implied by the non-running status a stop publishes first.
+const fn end_for_status(status: &ModuleStatus) -> RuntimeEnd {
+    match status {
+        ModuleStatus::Disabled => RuntimeEnd::Disabled,
+        ModuleStatus::Paused => RuntimeEnd::Paused,
+        ModuleStatus::Failed(_) => RuntimeEnd::Failed,
+        ModuleStatus::WaitingForPermission(_) => RuntimeEnd::PermissionBlocked,
+        ModuleStatus::Unavailable(_) => RuntimeEnd::DependencyUnavailable,
+        ModuleStatus::Stopped | ModuleStatus::Running => RuntimeEnd::Stopped,
+    }
 }
 
 /// Whether a command name resolves to an executable file on the current `PATH`.
@@ -1968,6 +2146,8 @@ mod tests {
                 permissions: &[],
                 executables: &[],
                 surfaces: &TEST_SURFACES,
+                observes: &[],
+                reserves_screen: false,
             }
         }
 
@@ -2038,6 +2218,8 @@ mod tests {
                 permissions: &[],
                 executables: &[],
                 surfaces: &TEST_SURFACES,
+                observes: &[],
+                reserves_screen: false,
             }
         }
 
@@ -2338,6 +2520,8 @@ mod tests {
                 permissions: self.permissions,
                 executables: self.executables,
                 surfaces: self.surfaces,
+                observes: &[],
+                reserves_screen: false,
             }
         }
 
@@ -2460,6 +2644,8 @@ mod tests {
                 permissions: &[],
                 executables: &[],
                 surfaces: &[],
+                observes: &[],
+                reserves_screen: false,
             }
         }
 

@@ -178,6 +178,161 @@ committed despite a later start or stop error is visible. The old pair stays
 readable for the whole `Module::reconfigure` call. `FactoryContext` exposes the
 same watch to factory socket handlers.
 
+## Published state and observation
+
+`stache_sdk::published_state` lets one module publish a typed latest-state value
+that other modules and the app read. It is a generic contract: the SDK imports no
+module crate, and no real provider ships yet (Bar part 08 adapts Keep Awake;
+`keepAwake.status` and `KeepAwakeSnapshot` are unchanged).
+
+- **Schema contract.** A provider type implements `PublishedState`
+  (`SCHEMA = StateSchema { name, version }`). The app registers one contract per
+  provider before any module registers, with `Registry::with_state_schema::<T>(provider)`
+  or a `StateSchemas` set (`HostDriver::with_state_schemas` forwards it). Identity
+  is provider `ModuleId` + schema name + version. A second schema for a provider
+  (`DuplicateStateSchema`) or a registration after the first module
+  (`StateSchemaAfterRegistration`) is a `RegistryError`.
+- **Publishing.** `ctx.state_publisher::<T>()` returns a `StatePublisher<T>` bound
+  to the runtime generation, or a deterministic `StateError`: `NotRegistered`,
+  `SchemaMismatch` (the module's registered type is another type or version) or
+  `Unauthorized` (`T` is registered for another provider). `publish(revision, &T)` serializes
+  to JSON inside the SDK; a `StatePublisher<A>` cannot publish a `B` (compile-fail
+  doctest).
+- **Observing.** A consumer lists providers in `ModuleDescriptor::observes` (new,
+  distinct from `requires`; `requires`, ordering, readiness and `service_failed`
+  are unchanged) and calls `ctx.observe_state(provider)`; an undeclared provider is
+  `StateError::NotObserved`. The app uses `Registry::observe_state` or
+  `FactoryContext::observe_state` for any provider. A `StateObserver` is read-only:
+  `read()` and `wait_for_change(seen_version, timeout, token)`. An unknown provider
+  or one without a schema reads `StateReading::Absent`; a registered provider that
+  is not running reads `Unavailable` with a reason (`NotStarted`, `Starting`,
+  `NotPublished` or `Ended(RuntimeEnd)`), never stale active data. Observing never
+  changes the consumer's lifecycle.
+- **Envelope.** `StateEnvelope` carries provider, runtime `generation` (new per
+  start, unique per registry), the accepted configuration `revision` the provider
+  labelled the payload with, a per-generation `sequence` (restarts at one) and the schema
+  identity, plus the serialized payload. Consumers outside the provider crate read
+  the payload and identity; the app decodes with the provider's own type through
+  `StateEnvelope::decode::<T>(provider)`, which checks the provider and schema
+  identity first, so two providers with the same schema name and version cannot
+  decode each other's payloads. Payload
+  fields are one atomic snapshot; host diagnostics sampled separately are not
+  claimed atomic with it. `u64` values become exact decimal strings only in the
+  app projection (`PublishedStateView`), like `ModuleSnapshot::revision`.
+- **Accepted revisions.** The provider labels every payload with the accepted
+  revision it was derived from (`AcceptedConfig::revision` from the worker's
+  `AcceptedWatch`), so a worker still computing with config N publishes
+  N-labelled envelopes while N+1 is accepted and labels N+1 only after reading
+  it from the watch. Per generation the cell tracks `start_revision` and the
+  latest `accepted` revision: a revision below `start_revision` or below the last
+  committed one fails with `RevisionStale` (an older payload never overwrites a
+  newer one), and one above `accepted` fails with `RevisionNotAccepted`. The
+  registry advances the cell's `accepted` BEFORE the accepted-configuration cell
+  shows the new revision, so no envelope can carry a revision that has not been
+  accepted. A provider that only labels payloads with revisions it read from the
+  watch never runs ahead of it; in the short window between the cell learning a
+  revision and the watch showing it, a publish at that revision can succeed. There is
+  no reconfigure hold: a failed reconfigure changes nothing and an unrelated
+  publication made during it commits at once. The SDK cannot tell a payload's
+  source, so never publish candidate-derived state from `Module::reconfigure`;
+  publish it after the worker reads the new revision from the watch. Only publications made during
+  `Module::start` are held (latest wins) and released just before the module
+  reads as running (`PublishOutcome::Held`); a failed start drops them and
+  exposes no available state. A provider that never started reads the registry
+  status (`Ended(Disabled | Paused | PermissionBlocked | DependencyUnavailable |
+  Failed)`, else `NotStarted`) with no generation. After a generation has ended the
+  tombstone keeps that last generation, and its reason follows later registry
+  status changes (for example a failed provider that is then disabled reads
+  `Ended(Disabled)`); it never becomes available again except through a new
+  generation, and a repeated identical status does not change the cell.
+- **Concurrency.** One cell per provider; `publish` updates it under its lock
+  before waking waiters. `wait_for_change` mirrors `AcceptedWatch::wait_for_change`
+  (same-lock check and sleep, cancellation wake, precedence cancel, close, change,
+  timeout, overflow becomes unbounded) and returns the latest value, so a slow
+  consumer sees coalesced state rather than a per-sample queue. `Registry::invalidate`
+  closes every cell and wakes waiters; cells created after that start closed, so
+  a late `observe_state` never blocks until timeout. Readers take no registry,
+  module or lifecycle lock and never run provider code.
+- **Generation scope.** The registry creates a crate-internal `GenerationScope`
+  per runtime (`generation.rs`) and ends it with a `RuntimeEnd` (`Stopped`,
+  `Disabled`, `Paused`, `Failed`, `PermissionBlocked`, `DependencyUnavailable`) as
+  the first step of every stop, before cancellation, `Module::stop` or a worker
+  join. The cell then holds a tombstone and wakes readers; writes from the ended
+  generation's handle fail with `StateError::Stale`, and an old handle can never
+  update or clear the successor's state. This is distinct from the per-slot
+  `ModuleInvalidation`, which fires only at shutdown.
+
+## Screen reservations and display identity
+
+A module that sets `ModuleDescriptor::reserves_screen` (default `false`, like
+`observes` it is a declaration, not a dependency; `requires` is unchanged) obtains
+`ctx.screen_reservations()`; without the flag it gets
+`ScreenReservationError::NotDeclared`. The registry owns one `ReservationHub`
+(`screen_reservations.rs`, distinct from the keyboard-chord registry in
+`input/reservations.rs`).
+
+- **Display identity.** `DisplayId` is a numeric `CGDirectDisplayID`-compatible
+  `u32` (no native pointer; `0`, the null display, is never present).
+  `TopologyGeneration` is a strictly increasing host-chosen number (initial
+  `0`). The SDK never enumerates displays: the host reports the live set with
+  `Registry::apply_screen_topology(generation, &[DisplayId])`, which rejects a
+  non-increasing generation. An ID is meaningful only with the topology
+  generation it was observed in. A display is present from the generation that
+  first listed it (`DisplayReservations::since`) until a topology omits it; applying
+  a topology drops every reservation of an omitted display, and a later return of
+  the same numeric ID is a new presence (later `since`) that is not resurrected.
+  The SDK cannot see a reuse inside one topology step, so the host omits such an
+  ID from the topology it applies first. Native enumeration and hotplug are not
+  shipped.
+- **Staging.** `ScreenReservations::replace(topology, &[(DisplayId, EdgeInsets)])`
+  atomically replaces the owner's whole set (empty removes it) and returns the
+  snapshot revision; `remove()` is idempotent. `EdgeInsets::new(top, left, bottom,
+  right)` accepts finite, nonnegative logical points up to
+  `MAX_RESERVATION_INSET` (negative zero is normalized); NaN, infinite, negative
+  or larger values fail with `InvalidInset`/`InsetTooLarge`. `replace` also fails
+  with `StaleTopology` (staged against a generation other than the current one),
+  `UnknownDisplay`, `DuplicateDisplay`, `TooManyDisplays` or `StaleGeneration`;
+  every failure leaves state unchanged.
+- **Snapshot.** `Registry::observe_screen_reservations()`,
+  `FactoryContext::observe_screen_reservations()` and
+  `ModuleContext::observe_screen_reservations()` (any module, no declaration)
+  return a read-only
+  `ScreenReservationObserver`. `read()` gives an immutable
+  `ScreenReservationSnapshot { revision, topology, displays }`: every present
+  display, ordered by `DisplayId`, with the per-edge MAXIMUM over all owners
+  (never a sum) and each owner's contribution (owner, exact runtime generation,
+  insets) ordered by owner. `revision` is monotonic and advances only on an
+  observable change (an identical replacement or a repeated remove does not).
+  Insets are measured inward from the full logical display bounds.
+- **Consumer facts.** The host applies topology (`Registry::apply_screen_topology`),
+  not modules; nothing applies it until Bar part 03, so the snapshot lists no
+  displays and consumers treat every display as zero-reserved. Reservations have
+  no reconfigure hold, so an owner stages reservations only after observing its
+  accepted revision. Reservations staged during `Module::start` are visible
+  immediately (there is no start hold, unlike published state) and are removed if
+  the start fails, so consumers must not treat a start-time reservation as a
+  confirmed running owner.
+- **Native projection.** `stache_app::display::sdk_display_id` converts a
+  `stache_macos::desktop::DisplayId` into the SDK `DisplayId` (a plain function:
+  the orphan rule blocks `From`). It is the one projection Tiling 05 and Bar 03
+  must use; applying the topology itself still belongs to Bar 03. The reservation
+  hub is a single hub closed by `Registry::invalidate`, so it has no late-created
+  cell gap.
+- **Reading.** Subscribe before fetch: `read()` then
+  `wait_for_change(seen_revision, timeout, token)` with the same race-free
+  check-and-sleep, cancellation wake, precedence (cancel, close, change,
+  timeout) and overflow rule as the other watches. `Registry::invalidate` closes
+  waiters. Readers take no registry, module or lifecycle lock and never read a
+  producer's configuration.
+- **Lifecycle.** The capability listens on the runtime's `GenerationScope`. When
+  the generation ends (stop, pause, disable, failure, failed or partial start)
+  the hub removes exactly that owner and generation's set and wakes readers
+  before cancellation, `Module::stop` or a worker join; later writes from the
+  ended handle fail with `StaleGeneration`. The hub registers one end listener per
+  (owner, generation), however often the capability is requested. An old handle
+  can never replace or remove a successor's set. Logical reservations are host state and distinct from
+  native panel acknowledgments.
+
 ## Cache leases
 
 `CacheLease` coordinates cooperating Stache Next processes that touch the
@@ -527,6 +682,8 @@ impl Module for Watch {
             permissions: &[],
             executables: &[],
             surfaces: &[],
+            observes: &[],
+            reserves_screen: false,
         }
     }
 
@@ -631,7 +788,7 @@ a `Retained` outcome never proves termination.
 Shipped here: registry, lifecycle, threading, events, logging, permissions,
 errors, descriptors, window capabilities, the safe Accessibility/main-thread
 adapters, file-backed configuration (catalog, store, watcher, comment-preserving
-edits, templates and schemas), the typed accepted-configuration watch, identity
+edits, templates and schemas), the typed accepted-configuration watch, generic published state with `observes`, host-owned screen reservations with the SDK display ID, identity
 paths/instance lock, cache leases, durable storage and the socket protocol/router/client/server,
 and the shared input contract with its idle macOS owner. The Tauri
 composition root, tray, permission polling, shutdown coordinator and test window

@@ -58,6 +58,8 @@ impl Module for FakeModule {
             permissions: &[],
             executables: &[],
             surfaces: &[],
+            observes: &[],
+            reserves_screen: false,
         }
     }
 

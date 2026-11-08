@@ -18,7 +18,7 @@ use stache_sdk::{ConfigCatalog, GlobalConfig, LoggingConfig, ModuleId, StartupCo
 
 use crate::{MigrateArgs, fail, write_atomic};
 
-const UNPORTED: [&str; 2] = ["bar", "tiling"];
+const UNPORTED: [&str; 1] = ["tiling"];
 
 pub(crate) fn run<W: Write, E: Write>(
     args: &MigrateArgs,
@@ -568,7 +568,7 @@ mod tests {
                     "execOnStartup": ["one", "two"],
                     "logging": { "level": "debug", "unexpected": true },
                     "proxyAudio": { "enabled": true, "output": [{ "name": "Speakers" }] },
-                    "bar": { "enabled": true },
+                    "tiling": { "enabled": true },
                     "widgets": {}
                 }"#,
             ),
@@ -577,14 +577,14 @@ mod tests {
         )
         .expect("plan");
         assert_eq!(plan.reports, vec![
-            "copied bar -> bar.jsonc",
             "converted execOnStartup -> global.jsonc",
             "warning: unknown logging key `unexpected` was not migrated",
             "converted logging -> global.jsonc",
             "validated proxyAudio -> proxyAudio.jsonc",
+            "copied tiling -> tiling.jsonc",
             "warning: dropped widgets (not ported)",
         ]);
-        assert!(plan.files.contains_key("bar.jsonc"));
+        assert!(plan.files.contains_key("tiling.jsonc"));
         assert!(plan.files.contains_key("global.jsonc"));
         assert!(plan.files.contains_key("proxyAudio.jsonc"));
         assert!(!plan.files.contains_key("widgets.jsonc"));
@@ -594,14 +594,14 @@ mod tests {
     #[test]
     fn command_quit_is_no_longer_copied_verbatim() {
         let source = Path::new("/legacy/config.jsonc");
-        let legacy = parse(r#"{ "commandQuit": { "enabled": true }, "bar": {} }"#);
+        let legacy = parse(r#"{ "commandQuit": { "enabled": true }, "tiling": {} }"#);
 
         let mut catalog = catalog();
         catalog.register::<Pilot>(ModuleId::new("commandQuit")).expect("commandQuit");
         let plan = plan(&legacy, source, &catalog).expect("plan");
         assert!(plan.reports.contains(&"validated commandQuit -> commandQuit.jsonc".to_owned()));
         assert!(!plan.reports.iter().any(|line| line.starts_with("copied commandQuit")));
-        assert!(plan.reports.contains(&"copied bar -> bar.jsonc".to_owned()));
+        assert!(plan.reports.contains(&"copied tiling -> tiling.jsonc".to_owned()));
 
         let plan = super::plan(&legacy, source, &super::tests::catalog()).expect("plan");
         assert!(!plan.files.contains_key("commandQuit.jsonc"));
@@ -897,7 +897,7 @@ mod integration_tests {
         let contents = r#"{
             "execOnStartup": "open -a Terminal",
             "proxyAudio": { "enabled": true, "output": [{ "name": "Speakers" }] },
-            "bar": { "enabled": true },
+            "tiling": { "enabled": true },
             "unknownThing": true
         }"#;
         fs::write(&source, contents).expect("source");
@@ -906,17 +906,18 @@ mod integration_tests {
             run_migration(Some(&source), &destination, false, &ConfigEnvironment::default());
         assert_eq!(code, ExitCode::SUCCESS, "{err}");
         assert!(out.contains("converted execOnStartup -> global.jsonc"));
-        assert!(out.contains("copied bar -> bar.jsonc"));
+        assert!(out.contains("copied tiling -> tiling.jsonc"));
         assert!(out.contains("warning: unknown key `unknownThing` was not migrated"));
         assert_eq!(fs::read_to_string(&source).expect("source"), contents);
         assert!(destination.join("global.jsonc").exists());
         assert!(destination.join("proxyAudio.jsonc").exists());
-        assert!(destination.join("bar.jsonc").exists());
+        assert!(destination.join("tiling.jsonc").exists());
         assert!(!destination.join("unknownThing.jsonc").exists());
-        let bar: Value =
-            serde_json::from_str(&fs::read_to_string(destination.join("bar.jsonc")).expect("bar"))
-                .expect("bar json");
-        assert_eq!(bar, parse(r#"{ "enabled": true }"#));
+        let tiling: Value = serde_json::from_str(
+            &fs::read_to_string(destination.join("tiling.jsonc")).expect("tiling"),
+        )
+        .expect("tiling json");
+        assert_eq!(tiling, parse(r#"{ "enabled": true }"#));
     }
 
     #[test]
@@ -997,7 +998,7 @@ mod integration_tests {
         assert!(out.contains("wrote"));
         assert!(destination.join("global.jsonc").exists());
         assert!(destination.join("proxyAudio.jsonc").exists());
-        assert!(!destination.join("bar.jsonc").exists());
+        assert!(!destination.join("tiling.jsonc").exists());
     }
 
     #[test]

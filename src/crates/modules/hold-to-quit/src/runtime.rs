@@ -571,6 +571,8 @@ impl Module for HoldToQuitModule {
             permissions: &[],
             executables: &[],
             surfaces: &[],
+            observes: &[],
+            reserves_screen: false,
         }
     }
 

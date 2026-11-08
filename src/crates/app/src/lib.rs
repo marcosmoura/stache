@@ -13,6 +13,7 @@ pub mod caps_recovery;
 pub mod catalog;
 pub mod commands;
 pub mod config_edit;
+pub mod display;
 pub mod frontmost_context;
 pub mod hold_to_quit;
 pub mod host;
@@ -21,6 +22,7 @@ pub mod keep_awake;
 pub mod keybindings;
 pub mod logging;
 pub mod permissions;
+pub mod published_state;
 pub mod shutdown;
 #[cfg(feature = "smoke")]
 pub mod smoke;

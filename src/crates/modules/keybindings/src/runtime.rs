@@ -1003,6 +1003,8 @@ impl stache_sdk::Module for KeybindingsModule {
             permissions: &[],
             executables: &[],
             surfaces: &[],
+            observes: &[],
+            reserves_screen: false,
         }
     }
 

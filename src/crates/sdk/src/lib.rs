@@ -35,6 +35,7 @@ mod dependencies;
 pub mod durable;
 pub mod error;
 pub mod events;
+mod generation;
 pub mod input;
 pub mod instance;
 pub mod ipc;
@@ -43,7 +44,9 @@ pub mod logging;
 pub mod module;
 pub mod paths;
 pub mod permissions;
+pub mod published_state;
 pub mod registry;
+pub mod screen_reservations;
 pub mod shutdown;
 pub mod status;
 pub mod threading;
@@ -64,6 +67,7 @@ pub use error::{
     ConfigError, ErrorCategory, ModuleError, ModuleResult, Operation, RegistryError, RegistryResult,
 };
 pub use events::{EventBus, Subscription};
+pub use generation::RuntimeEnd;
 pub use input::{InputCapability, InputService};
 pub use instance::{INSTANCE_FILE_NAME, InstanceError, InstanceLock};
 pub use logging::{DiscardLogger, LogFilter, LogLevel, LogRecord, Logger, ScopedLogger};
@@ -76,8 +80,18 @@ pub use permissions::{
     Permission, PermissionError, PermissionProvider, PermissionRequirement, PermissionStatus,
     PromptPolicy,
 };
+pub use published_state::{
+    PublishOutcome, PublishedState, SchemaIdentity, StateEnvelope, StateError, StateObserver,
+    StatePublisher, StateReading, StateSchema, StateSchemas, StateSnapshot, StateUnavailable,
+    StateUnavailableReason, StateWait,
+};
 pub use registry::{
     ModuleHandle, ModuleInvalidation, Registry, ReloadReport, ReloadStatus, StopTarget,
+};
+pub use screen_reservations::{
+    DisplayId, DisplayReservations, Edge, EdgeInsets, MAX_RESERVATION_INSET, MAX_RESERVED_DISPLAYS,
+    ReservationContribution, ScreenReservationError, ScreenReservationObserver,
+    ScreenReservationSnapshot, ScreenReservationWait, ScreenReservations, TopologyGeneration,
 };
 pub use shutdown::{
     CANCELLATION_QUANTUM, OWNER_WAIT_BUDGET, ShutdownWait, wait_for_finish, wait_until,

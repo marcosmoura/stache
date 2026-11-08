@@ -119,6 +119,8 @@ impl Module for WallpapersModule {
             permissions: &[],
             executables: &[],
             surfaces: &[],
+            observes: &[],
+            reserves_screen: false,
         }
     }
 

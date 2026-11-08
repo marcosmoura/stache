@@ -688,6 +688,8 @@ impl Module for MenuAnywhereModule {
             permissions: &[],
             executables: &[],
             surfaces: &[],
+            observes: &[],
+            reserves_screen: false,
         }
     }
 

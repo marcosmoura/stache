@@ -4,7 +4,7 @@ branch: feat/bar-foundation
 
 # Bar foundation
 
-Read when planning the first slice of the Bar rewrite. This is a draft, not shipped behavior or permission to implement. Obtain approval before implementing each part.
+Read when checking the first slice of the Bar rewrite: the inert `bar` configuration and the SDK published-state and screen-reservation contracts. Both parts are done on `feat/bar-foundation`; this record does not authorize further implementation.
 
 ## Goal
 
@@ -38,8 +38,8 @@ Downstream consumers after this spec merges:
 
 | Part                               | Summary                                                                       | Status |
 | ---------------------------------- | ----------------------------------------------------------------------------- | ------ |
-| [01](01-config-catalog.md)         | `BarConfig`, catalog, schema/bindings, typed migration (inert config only)    | draft  |
-| [02](02-sdk-state-reservations.md) | Published-state channel, change notifier, screen reservation registry (fakes) | draft  |
+| [01](01-config-catalog.md)         | `BarConfig`, catalog, schema/bindings, typed migration (inert config only)    | done   |
+| [02](02-sdk-state-reservations.md) | Published-state channel, change notifier, screen reservation registry (fakes) | done   |
 
 Dependency chain: 01 → 02. Every part builds, tests and commits alone; unfinished parts block merge.
 

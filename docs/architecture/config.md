@@ -20,6 +20,7 @@ Each file is its own catalog document, named after the exact identifier:
 ```text
 ~/.config/stache/
   global.jsonc       GlobalConfig
+  bar.jsonc          BarConfig
   commandQuit.jsonc  CommandQuitConfig
   keepAwake.jsonc    KeepAwakeConfig
   keybindings.jsonc  KeybindingsConfig
@@ -31,6 +32,17 @@ Each file is its own catalog document, named after the exact identifier:
 
 The loader reads only `global.jsonc` and registered IDs. Legacy
 `config.jsonc`/`config.json` locations are read only by `config migrate`.
+
+`bar.jsonc` is registered for configuration, schema, template and migration
+only (`enabled` default `false`, `height` 28, `padding` 12, and `weather` with
+`provider` `auto`|`visual-crossing`|`open-meteo`, `apiKeys` and `defaultLocation`).
+Bar has no runtime, window, provider or command: no factory is registered, so
+`enabled: true` validates but nothing runs. Dimensions keep the legacy `u16`
+range and an explicit `0` is preserved, never replaced or clamped; feasibility
+is a later runtime concern. `WeatherConfig::api_keys_path` trims `apiKeys`,
+expands injected `~`/`~/`, resolves anything else under the configuration
+directory and never expands shell or environment syntax or uses the process
+working directory. Nothing reads the env file. See [bar.md](../features/bar.md).
 
 `notunes.jsonc` is registered for configuration, schema, template and migration,
 and backs the shipped blocker runtime: enabling it installs application
@@ -246,7 +258,7 @@ unchanged save is still a no-op instead of re-decoding forever.
 stache config init [-f] [-p DIR] [--stdout]
 stache config path
 stache config migrate [--from FILE] [-f]
-stache schema [global|commandQuit|keepAwake|keybindings|menuAnywhere|notunes|proxyAudio|wallpapers]
+stache schema [global|bar|commandQuit|keepAwake|keybindings|menuAnywhere|notunes|proxyAudio|wallpapers]
 ```
 
 The commands run from the single `stache` binary. From a checkout use
@@ -283,7 +295,7 @@ not that a host accepted it.
 styles keys, strings, numbers and literals only when stdout is a terminal; see
 [ipc.md](ipc.md#output).
 
-`schema` defaults to the global schema; `schema commandQuit`, `schema keepAwake`, `schema menuAnywhere`,
+`schema` defaults to the global schema; `schema bar`, `schema commandQuit`, `schema keepAwake`, `schema menuAnywhere`,
 `schema proxyAudio`,
 `schema notunes` and `schema wallpapers` print those registered module schemas.
 Unknown IDs fail.
@@ -300,7 +312,7 @@ destination, migration refuses even with `--force`.
 
 `execOnStartup` and a `logging` section are converted into `global.jsonc`.
 Every registered module section is decoded and validated by the catalog's
-authoritative type: `commandQuit`, `keepAwake`, `keybindings`, `menuAnywhere`, `proxyAudio`, `notunes` and
+authoritative type: `bar`, `commandQuit`, `keepAwake`, `keybindings`, `menuAnywhere`, `proxyAudio`, `notunes` and
 `wallpapers` today. A type may also translate legacy spellings first through
 `ModuleConfig::migrate_legacy_section`, which migration calls before decoding and
 writing; that hook is the only place a configuration type knows about values the
@@ -313,13 +325,17 @@ that change. `keybindings` uses it to wrap the legacy shortcut map into
 `{ enabled, bindings }`. `wallpapers` uses it to preserve a bare relative `path` or list
 entry while warning that the new base is the destination configuration
 directory, not the unrecoverable legacy working directory; absolute and
-home-anchored values are silent. `commandQuit` is decoded through its typed
+home-anchored values are silent. `bar` uses it to keep explicit `height`/`padding` (including `0`),
+materialize an omitted one as 28/12 with a warning that the legacy application
+rendered an omitted value as 0, and warn that a relative `weather.apiKeys` now
+resolves under the destination configuration directory; unknown keys are kept
+with the usual warning and a missing section receives the disabled template. `commandQuit` is decoded through its typed
 configuration like the others: a valid section keeps its `enabled` and
 `holdDuration`, an invalid one fails migration and an absent one receives the
 disabled default template. `menuAnywhere` keeps the default hook: it is
 validated generically and its `[]` modifiers and `middleClick` are written
-unchanged. `bar` and `tiling` are copied verbatim as same-ID `.jsonc` files; the
-loader does not register or activate them. Legacy `widgets` are dropped with a
+unchanged. `tiling` is copied verbatim as a same-ID `.jsonc` file; the
+loader does not register or activate it. Legacy `widgets` are dropped with a
 warning. Unknown root keys warn, and unknown keys inside a registered module
 section are reported while the section is still validated and copied into its
 `.jsonc` file, where the typed configuration ignores them. A missing registered
@@ -347,7 +363,7 @@ bun run generate-schema -- --check
 ```
 
 The `generate-schema` binary writes `schemas/global.schema.json`,
-`schemas/commandQuit.schema.json`, `schemas/keepAwake.schema.json`, `schemas/keybindings.schema.json`,
+`schemas/bar.schema.json`, `schemas/commandQuit.schema.json`, `schemas/keepAwake.schema.json`, `schemas/keybindings.schema.json`,
 `schemas/menuAnywhere.schema.json`, `schemas/notunes.schema.json`, `schemas/proxyAudio.schema.json` and
 `schemas/wallpapers.schema.json` deterministically; `--check` writes nothing and
 exits non-zero on missing or stale files. Templates are generated from the

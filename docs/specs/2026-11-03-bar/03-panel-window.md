@@ -34,11 +34,11 @@ Window plumbing on main: `WindowKind::NonActivatingPanel` is a reserved name ret
 - Audit legacy `menubar.rs`/`watcher.rs` and `Bar.state.ts`: `menuHidden` means menu visible, causing Bar translateY(100%)/opacity 0. Seed initial state and subscribe before refresh, reconcile dropped/coalesced signals. Event-driven display/menu/activation observations where feasible, smallest bounded poll only while needed; document macOS heuristic limits, unknown/error behavior and deduplicated diagnostics. Preserve actual reveal/hide timing and animation in 04, no polling-derived visual redesign.
 - SDK EventBus is pull-only/lossy. Host owns bounded pull workers/state subscriptions, recovery snapshots and concrete tauri-specta `collect_commands!`/`collect_events!` entries in `bindings::builder`. App `BarView` reads published cells only, not native/module locks; exact provider revision/generation/sequence and held file-first diagnostics survive projection. Commands/events have concrete generated DTOs; no handwritten TS names or generic JSON facade. Future providers fill typed optional fields, not forward-invoked functions.
 - Least-privilege route-bound authorization validates actual window label/owner/surface, not a caller-supplied surface argument. Expose only current read feeds; no filesystem/shell/plugin HTTP/general launch/config writes. Part 04 adds the capability when the route exists; part 08 adds only authorized generic session actions.
-- While Bar is not running (disabled, paused, failed, stopped or held by the planned Accessibility gate), bridge commands return a typed unavailable result, never stale data or a hang.
+- While Bar is not running (disabled, paused, failed, stopped or held by the Accessibility gate), bridge commands return a typed unavailable result, never stale data or a hang.
 
 ### Accessibility gate interaction
 
-Bar needs no Accessibility permission and does not depend on the [gate](../2026-11-07-accessibility-gate/00-overview.md). Bar's stop path is the ordinary registry stop, so revocation through `on_permission_change` tears down its panel and clears its reservation with no Bar-specific hook; while gated Bar never starts and owns zero windows/webviews.
+Bar needs no Accessibility permission; the shipped [gate](../2026-11-07-accessibility-gate/00-overview.md) applies its baseline requirement to Bar automatically. Extend the landed per-surface `WindowChrome`/`chrome_for` (`src/crates/app/src/windows.rs`) for the `bar` surface instead of a parallel chrome path. Bar's stop path is the ordinary registry stop, so revocation through `on_permission_change` tears down its panel and clears its reservation with no Bar-specific hook; while gated Bar never starts and owns zero windows/webviews.
 
 ## Acceptance criteria
 

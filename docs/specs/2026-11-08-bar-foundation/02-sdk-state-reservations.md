@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 02 — SDK published state and screen reservations
@@ -31,10 +31,10 @@ Extend `sdk/src/{context,module,dependencies,registry,status,lib}.rs`; suggested
 
 ## Acceptance criteria
 
-- [ ] BAR-02-01: Typed schema/identity/authorization and optional-observation contract compile with independent fake consumers and preserve hard requires behavior.
-- [ ] BAR-02-02: Atomic accepted-revision/state envelopes, publish-before-wake, bounded cancellation and tombstones reject stale generations under adversarial scheduling.
-- [ ] BAR-02-03: Reservation validation, deterministic max aggregation, revision/topology identity and exact-owner cleanup pass without native work or config reads.
-- [ ] BAR-02-04: One factory context preserves current modules; SDK/new-module docs and compile-proof examples describe only landed contracts.
+- [x] BAR-02-01: Typed schema/identity/authorization and optional-observation contract compile with independent fake consumers and preserve hard requires behavior.
+- [x] BAR-02-02: Atomic accepted-revision/state envelopes, publish-before-wake, bounded cancellation and tombstones reject stale generations under adversarial scheduling.
+- [x] BAR-02-03: Reservation validation, deterministic max aggregation, revision/topology identity and exact-owner cleanup pass without native work or config reads.
+- [x] BAR-02-04: One factory context preserves current modules; SDK/new-module docs and compile-proof examples describe only landed contracts.
 
 ## Tests
 
