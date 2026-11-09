@@ -31,7 +31,7 @@ Fixed scenario, recorded on the user's machine under per-run approval naming the
 - Config: `animations.enabled: true`, `duration: 200`, `easing: ease-out`; one workspace in `master` layout with Ghostty, Zed, Safari (or Aside) and Spotify.
 - Action: 10 toggles master → monocle and 10 monocle → master, each after the previous animation settled; repeat the set three times with warmup.
 - Record per application: effective rate, dropped frames, per-write latency p50/p95, end lag, whether Enhanced UI was on and leased, fallback triggered and why, SkyLight capability, thread count, CPU and wakeups during the run against animations off.
-- **Pass criterion:** every scenario application either (a) has median effective rate ≥ refresh ÷ 2, p95 end lag ≤ one frame period and zero post-settle writes (no fighting), or (b) is in instant fallback with its diagnostic; and the number of applications meeting (a) satisfies the OQ-4 floor (proposed two of four). The user also judges visual smoothness; effective rate is measured at AX acknowledgement, **not** at on-screen presentation, which cannot be observed without Screen Recording.
+- **Pass criterion:** every scenario application either (a) has median effective rate ≥ refresh ÷ 2, p95 end lag ≤ one frame period and zero post-settle writes (no fighting), or (b) is in instant fallback with its diagnostic; and all four applications meet (a) (OQ-4: a fallback for any of the four fails the run). The user also judges visual smoothness; effective rate is measured at AX acknowledgement, **not** at on-screen presentation, which cannot be observed without Screen Recording.
 - Cleanup: restore the user's config, leave no lease open, report exact owned cleanup.
 
 ## Acceptance criteria

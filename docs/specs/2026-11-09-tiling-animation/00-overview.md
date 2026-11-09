@@ -40,15 +40,13 @@ Approved by the user on 2026-11-09.
 5. Animations stay opt-in (`animations.enabled`, default off); duration and easing configuration are unchanged.
 6. The [Tiling decisions](../2026-11-03-tiling/00-overview.md#decisions) 5–9 apply unchanged to every part: exact-token, generation, accepted-revision and plan-sequence authority checked at the native send; logical invalidation stays atomic; Applied/Partial/Uncertain outcomes stay truthful; stop seals, drains issued frames **before** owned restore, and quarantines what it cannot clean up. Owner confinement stays: no AX on main, AX objects stay `!Send` on the thread that created them (`macos/src/ax/mod.rs:10–15`), hops are bounded, no thread is detached, no lock is held across a native call, every queue is bounded and A–B–A histories never mark a successor applied.
 
-## Open questions
+## Resolved questions (approved 2026-11-09)
 
-These need a user answer before the named part starts. Each part states the conservative behavior that applies until then.
-
-- **OQ-1 (part 02): membership lease.** Today every action re-lists `AXWindows` (`core.rs:869–920`). Proposed: an animation validates membership at its first and final write, and intermediate writes rely on the retained element, destroy-notification invalidation and the issuance gate (a write that fails with an invalid element ends the animation). This relaxes "revalidate before every action" for intermediate frames only. Until approved, every write keeps full revalidation and part 06 measures its cost.
-- **OQ-2 (part 04): VoiceOver.** Turning `AXEnhancedUserInterface` off while an assistive technology relies on it may disturb that user. Proposed: take no lease while VoiceOver is running; such applications fall back to instant when slow.
-- **OQ-3 (part 04): hard-kill residue.** A SIGKILL or crash during a lease leaves the attribute off. Proposed: document it as a known limit (no persistence journal, matching the Tiling non-goal). Alternative: a small runtime journal restored at next start.
-- **OQ-4 (part 06): pass threshold.** Proposed: the fixed scenario passes when every listed application either meets the smooth criterion or falls back to instant with a diagnostic, and at least two of the four meet the smooth criterion. Confirm the "two of four" floor.
-- **OQ-5: Reduce Motion.** Should `animations.enabled` be ignored while the system Reduce Motion setting is on? Not requested; proposed default is no change.
+- **OQ-1 (part 02): membership lease — approved.** An animation validates `AXWindows` membership at its first and final write; intermediate writes rely on the retained element, destroy-notification invalidation and the issuance gate (seal, generation, exact token on every write). A write failing with an invalid element ends that animation.
+- **OQ-2 (part 04): VoiceOver — no lease.** While VoiceOver is running, `AXEnhancedUserInterface` is never touched; applications that are then too slow use instant placement with a diagnostic.
+- **OQ-3 (part 04): hard-kill residue — documented limit.** No journal; a crash or SIGKILL during a lease leaves the attribute off for that application until it relaunches. Documented in the feature doc.
+- **OQ-4 (part 06): pass threshold — all four.** Every listed application (Ghostty, Zed, Safari or Aside, Spotify) must meet the smooth criterion in the approved native run; a fallback for any of them fails the run. The per-application instant fallback still ships for other applications.
+- **OQ-5: Reduce Motion — no change.** `animations.enabled` alone decides; the system Reduce Motion setting does not override it.
 
 ## Sources
 
