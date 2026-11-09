@@ -56,10 +56,14 @@ fn run(root: &Path, args: &[&str], ansi: bool) -> Run {
 
 #[test]
 #[allow(clippy::redundant_closure_for_method_calls)] // clap is not a dev-dependency here.
-fn the_production_catalog_contributes_exactly_the_wallpaper_tree() {
+fn the_production_catalog_contributes_the_audio_wallpaper_and_tiling_trees() {
     let root = tempfile::tempdir().expect("root");
     let commands = stache_app::commands::catalog_for(&environment(root.path()));
-    assert_eq!(commands.names().collect::<Vec<_>>(), ["audio", "wallpaper"]);
+    assert_eq!(commands.names().collect::<Vec<_>>(), [
+        "audio",
+        "wallpaper",
+        "tiling"
+    ]);
     let composed = stache_cli::commands::compose(&commands);
     let wallpaper = composed.find_subcommand("wallpaper").expect("wallpaper");
     let names: Vec<&str> = wallpaper.get_subcommands().map(|command| command.get_name()).collect();
@@ -67,6 +71,9 @@ fn the_production_catalog_contributes_exactly_the_wallpaper_tree() {
     let set = wallpaper.find_subcommand("set").expect("set");
     let shorts: Vec<Option<char>> = set.get_arguments().map(|arg| arg.get_short()).collect();
     assert_eq!(shorts, [None, Some('r'), Some('s')]);
+    let tiling = composed.find_subcommand("tiling").expect("tiling");
+    let names: Vec<&str> = tiling.get_subcommands().map(|command| command.get_name()).collect();
+    assert_eq!(names, ["pause", "resume", "query", "window", "workspace"]);
 }
 
 #[test]

@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 03 — Safe native ownership and compile gates
@@ -23,10 +23,10 @@ Extend landed `src/crates/macos/src/applications.rs`/tests additively; add focus
 
 ## Acceptance criteria
 
-- [ ] TI-03-01: Real framework types compile with owner confinement, a dedicated AX owner thread per consumer (never main traversal, never a shared serialized AX thread with MenuAnywhere) and exact app/window tokens; same-app reused IDs/stale/cross-service/epoch targets cannot issue actions.
-- [ ] TI-03-02: Typed public/justified-private query/write/tab/display seams compile; unavailable attributes/symbols/partial AX writes remain explicit and preserve existing applications callers.
-- [ ] TI-03-03: Actual-send barriers prove immediate invalidation, deadline abandonment and truthful issued/uncertain outcomes; callback purity, bounded hops and no main wait cycle pass.
-- [ ] TI-03-04: Failed install/removal resources stay inert/owned and retry exactly once; compile/native feasibility records distinguish proven from unverified capabilities.
+- [x] TI-03-01: Real framework types compile with owner confinement, a dedicated AX owner thread per consumer (never main traversal, never a shared serialized AX thread with MenuAnywhere) and exact app/window tokens; same-app reused IDs/stale/cross-service/epoch targets cannot issue actions.
+- [x] TI-03-02: Typed public/justified-private query/write/tab/display seams compile; unavailable attributes/symbols/partial AX writes remain explicit and preserve existing applications callers.
+- [x] TI-03-03: Actual-send barriers prove immediate invalidation, deadline abandonment and truthful issued/uncertain outcomes; callback purity, bounded hops and no main wait cycle pass.
+- [x] TI-03-04: Failed install/removal resources stay inert/owned and retry exactly once; compile/native feasibility records distinguish proven from unverified capabilities.
 
 ## Tests, rollback and docs
 

@@ -23,6 +23,8 @@ pub fn catalog() -> CommandCatalog { catalog_for(&CliEnvironment::from_env()) }
 
 /// The application's contributed commands for an injected environment.
 ///
+/// The tiling command only talks to a running same-config host over the control
+/// socket: it never starts the desktop, the Accessibility owner or the module.
 /// The audio command enumerates locally and never starts the desktop host or a
 /// listener. The wallpaper command routes `set` to a running same-config host
 /// and otherwise works locally: `list` and `generate-all` are always local, and
@@ -54,6 +56,15 @@ pub fn catalog_for(environment: &CliEnvironment) -> CommandCatalog {
             interrupt_scope(),
         )))
         .expect("the wallpaper command is contributed exactly once");
+    catalog
+        .add(stache_tiling::cli::contribution(
+            stache_tiling::cli::TilingCliEnv::new(
+                environment.config.clone(),
+                environment.app.clone(),
+                Arc::new(stache_cli::output::highlight_json),
+            ),
+        ))
+        .expect("the tiling command is contributed exactly once");
     catalog
 }
 

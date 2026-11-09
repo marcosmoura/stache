@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -50,6 +50,10 @@ use stache_sdk::{
     RegistryError, RegistryResult, ReloadOutcome, StateObserver, StateSchemas, WatchError,
     WindowBackend, WindowError, WindowId, WindowKey, WindowKind, WindowRequest, WindowSize,
     inspect_paths,
+};
+use stache_tiling::ipc::{LifecycleControl, LifecycleFailure, LifecycleThread, TilingIpc};
+use stache_tiling::{
+    AppDirectory, DisplayProjection, TilingConfig, TilingParts, TilingRuntime, TilingRuntimeState,
 };
 
 /// Host-assigned generic input priorities.
@@ -645,6 +649,244 @@ impl ModuleFactory for KeybindingsFactory {
 
     fn finish_shutdown(&self, _wait: &dyn ShutdownWait) -> Result<bool, String> {
         Ok(self.runtime.finish_shutdown())
+    }
+}
+
+/// Registers the Tiling module over the host-lifetime runtime service.
+///
+/// Construction is inert: nothing native is installed, no thread is spawned and
+/// no reservation is read until an enabled module starts. Registration installs
+/// the typed accepted-configuration watch before the registry starts modules.
+/// The factory serves the `tiling` socket methods (`pause`, `resume`, `query`,
+/// `window`, `workspace`) through [`TilingIpc`]; the runtime details travel on
+/// [`ModuleStatusView`]. `begin_shutdown` cancels every handler wait before the
+/// connection joins.
+///
+/// The production composition (`lib.rs`) appends [`TilingFactory::production`],
+/// default disabled; the module's own `enabled` setting starts it.
+pub struct TilingFactory {
+    runtime: TilingRuntime,
+    /// The registry control, set by `register` and read by `ipc_handlers`.
+    control: Arc<OnceLock<Arc<dyn ModuleControl>>>,
+    /// The socket handlers' retained lifecycle workers, joined (bounded) by
+    /// `finish_shutdown`; never detached.
+    lifecycle_threads: Mutex<Vec<Arc<LifecycleThread>>>,
+}
+
+impl TilingFactory {
+    /// Wraps the one host-lifetime runtime service.
+    #[must_use]
+    pub fn new(runtime: TilingRuntime) -> Self {
+        Self {
+            runtime,
+            control: Arc::new(OnceLock::new()),
+            lifecycle_threads: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Builds the service over a backend and directory, injecting this crate's
+    /// native-to-SDK display projection and observing the host reservations
+    /// through the module context.
+    ///
+    /// `applications` installs the exact-instance application actions (hide,
+    /// unhide and the one `activate_exact` path) for each module run; build it
+    /// with [`stache_tiling::ControlActionsSource`] over the host's
+    /// `ApplicationControl`. `None` runs without them: nothing is hidden and
+    /// focus cannot activate an application.
+    #[must_use]
+    pub fn composed(
+        backend: Arc<dyn stache_tiling::WindowBackend>,
+        directory: Arc<dyn AppDirectory>,
+        applications: Option<Arc<dyn stache_tiling::ApplicationActionsSource>>,
+        self_bundle_id: &str,
+    ) -> Self {
+        let mut parts = TilingParts::new(
+            backend,
+            directory,
+            DisplayProjection::new(crate::display::sdk_display_id),
+            self_bundle_id,
+        );
+        parts.applications = applications;
+        Self::new(TilingRuntime::new(parts))
+    }
+}
+
+impl TilingFactory {
+    /// The production composition. Everything is inert until an enabled module
+    /// starts:
+    ///
+    /// - the window backend is [`stache_tiling::LazySystemBackend`]: the
+    ///   `stache-tiling-ax-owner` thread starts on the first epoch install;
+    /// - applications come from the run's own application observation over a
+    ///   Tiling-private [`ApplicationControl`] (like every other consumer, one
+    ///   control per module), used for exact hide, unhide, activation and the
+    ///   application directory;
+    /// - displays come from a system [`stache_macos::DisplayControl`] over the
+    ///   same main-thread executor;
+    /// - native tab reads stay off (`AdapterOptions::read_tabs` is false): the
+    ///   read path is implemented and fake-proven but has no native evidence, so
+    ///   status reports tabs as not read and every window is an ordinary tile.
+    #[must_use]
+    pub fn production(main_thread: Arc<dyn MainThreadExecutor>, self_bundle_id: &str) -> Self {
+        let applications = stache_tiling::ControlActionsSource::new(ApplicationControl::system(
+            Arc::clone(&main_thread),
+        ));
+        let mut parts = TilingParts::new(
+            Arc::new(stache_tiling::LazySystemBackend::new(
+                stache_macos::windows::AdapterOptions::default(),
+            )),
+            Arc::new(NoApplications),
+            DisplayProjection::new(crate::display::sdk_display_id),
+            self_bundle_id,
+        );
+        parts.applications = Some(Arc::new(applications));
+        parts.displays = Some(stache_macos::DisplayControl::system(main_thread));
+        // The JankyBorders authority: a transport created on the runner thread
+        // (never at construction) and a host-lifetime-independent executor per
+        // runner. Inert until an accepted `borders.enabled: true` (the consent).
+        parts.borders = Some(stache_tiling::BordersParts::new(
+            Arc::new(|| {
+                Box::new(stache_macos::borders::BordersConnection::new())
+                    as Box<dyn stache_macos::borders::BordersTransport>
+            }),
+            Arc::new(|| {
+                stache_sdk::commands::CommandExecutor::new(
+                    stache_sdk::commands::CommandEnvironment::from_env(),
+                )
+            }),
+        ));
+        Self::new(TilingRuntime::new(parts))
+    }
+}
+
+/// The directory of a run without application actions. A production run always
+/// has actions (a run fails to start without them), so it never answers.
+struct NoApplications;
+
+impl AppDirectory for NoApplications {
+    fn running(&self) -> Vec<stache_tiling::AppInfo> { Vec::new() }
+
+    fn describe(&self, _: stache_macos::ApplicationId) -> Option<stache_tiling::AppInfo> { None }
+}
+
+impl ModuleFactory for TilingFactory {
+    fn id(&self) -> ModuleId { TilingConfig::ID }
+
+    fn register(
+        &self,
+        registry: &Registry,
+        store: &ConfigStore,
+    ) -> Result<Arc<dyn ModuleControl>, HostError> {
+        let runtime = self.runtime.clone();
+        let control = register_module_observed(
+            registry,
+            store,
+            runtime.module(),
+            move |registry, handle| {
+                runtime.install_accepted_watch(registry.accepted_watch(handle)?);
+                Ok(())
+            },
+        )?;
+        let _ = self.control.set(Arc::clone(&control));
+        Ok(control)
+    }
+
+    /// The `tiling` socket methods: `pause`, `resume`, `query`, `window` and
+    /// `workspace`. The handler reads published snapshots and drives the
+    /// registry lifecycle; it starts nothing itself.
+    fn ipc_handlers(&self, context: &FactoryContext) -> Vec<(&'static str, Arc<dyn IpcHandler>)> {
+        let lifecycle = TilingLifecycle {
+            context: context.clone(),
+            control: Arc::clone(&self.control),
+        };
+        let handler = TilingIpc::new(
+            Arc::new(self.runtime.clone()),
+            Arc::new(lifecycle),
+            self.runtime.status(),
+            self.runtime.shutdown_token(),
+        );
+        self.lifecycle_threads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(handler.lifecycle_thread());
+        vec![(TilingConfig::ID.as_str(), Arc::new(handler))]
+    }
+
+    /// A running module whose actor reports an unhealthy runtime is shown
+    /// `unavailable` with the reason; a quarantined cleanup keeps the registry's
+    /// failure and adds the owed stages through the runtime details. The
+    /// registry lifecycle itself is never rewritten by a read or action error.
+    fn project_status(&self, view: &mut ModuleStatusView) -> bool {
+        if view.id != TilingConfig::ID.as_str() {
+            return false;
+        }
+        let status = self.runtime.status().read();
+        if view.state == crate::bindings::ModuleState::Running
+            && status.state == TilingRuntimeState::Running
+            && !status.healthy
+        {
+            view.state = crate::bindings::ModuleState::Unavailable;
+            view.detail.clone_from(&status.detail);
+        }
+        view.tiling = Some(status);
+        true
+    }
+
+    fn begin_shutdown(&self) { self.runtime.begin_shutdown(); }
+
+    /// Joins any socket lifecycle worker (bounded, one fresh hop each) before
+    /// draining the runtime. A worker still running is reported as not
+    /// acknowledged and stays owned, never detached.
+    fn finish_shutdown(&self, _wait: &dyn ShutdownWait) -> Result<bool, String> {
+        let threads = self.lifecycle_threads.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        // Join every worker, never short-circuiting past one still running.
+        let joined = threads
+            .iter()
+            .filter(|thread| !thread.join_within(TILING_LIFECYCLE_JOIN))
+            .count()
+            == 0;
+        Ok(self.runtime.finish_shutdown() && joined)
+    }
+}
+
+/// The bound for joining one Tiling socket lifecycle worker at shutdown.
+const TILING_LIFECYCLE_JOIN: Duration = Duration::from_secs(2);
+
+/// The registry lifecycle the Tiling socket handler drives: the published module
+/// snapshot, and pause/resume through the registry (never a second path).
+struct TilingLifecycle {
+    context: FactoryContext,
+    control: Arc<OnceLock<Arc<dyn ModuleControl>>>,
+}
+
+impl TilingLifecycle {
+    fn failure(error: &RegistryError) -> LifecycleFailure {
+        match error {
+            RegistryError::ShuttingDown => LifecycleFailure::ShuttingDown,
+            other => LifecycleFailure::Failed(other.to_string()),
+        }
+    }
+
+    fn control(&self) -> Result<&Arc<dyn ModuleControl>, LifecycleFailure> {
+        self.control
+            .get()
+            .ok_or_else(|| LifecycleFailure::Failed("Tiling is not initialized".to_owned()))
+    }
+}
+
+impl LifecycleControl for TilingLifecycle {
+    fn module(&self) -> Option<ModuleSnapshot> { self.context.module_snapshot(TilingConfig::ID) }
+
+    fn pause(&self) -> Result<(), LifecycleFailure> {
+        self.control()?
+            .pause(&self.context.registry)
+            .map_err(|error| Self::failure(&error))
+    }
+
+    fn resume(&self) -> Result<(), LifecycleFailure> {
+        self.control()?
+            .resume(&self.context.registry)
+            .map_err(|error| Self::failure(&error))
     }
 }
 
@@ -4291,5 +4533,523 @@ mod tests {
         kb_wait("first again", || first.rig.processes.count() == 2);
         first.rig.processes.finish_all();
         let _ = first.runner.registry.shutdown();
+    }
+
+    // -----------------------------------------------------------------------
+    // Tiling over the actual runner, registry and configuration store (fakes)
+    // -----------------------------------------------------------------------
+
+    use stache_macos::windows::StopOutcome;
+    use stache_tiling::{FakeBackendCall, FakeWindowBackend, TilingRuntimeState};
+
+    struct NoApps;
+
+    /// Runs main-thread jobs inline on the calling thread.
+    struct InlineMain;
+
+    impl MainThreadExecutor for InlineMain {
+        fn is_main_thread(&self) -> bool { false }
+
+        fn execute(&self, job: Box<dyn FnOnce() + Send + 'static>) -> Result<(), ThreadError> {
+            job();
+            Ok(())
+        }
+    }
+
+    fn ti_layout() -> stache_macos::DisplayLayout {
+        stache_macos::DisplayLayout::new(vec![stache_macos::DisplayInfo {
+            id: stache_macos::DisplayId::new(1),
+            frame: stache_macos::DisplayRect::new(0.0, 0.0, 1920.0, 1080.0),
+            visible_frame: stache_macos::DisplayRect::new(0.0, 0.0, 1920.0, 1055.0),
+            scale: 2.0,
+            refresh_hz: Some(60.0),
+            name: Some("Display 1".to_owned()),
+            is_primary: true,
+            is_main: true,
+            is_builtin: false,
+        }])
+    }
+
+    impl AppDirectory for NoApps {
+        fn running(&self) -> Vec<stache_tiling::AppInfo> { Vec::new() }
+
+        fn describe(&self, _: stache_macos::ApplicationId) -> Option<stache_tiling::AppInfo> {
+            None
+        }
+    }
+
+    struct TiHost {
+        runner: Runner,
+        backend: Arc<FakeWindowBackend>,
+        factory: Arc<TilingFactory>,
+        display: stache_macos::FakeDisplayBackend,
+        _receiver: Receiver<HostCommand>,
+        config: stache_sdk::ConfigPaths,
+        _root: tempfile::TempDir,
+    }
+
+    /// Counts requests: Tiling and the registry only ever check.
+    struct Trust {
+        trusted: AtomicBool,
+        requests: AtomicUsize,
+    }
+
+    impl PermissionProvider for Trust {
+        fn status(&self, _: Permission) -> PermissionStatus {
+            if self.trusted.load(Ordering::SeqCst) {
+                PermissionStatus::Granted
+            } else {
+                PermissionStatus::Denied
+            }
+        }
+
+        fn request(&self, permission: Permission) -> Result<PermissionStatus, PermissionError> {
+            self.requests.fetch_add(1, Ordering::SeqCst);
+            Ok(self.status(permission))
+        }
+    }
+
+    impl TiHost {
+        fn new(file: Option<&str>) -> Self { Self::composed(file, Vec::new(), true).0 }
+
+        /// Tiling over fakes plus `extra` independent factories.
+        fn composed(
+            file: Option<&str>,
+            extra: Vec<Arc<dyn ModuleFactory>>,
+            trusted: bool,
+        ) -> (Self, Arc<Trust>) {
+            let root = tempfile::tempdir().expect("root");
+            let config = ConfigPaths::new(root.path().join("config"));
+            std::fs::create_dir_all(root.path().join("config")).expect("config directory");
+            let backend = Arc::new(FakeWindowBackend::default());
+            let display = stache_macos::FakeDisplayBackend::new(ti_layout());
+            let mut parts = TilingParts::new(
+                Arc::clone(&backend) as Arc<dyn stache_tiling::WindowBackend>,
+                Arc::new(NoApps),
+                DisplayProjection::new(crate::display::sdk_display_id),
+                "",
+            );
+            parts.displays = Some(stache_macos::DisplayControl::new(
+                Arc::new(InlineMain),
+                Arc::new(display.clone()),
+            ));
+            parts.timing.hop = Duration::from_millis(60);
+            parts.timing.poll = Duration::from_millis(5);
+            let factory = Arc::new(TilingFactory::new(TilingRuntime::new(parts)));
+            let mut factories = ModuleFactories::new();
+            factories.entries.push(Arc::clone(&factory) as Arc<dyn ModuleFactory>);
+            factories.entries.extend(extra);
+            let trust = Arc::new(Trust {
+                trusted: AtomicBool::new(trusted),
+                requests: AtomicUsize::new(0),
+            });
+            let (runner, receiver) = runner_over(
+                root.path(),
+                factories,
+                crate::catalog::catalog().expect("catalog"),
+                Arc::clone(&trust) as Arc<dyn PermissionProvider>,
+                None,
+            );
+            let host = Self {
+                runner,
+                backend,
+                factory,
+                display,
+                _receiver: receiver,
+                config,
+                _root: root,
+            };
+            if let Some(file) = file {
+                host.write(file);
+            }
+            (host, trust)
+        }
+
+        fn path(&self) -> std::path::PathBuf { self.config.module_file(TilingConfig::ID) }
+
+        fn write(&self, text: &str) { std::fs::write(self.path(), text).expect("write"); }
+
+        fn register(&mut self) {
+            self.runner.start_recovery();
+            let factories: Vec<Arc<dyn ModuleFactory>> =
+                self.runner.settings.factories.entries().to_vec();
+            for factory in factories {
+                let control =
+                    factory.register(&self.runner.registry, &self.runner.store).expect("register");
+                self.runner.controls.insert(factory.id().as_str().to_owned(), control);
+            }
+        }
+
+        fn start(&mut self) {
+            self.register();
+            let _ = self.runner.registry.start_all();
+            self.runner.ready = true;
+            self.runner.publish();
+        }
+
+        fn reload(&mut self) {
+            let mut changes = ChangeSet::default();
+            changes.files.insert(ConfigFileId::module(TilingConfig::ID));
+            self.runner.apply_config(&changes);
+            self.runner.publish();
+        }
+
+        fn view(&self) -> ModuleStatusView {
+            self.runner
+                .handle
+                .status()
+                .modules
+                .into_iter()
+                .find(|module| module.id == "tiling")
+                .expect("tiling module")
+        }
+    }
+
+    const TI_ON: &str = r#"{ "enabled": true }"#;
+
+    fn ti_wait(what: &str, mut condition: impl FnMut() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !condition() {
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    #[test]
+    fn ti_05_01_the_tiling_factory_is_inert_until_start_and_projects_runtime_details() {
+        let mut host = TiHost::new(Some(TI_ON));
+        host.register();
+        assert!(
+            host.backend.calls().is_empty(),
+            "registration touches nothing native"
+        );
+        host.runner.registry.start_all().expect("start");
+        host.runner.publish();
+        let view = host.view();
+        assert_eq!(view.state, crate::bindings::ModuleState::Running);
+        let details = view.tiling.as_ref().expect("runtime details");
+        assert_eq!(details.state, TilingRuntimeState::Running);
+        assert!(details.healthy);
+        ti_wait("the actor adopted the revision", || {
+            host.runner.publish();
+            host.view().tiling.is_some_and(|t| t.config_revision == host.view().revision)
+        });
+        let json = serde_json::to_value(host.runner.handle.status()).expect("encode");
+        let module = json["modules"]
+            .as_array()
+            .expect("modules")
+            .iter()
+            .find(|m| m["id"] == "tiling")
+            .expect("tiling");
+        assert_eq!(module["tiling"]["state"], "running");
+        for other in json["modules"].as_array().expect("modules") {
+            if other["id"] != "tiling" {
+                assert!(other.get("tiling").is_none(), "details are tiling-only");
+            }
+        }
+        let _ = host.runner.registry.shutdown();
+        assert!(host.backend.calls().iter().any(|c| matches!(c, FakeBackendCall::Stop(_))));
+    }
+
+    /// The production list plus the production Tiling factory, as `lib.rs`
+    /// composes them, over a main thread that runs nothing.
+    fn production_with_tiling() -> ModuleFactories {
+        ModuleFactories::production(Arc::new(NoMainThread), AssertionOwner::system()).with(
+            TilingFactory::production(Arc::new(NoMainThread), "com.example.stache"),
+        )
+    }
+
+    #[test]
+    fn ti_06_04_the_production_composition_registers_tiling_default_disabled() {
+        let factories = production_with_tiling();
+        assert!(factories.entries().iter().any(|factory| factory.id() == TilingConfig::ID));
+        // Registering over an empty configuration directory: nothing starts.
+        let root = tempfile::tempdir().expect("root");
+        let (mut runner, _receiver) = runner_over(
+            root.path(),
+            factories,
+            crate::catalog::catalog().expect("catalog"),
+            Arc::new(AllowAll),
+            None,
+        );
+        runner.start_recovery();
+        let entries: Vec<Arc<dyn ModuleFactory>> = runner.settings.factories.entries().to_vec();
+        for factory in entries {
+            let control = factory.register(&runner.registry, &runner.store).expect("register");
+            runner.controls.insert(factory.id().as_str().to_owned(), control);
+        }
+        let _ = runner.registry.start_all();
+        runner.publish();
+        let view = runner
+            .handle
+            .status()
+            .modules
+            .into_iter()
+            .find(|module| module.id == "tiling")
+            .expect("tiling is registered");
+        assert_eq!(view.state, crate::bindings::ModuleState::Disabled);
+        assert_eq!(
+            view.tiling.expect("details").state,
+            TilingRuntimeState::Inactive,
+            "default disabled: nothing was started"
+        );
+        let _ = runner.registry.shutdown();
+    }
+
+    #[test]
+    fn ti_06_04_enabling_tiling_over_fakes_reaches_running_and_delivers_displays_first() {
+        let mut host = TiHost::new(Some(TI_ON));
+        host.start();
+        let view = host.view();
+        assert_eq!(view.state, crate::bindings::ModuleState::Running);
+        assert_eq!(host.display.observers(), 1, "the display feed observes natively");
+        assert!(host.display.layout_reads() >= 1);
+        let tracking = host.factory.runtime.tracking().expect("running");
+        ti_wait("the native display reached the actor", || {
+            tracking.snapshot().screens.len() == 1
+        });
+        let _ = host.runner.registry.shutdown();
+        assert_eq!(host.display.observers(), 0, "stop removes the observer");
+    }
+
+    #[test]
+    fn ti_06_04_missing_accessibility_waits_without_acquiring_or_prompting() {
+        let (mut host, trust) = TiHost::composed(Some(TI_ON), Vec::new(), false);
+        host.start();
+        let view = host.view();
+        assert_eq!(view.state, crate::bindings::ModuleState::WaitingForPermission);
+        assert_eq!(view.tiling.expect("details").state, TilingRuntimeState::Inactive);
+        assert!(host.backend.calls().is_empty(), "nothing native was acquired");
+        assert_eq!(host.display.observers(), 0);
+        assert_eq!(host.display.layout_reads(), 0);
+        assert_eq!(trust.requests.load(Ordering::SeqCst), 0, "Tiling never prompts");
+        let _ = host.runner.registry.shutdown();
+    }
+
+    #[test]
+    fn ti_09_requested_borders_without_a_composed_authority_degrade_borders_only() {
+        let mut host = TiHost::new(Some(
+            r#"{ "enabled": true, "animations": { "enabled": true }, "borders": { "enabled": true } }"#,
+        ));
+        host.start();
+        let view = host.view();
+        assert_eq!(
+            view.state,
+            crate::bindings::ModuleState::Running,
+            "not a failed module"
+        );
+        let details = view.tiling.expect("details");
+        assert!(details.healthy);
+        // Borders (this host composed no JankyBorders authority, so nothing is
+        // sent), the explicit "tabs are not read" capability and, with no shared
+        // input service attached to this fake host, the degraded passive drag
+        // (only drag, never the module). Animation is implemented (part 08), so a
+        // requested animation publishes no unsupported diagnostic.
+        assert_eq!(details.diagnostics.len(), 3, "{details:?}");
+        assert!(details.diagnostics.iter().any(|d| d.contains("no JankyBorders authority")));
+        assert!(!details.diagnostics.iter().any(|d| d.contains("animation")));
+        assert!(details.diagnostics.iter().any(|d| d.contains("native tabs are not read")));
+        assert!(details.diagnostics.iter().any(|d| d.contains("drag is unavailable")));
+        let json = serde_json::to_value(host.runner.handle.status()).expect("encode");
+        let module = json["modules"]
+            .as_array()
+            .expect("modules")
+            .iter()
+            .find(|m| m["id"] == "tiling")
+            .expect("tiling");
+        assert_eq!(module["tiling"]["diagnostics"].as_array().map(Vec::len), Some(3));
+        let _ = host.runner.registry.shutdown();
+    }
+
+    #[test]
+    fn ti_06_04_a_stopped_or_quarantined_tiling_leaves_an_independent_module_running() {
+        let backend = Arc::new(stache_macos::FakeApplicationBackend::new());
+        let executor = Arc::new(stache_macos::ManualExecutor::new(true));
+        let control = ApplicationControl::with_acknowledgement_budget(
+            Arc::clone(&executor) as Arc<dyn MainThreadExecutor>,
+            Arc::clone(&backend) as Arc<dyn stache_macos::ApplicationBackend>,
+            Duration::from_millis(500),
+        );
+        let (mut host, _) = TiHost::composed(
+            Some(TI_ON),
+            vec![Arc::new(NoTunesFactory::new(control)) as Arc<dyn ModuleFactory>],
+            true,
+        );
+        std::fs::write(
+            host.config.module_file(stache_notunes::NoTunesConfig::ID),
+            r#"{ "enabled": true }"#,
+        )
+        .expect("write notunes");
+        host.start();
+        let state_of = |host: &TiHost, id: &str| {
+            host.runner
+                .handle
+                .status()
+                .modules
+                .into_iter()
+                .find(|module| module.id == id)
+                .expect("module")
+                .state
+        };
+        assert_eq!(state_of(&host, "tiling"), crate::bindings::ModuleState::Running);
+        assert_eq!(state_of(&host, "notunes"), crate::bindings::ModuleState::Running);
+        host.backend.script_stop(StopOutcome::Unacknowledged);
+        host.write(r#"{ "enabled": false }"#);
+        host.reload();
+        let view = host.view();
+        assert_eq!(
+            view.tiling.expect("details").state,
+            TilingRuntimeState::Quarantined
+        );
+        assert_eq!(
+            state_of(&host, "notunes"),
+            crate::bindings::ModuleState::Running,
+            "a quarantined Tiling never stops another module"
+        );
+        let _ = host.runner.registry.shutdown();
+    }
+
+    #[test]
+    fn ti_05_03_held_file_diagnostics_repair_independently_of_cleanup_errors() {
+        let mut host = TiHost::new(Some(TI_ON));
+        host.start();
+        let revision = host.view().revision;
+        host.write("{ \"enabled\": ");
+        host.reload();
+        let view = host.view();
+        assert!(view.diagnostic.is_some(), "the rejected file is held");
+        assert_eq!(view.state, crate::bindings::ModuleState::Running);
+        assert_eq!(view.revision, revision);
+        assert_eq!(
+            view.tiling.as_ref().expect("details").state,
+            TilingRuntimeState::Running
+        );
+        host.write(r#"{ "enabled": true, "defaultLayout": "floating" }"#);
+        host.reload();
+        let view = host.view();
+        assert!(view.diagnostic.is_none());
+        assert_ne!(view.revision, revision);
+        let adopted = view.revision;
+        ti_wait("the repaired file is adopted", || {
+            host.runner.publish();
+            host.view().tiling.is_some_and(|t| t.config_revision == adopted)
+        });
+
+        // A cleanup error is retained by the runtime and independent of the
+        // file diagnostic.
+        host.backend.script_stop(StopOutcome::Unacknowledged);
+        host.write(r#"{ "enabled": false }"#);
+        host.reload();
+        let view = host.view();
+        let details = view.tiling.as_ref().expect("details");
+        assert_eq!(details.state, TilingRuntimeState::Quarantined);
+        assert_eq!(details.owed, ["backend epoch"]);
+        host.write("not json");
+        host.reload();
+        let view = host.view();
+        assert!(view.diagnostic.is_some());
+        assert_eq!(
+            view.tiling.as_ref().expect("details").state,
+            TilingRuntimeState::Quarantined,
+            "the file diagnostic never hides the cleanup state"
+        );
+        host.write(r#"{ "enabled": false }"#);
+        host.reload();
+        let view = host.view();
+        assert!(
+            view.diagnostic.is_none(),
+            "a repaired file clears only its own diagnostic"
+        );
+        let _ = host.runner.registry.shutdown();
+    }
+
+    /// The `tiling` socket handler the factory contributes, over the real
+    /// registry and store.
+    fn ti_handler(host: &TiHost) -> Arc<dyn IpcHandler> {
+        let context =
+            FactoryContext::new(Arc::clone(&host.runner.registry), Arc::clone(&host.runner.store));
+        let mut handlers = host.factory.ipc_handlers(&context);
+        assert_eq!(handlers.len(), 1);
+        let (name, handler) = handlers.remove(0);
+        assert_eq!(name, "tiling");
+        handler
+    }
+
+    #[test]
+    fn ti_07_02_the_factory_serves_tiling_methods_over_the_real_registry_lifecycle() {
+        use stache_sdk::ipc::HandlerErrorKind;
+        let mut host = TiHost::new(Some(TI_ON));
+        host.start();
+        let handler = ti_handler(&host);
+        let error = |method: &str| handler.handle(method, serde_json::json!({"kind": "screens"}));
+
+        // Running: the screens arrive from the native display feed.
+        ti_wait("screens are published", || {
+            handler
+                .handle("query", serde_json::json!({"kind": "screens"}))
+                .is_ok_and(|value| value.as_array().is_some_and(|rows| !rows.is_empty()))
+        });
+        let screens = handler.handle("query", serde_json::json!({"kind": "screens"})).expect("ok");
+        assert_eq!(screens[0]["name"], "Display 1");
+
+        // Pause waits for the registry teardown and reports Applied.
+        let paused = handler.handle("pause", serde_json::Value::Null).expect("pause");
+        assert_eq!(paused["outcome"], "applied");
+        assert_eq!(
+            host.runner
+                .registry
+                .snapshots()
+                .iter()
+                .find(|s| s.id == TilingConfig::ID)
+                .map(|s| s.paused),
+            Some(true)
+        );
+        let refused = error("query").expect_err("paused");
+        assert_eq!(
+            (refused.kind(), refused.message()),
+            (HandlerErrorKind::Unavailable, "Tiling is paused")
+        );
+        host.runner.publish();
+        assert_eq!(
+            host.view().tiling.expect("details").state,
+            TilingRuntimeState::Inactive
+        );
+
+        // Resume restarts through the registry.
+        let resumed = handler.handle("resume", serde_json::Value::Null).expect("resume");
+        assert_eq!(resumed["outcome"], "applied");
+        ti_wait("the resumed module serves queries", || error("query").is_ok());
+
+        // A disabled configuration is disabled, and resume cannot override it.
+        host.write(r#"{ "enabled": false }"#);
+        host.reload();
+        let disabled = error("query").expect_err("disabled");
+        assert_eq!(
+            (disabled.kind(), disabled.message()),
+            (HandlerErrorKind::Disabled, "Tiling is disabled")
+        );
+        let resume = handler.handle("resume", serde_json::Value::Null).expect_err("disabled");
+        assert_eq!(resume.kind(), HandlerErrorKind::Disabled);
+
+        // Host begin-shutdown cancels every handler wait.
+        host.factory.begin_shutdown();
+        let closing = handler
+            .handle("window", serde_json::json!({"toggleFloating": true}))
+            .expect_err("shutting down");
+        assert_eq!(closing.message(), "Tiling is shutting down");
+        let _ = host.runner.registry.shutdown();
+    }
+
+    #[test]
+    fn ti_05_05_the_factory_shutdown_closes_the_backend() {
+        let mut host = TiHost::new(Some(TI_ON));
+        host.start();
+        let _ = host.runner.registry.shutdown();
+        host.factory.begin_shutdown();
+        let wait = LateReapWait {
+            deadline: Instant::now() + Duration::from_secs(5),
+        };
+        assert_eq!(host.factory.finish_shutdown(&wait), Ok(true));
+        assert!(host.backend.calls().iter().any(|c| matches!(c, FakeBackendCall::Close)));
     }
 }

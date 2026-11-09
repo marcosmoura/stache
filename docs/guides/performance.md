@@ -166,6 +166,24 @@ The report compares against the provisional targets without inventing a numeric
 CPU budget: ≈0% idle CPU is labelled against a 1% noise threshold while the raw
 average is always shown. Misses are listed explicitly; targets are not relaxed.
 
+## Tiling runtime bounds
+
+These are deterministic bounds, not measurements (live figures need a per-run
+approved measurement). Disabled Tiling owns no worker, timer or tap. Geometry
+flushes run no faster than the configured display rate, clamped to 30–360 Hz
+(60 Hz fallback). Animation is off by default and spawns its single worker only
+when `animations.enabled`; it keeps one latest plan per window in a mailbox of at
+most 16 windows, paces frames at that same clamped rate, never retries a refused
+or partial frame, and is capped at 1000 ms per move. The animation worker and its
+pacing are **unverified** on real hardware.
+
+Borders are off by default and then own no thread, port, child or timer. Enabled,
+they spawn one runner thread holding the latest pending update; animation frames
+are capped at **8 per second**, a Mach send at 0.5 s, a helper CLI child at 2 s
+(plus 2 s to reap, 64 KiB per output stream), and the stop join at the sum of
+those. Waits are cancellation-wakeable and no lock is held across a send or a
+sleep. The achieved rate and JankyBorders' own load are **unverified**.
+
 ## Known limitations
 
 - The legacy cache socket path under the isolated `HOME` exceeds the 103-byte

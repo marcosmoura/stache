@@ -21,6 +21,13 @@ use stache_menu_anywhere::{MenuAnywhereConfig, MenuAnywhereModifier, MenuAnywher
 use stache_notunes::NoTunesConfig;
 use stache_proxy_audio::{AudioDeviceInfo, AudioListKind, AudioListParams, ProxyAudioConfig};
 use stache_sdk::{GlobalConfig, IDENTITY, ModuleSnapshot, ModuleStatus, UnavailableReason};
+use stache_tiling::{
+    AnimationConfig, BorderAnimationConfig, BorderStateConfig, BorderStyle, BordersConfig,
+    DimensionValue, EasingType, FloatingConfig, FloatingPosition, FloatingPreset, GapValue,
+    GapsConfig, GapsConfigValue, GradientConfig, LayoutType, MasterConfig, MasterPosition,
+    ScreenGapsConfig, TilingConfig, TilingRuntimeState, TilingRuntimeStatus, WindowRule,
+    WorkspaceConfig,
+};
 use stache_wallpapers::{
     WallpaperMode, WallpaperScreen, WallpaperSelection, WallpapersConfig, WallpapersOutcomeCause,
     WallpapersOutcomeStatus, WallpapersSetOutcome, WallpapersSetParams, WallpapersTargetFailure,
@@ -120,6 +127,14 @@ pub struct ModuleStatusView {
     /// channel, and it is absent from the wire for every other module.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keybindings: Option<KeybindingsRuntimeStatus>,
+    /// Tiling runtime details, present only on the `tiling` module.
+    ///
+    /// Published by the module's lifecycle and the actor's own snapshot, never
+    /// read from disk. It never replaces `diagnostic`, which stays the
+    /// rejected-file channel, and it is absent from the wire for every other
+    /// module.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tiling: Option<TilingRuntimeStatus>,
 }
 
 impl ModuleStatusView {
@@ -135,6 +150,7 @@ impl ModuleStatusView {
             detail: detail(&snapshot.status),
             diagnostic: snapshot.diagnostic.as_ref().map(|value| value.message.clone()),
             keybindings: None,
+            tiling: None,
         }
     }
 }
@@ -302,7 +318,7 @@ pub fn config_file_view(
 ///
 /// The config types are exported explicitly; they are the authoritative catalog
 /// types used by `global.jsonc`, `bar.jsonc`, `commandQuit.jsonc`, `keepAwake.jsonc`, `keybindings.jsonc`,
-/// `menuAnywhere.jsonc`, /// `proxyAudio.jsonc`, `notunes.jsonc` and `wallpapers.jsonc`. The Keep Awake status envelope and
+/// `menuAnywhere.jsonc`, /// `proxyAudio.jsonc`, `notunes.jsonc`, `tiling.jsonc` and `wallpapers.jsonc`. The Keep Awake status envelope and
 /// its reachable runtime DTOs are exported from the same collection, so the
 /// generated client cannot mirror them by hand. The Wallpapers request and
 /// operation-outcome DTOs are exported from the same collection so Part 04's
@@ -345,6 +361,29 @@ pub fn builder() -> Builder<tauri::Wry> {
         .typ::<AudioDeviceInfo>()
         .typ::<AudioListKind>()
         .typ::<AudioListParams>()
+        .typ::<TilingConfig>()
+        .typ::<TilingRuntimeStatus>()
+        .typ::<TilingRuntimeState>()
+        .typ::<LayoutType>()
+        .typ::<EasingType>()
+        .typ::<AnimationConfig>()
+        .typ::<MasterConfig>()
+        .typ::<MasterPosition>()
+        .typ::<WorkspaceConfig>()
+        .typ::<WindowRule>()
+        .typ::<GapsConfigValue>()
+        .typ::<GapsConfig>()
+        .typ::<ScreenGapsConfig>()
+        .typ::<GapValue>()
+        .typ::<FloatingConfig>()
+        .typ::<FloatingPosition>()
+        .typ::<FloatingPreset>()
+        .typ::<DimensionValue>()
+        .typ::<BordersConfig>()
+        .typ::<BorderStyle>()
+        .typ::<BorderStateConfig>()
+        .typ::<GradientConfig>()
+        .typ::<BorderAnimationConfig>()
         .typ::<WallpapersConfig>()
         .typ::<WallpaperMode>()
         .typ::<WallpapersSetParams>()

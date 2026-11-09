@@ -257,6 +257,7 @@ fn the_wire_envelope_round_trips_every_assertion_state() {
                 detail: None,
                 diagnostic: Some("held".to_owned()),
                 keybindings: None,
+                tiling: None,
             },
             runtime: KeepAwakeRuntimeStatus {
                 assertion_state: state,

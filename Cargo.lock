@@ -3290,6 +3290,7 @@ dependencies = [
  "stache-notunes",
  "stache-proxy-audio",
  "stache-sdk",
+ "stache-tiling",
  "stache-wallpapers",
  "tauri",
  "tauri-build",
@@ -3435,6 +3436,22 @@ dependencies = [
  "serde_path_to_error",
  "specta",
  "tempfile",
+]
+
+[[package]]
+name = "stache-tiling"
+version = "0.25.0"
+dependencies = [
+ "clap",
+ "schemars 1.2.3",
+ "serde",
+ "serde_json",
+ "specta",
+ "stache-cli",
+ "stache-macos",
+ "stache-sdk",
+ "tempfile",
+ "unicode-width",
 ]
 
 [[package]]
@@ -4211,6 +4228,12 @@ name = "unicode-segmentation"
 version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
+
+[[package]]
+name = "unicode-width"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca718471876992059f251e33aafc334346ada08042b7661dd1fe313a9bced557"
 
 [[package]]
 name = "url"

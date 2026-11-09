@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 01 — Typed configuration and inert catalog
@@ -27,9 +27,9 @@ No runtime factory/observer/worker/effect starts here. Legacy mapping: inventory
 
 ## Acceptance criteria
 
-- [ ] TI-01-01: All legacy config shapes/defaults round-trip with one dwindle enum and explicit validation/compatibility fixtures; generated schema and TypeScript agree.
-- [ ] TI-01-02: Init/path/schema/migrate use the authoritative catalog hook, preserve preceding modules, handle invalid/missing/duplicate/collision cases and start zero native resources.
-- [ ] TI-01-03: Configuration/feature/index docs describe catalog support as inert, with corrections and later runtime behavior still planned.
+- [x] TI-01-01: All legacy config shapes/defaults round-trip with one dwindle enum and explicit validation/compatibility fixtures; generated schema and TypeScript agree.
+- [x] TI-01-02: Init/path/schema/migrate use the authoritative catalog hook, preserve preceding modules, handle invalid/missing/duplicate/collision cases and start zero native resources.
+- [x] TI-01-03: Configuration/feature/index docs describe catalog support as inert, with corrections and later runtime behavior still planned.
 
 ## Tests
 

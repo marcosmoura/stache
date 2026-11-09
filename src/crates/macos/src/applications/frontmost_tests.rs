@@ -938,3 +938,24 @@ fn the_unobserved_watch_is_unchanged_without_a_listener() {
         FrontmostState::Unconfirmed(Unconfirmed::Inactive)
     );
 }
+
+#[test]
+fn running_details_list_exact_live_instances_with_metadata() {
+    let f = fixture();
+    let a = app(&f, "com.example.a", 100);
+    f.backend.set_name(a, Some("Alpha"));
+    let b = app(&f, "com.example.b", 200);
+    f.backend.set_current_process(Some(b));
+    let details = f.observation.running_details().expect("details");
+    assert_eq!(details.len(), 2);
+    let alpha = details.iter().find(|d| d.pid == Some(100)).expect("alpha");
+    assert_eq!(alpha.id, id_of(&f, "com.example.a"));
+    assert_eq!(alpha.name.as_deref(), Some("Alpha"));
+    assert!(!alpha.is_current_process);
+    assert!(details.iter().find(|d| d.pid == Some(200)).expect("b").is_current_process);
+    f.backend.fail_next_query();
+    assert!(
+        f.observation.running_details().is_err(),
+        "a failed query is an error, not empty"
+    );
+}

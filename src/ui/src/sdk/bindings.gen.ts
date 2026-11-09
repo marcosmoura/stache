@@ -70,6 +70,29 @@ export type AccessView_Serialize = {
 	appPath: string | null,
 };
 
+/**  Animation configuration for window transitions. */
+export type AnimationConfig = AnimationConfig_Serialize | AnimationConfig_Deserialize;
+
+/**  Animation configuration for window transitions. */
+export type AnimationConfig_Deserialize = {
+	/**  Whether animations are enabled. */
+	enabled?: boolean,
+	/**  Animation duration in milliseconds for large movements. */
+	duration?: number,
+	/**  Easing function for animations. */
+	easing?: EasingType,
+};
+
+/**  Animation configuration for window transitions. */
+export type AnimationConfig_Serialize = {
+	/**  Whether animations are enabled. */
+	enabled: boolean,
+	/**  Animation duration in milliseconds for large movements. */
+	duration: number,
+	/**  Easing function for animations. */
+	easing: EasingType,
+};
+
 /**  Application identity shown by the test window. */
 export type AppInfo = {
 	/**  Product name. */
@@ -271,6 +294,166 @@ export type BindingStatus_Serialize = {
 	detail: string | null,
 };
 
+/**  Color animation for gradient borders. */
+export type BorderAnimationConfig = BorderAnimationConfig_Serialize | BorderAnimationConfig_Deserialize;
+
+/**  Color animation for gradient borders. */
+export type BorderAnimationConfig_Deserialize = {
+	/**  Duration in milliseconds of one color-swap leg. */
+	duration: number,
+	/**  Easing of each leg. */
+	easing?: EasingType,
+};
+
+/**  Color animation for gradient borders. */
+export type BorderAnimationConfig_Serialize = {
+	/**  Duration in milliseconds of one color-swap leg. */
+	duration: number,
+	/**  Easing of each leg. */
+	easing: EasingType,
+};
+
+/**  One border state: `false` or an object with a width and a color source. */
+export type BorderStateConfig = BorderStateConfig_Serialize | BorderStateConfig_Deserialize;
+
+/**  One border state: `false` or an object with a width and a color source. */
+export type BorderStateConfig_Deserialize =
+/**  `false` disables the border for this state. */
+boolean |
+/**  Solid color. */
+({
+/**  Width in pixels. */
+width: number;
+/**  Solid color. */
+color: string }) & { animation?: never; glow?: never; gradient?: never } |
+/**  Gradient color. */
+({
+/**  Width in pixels. */
+width: number;
+/**  Gradient. */
+gradient: GradientConfig_Deserialize;
+/**  Optional color animation. */
+animation?: BorderAnimationConfig_Deserialize | null }) & { color?: never; glow?: never } |
+/**  Glow effect. */
+({
+/**  Width in pixels. */
+width: number;
+/**  Glow color. */
+glow: string }) & { animation?: never; color?: never; gradient?: never };
+
+/**  One border state: `false` or an object with a width and a color source. */
+export type BorderStateConfig_Serialize =
+/**  `false` disables the border for this state. */
+boolean |
+/**  Solid color. */
+({
+/**  Width in pixels. */
+width: number;
+/**  Solid color. */
+color: string }) & { animation?: never; glow?: never; gradient?: never } |
+/**  Gradient color. */
+({
+/**  Width in pixels. */
+width: number;
+/**  Gradient. */
+gradient: GradientConfig_Serialize;
+/**  Optional color animation. */
+animation?: BorderAnimationConfig_Serialize }) & { color?: never; glow?: never } |
+/**  Glow effect. */
+({
+/**  Width in pixels. */
+width: number;
+/**  Glow color. */
+glow: string }) & { animation?: never; color?: never; gradient?: never };
+
+/**  Border corner style. */
+export type BorderStyle =
+/**  Rounded corners. */
+"round" |
+/**  Square corners. */
+"square";
+
+/**  Window border configuration. */
+export type BordersConfig = BordersConfig_Serialize | BordersConfig_Deserialize;
+
+/**  Window border configuration. */
+export type BordersConfig_Deserialize = {
+	/**
+	 *  Whether borders are enabled. Setting this to `true` is your explicit
+	 *  consent for Stache to overwrite the shared `JankyBorders` settings it names:
+	 *  width, style, hidpi, active and inactive colors and the blacklist. Their
+	 *  previous values are not read or restored. Stache never starts, restarts or
+	 *  kills the `JankyBorders` service (it must already be running) and, when
+	 *  borders stop or are disabled, leaves the last settings it sent in place.
+	 */
+	enabled?: boolean,
+	/**  Border style; omitted uses the external service default (round). */
+	style?: BorderStyle | null,
+	/**  Retina support (`hidpi`); omitted uses the external service default (true). */
+	hidpi?: boolean | null,
+	/**  Focused windows. */
+	focused?: BorderStateConfig_Deserialize,
+	/**  Unfocused windows; `false` hides them. */
+	unfocused?: BorderStateConfig_Deserialize,
+	/**  Windows in monocle layout. */
+	monocle?: BorderStateConfig_Deserialize,
+	/**  Floating windows. */
+	floating?: BorderStateConfig_Deserialize,
+	/**  Windows in dwindle layout. */
+	dwindle?: BorderStateConfig_Deserialize | null,
+	/**  Windows in master layout. */
+	master?: BorderStateConfig_Deserialize | null,
+	/**  Windows in grid layout. */
+	grid?: BorderStateConfig_Deserialize | null,
+	/**  Windows in split layout. */
+	split?: BorderStateConfig_Deserialize | null,
+	/**  Windows in vertical split layout. */
+	splitVertical?: BorderStateConfig_Deserialize | null,
+	/**  Windows in horizontal split layout. */
+	splitHorizontal?: BorderStateConfig_Deserialize | null,
+	/**  Windows that never get a border, in addition to the global ignore rules. */
+	ignore?: WindowRule_Deserialize[],
+};
+
+/**  Window border configuration. */
+export type BordersConfig_Serialize = {
+	/**
+	 *  Whether borders are enabled. Setting this to `true` is your explicit
+	 *  consent for Stache to overwrite the shared `JankyBorders` settings it names:
+	 *  width, style, hidpi, active and inactive colors and the blacklist. Their
+	 *  previous values are not read or restored. Stache never starts, restarts or
+	 *  kills the `JankyBorders` service (it must already be running) and, when
+	 *  borders stop or are disabled, leaves the last settings it sent in place.
+	 */
+	enabled: boolean,
+	/**  Border style; omitted uses the external service default (round). */
+	style?: BorderStyle,
+	/**  Retina support (`hidpi`); omitted uses the external service default (true). */
+	hidpi?: boolean,
+	/**  Focused windows. */
+	focused: BorderStateConfig_Serialize,
+	/**  Unfocused windows; `false` hides them. */
+	unfocused: BorderStateConfig_Serialize,
+	/**  Windows in monocle layout. */
+	monocle: BorderStateConfig_Serialize,
+	/**  Floating windows. */
+	floating: BorderStateConfig_Serialize,
+	/**  Windows in dwindle layout. */
+	dwindle?: BorderStateConfig_Serialize,
+	/**  Windows in master layout. */
+	master?: BorderStateConfig_Serialize,
+	/**  Windows in grid layout. */
+	grid?: BorderStateConfig_Serialize,
+	/**  Windows in split layout. */
+	split?: BorderStateConfig_Serialize,
+	/**  Windows in vertical split layout. */
+	splitVertical?: BorderStateConfig_Serialize,
+	/**  Windows in horizontal split layout. */
+	splitHorizontal?: BorderStateConfig_Serialize,
+	/**  Windows that never get a border, in addition to the global ignore rules. */
+	ignore: WindowRule_Serialize[],
+};
+
 /**  Require holding Cmd+Q before an application quits. */
 export type CommandQuitConfig = CommandQuitConfig_Serialize | CommandQuitConfig_Deserialize;
 
@@ -338,6 +521,13 @@ export type ConfigFileView_Serialize = {
 	warnings: string[],
 };
 
+/**  A dimension that is either pixels (`1440`) or a percentage (`"50%"`). */
+export type DimensionValue =
+/**  Value in pixels. */
+number |
+/**  Value as a percentage string such as `"50%"`. */
+string;
+
 /**  Dispatch counters, copied from atomics. */
 export type DispatchStatus = {
 	/**  The current dispatcher generation, as a decimal string. */
@@ -375,6 +565,139 @@ export type DispatchStatus = {
 	submitted: number,
 };
 
+/**  Easing function for animations. */
+export type EasingType =
+/**  Linear interpolation. */
+"linear" |
+/**  Slow start. */
+"ease-in" |
+/**  Slow end. */
+"ease-out" |
+/**  Slow start and end. */
+"ease-in-out" |
+/**  Exponential ease out: very fast start, slow end. */
+"ease-out-expo" |
+/**  Spring physics. */
+"spring";
+
+/**  Floating window configuration. */
+export type FloatingConfig = FloatingConfig_Serialize | FloatingConfig_Deserialize;
+
+/**  Floating window configuration. */
+export type FloatingConfig_Deserialize = {
+	/**  Default position for newly floating windows. */
+	defaultPosition?: FloatingPosition,
+	/**  Named presets. */
+	presets?: FloatingPreset_Deserialize[],
+};
+
+/**  Floating window configuration. */
+export type FloatingConfig_Serialize = {
+	/**  Default position for newly floating windows. */
+	defaultPosition: FloatingPosition,
+	/**  Named presets. */
+	presets: FloatingPreset_Serialize[],
+};
+
+/**  Default position for newly floating windows. */
+export type FloatingPosition =
+/**  Center the window on its display. */
+"center" |
+/**  Keep the application's frame. */
+"default";
+
+/**  A floating window preset. */
+export type FloatingPreset = FloatingPreset_Serialize | FloatingPreset_Deserialize;
+
+/**  A floating window preset. */
+export type FloatingPreset_Deserialize = {
+	/**  Unique preset name, compared case-insensitively. */
+	name: string,
+	/**  Width in pixels (`1440`) or percent (`"50%"`). */
+	width: DimensionValue,
+	/**  Height in pixels (`900`) or percent (`"100%"`). */
+	height: DimensionValue,
+	/**  X position; ignored when `center` is true. */
+	x?: DimensionValue | null,
+	/**  Y position; ignored when `center` is true. */
+	y?: DimensionValue | null,
+	/**  Center on the display; `x` and `y` are ignored. */
+	center?: boolean,
+};
+
+/**  A floating window preset. */
+export type FloatingPreset_Serialize = {
+	/**  Unique preset name, compared case-insensitively. */
+	name: string,
+	/**  Width in pixels (`1440`) or percent (`"50%"`). */
+	width: DimensionValue,
+	/**  Height in pixels (`900`) or percent (`"100%"`). */
+	height: DimensionValue,
+	/**  X position; ignored when `center` is true. */
+	x?: DimensionValue,
+	/**  Y position; ignored when `center` is true. */
+	y?: DimensionValue,
+	/**  Center on the display; `x` and `y` are ignored. */
+	center: boolean,
+};
+
+/**  A gap value: uniform, per axis (inner) or per side (outer). */
+export type GapValue =
+/**  Same value for all sides and axes. */
+number |
+/**  Different values per axis. */
+({
+/**  Horizontal gap. */
+horizontal: number;
+/**  Vertical gap. */
+vertical: number }) & { bottom?: never; left?: never; right?: never; top?: never } |
+/**  Different values per side. */
+({
+/**  Top gap. */
+top: number;
+/**  Right gap. */
+right: number;
+/**  Bottom gap. */
+bottom: number;
+/**  Left gap. */
+left: number }) & { horizontal?: never; vertical?: never };
+
+/**  Gaps for a single display or for every display. */
+export type GapsConfig = GapsConfig_Serialize | GapsConfig_Deserialize;
+
+/**  Gaps that apply globally or per display. */
+export type GapsConfigValue = GapsConfigValue_Serialize | GapsConfigValue_Deserialize;
+
+/**  Gaps that apply globally or per display. */
+export type GapsConfigValue_Deserialize =
+/**  Same gaps for every display. */
+GapsConfig_Deserialize |
+/**  Per-display gaps. */
+ScreenGapsConfig_Deserialize[];
+
+/**  Gaps that apply globally or per display. */
+export type GapsConfigValue_Serialize =
+/**  Same gaps for every display. */
+GapsConfig_Serialize |
+/**  Per-display gaps. */
+ScreenGapsConfig_Serialize[];
+
+/**  Gaps for a single display or for every display. */
+export type GapsConfig_Deserialize = {
+	/**  Gaps between windows. */
+	inner?: GapValue,
+	/**  Gaps from display edges. */
+	outer?: GapValue,
+};
+
+/**  Gaps for a single display or for every display. */
+export type GapsConfig_Serialize = {
+	/**  Gaps between windows. */
+	inner: GapValue,
+	/**  Gaps from display edges. */
+	outer: GapValue,
+};
+
 /**
  *  The global configuration shared by every module.
  *
@@ -410,6 +733,29 @@ export type GlobalConfig_Serialize = {
 	logging: LoggingConfig_Serialize,
 	/**  Commands to execute once per desktop launch. */
 	execOnStartup: StartupCommands,
+};
+
+/**  Gradient border color. */
+export type GradientConfig = GradientConfig_Serialize | GradientConfig_Deserialize;
+
+/**  Gradient border color. */
+export type GradientConfig_Deserialize = {
+	/**  Starting color. */
+	from: string,
+	/**  Ending color. */
+	to: string,
+	/**  Angle in degrees; 0 is left to right, 90 bottom to top. */
+	angle?: number | null,
+};
+
+/**  Gradient border color. */
+export type GradientConfig_Serialize = {
+	/**  Starting color. */
+	from: string,
+	/**  Ending color. */
+	to: string,
+	/**  Angle in degrees; 0 is left to right, 90 bottom to top. */
+	angle: number | null,
 };
 
 /**  Point-in-time status published to the tray and the test window. */
@@ -677,6 +1023,25 @@ export type KeybindingsRuntimeStatus_Serialize = {
 	diagnostics: string[],
 };
 
+/**  Layout type for workspaces; `dwindle` is the single authoritative default. */
+export type LayoutType =
+/**  Binary space partitioning. */
+"dwindle" |
+/**  Split based on screen orientation. */
+"split" |
+/**  Windows arranged vertically. */
+"split-vertical" |
+/**  Windows arranged horizontally. */
+"split-horizontal" |
+/**  All windows maximized and stacked. */
+"monocle" |
+/**  One master window with a stack. */
+"master" |
+/**  Windows arranged in a grid. */
+"grid" |
+/**  Windows move and resize freely. */
+"floating";
+
 /**  How the runtime learns about lock changes. */
 export type LockObservation =
 /**  No observation is installed. */
@@ -733,6 +1098,38 @@ export type LoggingConfig_Serialize = {
 	/**  Whether the host includes development-only detail in its records. */
 	debug: boolean,
 };
+
+/**  Master layout configuration. */
+export type MasterConfig = MasterConfig_Serialize | MasterConfig_Deserialize;
+
+/**  Master layout configuration. */
+export type MasterConfig_Deserialize = {
+	/**  Master window size as a percentage, 0 to 100. */
+	ratio?: number,
+	/**  Position of the master window. */
+	position?: MasterPosition,
+};
+
+/**  Master layout configuration. */
+export type MasterConfig_Serialize = {
+	/**  Master window size as a percentage, 0 to 100. */
+	ratio: number,
+	/**  Position of the master window. */
+	position: MasterPosition,
+};
+
+/**  Position of the master window in the master layout. */
+export type MasterPosition =
+/**  Master window on the left. */
+"left" |
+/**  Master window on the right. */
+"right" |
+/**  Master window on top. */
+"top" |
+/**  Master window on the bottom. */
+"bottom" |
+/**  Left on landscape displays, top on portrait displays. */
+"auto";
 
 /**  Strategy used to match a device name. */
 export type MatchStrategy =
@@ -878,6 +1275,15 @@ export type ModuleStatusView_Deserialize = {
 	 *  channel, and it is absent from the wire for every other module.
 	 */
 	keybindings?: KeybindingsRuntimeStatus_Deserialize | null,
+	/**
+	 *  Tiling runtime details, present only on the `tiling` module.
+	 *
+	 *  Published by the module's lifecycle and the actor's own snapshot, never
+	 *  read from disk. It never replaces `diagnostic`, which stays the
+	 *  rejected-file channel, and it is absent from the wire for every other
+	 *  module.
+	 */
+	tiling?: TilingRuntimeStatus_Deserialize | null,
 };
 
 /**
@@ -914,6 +1320,15 @@ export type ModuleStatusView_Serialize = {
 	 *  channel, and it is absent from the wire for every other module.
 	 */
 	keybindings?: KeybindingsRuntimeStatus_Serialize,
+	/**
+	 *  Tiling runtime details, present only on the `tiling` module.
+	 *
+	 *  Published by the module's lifecycle and the actor's own snapshot, never
+	 *  read from disk. It never replaces `diagnostic`, which stays the
+	 *  rejected-file channel, and it is absent from the wire for every other
+	 *  module.
+	 */
+	tiling?: TilingRuntimeStatus_Serialize,
 };
 
 /**  Automatic Apple Music and iTunes blocking. */
@@ -1028,6 +1443,29 @@ export type RuntimeState =
 /**  Some requested bindings are active, rejected or pending cleanup. */
 "degraded";
 
+/**  Gaps for one named display. */
+export type ScreenGapsConfig = ScreenGapsConfig_Serialize | ScreenGapsConfig_Deserialize;
+
+/**  Gaps for one named display. */
+export type ScreenGapsConfig_Deserialize = {
+	/**  Display: `main`/`primary`, `secondary` or a display name. */
+	screen: string,
+	/**  Gaps between windows. */
+	inner?: GapValue,
+	/**  Gaps from display edges. */
+	outer?: GapValue,
+};
+
+/**  Gaps for one named display. */
+export type ScreenGapsConfig_Serialize = {
+	/**  Display: `main`/`primary`, `secondary` or a display name. */
+	screen: string,
+	/**  Gaps between windows. */
+	inner: GapValue,
+	/**  Gaps from display edges. */
+	outer: GapValue,
+};
+
 /**  Startup commands, accepted as one string or an ordered list. */
 export type StartupCommands =
 /**  One command. */
@@ -1064,6 +1502,160 @@ export type TapState =
 "reenableFailed" |
 /**  A failed action left inert resources awaiting cleanup. */
 "retained";
+
+/**
+ *  Virtual workspaces, layouts, gaps, floating presets and borders.
+ *
+ *  Tiling is disabled by default. Setting `enabled: true` (with Accessibility
+ *  granted) starts window management: Stache moves and resizes windows and
+ *  hides and unhides applications to implement virtual workspaces.
+ */
+export type TilingConfig = TilingConfig_Serialize | TilingConfig_Deserialize;
+
+/**
+ *  Virtual workspaces, layouts, gaps, floating presets and borders.
+ *
+ *  Tiling is disabled by default. Setting `enabled: true` (with Accessibility
+ *  granted) starts window management: Stache moves and resizes windows and
+ *  hides and unhides applications to implement virtual workspaces.
+ */
+export type TilingConfig_Deserialize = {
+	/**  Whether the tiling window manager should run. */
+	enabled?: boolean,
+	/**  Layout for workspaces that do not specify one. */
+	defaultLayout?: LayoutType,
+	/**  Workspace definitions. Empty means one default workspace per display. */
+	workspaces?: WorkspaceConfig_Deserialize[],
+	/**  Windows that are never managed. */
+	ignore?: WindowRule_Deserialize[],
+	/**  Window transition animations. */
+	animations?: AnimationConfig_Deserialize,
+	/**  Gaps, global or per display. */
+	gaps?: GapsConfigValue_Deserialize,
+	/**  Floating window defaults and presets. */
+	floating?: FloatingConfig_Deserialize,
+	/**  Master layout settings. */
+	master?: MasterConfig_Deserialize,
+	/**  Window borders. */
+	borders?: BordersConfig_Deserialize,
+};
+
+/**
+ *  Virtual workspaces, layouts, gaps, floating presets and borders.
+ *
+ *  Tiling is disabled by default. Setting `enabled: true` (with Accessibility
+ *  granted) starts window management: Stache moves and resizes windows and
+ *  hides and unhides applications to implement virtual workspaces.
+ */
+export type TilingConfig_Serialize = {
+	/**  Whether the tiling window manager should run. */
+	enabled: boolean,
+	/**  Layout for workspaces that do not specify one. */
+	defaultLayout: LayoutType,
+	/**  Workspace definitions. Empty means one default workspace per display. */
+	workspaces: WorkspaceConfig_Serialize[],
+	/**  Windows that are never managed. */
+	ignore: WindowRule_Serialize[],
+	/**  Window transition animations. */
+	animations: AnimationConfig_Serialize,
+	/**  Gaps, global or per display. */
+	gaps: GapsConfigValue_Serialize,
+	/**  Floating window defaults and presets. */
+	floating: FloatingConfig_Serialize,
+	/**  Master layout settings. */
+	master: MasterConfig_Serialize,
+	/**  Window borders. */
+	borders: BordersConfig_Serialize,
+};
+
+/**  Where the runtime is in its lifecycle. */
+export type TilingRuntimeState =
+/**  Nothing is installed or spawned. */
+"inactive" |
+/**  The infrastructure is installed and the action authority is published. */
+"running" |
+/**  Stop began: the authority is withdrawn and cleanup is in progress. */
+"stopping" |
+/**
+ *  Cleanup is incomplete; exact resources are retained and no restart is
+ *  allowed until the owed stages finish.
+ */
+"quarantined";
+
+/**  The runtime observation published to the host. */
+export type TilingRuntimeStatus = TilingRuntimeStatus_Serialize | TilingRuntimeStatus_Deserialize;
+
+/**  The runtime observation published to the host. */
+export type TilingRuntimeStatus_Deserialize = {
+	/**  Lifecycle position. */
+	state: TilingRuntimeState,
+	/**  The accepted revision the actor adopted, as a decimal string. */
+	configRevision: string,
+	/**  The monotonic layout plan sequence, as a decimal string. */
+	planSequence: string,
+	/**  Whether the actor reports healthy infrastructure. */
+	healthy: boolean,
+	/**  Cleanup stages still owed (empty unless quarantined or stopping). */
+	owed: string[],
+	/**  The last lifecycle or cleanup problem. */
+	detail?: string | null,
+	/**
+	 *  Explicit degraded or unsupported conditions: requested optional features
+	 *  the runtime keeps off and a display feed problem.
+	 */
+	diagnostics: string[],
+	/**
+	 *  Applications whose hidden state the runtime cannot attribute. They are
+	 *  retained and never unhidden automatically.
+	 */
+	ambiguousVisibility: string[],
+	/**
+	 *  Windows whose latest placement was only partly confirmed, uncertain or
+	 *  refused. The accepted configuration is separate from physical placement.
+	 */
+	partialOutcomes: number,
+	/**
+	 *  Applications with windows on inactive workspaces that stay visible
+	 *  because another visible workspace needs them (partial isolation).
+	 */
+	visibilityConflicts: number,
+};
+
+/**  The runtime observation published to the host. */
+export type TilingRuntimeStatus_Serialize = {
+	/**  Lifecycle position. */
+	state: TilingRuntimeState,
+	/**  The accepted revision the actor adopted, as a decimal string. */
+	configRevision: string,
+	/**  The monotonic layout plan sequence, as a decimal string. */
+	planSequence: string,
+	/**  Whether the actor reports healthy infrastructure. */
+	healthy: boolean,
+	/**  Cleanup stages still owed (empty unless quarantined or stopping). */
+	owed: string[],
+	/**  The last lifecycle or cleanup problem. */
+	detail: string | null,
+	/**
+	 *  Explicit degraded or unsupported conditions: requested optional features
+	 *  the runtime keeps off and a display feed problem.
+	 */
+	diagnostics: string[],
+	/**
+	 *  Applications whose hidden state the runtime cannot attribute. They are
+	 *  retained and never unhidden automatically.
+	 */
+	ambiguousVisibility: string[],
+	/**
+	 *  Windows whose latest placement was only partly confirmed, uncertain or
+	 *  refused. The accepted configuration is separate from physical placement.
+	 */
+	partialOutcomes: number,
+	/**
+	 *  Applications with windows on inactive workspaces that stay visible
+	 *  because another visible workspace needs them (partial isolation).
+	 */
+	visibilityConflicts: number,
+};
 
 /**  Wallpaper cycling mode. */
 export type WallpaperMode =
@@ -1414,6 +2006,78 @@ export type WeatherProvider =
 "visual-crossing" |
 /**  Use Open Meteo (free, no API key required). */
 "open-meteo";
+
+/**
+ *  A window matching rule; every specified field must match (AND).
+ *
+ *  A rule with no field never matches anything.
+ */
+export type WindowRule = WindowRule_Serialize | WindowRule_Deserialize;
+
+/**
+ *  A window matching rule; every specified field must match (AND).
+ *
+ *  A rule with no field never matches anything.
+ */
+export type WindowRule_Deserialize = {
+	/**  Bundle identifier, matched case-insensitively and exactly. */
+	appId?: string | null,
+	/**  Window title, matched as a case-insensitive substring. */
+	title?: string | null,
+	/**  Application name, matched as a case-insensitive substring. */
+	appName?: string | null,
+};
+
+/**
+ *  A window matching rule; every specified field must match (AND).
+ *
+ *  A rule with no field never matches anything.
+ */
+export type WindowRule_Serialize = {
+	/**  Bundle identifier, matched case-insensitively and exactly. */
+	appId?: string,
+	/**  Window title, matched as a case-insensitive substring. */
+	title?: string,
+	/**  Application name, matched as a case-insensitive substring. */
+	appName?: string,
+};
+
+/**  A workspace definition. */
+export type WorkspaceConfig = WorkspaceConfig_Serialize | WorkspaceConfig_Deserialize;
+
+/**  A workspace definition. */
+export type WorkspaceConfig_Deserialize = {
+	/**  Unique workspace name. */
+	name: string,
+	/**  Layout; omitted uses `defaultLayout`. */
+	layout?: LayoutType | null,
+	/**  Display: `main`/`primary`, `secondary` or a display name. */
+	screen?: string,
+	/**  Rules that assign windows to this workspace. */
+	rules?: WindowRule_Deserialize[],
+	/**
+	 *  Floating preset applied when windows open here. Parsed and validated
+	 *  but inert: nothing reads it at runtime.
+	 */
+	"preset-on-open"?: string | null,
+};
+
+/**  A workspace definition. */
+export type WorkspaceConfig_Serialize = {
+	/**  Unique workspace name. */
+	name: string,
+	/**  Layout; omitted uses `defaultLayout`. */
+	layout?: LayoutType,
+	/**  Display: `main`/`primary`, `secondary` or a display name. */
+	screen: string,
+	/**  Rules that assign windows to this workspace. */
+	rules: WindowRule_Serialize[],
+	/**
+	 *  Floating preset applied when windows open here. Parsed and validated
+	 *  but inert: nothing reads it at runtime.
+	 */
+	"preset-on-open"?: string,
+};
 
 /* Tauri Specta runtime */
 type EventEmit<T> = [T] extends [null] ? () => Promise<void> : (payload: T) => Promise<void>;

@@ -262,7 +262,8 @@ fn completions_are_generated_for_supported_shells() {
     assert!(script.starts_with("#compdef stache"), "{script}");
     assert!(script.contains("reload"));
     assert!(script.contains("audio"));
-    assert!(!script.contains("tiling"));
+    assert!(script.contains("tiling"));
+    assert!(script.contains("toggle-floating"));
     assert!(script.contains("wallpaper"));
     assert!(script.contains("generate-all"));
     assert_no_desktop(&workspace);
@@ -406,6 +407,55 @@ fn strip_ansi(input: &str) -> String {
         }
     }
     output
+}
+
+#[test]
+fn tiling_help_lists_the_commands_and_an_absent_host_fails_without_starting_anything() {
+    let workspace = Workspace::new();
+    let output = workspace.run(&["tiling", "--help"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let help = stdout(&output);
+    for needle in ["pause", "resume", "query", "window", "workspace"] {
+        assert!(help.contains(needle), "{needle}: {help}");
+    }
+    let output = workspace.run(&["tiling", "query"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stdout(&output).contains("Usage: stache tiling query"));
+
+    // Host absent: queries print the legacy body on stdout and exit 1.
+    let output = workspace.run(&["tiling", "query", "screens"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(stdout(&output), "Stache app is not running.\n");
+    assert_eq!(stderr(&output), "");
+    let output = workspace.run(&["tiling", "query", "--json", "apps"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(stdout(&output), "{\"error\":\"Stache app is not running\"}\n");
+    // Mutations fail on stderr; none reports success.
+    for arguments in [
+        &["tiling", "pause"][..],
+        &["tiling", "resume"],
+        &["tiling", "window", "--toggle-floating"],
+        &["tiling", "workspace", "--balance"],
+    ] {
+        let output = workspace.run(arguments);
+        assert_eq!(output.status.code(), Some(1), "{arguments:?}");
+        assert_eq!(stdout(&output), "");
+        assert_eq!(
+            stderr(&output),
+            "stache: IPC error: Stache app is not running\n",
+            "{arguments:?}"
+        );
+    }
+    // Semantic and parse errors keep their distinct codes before any socket use.
+    let output = workspace.run(&["tiling", "window"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        stderr(&output),
+        "stache: No window operation specified. Use --help for available options.\n"
+    );
+    let output = workspace.run(&["tiling", "window", "--swap", "prev"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_no_desktop(&workspace);
 }
 
 #[test]

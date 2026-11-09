@@ -115,6 +115,14 @@ command and no UI module: launch still creates no window and no webview.
 `wallpapers.set` socket request and its typed domain outcome; no Tauri command
 or UI surface consumes them yet.
 
+`TilingConfig` and its nested wire types (`LayoutType`, `EasingType`,
+`AnimationConfig`, `MasterConfig`, `MasterPosition`, `WorkspaceConfig`,
+`WindowRule`, `GapsConfigValue`, `GapsConfig`, `ScreenGapsConfig`, `GapValue`,
+`FloatingConfig`, `FloatingPosition`, `FloatingPreset`, `DimensionValue`,
+`BordersConfig`, `BorderStyle`, `BorderStateConfig`, `GradientConfig` and
+`BorderAnimationConfig`) are exported the same way. They are catalog types for
+the Tiling configuration; the shipped Tiling runtime consumes them when `enabled: true`.
+
 Serde phases make `ProxyAudioConfig` and `AudioDevicePriority` unions of
 `_Serialize` and `_Deserialize` shapes. Unified serde mode is rejected because
 `skip_serializing_if` cannot be represented there. The JSON Schemas remain the

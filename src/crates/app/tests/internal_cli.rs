@@ -248,7 +248,17 @@ fn invalid_requests_are_usage_errors_and_never_desktop_work() {
                 &["stache", "--stache-internal-cli", "--bogus", "reload"],
                 "--bogus",
             ),
-            (&["stache", "--stache-internal-cli", "tiling", "query"], "tiling"),
+            (
+                &[
+                    "stache",
+                    "--stache-internal-cli",
+                    "tiling",
+                    "window",
+                    "--swap",
+                    "prev",
+                ],
+                "invalid value 'prev'",
+            ),
             (
                 &[
                     "stache",

@@ -13,6 +13,7 @@ members = [
     "src/crates/modules/menu-anywhere",
     "src/crates/modules/notunes",
     "src/crates/modules/proxy-audio",
+    "src/crates/modules/tiling",
     "src/crates/modules/wallpapers",
     "src/crates/sdk",
 ]

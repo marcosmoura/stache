@@ -1,6 +1,6 @@
 # Planned CLI compatibility contract
 
-Read when implementing part 07. **Draft, not shipped.** Source pin `ad34b46` legacy files; this appendix owns no acceptance IDs. Table/render bodies are evidence requirements, not permission to execute legacy automation.
+Read when changing the part 07 CLI. Implemented in part 07. Source pin `ad34b46` legacy files; this appendix owns no acceptance IDs. Table/render bodies are evidence requirements, not permission to execute legacy automation.
 
 ## Grammar and ordering
 
@@ -68,7 +68,7 @@ Semantic/action errors use existing main CLI stderr `stache: {body}\n`, exit1; I
 
 New typed physical failure adapters (stderr, exit1, never appended success text): `stache: IPC error: Tiling operation partially applied.\n` and `stache: IPC error: Tiling operation outcome is uncertain; it may already have taken effect.\n`. Structured per-target details remain Response::Ok/status data. Proven pre-send rejection uses its typed reason, not uncertainty. Unknown numeric focus target uses `Window {id} not found`; never retarget by reused ID after resolution. New lifecycle bodies are `Tiling is disabled`, `Tiling is paused`, `Tiling cleanup is pending`; unavailable/uninitialized keeps `Tiling is not initialized`. Use existing disabled/unavailable/handler wire categories, not new wire variants. These explicitly diagnosed lifecycle/physical failures are the necessary error-semantics differences, not changed successful output. No raw Debug dump or automatic retry after uncertainty.
 
-Map typed SDK client errors through this module's compatibility adapter, not SDK lowercase Display: NotRunning→`Stache app is not running`, Timeout→`Connection timed out`, Io→`IO error: {source}`, InvalidResponse→`Invalid response: {detail}`, Remote→its frozen typed body. Serialization failure uses `Cannot serialize tiling request`. Query errors use stdout forms above; action errors wrap with stderr `stache: IPC error: {body}\n`. OS/decoder source details can vary; goldens inject fixed sources and freeze prefix/escaping, not an invented universal platform error. A decode failure must not echo sensitive payloads or be silently suppressed.
+Golden bodies come from the cited legacy sources, not the landed SDK client `Display` (which reads `the Stache app is not running`). Map typed SDK client errors through this module's compatibility adapter, not SDK lowercase Display: NotRunning→`Stache app is not running`, Timeout→`Connection timed out`, Io→`IO error: {source}`, InvalidResponse→`Invalid response: {detail}`, Remote→its frozen typed body. Serialization failure uses `Cannot serialize tiling request`. Query errors use stdout forms above; action errors wrap with stderr `stache: IPC error: {body}\n`. OS/decoder source details can vary; goldens inject fixed sources and freeze prefix/escaping, not an invented universal platform error. A decode failure must not echo sensitive payloads or be silently suppressed.
 
 ## Golden inventory and intentional differences
 

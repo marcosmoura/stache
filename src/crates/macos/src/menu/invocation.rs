@@ -37,9 +37,7 @@ use crate::applications::{
     AcceptedActionToken, ActivationAuthorization, ActivationCancel, ActivationOutcome,
     ApplicationId, ApplicationObservation,
 };
-
-/// Messaging timeout set on the selected element before `AXPress`.
-pub const PRESS_TIMEOUT: Duration = Duration::from_secs(1);
+pub use crate::ax::PRESS_TIMEOUT;
 
 /// What the invoker asks about a presentation at every recheck.
 pub trait InvocationAuthority: Send + Sync {

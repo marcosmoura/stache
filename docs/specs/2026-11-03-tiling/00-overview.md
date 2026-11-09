@@ -4,7 +4,7 @@ branch: feat/tiling
 
 # Tiling rewrite
 
-Read when planning the Tiling runtime rewrite. **DRAFT — NOT SHIPPED.** Each part needs separate approval; this document authorizes no native work.
+Read when changing the Tiling runtime rewrite. Parts 01–09 are implemented on `feat/tiling` with fake-proven acceptance; per-run approved native gates in [validation](validation.md) remain separately required and are not implied by a ticked criterion. This document authorizes no native run.
 
 ## Goal
 
@@ -29,12 +29,13 @@ Landed facilities on `main` (reuse; add no parallel path):
 | AX precedent         | `stache_macos::menu::{AxApi, AxElement, AxError, SystemAx}` (`macos/src/menu/ax.rs`) with owner thread `stache-ax-owner` (`menu/owner.rs`); `ELEMENT_TIMEOUT` 0.5 s (`menu/reader.rs`), `PRESS_TIMEOUT` 1 s (`menu/invocation.rs`)                                                                                                                                                                                                                        |
 | Catalog and launch   | `ModuleConfig::migrate_legacy_section` (`sdk/src/module.rs`); Accessibility launch gate `Registry::with_baseline_requirements` applies only to registered Module factories (catalog-only part 01 is unaffected)                                                                                                                                                                                                                                           |
 
-Still-unlanded drafts:
+Bar foundation landed on `main` as `221b005` (2026-11-08); `feat/tiling` is rebased onto it. Parts 05–09 consume its SDK `PublishedState` channel (`sdk/src/published_state.rs`), `ScreenReservations`/`ScreenReservationObserver`/`ScreenReservationSnapshot` (`sdk/src/screen_reservations.rs`) and the typed `DisplayId` there; Tiling never reimplements them.
 
-| Branch                | Draft contract path                                                             | Reuse after landing                                                            |
-| --------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `feat/bar-foundation` | [State/reservations](../2026-11-08-bar-foundation/02-sdk-state-reservations.md) | Versioned optional observation and host reservations (parts 05–09)             |
-| `feat/bar`            | [UI shell parity](../2026-11-03-bar/04-ui-shell-parity.md)                      | Approved empty slot and independent parity reference (tiling-bar part 10 only) |
+Still-unlanded draft:
+
+| Branch     | Draft contract path                                        | Reuse after landing                                                            |
+| ---------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `feat/bar` | [UI shell parity](../2026-11-03-bar/04-ui-shell-parity.md) | Approved empty slot and independent parity reference (tiling-bar part 10 only) |
 
 No dependencies on unmerged module crates. Tiling depends only on SDK + macOS (ordinary serialization/geometry dependencies are not sibling services). Bar cannot import Tiling crate/config; Tiling cannot import Bar crate/config. App composition registers original DTO codecs and concrete generated commands/events.
 
@@ -59,15 +60,15 @@ No dependencies on unmerged module crates. Tiling depends only on SDK + macOS (o
 
 | Part                            | Summary                                                    | Status |
 | ------------------------------- | ---------------------------------------------------------- | ------ |
-| [01](01-config-catalog.md)      | Inert typed config/catalog/migration                       | draft  |
-| [02](02-pure-layouts.md)        | Pure layouts/rules/presets/min sizing and grid correction  | draft  |
-| [03](03-native-adapters.md)     | Safe AX/window/display adapters; tab/private compile gates | draft  |
-| [04](04-event-tracking.md)      | Bounded event pipeline/read-only tracking/fake actor       | draft  |
-| [05](05-runtime-effects.md)     | Frame effects/reservation normalization/core factory       | draft  |
-| [06](06-virtual-workspaces.md)  | Virtual workspaces/owned hide-unhide/recovery              | draft  |
-| [07](07-ipc-cli.md)             | Full typed IPC/CLI and golden contracts                    | draft  |
-| [08](08-tabs-drag-animation.md) | Native tabs/passive drag/animation                         | draft  |
-| [09](09-jankyborders.md)        | Optional external JankyBorders                             | draft  |
+| [01](01-config-catalog.md)      | Inert typed config/catalog/migration                       | done   |
+| [02](02-pure-layouts.md)        | Pure layouts/rules/presets/min sizing and grid correction  | done   |
+| [03](03-native-adapters.md)     | Safe AX/window/display adapters; tab/private compile gates | done   |
+| [04](04-event-tracking.md)      | Bounded event pipeline/read-only tracking/fake actor       | done   |
+| [05](05-runtime-effects.md)     | Frame effects/reservation normalization/core factory       | done   |
+| [06](06-virtual-workspaces.md)  | Virtual workspaces/owned hide-unhide/recovery              | done   |
+| [07](07-ipc-cli.md)             | Full typed IPC/CLI and golden contracts                    | done   |
+| [08](08-tabs-drag-animation.md) | Native tabs/passive drag/animation                         | done   |
+| [09](09-jankyborders.md)        | Optional external JankyBorders                             | done   |
 
 Sequence 01 → 02 → 03 → 04 → 05 → 06 → 07 → 08 → 09. Part 10 moved to the [Tiling–Bar integration](../2026-11-08-tiling-bar/00-overview.md) spec, which merges after this spec and Bar 03–08; it keeps its number and `TI-10-*` IDs, so appendix references to part 10 point there. Each part compiles/tests/commits alone; internal seams compile before consumers. Part 05's production factory remains unregistered until 06 supplies workspace safety; 06 rejects not-yet-implemented optional features explicitly. Part 07 must not report success for unimplemented actions; later parts activate only compiled features, never placeholders. Unfinished parts block feature-branch merge.
 
@@ -75,8 +76,8 @@ Acceptance IDs `TI-NN-MM` have exactly one owning part; appendices contain contr
 
 ## Intentional compatibility corrections
 
-Separate `tiling.jsonc`; transactional accepted reload instead of whole-app restart; unified dwindle default; rule appId fallback self-comparison fixed; grid max12 silent extras becomes max10 explicit overflow with append-only new eligibility; advertised floating positioning implemented (not dead preset-on-open behavior); advertised numeric focus implemented with exact-token safety; full-bounds max-normalized reservations instead of additive native/Bar exclusions; query failures exit1 instead of0; typed actual outcomes replace native-success assumptions; safe retained cleanup replaces drain-and-forget restoration; external borders require actual authority rather than blanket pause commands. Other successful CLI grammar/JSON/table/flag/order contracts and all Bar visuals remain unchanged. Generated transport names replace hand-coded events; no legacy socket/global plumbing is copied.
+Separate `tiling.jsonc`; transactional accepted reload instead of whole-app restart; unified dwindle default; rule appId fallback self-comparison fixed; grid max12 silent extras becomes max10 explicit overflow with append-only new eligibility; advertised floating positioning implemented (not dead preset-on-open behavior); advertised numeric focus implemented with exact-token safety; full-bounds max-normalized reservations instead of additive native/Bar exclusions; query failures exit1 instead of0; typed actual outcomes replace native-success assumptions; safe retained cleanup replaces drain-and-forget restoration; external borders require actual authority rather than blanket pause commands; border colors given as `rgb()`/`rgba()` (accepted by config validation) are honored instead of legacy's silent transparent conversion. Other successful CLI grammar/JSON/table/flag/order contracts and all Bar visuals remain unchanged. Generated transport names replace hand-coded events; no legacy socket/global plumbing is copied.
 
 ## Affected docs
 
-The [feature notice](../../features/tiling.md) stays planned until implementation lands; the workspace strip lands only with the Tiling–Bar integration spec. Each part materializes only its shipped slice in architecture/config/sdk/ipc/ui, feature/testing/performance docs and additive index routes. Preserve all earlier catalog/schema/bindings/capability/roadmap additions. No unresolved product choice now; native feasibility, shared-service authority and independent baseline evidence are blocking gates, not assumed facts.
+The [feature notice](../../features/tiling.md) describes the shipped parts 01–09; the workspace strip lands only with the Tiling–Bar integration spec. Each part materializes only its shipped slice in architecture/config/sdk/ipc/ui, feature/testing/performance docs and additive index routes. Preserve all earlier catalog/schema/bindings/capability/roadmap additions. No unresolved product choice now; native feasibility, shared-service authority and independent baseline evidence are blocking gates, not assumed facts.

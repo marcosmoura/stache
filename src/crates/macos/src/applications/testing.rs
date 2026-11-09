@@ -9,7 +9,7 @@
 // no contention to reduce, and splitting the guards would obscure the double.
 #![allow(clippy::significant_drop_tightening)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
@@ -23,6 +23,8 @@ use super::frontmost::{
     ActivationSink, FrontmostApplication, FrontmostPreflight, defer_activation, preflight_on_main,
 };
 use super::graceful::{GracefulOutcome, PressAuthorization};
+use super::lifecycle::{LifecycleEvent, LifecycleKind, LifecycleSink, defer_lifecycle};
+use super::visibility::{VisibilityAuthorization, VisibilityOperation, VisibilityOutcome};
 use super::{
     ApplicationBackend, ApplicationError, ApplicationId, BackendHandle, IssuancePermit,
     NativeOpenCompletion, OpenRequest, TerminateOutcome, defer_notification,
@@ -201,6 +203,7 @@ impl FakeLaunch {
     /// accepted it and the sink ran.
     #[must_use]
     pub fn deliver(&self) -> bool {
+        let applications = lock(&self.backend.applications);
         let mut observations = lock(&self.backend.observations);
         let Some(observation) = observations.get_mut(&self.handle) else {
             return false;
@@ -208,7 +211,7 @@ impl FakeLaunch {
         if observation.generation != self.generation {
             return false;
         }
-        let id = intern(self.handle, observation, self.key);
+        let id = intern(self.handle, observation, &applications, self.key);
         let notify = Arc::clone(&self.notify);
         drop(observations);
         notify(id);
@@ -280,6 +283,22 @@ struct FakeState {
     exact_activation_after_issue_barrier: Mutex<Option<Arc<FakeBarrier>>>,
     display: Mutex<FakeDisplay>,
     display_queries: AtomicUsize,
+    lifecycles: Mutex<BTreeMap<BackendHandle, FakeLifecycle>>,
+    fail_lifecycle_observe: AtomicBool,
+    fail_lifecycle_unobserve: AtomicUsize,
+    lifecycle_removals: AtomicUsize,
+    visibility_requests: Mutex<Vec<(FakeAppKey, VisibilityOperation)>>,
+    visibility_attempts: AtomicUsize,
+    refuse_visibility: AtomicBool,
+    visibility_preflight_barrier: Mutex<Option<Arc<FakeBarrier>>>,
+    visibility_commit_barrier: Mutex<Option<Arc<FakeBarrier>>>,
+    visibility_issuance_barrier: Mutex<Option<Arc<FakeBarrier>>>,
+    visibility_after_issue_barrier: Mutex<Option<Arc<FakeBarrier>>>,
+}
+
+struct FakeLifecycle {
+    generation: u64,
+    sink: LifecycleSink,
 }
 
 struct FakeActivation {
@@ -306,6 +325,8 @@ struct FakeObservation {
     next_token: u64,
     notify: Arc<dyn Fn(ApplicationId) + Send + Sync>,
     applications: BTreeMap<u64, FakeAppKey>,
+    /// Pruned terminated instances, oldest first (bounded like the system store).
+    tombstones: VecDeque<(u64, FakeAppKey)>,
 }
 
 struct FakeApplication {
@@ -313,6 +334,7 @@ struct FakeApplication {
     name: Option<String>,
     pid: i32,
     alive: bool,
+    hidden: bool,
 }
 
 impl FakeApplicationBackend {
@@ -335,6 +357,7 @@ impl FakeApplicationBackend {
             name: None,
             pid,
             alive: true,
+            hidden: false,
         });
         key
     }
@@ -545,11 +568,12 @@ impl FakeApplicationBackend {
     #[must_use]
     pub fn launch(&self, key: FakeAppKey) -> usize {
         let deliveries: Vec<FakeDelivery> = {
+            let applications = lock(&self.state.applications);
             let mut observations = lock(&self.state.observations);
             observations
                 .iter_mut()
                 .map(|(handle, observation)| {
-                    let id = intern(*handle, observation, key);
+                    let id = intern(*handle, observation, &applications, key);
                     (Arc::clone(&observation.notify), id)
                 })
                 .collect()
@@ -848,6 +872,181 @@ impl FakeApplicationBackend {
         barrier
     }
 
+    // ----- hide/unhide and lifecycle fixtures -------------------------------
+
+    /// The exact-instance hide/unhide requests the backend sent, in order.
+    #[must_use]
+    pub fn visibility_requests(&self) -> Vec<(FakeAppKey, VisibilityOperation)> {
+        lock(&self.state.visibility_requests).clone()
+    }
+
+    /// The number of hide/unhide attempts reaching the backend, including stale,
+    /// cancelled and expired ones.
+    #[must_use]
+    pub fn visibility_attempts(&self) -> usize {
+        self.state.visibility_attempts.load(Ordering::SeqCst)
+    }
+
+    /// Makes every hide/unhide return `false` from the fake native call.
+    pub fn refuse_visibility(&self) { self.state.refuse_visibility.store(true, Ordering::SeqCst); }
+
+    /// Stops refusing hide/unhide: later requests succeed again.
+    pub fn allow_visibility(&self) { self.state.refuse_visibility.store(false, Ordering::SeqCst); }
+
+    /// Whether the fake application is currently hidden.
+    #[must_use]
+    pub fn is_hidden(&self, key: FakeAppKey) -> bool {
+        lock(&self.state.applications)
+            .get(&key.0)
+            .is_some_and(|application| application.hidden)
+    }
+
+    /// Parks the next hide/unhide before its native preflight.
+    #[must_use]
+    pub fn block_next_visibility(&self) -> Arc<FakeBarrier> {
+        let barrier = Arc::new(FakeBarrier::default());
+        *lock(&self.state.visibility_preflight_barrier) = Some(Arc::clone(&barrier));
+        barrier
+    }
+
+    /// Parks the next hide/unhide after preflight and before the permit and
+    /// authorization commit (still cancellable).
+    #[must_use]
+    pub fn block_next_visibility_before_commit(&self) -> Arc<FakeBarrier> {
+        let barrier = Arc::new(FakeBarrier::default());
+        *lock(&self.state.visibility_commit_barrier) = Some(Arc::clone(&barrier));
+        barrier
+    }
+
+    /// Parks the next hide/unhide inside the irreversible send, after the
+    /// authorization committed and before it is recorded.
+    #[must_use]
+    pub fn block_next_visibility_issuance(&self) -> Arc<FakeBarrier> {
+        let barrier = Arc::new(FakeBarrier::default());
+        *lock(&self.state.visibility_issuance_barrier) = Some(Arc::clone(&barrier));
+        barrier
+    }
+
+    /// Parks the next hide/unhide after the send committed and before the
+    /// backend returns.
+    #[must_use]
+    pub fn block_next_visibility_after_issue(&self) -> Arc<FakeBarrier> {
+        let barrier = Arc::new(FakeBarrier::default());
+        *lock(&self.state.visibility_after_issue_barrier) = Some(Arc::clone(&barrier));
+        barrier
+    }
+
+    /// Makes the next lifecycle registration fail.
+    pub fn fail_next_lifecycle_observe(&self) {
+        self.state.fail_lifecycle_observe.store(true, Ordering::SeqCst);
+    }
+
+    /// Makes the next `count` lifecycle removals fail and leave it registered.
+    pub fn fail_lifecycle_unobserves(&self, count: usize) {
+        self.state.fail_lifecycle_unobserve.store(count, Ordering::SeqCst);
+    }
+
+    /// The number of live lifecycle registrations.
+    #[must_use]
+    pub fn lifecycle_observers(&self) -> usize { lock(&self.state.lifecycles).len() }
+
+    /// How many lifecycle registrations have actually been removed.
+    #[must_use]
+    pub fn lifecycle_removals(&self) -> usize {
+        self.state.lifecycle_removals.load(Ordering::SeqCst)
+    }
+
+    /// Delivers one lifecycle notification for `key` to every live registration
+    /// and returns how many registrations received it.
+    ///
+    /// Mirrors the system backend: a termination resolves through the live
+    /// instances, then the bounded tombstones of pruned ones; a termination
+    /// that resolves nowhere is delivered as
+    /// [`LifecycleKind::TerminatedUnresolved`]. Other kinds intern the instance
+    /// (pruning terminated ones first, like the system store). Delivery goes through the
+    /// [`FakeApplicationBackend::defer_launches`] queue when configured and is
+    /// otherwise immediate. This changes no application state; use
+    /// [`FakeApplicationBackend::terminate`] or a hide request for that.
+    #[must_use]
+    pub fn deliver_lifecycle(&self, kind: LifecycleKind, key: FakeAppKey) -> usize {
+        let pid = lock(&self.state.applications)
+            .get(&key.0)
+            .and_then(|application| super::lifecycle::diagnostic_pid(application.pid));
+        let deliveries: Vec<(LifecycleSink, LifecycleKind, ApplicationId)> = {
+            let applications = lock(&self.state.applications);
+            let mut observations = lock(&self.state.observations);
+            lock(&self.state.lifecycles)
+                .iter()
+                .filter_map(|(handle, registration)| {
+                    let observation = observations.get_mut(handle)?;
+                    if observation.generation != registration.generation {
+                        return None;
+                    }
+                    let (kind, id) = if kind == LifecycleKind::Terminated {
+                        // No pruning here, like the system lookup; pruned
+                        // instances resolve through the tombstones and are
+                        // cleared on delivery.
+                        let live = observation
+                            .applications
+                            .iter()
+                            .find_map(|(token, stored)| (*stored == key).then_some(*token));
+                        let token = live.or_else(|| {
+                            let index = observation
+                                .tombstones
+                                .iter()
+                                .position(|(_, stored)| *stored == key)?;
+                            observation.tombstones.remove(index).map(|(token, _)| token)
+                        });
+                        match token {
+                            Some(token) => (kind, ApplicationId {
+                                handle: *handle,
+                                generation: observation.generation,
+                                token,
+                            }),
+                            None => (
+                                LifecycleKind::TerminatedUnresolved,
+                                ApplicationId::unresolved(*handle, observation.generation),
+                            ),
+                        }
+                    } else {
+                        (kind, intern(*handle, observation, &applications, key))
+                    };
+                    Some((Arc::clone(&registration.sink), kind, id))
+                })
+                .collect()
+        };
+        let delivered = deliveries.len();
+        let executor = lock(&self.state.notification_queue).clone();
+        for (sink, kind, application) in deliveries {
+            let event = LifecycleEvent { kind, application, pid };
+            if let Some(executor) = &executor {
+                let executor = Arc::clone(executor);
+                defer_lifecycle(move |job| executor.try_enqueue(job), sink, event);
+            } else {
+                defer_lifecycle(
+                    |job| {
+                        job();
+                        Ok(())
+                    },
+                    sink,
+                    event,
+                );
+            }
+        }
+        delivered
+    }
+
+    fn remove_lifecycle(&self, handle: BackendHandle, generation: u64) {
+        let mut lifecycles = lock(&self.state.lifecycles);
+        if lifecycles
+            .get(&handle)
+            .is_some_and(|registration| registration.generation == generation)
+        {
+            lifecycles.remove(&handle);
+            self.state.lifecycle_removals.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
     /// Sets the fake window list (front to back); `None` models an unavailable
     /// `CGWindowListCopyWindowInfo` result.
     pub fn set_windows(&self, windows: Option<Vec<WindowRecord>>) {
@@ -916,16 +1115,43 @@ impl FakeApplicationBackend {
     }
 }
 
+/// Mirrors the system `InstanceStore::intern`: every intern first prunes
+/// terminated instances, moving them to the bounded tombstone list.
 fn intern(
     handle: BackendHandle,
     observation: &mut FakeObservation,
+    applications: &BTreeMap<u64, FakeApplication>,
     key: FakeAppKey,
 ) -> ApplicationId {
-    if let Some((token, _)) = observation.applications.iter().find(|(_, stored)| **stored == key) {
+    let dead: Vec<u64> = observation
+        .applications
+        .iter()
+        .filter(|(_, stored)| applications.get(&stored.0).is_some_and(|app| !app.alive))
+        .map(|(token, _)| *token)
+        .collect();
+    for token in dead {
+        if let Some(stored) = observation.applications.remove(&token) {
+            observation.tombstones.push_back((token, stored));
+            while observation.tombstones.len() > super::TERMINATED_TOMBSTONES {
+                observation.tombstones.pop_front();
+            }
+        }
+    }
+    let existing = observation
+        .applications
+        .iter()
+        .find_map(|(token, stored)| (*stored == key).then_some(*token))
+        .or_else(|| {
+            observation
+                .tombstones
+                .iter()
+                .find_map(|(token, stored)| (*stored == key).then_some(*token))
+        });
+    if let Some(token) = existing {
         return ApplicationId {
             handle,
             generation: observation.generation,
-            token: *token,
+            token,
         };
     }
     let token = observation.next_token;
@@ -961,6 +1187,7 @@ impl ApplicationBackend for FakeApplicationBackend {
                 next_token: 0,
                 notify,
                 applications: BTreeMap::new(),
+                tombstones: VecDeque::new(),
             });
         }
         if let Some(barrier) = barrier {
@@ -991,6 +1218,22 @@ impl ApplicationBackend for FakeApplicationBackend {
         if fail {
             return Err(ApplicationError::RemovalFailed("injected failure".to_owned()));
         }
+        // A failed lifecycle removal fails the generation removal too and
+        // leaves everything registered, so cleanup stays owned for a retry.
+        let lifecycle_registered = lock(&self.state.lifecycles).contains_key(&handle);
+        if lifecycle_registered
+            && self
+                .state
+                .fail_lifecycle_unobserve
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                    remaining.checked_sub(1)
+                })
+                .is_ok()
+        {
+            return Err(ApplicationError::RemovalFailed(
+                "injected lifecycle failure".to_owned(),
+            ));
+        }
         let mut observations = lock(&self.state.observations);
         if observations
             .get(&handle)
@@ -998,8 +1241,114 @@ impl ApplicationBackend for FakeApplicationBackend {
         {
             observations.remove(&handle);
             self.remove_activation(handle, generation);
+            self.remove_lifecycle(handle, generation);
         }
         Ok(())
+    }
+
+    fn observe_lifecycle(
+        &self,
+        handle: BackendHandle,
+        generation: u64,
+        notify: LifecycleSink,
+    ) -> Result<(), ApplicationError> {
+        if self.state.fail_lifecycle_observe.swap(false, Ordering::SeqCst) {
+            return Err(ApplicationError::ObservationFailed(
+                "injected lifecycle failure".to_owned(),
+            ));
+        }
+        let live = lock(&self.state.observations)
+            .get(&handle)
+            .is_some_and(|observation| observation.generation == generation);
+        if !live {
+            return Err(ApplicationError::NotInstalled);
+        }
+        let mut lifecycles = lock(&self.state.lifecycles);
+        if lifecycles.contains_key(&handle) {
+            return Err(ApplicationError::AlreadyInstalled);
+        }
+        lifecycles.insert(handle, FakeLifecycle { generation, sink: notify });
+        Ok(())
+    }
+
+    fn unobserve_lifecycle(
+        &self,
+        handle: BackendHandle,
+        generation: u64,
+    ) -> Result<(), ApplicationError> {
+        let fail = self
+            .state
+            .fail_lifecycle_unobserve
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .is_ok();
+        if fail {
+            return Err(ApplicationError::RemovalFailed(
+                "injected lifecycle failure".to_owned(),
+            ));
+        }
+        self.remove_lifecycle(handle, generation);
+        Ok(())
+    }
+
+    fn request_visibility(
+        &self,
+        handle: BackendHandle,
+        application: ApplicationId,
+        operation: VisibilityOperation,
+        authorization: &VisibilityAuthorization,
+        permit: IssuancePermit<'_>,
+    ) -> Result<VisibilityOutcome, ApplicationError> {
+        self.state.visibility_attempts.fetch_add(1, Ordering::SeqCst);
+        let barrier = lock(&self.state.visibility_preflight_barrier).take();
+        if let Some(barrier) = barrier {
+            barrier.enter();
+        }
+        if !self.is_running(handle, application)? {
+            return Ok(VisibilityOutcome::Stale);
+        }
+        let key = {
+            let observations = lock(&self.state.observations);
+            observations
+                .get(&handle)
+                .and_then(|observation| observation.applications.get(&application.token).copied())
+        };
+        let Some(key) = key else {
+            return Ok(VisibilityOutcome::Stale);
+        };
+        // Preflight is complete; this barrier is still cancellable.
+        let barrier = lock(&self.state.visibility_commit_barrier).take();
+        if let Some(barrier) = barrier {
+            barrier.enter();
+        }
+        let issuance_barrier = lock(&self.state.visibility_issuance_barrier).take();
+        let Some(outcome) = permit.issue(|| {
+            if authorization.is_expired() {
+                return VisibilityOutcome::ExpiredBeforeSend;
+            }
+            if !authorization.commit_send() {
+                return VisibilityOutcome::Cancelled;
+            }
+            if let Some(barrier) = issuance_barrier {
+                barrier.enter();
+            }
+            lock(&self.state.visibility_requests).push((key, operation));
+            if self.state.refuse_visibility.load(Ordering::SeqCst) {
+                return VisibilityOutcome::Refused;
+            }
+            if let Some(fake) = lock(&self.state.applications).get_mut(&key.0) {
+                fake.hidden = operation == VisibilityOperation::Hide;
+            }
+            VisibilityOutcome::Requested
+        }) else {
+            return Ok(VisibilityOutcome::Stale);
+        };
+        let after = lock(&self.state.visibility_after_issue_barrier).take();
+        if let Some(barrier) = after {
+            barrier.enter();
+        }
+        Ok(outcome)
     }
 
     fn observe_activation(
@@ -1048,6 +1397,34 @@ impl ApplicationBackend for FakeApplicationBackend {
         Ok(())
     }
 
+    fn running_details(
+        &self,
+        handle: BackendHandle,
+    ) -> Result<Vec<FrontmostApplication>, ApplicationError> {
+        self.query_preflight()?;
+        let current = *lock(&self.state.current_process);
+        let applications = lock(&self.state.applications);
+        let mut observations = lock(&self.state.observations);
+        let Some(observation) = observations.get_mut(&handle) else {
+            return Err(ApplicationError::NotInstalled);
+        };
+        let mut details = Vec::new();
+        for (key, application) in applications.iter() {
+            if !application.alive {
+                continue;
+            }
+            let key = FakeAppKey(*key);
+            details.push(FrontmostApplication {
+                id: intern(handle, observation, &applications, key),
+                bundle_identifier: application.bundle_id.clone(),
+                name: application.name.clone(),
+                is_current_process: current == Some(key),
+                pid: Some(application.pid),
+            });
+        }
+        Ok(details)
+    }
+
     fn frontmost(
         &self,
         handle: BackendHandle,
@@ -1070,7 +1447,7 @@ impl ApplicationBackend for FakeApplicationBackend {
                 if !application.alive {
                     return None;
                 }
-                let id = intern(handle, observation, key);
+                let id = intern(handle, observation, &applications, key);
                 Some(FrontmostApplication {
                     id,
                     bundle_identifier: application.bundle_id.clone(),
@@ -1243,7 +1620,7 @@ impl ApplicationBackend for FakeApplicationBackend {
             let mut matches = Vec::new();
             for (key, application) in applications.iter() {
                 if application.alive && application.bundle_id.as_deref() == Some(bundle_id) {
-                    matches.push(intern(handle, observation, FakeAppKey(*key)));
+                    matches.push(intern(handle, observation, &applications, FakeAppKey(*key)));
                 }
             }
             matches

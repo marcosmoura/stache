@@ -58,7 +58,7 @@ use crate::frontmost_context::{FrontmostContext, FrontmostContextOwner};
 use crate::hold_to_quit::{HoldToQuitFactory, HudOwner, ObserverOwner};
 use crate::host::{
     HostDriver, HostHandle, HostServices, HostSettings, HostState, HostUi, KeybindingsFactory,
-    ModuleFactories, new_host,
+    ModuleFactories, TilingFactory, new_host,
 };
 use crate::input::InputTapOwner;
 use crate::keep_awake::PowerAssertionOwner;
@@ -461,7 +461,13 @@ fn run_with(
                 ModuleFactories::production(Arc::clone(&main_thread), setup_power_owner)
                     .with(wallpapers)
                     .with(KeybindingsFactory::new(keybindings_runtime))
-                    .with(HoldToQuitFactory::new(hold_to_quit_runtime));
+                    .with(HoldToQuitFactory::new(hold_to_quit_runtime))
+                    // Tiling is registered default disabled. Its construction is
+                    // inert; the module's own `enabled` setting starts it.
+                    .with(TilingFactory::production(
+                        Arc::clone(&main_thread),
+                        &app.config().identifier,
+                    ));
             let services = HostServices {
                 logger: Arc::clone(&logger),
                 log_filter: filter,

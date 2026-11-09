@@ -1,6 +1,6 @@
 # Planned validation and native safety gates
 
-Read when approving/validating any implementation part. **Draft; no tests, builds or native effects are authorized by this planning task.** Criteria belong to their numbered parts, not this appendix.
+Read when approving/validating any implementation part. No native effects are authorized by this document; each native gate below needs its own per-run approval. Criteria belong to their numbered parts, not this appendix.
 
 ## Every part
 

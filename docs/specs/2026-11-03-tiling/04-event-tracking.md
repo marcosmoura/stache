@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 04 — Event pipeline and read-only actor tracking
@@ -22,10 +22,10 @@ Tiling `src/{state/,actor/,events/,tracking.rs}` and fake runtime harness. Map a
 
 ## Acceptance criteria
 
-- [ ] TI-04-01: Single-writer pure actor preserves all inventory event/state semantics with exact-token cache pruning and atomic read-only snapshots.
-- [ ] TI-04-02: Bounded FIFO/coalesced queues/overflow reconciliation pass create-focus-destroy/geometry ordering and overload tests without stale action authority or memory growth.
-- [ ] TI-04-03: Async initial enumeration/reconciliation, hotplug/retiming and lifecycle cancellation remain responsive under barriers and report completeness truthfully.
-- [ ] TI-04-04: Read-only harness has zero native effects, deterministic diagnostics, no global runtime and no public placeholder handlers; docs distinguish tracking from active tiling.
+- [x] TI-04-01: Single-writer pure actor preserves all inventory event/state semantics with exact-token cache pruning and atomic read-only snapshots.
+- [x] TI-04-02: Bounded FIFO/coalesced queues/overflow reconciliation pass create-focus-destroy/geometry ordering and overload tests without stale action authority or memory growth.
+- [x] TI-04-03: Async initial enumeration/reconciliation, hotplug/retiming and lifecycle cancellation remain responsive under barriers and report completeness truthfully.
+- [x] TI-04-04: Read-only harness has zero native effects, deterministic diagnostics, no global runtime and no public placeholder handlers; docs distinguish tracking from active tiling.
 
 ## Tests
 

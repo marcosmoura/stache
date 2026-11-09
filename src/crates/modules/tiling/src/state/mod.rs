@@ -1,0 +1,946 @@
+//! The pure, owned Tiling state and its read-only published snapshot.
+//!
+//! [`TilingState`] is owned by exactly one writer, the actor. Every change is a
+//! pure transition `(state, input) -> (state', effects)` in [`transition`]; the
+//! effects are read-only backend requests, gated frame writes and publication.
+//! Nothing here calls native code, takes a lock or reads a clock.
+//!
+//! Desired state (workspace assignment, stable order and the planned frames in
+//! `frames`) is kept apart from observed state (title, frame, flags). A frame is
+//! only ever *confirmed* by a readback or an observation, never by admission.
+
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::Arc;
+
+use stache_macos::applications::LifecycleKind;
+use stache_macos::windows::{
+    RuntimeEpoch, SnapshotOutcome, TabInfo, TrackOutcome, WindowActionOutcome, WindowEvent,
+    WindowInstance,
+};
+use stache_macos::{ApplicationId, DisplayId, DisplayLayout};
+
+use crate::config::{LayoutType, TilingConfig};
+use crate::geometry::Rect;
+use crate::intent::{Intent, IntentRecord};
+use crate::layout::WindowFlags;
+use crate::minimum_size::RatioState;
+use crate::outcome::FrameComponents;
+use crate::reservations::HostReservations;
+use crate::rules::{ManagementExclusion, PreparedRules};
+use crate::tabs::{TabRegistry, TabsStatus};
+use crate::workspaces::VisibilityRequirement;
+
+mod drag;
+mod frames;
+mod intents;
+mod tab_sync;
+mod transition;
+pub use drag::{DragOutcome, DragRecord, DragReport, DragState};
+pub use frames::{
+    AttemptStatus, Binding, FrameAttempt, FrameBook, FrameRecord, FrameStatus,
+    MAX_EXTERNAL_ATTEMPTS, MAX_IN_FLIGHT_FRAMES, MAX_INFERENCES, NoFrameReason,
+};
+pub use transition::transition;
+
+#[cfg(test)]
+mod animation_tests;
+#[cfg(test)]
+mod drag_tests;
+#[cfg(test)]
+mod frame_tests;
+#[cfg(test)]
+mod tab_tests;
+#[cfg(test)]
+mod tests;
+#[cfg(test)]
+mod workspace_tests;
+
+/// Maximum applications waiting to be tracked.
+pub const MAX_PENDING_TRACKS: usize = 4096;
+/// Applications handed to the backend before earlier acknowledgements return.
+pub const TRACK_CHUNK: usize = 8;
+/// Unconfirmed applications remembered before the scope widens to everything.
+pub const MAX_UNCONFIRMED_APPS: usize = 256;
+/// Destroyed tokens remembered so a late snapshot cannot resurrect one.
+pub const TOMBSTONE_CAPACITY: usize = 4096;
+/// Focus history entries kept.
+pub const FOCUS_HISTORY_CAPACITY: usize = 64;
+/// Workspace focus history entries kept.
+pub const WORKSPACE_HISTORY_CAPACITY: usize = 32;
+/// Consecutive overflows (without a confirmed reconciliation) that mark the
+/// stream overloaded.
+pub const OVERLOAD_THRESHOLD: u32 = 4;
+
+/// A workspace identity, allocated monotonically by the actor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct WorkspaceId(pub u32);
+
+/// The registry generation and backend epoch every effect and completion carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Stamp {
+    /// The backend runtime epoch.
+    pub epoch: RuntimeEpoch,
+    /// The actor registry generation; bumps on every restart.
+    pub registry: u64,
+}
+
+/// How complete the observed state is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Phase {
+    /// Startup enumeration has not finished for the first time.
+    Initializing,
+    /// A reconciliation is in flight.
+    Reconciling,
+    /// Everything tracked has been confirmed.
+    Complete,
+    /// Something could not be confirmed (failure, truncation, overload, no
+    /// screens, missing permission or failed health).
+    Incomplete,
+}
+
+/// Why the actor can no longer be trusted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HealthFault {
+    /// The backend owner is unavailable.
+    BackendUnavailable,
+    /// A channel to a collaborator closed.
+    Disconnected,
+    /// A transition panicked (unwind builds only); restart required.
+    Panicked,
+}
+
+/// Actor health.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Health {
+    /// Running.
+    Healthy,
+    /// Failed; the last published snapshot stays the safe one.
+    Failed(HealthFault),
+}
+
+/// What an unconfirmed marking applies to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Scope {
+    /// One exact application instance.
+    App(ApplicationId),
+    /// Everything.
+    All,
+}
+
+/// Why a scope became unconfirmed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cause {
+    /// The semantic queue was full.
+    SemanticOverflow,
+    /// The backend sink dropped events.
+    SinkOverflow,
+    /// A sequence gap proved a missed event.
+    SequenceGap,
+    /// An application observer mailbox overflowed.
+    ObserverOverflow,
+    /// Geometry cardinality overflowed.
+    GeometryOverflow,
+    /// A reserved read-only effect could not be queued.
+    EffectRejected,
+    /// A drag gesture was cancelled because observation was lost.
+    DragLost,
+}
+
+/// Identity and metadata of a running application.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AppInfo {
+    /// The exact application instance.
+    pub application: ApplicationId,
+    /// Process id: diagnostic and the AX handle only.
+    pub pid: i32,
+    /// Bundle identifier (empty when unknown).
+    pub bundle_id: String,
+    /// Localized name (empty when unknown).
+    pub name: String,
+}
+
+/// A read-only effect result.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CompletionResult {
+    /// A `track` request returned.
+    Track(ApplicationId, TrackOutcome),
+    /// A `refresh` request returned.
+    Refresh(ApplicationId, TrackOutcome),
+    /// A snapshot read returned.
+    Snapshot(WindowInstance, SnapshotOutcome),
+    /// A frame write was acknowledged. Matched against the exact window, plan
+    /// sequence and accepted revision it was issued for.
+    Frame {
+        /// The exact window token.
+        window: WindowInstance,
+        /// The layout plan sequence of the attempt.
+        plan_sequence: u64,
+        /// The accepted configuration revision of the attempt.
+        revision: u64,
+        /// What the backend reported.
+        outcome: WindowActionOutcome,
+    },
+    /// A hide, unhide or focus request finished. The worker's result is in the
+    /// shared visibility control; this only wakes the actor to fold it.
+    Visibility(ApplicationId),
+    /// The effect could not be queued; nothing was requested.
+    Rejected(Effect),
+}
+
+/// A pure input to the actor.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Input {
+    /// A (new) backend epoch and registry begins.
+    Start(Stamp),
+    /// A pure, epoch-tagged backend event.
+    Window(WindowEvent),
+    /// An application lifecycle delivery with resolved metadata.
+    Lifecycle {
+        /// What happened.
+        kind: LifecycleKind,
+        /// The application.
+        info: AppInfo,
+    },
+    /// An application became the frontmost one (informational).
+    Activated(ApplicationId),
+    /// The authoritative list of running applications.
+    Applications {
+        /// The registry it answers.
+        stamp: Stamp,
+        /// Every running application.
+        apps: Vec<AppInfo>,
+    },
+    /// The current display layout.
+    Displays(Arc<DisplayLayout>),
+    /// An accepted configuration.
+    Config {
+        /// The accepted revision; older or equal revisions are dropped.
+        revision: u64,
+        /// The accepted configuration.
+        config: Arc<TilingConfig>,
+    },
+    /// Coalesced geometry samples that came due.
+    GeometryBatch(Vec<WindowInstance>),
+    /// A scope could not be confirmed.
+    Unconfirmed(Scope, Cause),
+    /// An effect completed.
+    Completion {
+        /// The registry the effect was issued for.
+        stamp: Stamp,
+        /// The result.
+        result: CompletionResult,
+    },
+    /// A health fact.
+    Fault(HealthFault),
+    /// The runtime published (`true`) or revoked (`false`) its frame-write
+    /// authority.
+    FrameWrites(bool),
+    /// A user command: attempt every window again and forget inferred minimums.
+    Relayout,
+    /// A normalized copy of the host screen reservations (a pure hint).
+    Reservations(HostReservations),
+    /// A typed user command for the workspace model.
+    Intent(Intent),
+    /// A passive mouse down, up or lost observation from the drag observer.
+    Drag(crate::drag::DragSignal),
+    /// Test hook: panics inside the transition (unwind builds).
+    #[cfg(test)]
+    PanicForTest,
+}
+
+/// A request the actor makes of its environment: read-only backend requests,
+/// frame writes and publication.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Effect {
+    /// Install observation and start chunked enumeration.
+    Track {
+        /// Registry.
+        stamp: Stamp,
+        /// Application.
+        application: ApplicationId,
+        /// Process id.
+        pid: i32,
+    },
+    /// Re-enumerate a tracked application.
+    Refresh {
+        /// Registry.
+        stamp: Stamp,
+        /// Application.
+        application: ApplicationId,
+    },
+    /// Read one window snapshot.
+    Snapshot {
+        /// Registry.
+        stamp: Stamp,
+        /// Window.
+        window: WindowInstance,
+    },
+    /// Stop observing a terminated application.
+    Untrack {
+        /// Registry.
+        stamp: Stamp,
+        /// Application.
+        application: ApplicationId,
+    },
+    /// Ask for the authoritative running-application list.
+    ListApplications {
+        /// Registry.
+        stamp: Stamp,
+    },
+    /// Write the changed components of one window frame. The runner issues each
+    /// component once and returns the readback as
+    /// [`CompletionResult::Frame`].
+    WriteFrame {
+        /// Registry (the issuance generation).
+        stamp: Stamp,
+        /// The accepted configuration revision the plan was made under.
+        revision: u64,
+        /// The layout plan sequence.
+        plan_sequence: u64,
+        /// The exact window.
+        window: WindowInstance,
+        /// The desired frame.
+        target: Rect,
+        /// The components to write.
+        components: FrameComponents,
+        /// The window's actual frame when the attempt was created.
+        from: Rect,
+        /// The plan asks for an animated transition (animations enabled and a
+        /// meaningful travel). The runner writes directly when it has no
+        /// animation worker.
+        animate: bool,
+        /// The target display's reported refresh rate, for animation pacing.
+        refresh_hz: Option<f64>,
+    },
+    /// A queued frame write for this window is no longer wanted; it must become
+    /// inert before it is issued.
+    CancelFrame {
+        /// The exact window.
+        window: WindowInstance,
+    },
+    /// Hide this exact application instance. Emitted by the actor shell from
+    /// the visibility requirement, never by a pure transition.
+    HideApp {
+        /// Registry.
+        stamp: Stamp,
+        /// The exact application instance.
+        application: ApplicationId,
+    },
+    /// Unhide this exact application instance the runtime hid.
+    UnhideApp {
+        /// Registry.
+        stamp: Stamp,
+        /// The exact application instance.
+        application: ApplicationId,
+    },
+    /// Focus this exact window. Emitted only while the runtime holds the action
+    /// authority. The runner unhides an owned-hidden application first, then
+    /// activates it through `activate_exact` (the only activation path) and
+    /// raises the window through the issuance gate.
+    Focus {
+        /// Registry.
+        stamp: Stamp,
+        /// The exact window to focus.
+        window: WindowInstance,
+    },
+    /// The state changed; publish a snapshot.
+    Publish,
+}
+
+/// One attached display.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScreenState {
+    /// Native identity.
+    pub id: DisplayId,
+    /// Display name.
+    pub name: Option<String>,
+    /// `NSScreen.screens[0]`.
+    pub is_primary: bool,
+    /// Raw refresh rate (the pipeline clamps it).
+    pub refresh_hz: Option<f64>,
+    /// Tiling's count of this display's native presences. A display that
+    /// disappears and returns gets a new one, so a reused id is detectable.
+    pub presence: u64,
+}
+
+/// One workspace: desired assignment and order.
+// Independent facts (visible, focused, overridden, displaced), not a state machine.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct WorkspaceState {
+    /// Identity.
+    pub id: WorkspaceId,
+    /// Name.
+    pub name: String,
+    /// The screen it is on.
+    pub screen: DisplayId,
+    /// The configured screen string, to restore after a hotplug.
+    pub configured_screen: Option<String>,
+    /// The layout the configuration names for it, if any.
+    pub configured_layout: Option<LayoutType>,
+    /// The layout in effect (configured, default or a user override).
+    pub layout: LayoutType,
+    /// The user changed the layout away from the configured one.
+    pub layout_overridden: bool,
+    /// The configured display is absent, so the main one stands in until it
+    /// returns.
+    pub displaced: bool,
+    /// Runtime ratio overrides.
+    pub ratios: RatioState,
+    /// Visible on its screen.
+    pub visible: bool,
+    /// The globally focused workspace.
+    pub focused: bool,
+    /// Stable window order (desired).
+    pub order: Vec<WindowInstance>,
+    /// Last focused window in this workspace.
+    pub focused_window: Option<WindowInstance>,
+}
+
+/// Desired (runtime-decided) facts about a window.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DesiredWindow {
+    /// The workspace it belongs to; `None` until screens exist.
+    pub workspace: Option<WorkspaceId>,
+    /// The user floated it explicitly. Layout, reload and refresh never change it.
+    pub floating: bool,
+    /// Default positioning already happened once for the current floating state.
+    pub positioned: bool,
+}
+
+/// Observed (reported by the system) facts about a window.
+// Independent observable facts, not a state machine.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ObservedWindow {
+    /// Title.
+    pub title: String,
+    /// Role.
+    pub role: Option<String>,
+    /// Subrole.
+    pub subrole: Option<String>,
+    /// Frame in the AX global space, when completely read.
+    pub frame: Option<Rect>,
+    /// Native fullscreen.
+    pub fullscreen: bool,
+    /// Minimized.
+    pub minimized: bool,
+    /// The application is hidden (never runtime-owned here).
+    pub hidden: bool,
+    /// Tab information.
+    pub tabs: TabInfo,
+    /// Whether every per-window notification registered.
+    pub observed: bool,
+}
+
+/// A tracked window.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WindowState {
+    /// The exact token.
+    pub token: WindowInstance,
+    /// The owning application.
+    pub application: ApplicationId,
+    /// `CGWindowID` metadata only.
+    pub cg_window_id: Option<u32>,
+    /// Desired state.
+    pub desired: DesiredWindow,
+    /// Observed state.
+    pub observed: ObservedWindow,
+    /// Backend sequence that adopted it; `None` when adopted by a completion.
+    pub adopted_seq: Option<u64>,
+    /// An inactive member of a native tab group: tracked, never a tile. Derived
+    /// from the tab registry, never set by a user.
+    pub inactive_tab: bool,
+}
+
+impl WindowState {
+    /// Layout eligibility flags.
+    #[must_use]
+    pub const fn flags(&self) -> WindowFlags {
+        WindowFlags {
+            explicit_floating: self.desired.floating,
+            inactive_tab: self.inactive_tab,
+            fullscreen: self.observed.fullscreen,
+            minimized: self.observed.minimized,
+            hidden: self.observed.hidden,
+        }
+    }
+}
+
+/// Focus.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FocusState {
+    /// Focused window.
+    pub window: Option<WindowInstance>,
+    /// Its workspace.
+    pub workspace: Option<WorkspaceId>,
+    /// Its screen.
+    pub screen: Option<DisplayId>,
+}
+
+/// An application the actor knows about.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AppRecord {
+    /// Metadata.
+    pub info: AppInfo,
+    /// Hidden by the user or system (observed only).
+    pub hidden: bool,
+    /// Never tracked: Stache itself or a system component.
+    pub skipped: bool,
+    /// Observation was installed.
+    pub tracked: bool,
+}
+
+/// Unused placeholder kept for the state shape: the runtime-owned visibility
+/// ledger lives in [`crate::visibility`] because the stop path needs it after
+/// the actor ends.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct VisibilityLedger {}
+
+/// State-side diagnostics (admission counters are added when publishing).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Diagnostics {
+    /// Events dropped for a stale epoch.
+    pub stale_epoch_events: u64,
+    /// Completions dropped for a stale registry or epoch.
+    pub stale_completions: u64,
+    /// Snapshots dropped because the token was already destroyed.
+    pub ignored_after_destroy: u64,
+    /// Windows adopted for an application with no metadata.
+    pub unknown_app_windows: u64,
+    /// Windows never managed.
+    pub excluded_windows: u64,
+    /// Reconciliations started.
+    pub reconciliations_started: u64,
+    /// Reconciliations confirmed.
+    pub reconciliations_completed: u64,
+    /// Destroys proven missed and repaired by a reconciliation.
+    pub missed_destroys_repaired: u64,
+    /// Stale numeric `CGWindowID` owners evicted.
+    pub cg_reuse_evictions: u64,
+    /// Overflow-style markings by cause.
+    pub unconfirmed_markings: u64,
+    /// Stale configuration revisions dropped.
+    pub stale_configs: u64,
+    /// Reload mappings refused; the old workspace state stayed.
+    pub rejected_reloads: u64,
+    /// Intents that changed desired state.
+    pub intents_applied: u64,
+    /// Intents admitted that changed nothing.
+    pub intents_noop: u64,
+    /// Intents refused.
+    pub intents_rejected: u64,
+    /// Focus intents recorded without a native focus effect (no authority).
+    pub focus_unauthorized: u64,
+    /// Focus events for an unknown, unexcluded window.
+    pub unknown_focus: u64,
+    /// Snapshot reads the backend refused or could not verify.
+    pub snapshot_refusals: u64,
+    /// Registry restarts.
+    pub registry_restarts: u64,
+    /// Applications whose enumeration was truncated or failed.
+    pub enumeration_failures: u64,
+    /// Whether the stream is overloaded (consecutive overflows).
+    pub overloaded: bool,
+    /// Frame attempts created (each component at most once per attempt).
+    pub frame_attempts: u64,
+    /// Attempts confirmed by readback.
+    pub frames_applied: u64,
+    /// Attempts with an unconfirmed or refused component.
+    pub frames_partial: u64,
+    /// Attempts issued without a trustworthy result.
+    pub frames_uncertain: u64,
+    /// Attempts the system refused outright.
+    pub frames_failed: u64,
+    /// Attempts proven not sent (including stale tokens).
+    pub frames_not_attempted: u64,
+    /// Acknowledgements of an old plan, window or revision, dropped.
+    pub stale_frame_acks: u64,
+    /// Own geometry echoes of a settled animation, ignored (bounded).
+    pub animation_echoes_ignored: u64,
+    /// Host reservation hints older than the one held, dropped.
+    pub stale_reservations: u64,
+    /// Drag gestures captured.
+    pub drag_gestures: u64,
+    /// Mouse downs that started no gesture (writes off, no tiles, floating layout).
+    pub drag_ignored: u64,
+    /// Gestures that ended in a swap.
+    pub drag_swaps: u64,
+    /// Gestures that ended in a resize.
+    pub drag_resizes: u64,
+    /// Gestures that ended in a snap-back plan.
+    pub drag_snap_backs: u64,
+    /// Gestures that failed revalidation at commit.
+    pub drag_stale: u64,
+    /// Gestures cancelled by a lost observation.
+    pub drag_cancelled: u64,
+    /// Lost observations reported (with or without a gesture).
+    pub drag_lost_observations: u64,
+}
+
+/// One enumeration or refresh in progress.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Scan {
+    /// Backend sequence processed when the scan was requested.
+    pub floor: u64,
+    /// Tokens an enumeration snapshot reported.
+    pub seen: BTreeSet<WindowInstance>,
+}
+
+/// Reconciliation bookkeeping; every collection is bounded.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Reconcile {
+    /// Applications whose state is not confirmed and need a refresh.
+    pub unconfirmed: BTreeSet<ApplicationId>,
+    /// Everything is unconfirmed.
+    pub all: bool,
+    /// Applications with an enumeration outstanding.
+    pub inflight: BTreeSet<ApplicationId>,
+    /// Open scans.
+    pub scans: BTreeMap<ApplicationId, Scan>,
+    /// Overflows since the last confirmed reconciliation.
+    pub consecutive_overflows: u32,
+    /// The running-application list was requested.
+    pub listing: bool,
+    /// An unresolved termination arrived while a list was in flight; that list
+    /// may predate it, so exactly one follow-up list runs when it completes.
+    pub relist: bool,
+}
+
+/// Startup/tracking bookkeeping.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Startup {
+    /// Applications waiting for a track slot.
+    pub pending: VecDeque<AppInfo>,
+    /// `track` requests awaiting acknowledgement.
+    pub awaiting: BTreeSet<ApplicationId>,
+    /// Applications that failed to track or enumerate.
+    pub failed: BTreeSet<ApplicationId>,
+    /// Applications whose enumeration was truncated.
+    pub truncated: BTreeSet<ApplicationId>,
+    /// The application list was received at least once.
+    pub listed: bool,
+}
+
+/// The whole actor-owned state.
+// Independent facts (screens known, completed once, accessibility), not a state machine.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Debug)]
+pub struct TilingState {
+    pub(crate) self_bundle_id: String,
+    pub(crate) config: Option<Arc<TilingConfig>>,
+    pub(crate) config_revision: u64,
+    pub(crate) workspace_rules: Vec<(String, PreparedRules)>,
+    pub(crate) ignore: PreparedRules,
+    pub(crate) stamp: Option<Stamp>,
+    pub(crate) sequence: u64,
+    pub(crate) last_event_sequence: u64,
+    pub(crate) layout: DisplayLayout,
+    pub(crate) screens: Vec<ScreenState>,
+    pub(crate) screens_known: bool,
+    pub(crate) next_presence: u64,
+    pub(crate) host: HostReservations,
+    pub(crate) frames: FrameBook,
+    pub(crate) no_screens: bool,
+    pub(crate) workspaces: Vec<WorkspaceState>,
+    pub(crate) next_workspace: u32,
+    pub(crate) windows: BTreeMap<WindowInstance, WindowState>,
+    pub(crate) excluded: BTreeMap<WindowInstance, ManagementExclusion>,
+    pub(crate) cg_index: BTreeMap<u32, WindowInstance>,
+    pub(crate) apps: BTreeMap<ApplicationId, AppRecord>,
+    pub(crate) active_application: Option<ApplicationId>,
+    pub(crate) focus: FocusState,
+    pub(crate) focus_history: VecDeque<WindowInstance>,
+    pub(crate) workspace_history: VecDeque<WorkspaceId>,
+    pub(crate) last_intent: Option<IntentRecord>,
+    pub(crate) last_reload_error: Option<String>,
+    pub(crate) tombstones: BTreeSet<WindowInstance>,
+    pub(crate) tombstone_order: VecDeque<WindowInstance>,
+    pub(crate) ledger: VisibilityLedger,
+    pub(crate) tabs: TabRegistry,
+    pub(crate) reconcile: Reconcile,
+    pub(crate) startup: Startup,
+    pub(crate) accessibility: bool,
+    pub(crate) completed_once: bool,
+    pub(crate) health: Health,
+    pub(crate) diagnostics: Diagnostics,
+    pub(crate) drag: DragState,
+}
+
+impl TilingState {
+    /// An empty state. `self_bundle_id` is Stache's own bundle identifier
+    /// (empty disables the self exclusion).
+    #[must_use]
+    pub fn new(self_bundle_id: impl Into<String>) -> Self {
+        Self {
+            self_bundle_id: self_bundle_id.into(),
+            config: None,
+            config_revision: 0,
+            workspace_rules: Vec::new(),
+            ignore: PreparedRules::default(),
+            stamp: None,
+            sequence: 0,
+            last_event_sequence: 0,
+            layout: DisplayLayout::default(),
+            screens: Vec::new(),
+            screens_known: false,
+            next_presence: 0,
+            host: HostReservations::empty(),
+            frames: FrameBook::default(),
+            no_screens: false,
+            workspaces: Vec::new(),
+            next_workspace: 1,
+            windows: BTreeMap::new(),
+            excluded: BTreeMap::new(),
+            cg_index: BTreeMap::new(),
+            apps: BTreeMap::new(),
+            active_application: None,
+            focus: FocusState::default(),
+            focus_history: VecDeque::new(),
+            workspace_history: VecDeque::new(),
+            last_intent: None,
+            last_reload_error: None,
+            tombstones: BTreeSet::new(),
+            tombstone_order: VecDeque::new(),
+            ledger: VisibilityLedger::default(),
+            tabs: TabRegistry::default(),
+            reconcile: Reconcile::default(),
+            startup: Startup::default(),
+            accessibility: true,
+            completed_once: false,
+            health: Health::Healthy,
+            diagnostics: Diagnostics::default(),
+            drag: DragState::default(),
+        }
+    }
+
+    /// Declares whether the backend reads native tab groups. Without reads
+    /// every window is an ordinary window.
+    pub fn set_tab_reads(&mut self, reading: bool) {
+        self.tabs.set_reading(reading);
+        if !reading {
+            for window in self.windows.values_mut() {
+                window.inactive_tab = false;
+            }
+        }
+    }
+
+    /// The future visibility ledger (empty until part 06).
+    #[must_use]
+    pub const fn ledger(&self) -> &VisibilityLedger { &self.ledger }
+
+    /// The current registry stamp.
+    #[must_use]
+    pub const fn stamp(&self) -> Option<Stamp> { self.stamp }
+
+    /// The display a window is on: by frame, else its workspace's screen.
+    #[must_use]
+    pub fn display_of(&self, token: WindowInstance) -> Option<DisplayId> {
+        let window = self.windows.get(&token)?;
+        window
+            .observed
+            .frame
+            .and_then(|frame| {
+                self.layout.display_for_ax_rect(stache_macos::applications::DisplayRect::new(
+                    frame.x,
+                    frame.y,
+                    frame.width,
+                    frame.height,
+                ))
+            })
+            .or_else(|| {
+                let id = window.desired.workspace?;
+                self.workspaces.iter().find(|ws| ws.id == id).map(|ws| ws.screen)
+            })
+    }
+
+    /// Whether a destroyed token was seen (kept for diagnostics and tests).
+    #[must_use]
+    pub fn is_tombstoned(&self, token: WindowInstance) -> bool { self.tombstones.contains(&token) }
+
+    /// The phase derived from the current facts.
+    #[must_use]
+    pub fn phase(&self) -> Phase {
+        let broken = !self.startup.failed.is_empty()
+            || !self.startup.truncated.is_empty()
+            || self.diagnostics.overloaded
+            || self.no_screens
+            || !self.accessibility
+            || self.health != Health::Healthy;
+        if broken {
+            return Phase::Incomplete;
+        }
+        let working = self.stamp.is_none()
+            || !self.screens_known
+            || !self.startup.listed
+            || !self.startup.pending.is_empty()
+            || !self.startup.awaiting.is_empty()
+            || !self.reconcile.inflight.is_empty()
+            || !self.reconcile.unconfirmed.is_empty()
+            || self.reconcile.all
+            || self.reconcile.listing;
+        match (working, self.completed_once) {
+            (false, _) => Phase::Complete,
+            (true, false) => Phase::Initializing,
+            (true, true) => Phase::Reconciling,
+        }
+    }
+
+    /// An immutable view for queries.
+    #[must_use]
+    pub fn snapshot(&self) -> TilingSnapshot {
+        let phase = self.phase();
+        TilingSnapshot {
+            sequence: self.sequence,
+            phase,
+            health: self.health,
+            actions_allowed: phase == Phase::Complete,
+            registry: self.stamp.map(|stamp| stamp.registry),
+            epoch: self.stamp.map(|stamp| stamp.epoch.value()),
+            config_revision: self.config_revision,
+            screens: self.screens.clone(),
+            workspaces: self.workspaces.clone(),
+            windows: self.windows.values().cloned().collect(),
+            excluded: self.excluded.iter().map(|(token, why)| (*token, *why)).collect(),
+            focus: self.focus,
+            unconfirmed_apps: self.reconcile.unconfirmed.len(),
+            all_unconfirmed: self.reconcile.all,
+            inflight_apps: self.reconcile.inflight.len(),
+            no_screens: self.no_screens,
+            diagnostics: self.diagnostics.clone(),
+            admission: crate::events::AdmissionStats::default(),
+            plan_sequence: self.frames.plan_sequence,
+            frames: frames::statuses(self),
+            no_frame: self.frames.no_frame.iter().map(|(id, why)| (*id, *why)).collect(),
+            host_revision: self.host.revision,
+            visibility: crate::workspaces::visibility_requirement(self),
+            last_intent: self.last_intent.clone(),
+            workspace_history: self.workspace_history.iter().copied().collect(),
+            last_reload_error: self.last_reload_error.clone(),
+            hidden_apps: Vec::new(),
+            display_layout: self.layout.clone(),
+            apps: self.apps.values().cloned().collect(),
+            tabs: self.tabs.status(self.windows.values().filter(|w| w.inactive_tab).count()),
+            drag: drag::report(self),
+        }
+    }
+
+    /// The global application visibility requirement (a pure function of this
+    /// state). Slice B's ledger consumes it.
+    #[must_use]
+    pub fn visibility_requirement(&self) -> VisibilityRequirement {
+        crate::workspaces::visibility_requirement(self)
+    }
+
+    /// The identity of the drag gesture in progress, if any.
+    #[must_use]
+    pub fn drag_gesture(&self) -> Option<u64> { self.drag.gesture_id() }
+
+    /// The most recent intent and its outcome.
+    #[must_use]
+    pub const fn last_intent(&self) -> Option<&IntentRecord> { self.last_intent.as_ref() }
+
+    /// A state rebuilt from a published snapshot, for staging a reload before
+    /// the actor sees it. It has no configuration and no application metadata.
+    #[must_use]
+    pub fn replica(snapshot: &TilingSnapshot) -> Self {
+        let mut state = Self::new("");
+        state.screens.clone_from(&snapshot.screens);
+        state.screens_known = !snapshot.screens.is_empty();
+        state.workspaces.clone_from(&snapshot.workspaces);
+        state.next_workspace =
+            snapshot.workspaces.iter().map(|ws| ws.id.0).max().map_or(1, |max| max + 1);
+        state.windows = snapshot.windows.iter().map(|w| (w.token, w.clone())).collect();
+        state.excluded = snapshot.excluded.iter().copied().collect();
+        state.focus = snapshot.focus;
+        state
+    }
+}
+
+/// The atomic, immutable result of the actor's last published turn.
+///
+/// Queries clone an `Arc` of this under a short lock; no field is ever sampled
+/// separately from the others.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TilingSnapshot {
+    /// Inputs applied so far.
+    pub sequence: u64,
+    /// Completeness.
+    pub phase: Phase,
+    /// Health.
+    pub health: Health,
+    /// Whether later parts may issue native mutations (always read-only now).
+    pub actions_allowed: bool,
+    /// The registry generation.
+    pub registry: Option<u64>,
+    /// The backend epoch value.
+    pub epoch: Option<u64>,
+    /// The accepted configuration revision.
+    pub config_revision: u64,
+    /// Screens.
+    pub screens: Vec<ScreenState>,
+    /// Workspaces (desired order).
+    pub workspaces: Vec<WorkspaceState>,
+    /// Tracked windows (desired and observed).
+    pub windows: Vec<WindowState>,
+    /// Windows deliberately not managed.
+    pub excluded: Vec<(WindowInstance, ManagementExclusion)>,
+    /// Focus.
+    pub focus: FocusState,
+    /// Applications waiting for a refresh.
+    pub unconfirmed_apps: usize,
+    /// Everything is waiting for a refresh.
+    pub all_unconfirmed: bool,
+    /// Applications with an enumeration in flight.
+    pub inflight_apps: usize,
+    /// No display is attached.
+    pub no_screens: bool,
+    /// State diagnostics.
+    pub diagnostics: Diagnostics,
+    /// Admission accounting.
+    pub admission: crate::events::AdmissionStats,
+    /// The monotonic layout plan sequence.
+    pub plan_sequence: u64,
+    /// Desired versus confirmed frames and the latest outcome per window.
+    pub frames: Vec<FrameStatus>,
+    /// Displays that produced no frame, with the reason.
+    pub no_frame: Vec<(DisplayId, NoFrameReason)>,
+    /// The host reservation revision in use.
+    pub host_revision: u64,
+    /// The application visibility requirement across all visible workspaces.
+    pub visibility: VisibilityRequirement,
+    /// The latest intent and its outcome.
+    pub last_intent: Option<IntentRecord>,
+    /// Workspace focus history, oldest first.
+    pub workspace_history: Vec<WorkspaceId>,
+    /// Why the latest reload mapping was refused, if it was.
+    pub last_reload_error: Option<String>,
+    /// Applications the runtime hid (or may have hid), with their ownership.
+    pub hidden_apps: Vec<crate::visibility::OwnedApp>,
+    /// The native display layout (frames, scale, built-in flag) behind `screens`.
+    pub display_layout: DisplayLayout,
+    /// The application catalog the actor knows, in stable application order.
+    pub apps: Vec<AppRecord>,
+    /// The native tab capability and group counts.
+    pub tabs: TabsStatus,
+    /// The drag gesture in progress and the latest finished one.
+    pub drag: DragReport,
+}
+
+impl TilingSnapshot {
+    /// An empty snapshot before the first turn.
+    #[must_use]
+    pub fn initial() -> Self { TilingState::new("").snapshot() }
+
+    /// The workspace with this name.
+    #[must_use]
+    pub fn workspace(&self, name: &str) -> Option<&WorkspaceState> {
+        self.workspaces.iter().find(|ws| ws.name == name)
+    }
+
+    /// The window with this token.
+    #[must_use]
+    pub fn window(&self, token: WindowInstance) -> Option<&WindowState> {
+        self.windows.iter().find(|window| window.token == token)
+    }
+}

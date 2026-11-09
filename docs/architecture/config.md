@@ -27,6 +27,7 @@ Each file is its own catalog document, named after the exact identifier:
   menuAnywhere.jsonc MenuAnywhereConfig
   notunes.jsonc      NoTunesConfig
   proxyAudio.jsonc   ProxyAudioConfig
+  tiling.jsonc       TilingConfig
   wallpapers.jsonc   WallpapersConfig
 ```
 
@@ -64,6 +65,40 @@ wraps the whole legacy map as `bindings` and sets `enabled` from map
 nonemptiness, even when every command is blank; a legacy shortcut literally named
 `enabled` or `bindings` is a binding, never the new envelope. A missing legacy
 section emits the disabled template. See [keybindings.md](../features/keybindings.md).
+
+`tiling.jsonc` is registered for configuration, schema, template and migration,
+and the Tiling module itself is registered **default disabled** (`enabled` is
+`false`): the `lib.rs` composition appends `TilingFactory::production` after
+Wallpapers, Keybindings and Hold-to-Quit. Construction and registration are inert
+(no observer, worker, thread or native effect); only `enabled: true` starts the
+core and workspace runtime. `animations.enabled` starts one owned animation worker
+(see the Tiling feature doc). `borders.enabled: true` is the **explicit consent**
+for Stache to overwrite the shared JankyBorders settings width, style, hidpi,
+active/inactive colors and blacklist; their previous values are not read or
+restored, the service is never launched, restarted or killed, and its last
+settings stay in place when borders stop. The `enabled` schema description
+(generated from the config doc comment) states this; there is no separate
+ownership setting. Disabled (the default) sends nothing and allocates nothing.
+A missing service is a Tiling status diagnostic, never a failed module. `TilingConfig` (crate `stache-tiling`) keeps
+every legacy shape: `enabled` (`false`), `defaultLayout` (one authoritative
+`dwindle` default; `dwindle|split|split-vertical|split-horizontal|monocle|master|grid|floating`),
+`workspaces` (`name`, optional `layout`, `screen` default `main`, `rules`, and the
+inert exact-spelled `preset-on-open`), `ignore` rules (`appId`, `title`,
+`appName`; an empty rule is valid and matches nothing), `animations`
+(`{enabled:false,duration:200,easing:"ease-out"}`; six easings), `gaps`
+(uniform, per-axis or per-side values, global or a per-display list),
+`floating` (`defaultPosition` `center|default`, `presets` with pixel or `"50%"`
+dimensions, `x`/`y`/`center`), `master` (`ratio` 60, `position` `auto`) and
+`borders` (per-state `false`, solid, gradient with optional animation, or glow;
+per-layout overrides; `style` `round|square`; `hidpi`; `ignore`). User shapes
+round-trip unchanged. Validation rejects duplicate workspace names
+(exact case, matching workspace lookup) or preset names (case-insensitive), a `preset-on-open` naming no preset, `master.ratio` above 100,
+zero, negative, non-numeric or non-finite preset dimensions, gap sums that
+overflow, malformed colors, unsupported `style` and a bare `true` border state,
+with field paths; a rejected file leaves the module inactive and never falls back
+to enabled defaults. The grid cap of ten and the applied floating
+`defaultPosition` now apply to the core runtime; animation, drag and
+borders apply to the runtime; tabs are a fake-proven registry with native reads off. See [tiling.md](../features/tiling.md).
 
 `menuAnywhere.jsonc` backs the MenuAnywhere runtime: the host registers it
 through `MenuAnywhereFactory`, so the file is bound, watched and reloaded like
@@ -258,7 +293,7 @@ unchanged save is still a no-op instead of re-decoding forever.
 stache config init [-f] [-p DIR] [--stdout]
 stache config path
 stache config migrate [--from FILE] [-f]
-stache schema [global|bar|commandQuit|keepAwake|keybindings|menuAnywhere|notunes|proxyAudio|wallpapers]
+stache schema [global|bar|commandQuit|keepAwake|keybindings|menuAnywhere|notunes|proxyAudio|tiling|wallpapers]
 ```
 
 The commands run from the single `stache` binary. From a checkout use
@@ -297,7 +332,7 @@ styles keys, strings, numbers and literals only when stdout is a terminal; see
 
 `schema` defaults to the global schema; `schema bar`, `schema commandQuit`, `schema keepAwake`, `schema menuAnywhere`,
 `schema proxyAudio`,
-`schema notunes` and `schema wallpapers` print those registered module schemas.
+`schema notunes`, `schema tiling` and `schema wallpapers` print those registered module schemas.
 Unknown IDs fail.
 
 ## Migration
@@ -312,7 +347,7 @@ destination, migration refuses even with `--force`.
 
 `execOnStartup` and a `logging` section are converted into `global.jsonc`.
 Every registered module section is decoded and validated by the catalog's
-authoritative type: `bar`, `commandQuit`, `keepAwake`, `keybindings`, `menuAnywhere`, `proxyAudio`, `notunes` and
+authoritative type: `bar`, `commandQuit`, `keepAwake`, `keybindings`, `menuAnywhere`, `proxyAudio`, `notunes`, `tiling` and
 `wallpapers` today. A type may also translate legacy spellings first through
 `ModuleConfig::migrate_legacy_section`, which migration calls before decoding and
 writing; that hook is the only place a configuration type knows about values the
@@ -334,15 +369,20 @@ configuration like the others: a valid section keeps its `enabled` and
 `holdDuration`, an invalid one fails migration and an absent one receives the
 disabled default template. `menuAnywhere` keeps the default hook: it is
 validated generically and its `[]` modifiers and `middleClick` are written
-unchanged. `tiling` is copied verbatim as a same-ID `.jsonc` file; the
-loader does not register or activate it. Legacy `widgets` are dropped with a
+unchanged. `tiling` is validated by `TilingConfig`, keeps every valid legacy
+value and shape, and its hook only warns about planned runtime corrections: a
+grid layout (the new cap is ten tiles, not twelve), an enabled section whose
+floating `defaultPosition` is `center` or omitted (it will start centering newly
+floating windows once) and an enabled section with no `defaultLayout` (dwindle
+is the single default). Nothing is rewritten and the module stays inert.
+Invalid tiling input fails migration. No legacy module section is copied
+verbatim any more. Legacy `widgets` are dropped with a
 warning. Unknown root keys warn, and unknown keys inside a registered module
 section are reported while the section is still validated and copied into its
 `.jsonc` file, where the typed configuration ignores them. A missing registered
 module section is emitted as the same commented template as `config init`,
 reported generically as `emitted default template <file>` with ` (disabled)`
-when the registered default is disabled; absent unported sections create no
-file. `keepAwake` therefore always migrates disabled, whether the legacy `bar`
+when the registered default is disabled. `keepAwake` therefore always migrates disabled, whether the legacy `bar`
 section was enabled, disabled or absent. `wallpapers` likewise always migrates
 disabled; no legacy consent is inferred. Legacy has no Keep Awake setting, so
 migration never creates or infers a separate enable flag and never treats Bar
@@ -364,7 +404,7 @@ bun run generate-schema -- --check
 
 The `generate-schema` binary writes `schemas/global.schema.json`,
 `schemas/bar.schema.json`, `schemas/commandQuit.schema.json`, `schemas/keepAwake.schema.json`, `schemas/keybindings.schema.json`,
-`schemas/menuAnywhere.schema.json`, `schemas/notunes.schema.json`, `schemas/proxyAudio.schema.json` and
+`schemas/menuAnywhere.schema.json`, `schemas/notunes.schema.json`, `schemas/proxyAudio.schema.json`, `schemas/tiling.schema.json` and
 `schemas/wallpapers.schema.json` deterministically; `--check` writes nothing and
 exits non-zero on missing or stale files. Templates are generated from the
 serialized `Default` plus schema descriptions, so there is no second

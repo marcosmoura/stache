@@ -37,8 +37,35 @@ Read when changing the shipped foundation boundaries.
   exact-instance invocation (activation, then `AXPress` under a one-shot gate with leased
   elements) and a `MenuControl` with acknowledged cancellation and cleanup that reports
   `cleanupPending` honestly. It has no module runtime, input subscription or enabled behavior yet,
-  and its native behavior is verified only by the opt-in `menu-native-check` harness. It is the only crate containing project-authored unsafe code; public
-  functions are safe.
+  and its native behavior is verified only by the opt-in `menu-native-check` harness. The shared AX
+  FFI (`AxApi`, `AxElement`, `AxError`, `SystemAx`, the 0.5 s `ELEMENT_TIMEOUT` and 1 s
+  `PRESS_TIMEOUT`) lives in the neutral `ax` module; `menu` re-exports the same names so
+  MenuAnywhere is unchanged. Tiling slice 03a adds (consumed by the shipped Tiling runtime; native behavior
+  unverified), a `WindowAx` capability trait (separate `AXPosition`/`AXSize` read and write through
+  `AXValue`, settable-ness, minimized/fullscreen/hidden flags, title/role/subrole, windows, focused
+  and main window, explicit unknown/unsupported readings instead of zero frames), an `AxObserver`
+  wrapper (create, add/remove notification, run-loop source; its callback records only a pure
+  notification enum and an opaque owner-local element key into a bounded mailbox), a
+  `_AXUIElementGetWindow` resolver by `dlsym` only (missing symbol is an explicit `Unsupported`
+  capability, never linked), and compile-proofed `AXTabGroup`/`AXTabs` extraction reads (members read with their ids and
+  selected flags by `read_tab_group`) that do not claim tab support. All AX objects stay `!Send` on one owner thread. Slice 03b adds (consumed by the shipped Tiling runtime; **native behavior unverified**), the `windows` ownership adapter (see below). The applications adapter additionally gains
+  exact-instance `hide_exact`/`unhide_exact` (the `activate_exact` issuance, authorization and
+  outcome model; `NSRunningApplication hide`/`unhide`) and `watch_lifecycle` (launch, terminate,
+  hide, unhide as pure `LifecycleEvent`s with the exact `ApplicationId`, deferred to a later main
+  turn; a terminate that cannot be resolved to an id after pruning is delivered as the synthesized
+  `TerminatedUnresolved`, never dropped). Part 06 slice B adds the `AXHidden` fallback beside them,
+  on the Tiling AX owner thread (`stache-tiling-ax-owner`, never main and never `MenuAnywhere`'s
+  `stache-ax-owner`): `WindowAx::set_hidden` plus the `windows` command `application_hidden`
+  (`HiddenRequest`/`HiddenOutcome`) read or write `AXHidden` on one tracked exact `ApplicationId`
+  only. It is used solely when the public `hide_exact`/`unhide_exact` returned `false`; a write is
+  authorized by its own one-shot `ApplicationIssuance` (not the frame `GenerationCell`, which stop
+  seals before the restore that may need it) and answers with a typed outcome (issued with a
+  read-back, `Unobserved` after a lost acknowledgement, never-sent reasons, stale). Native behavior
+  stays unverified. A `displays` adapter reads per-display id, full frame with origin, visible frame, backing
+  scale, optional refresh rate, localized name and primary/main flags, converts between the
+  `AppKit` and AX coordinate spaces in pure code, and observes
+  `NSApplicationDidChangeScreenParametersNotification` as a pure topology-changed hint. It is the
+  only crate containing project-authored unsafe code; public functions are safe.
 - `src/crates/modules/proxy-audio`: the proxyAudio pilot — authoritative configuration, priority
   policy, `CoreAudio` watcher, `audio list` command and read-only `proxyAudio.list` handler. See
   [proxy-audio.md](../features/proxy-audio.md).
@@ -356,3 +383,128 @@ comparative measurements and manual hardware checks remain open.
 `stache-sdk`, `stache-cli`, `stache-hold-to-quit`, `stache-keep-awake`, `stache-keybindings`, `stache-menu-anywhere`,
 `stache-proxy-audio`, `stache-notunes`, `stache-wallpapers` and `stache-app` forbid unsafe code;
 `stache-macos` documents every unsafe block.
+
+## Window ownership adapter (`stache_macos::windows`, Tiling slice 03b)
+
+Consumed by the shipped Tiling runtime (part 05 onward); native behavior unverified. Compile- and
+fake-proven only; construction starts nothing and sends no AX message.
+
+| Thread                                                                    | Owns                                                                                                                                                                              |
+| ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Main                                                                      | `AppKit` applications and `NSScreen` only. Never runs an AX query, enumeration chunk or action.                                                                                   |
+| Tiling AX owner (`stache-tiling-ax-owner`, name supplied by the consumer) | The AX API (created in-thread from a `Send` factory), one `AxObserver` per tracked application, the `CFRunLoop` that delivers their callbacks, and every retained window element. |
+| MenuAnywhere AX owner (`stache-ax-owner`)                                 | Its own state. Never shared: the adapter rejects that name and any name already used by a live adapter.                                                                           |
+
+- **Commands and wakeup.** Callers send pure `Command`s through a bounded channel
+  (`OWNER_QUEUE_BOUND`) and a coalescing wakeup that performs a block on the owner's run loop
+  (`CFRunLoopPerformBlock` plus `CFRunLoopWakeUp`; a queued block cannot be lost if it races ahead of
+  the park, and `core_foundation::CFRunLoop` is already `Send + Sync`, so no unsafe `Send` impl is
+  needed). The idle owner parks with no timeout; there is no polling timer. While enumeration or
+  queued commands remain it polls with a zero timeout (the re-post). A `Driver` trait abstracts the
+  park so tests drive the owner deterministically.
+- **Identity.** `WindowInstance = (adapter, runtime epoch, exact ApplicationId, serial)`; the serial is
+  never reused. Before every action the owner revalidates adapter, epoch, application instance,
+  retained element and current `AXWindows` membership. A destroy notification invalidates the token
+  before queued commands are examined. `CGWindowID` is metadata: `resolve_window_id` returns only a
+  live, unambiguous token, so a reused id never revives a destroyed one.
+- **Observation.** Application-level notifications are registered before the first enumeration read.
+  Events leave as pure values (token or application id, kind, epoch, sequence) through a bounded
+  `EventQueue` that counts dropped events explicitly. Enumeration is chunked at 64 elements or 50 ms of
+  issuing time, then re-posted; cancellation, deadline and sealing are checked between elements.
+  A refresh reports every listed window again, with its original token and fresh facts. Only a
+  listing that finished untruncated and without error retires owner-tracked windows absent from a
+  fresh full list (each reported `Destroyed`; a failed registration removal stays owned for cleanup);
+  an aborted, cancelled or capped listing retires nothing, and Tiling's scan repair acts only on an
+  untruncated completion. The fresh read and each re-read or retirement of a missed window count
+  against the same 64-element and 50 ms chunk and are re-posted; cancellation, deadline and sealing
+  are checked between them, and an interrupted listing ends as `EnumerationAborted` (windows already
+  reported `Destroyed` were proven absent; nothing else is retired). This is fake-proven, not natively verified. Observer events are processed
+  from an ordered backlog: at most 64 `WindowCreated` adoptions within 50 ms per turn, the rest
+  re-posted in order; callback-delivered keys are released only after the whole backlog and only when
+  no undrained observer event still names them, a focus or main notification for a window created
+  later is reported for its token right after that creation (the latest of each kind wins), the
+  backlog and deferred entries of an untracked application are dropped with its observer, and an
+  unresolvable creation becomes `ObserverOverflow` instead of being dropped. Tiling coalesces
+  unresolved terminations that arrive during an in-flight application list into one follow-up list.
+- **Gate.** `WindowIssuance` is checked against a `GenerationCell` (revision, live generation, exact
+  token, plan sequence, deadline) at the send instant, with a one-shot commit after the messaging
+  timeout and immediately before the native call. Invalidation and `cancel` are lock-free and return
+  while a send is stalled. Outcomes are `NotIssued`, `ExpiredBeforeSend`, `Stale` or
+  `Issued {Applied | Partial | Uncertain | Rejected}`; a timeout after the commit is `Uncertain`.
+  Focus is not a second activation path: callers combine `ApplicationObservation::activate_exact`
+  with `AXRaise`.
+- **Hops.** One `ACKNOWLEDGEMENT_BUDGET` (2 s) per hop capped by the command's remaining deadline,
+  cancellation observed every `CANCELLATION_QUANTUM` (10 ms), including the backend calls the
+  Tiling effect worker makes (so shutdown does not wait out a hop); budgets are shared, never
+  multiplied.
+- **Cleanup.** Stop seals issuance, cancels enumeration and removes observer registrations with
+  acknowledgement. A failed removal keeps the observer and elements inert in an owner-held
+  quarantine; `retry_cleanup` retries each registration exactly once per call, and a quarantined
+  adapter refuses a new install until cleanup completes. Old-epoch cleanup cannot touch a successor.
+  `close` joins the thread with a bounded wait and refuses while resources are quarantined.
+- **Tiling seam.** `stache-tiling` `backend.rs` exposes the safe `WindowBackend` trait,
+  `SystemWindowBackend`, `LazySystemBackend` (the production composition: it spawns the
+  `stache-tiling-ax-owner` thread on the first epoch install, so a disabled Tiling owns no thread)
+  and an in-crate `FakeWindowBackend`.
+- **Tiling read-only actor (slice 04).** `stache-tiling` adds a single-writer actor thread
+  (`stache-tiling-actor`) and a bounded read-effect worker thread, both started only by the
+  internal `TrackingRuntime` harness, which nothing constructs or registers. The actor owns the pure
+  state, drains the backend `EventQueue` and a bounded mailbox, and publishes immutable
+  `Arc<TilingSnapshot>` values; native reads run on the effect worker (calling only the backend's
+  `track`, `refresh`, `untrack` and `snapshot`) and return as tagged completions. It never waits on the
+  main thread, calls `act`, or mutates a window, and it adds no SDK, IPC or CLI surface.
+- **Tiling module (parts 05-06).** `stache-tiling` `module.rs`/`status.rs` add the `Module`
+  implementation (`TilingModule`, `TilingRuntime`) and `TilingFactory` in `stache-app` `host.rs`.
+  `lib.rs` appends `TilingFactory::production` to the production composition **default disabled**
+  (after Wallpapers, Keybindings and Hold-to-Quit); it uses a Tiling-private `ApplicationControl`
+  (the repository pattern is one control per consumer), `LazySystemBackend` over default
+  `AdapterOptions` (tab reads off; Tiling's `tabs.rs` registry is wired but inert without them), a system `DisplayControl` and `sdk_display_id`. Construction is
+  inert. Start is staged with exact rollback (backend epoch, effect worker, actor, reservation
+  watcher, **display feed**, coordinator, enumeration, authority). The display feed registers a
+  `DisplayControl::observe_topology` observer whose callback only records a pure hint; the
+  `stache-tiling-displays` worker queries the layout off the callback and calls `submit_displays`,
+  and the initial layout reaches the actor before the authority is published. Tiling never calls
+  `Registry::apply_screen_topology`; Bar owns it. Reconfigure flips only after the same revision is
+  observed through the accepted watch. Stop seals first and then drains, restores runtime-hidden
+  applications (the owned ledger), stops the watcher, the display feed, the backend epoch, the actor
+  and the worker with finite waits, retaining a quarantine for any owed stage (a failed display
+  observer removal is owed as `display observer`). The status travels on `ModuleStatusView.tiling`:
+  lifecycle, owed stages, unsupported-feature and display diagnostics, ambiguous visibility records,
+  and counts of partially placed windows and visibility conflicts. The production directory is the
+  run's own application observation (`ActionsDirectory`), so every `ApplicationId` shares the
+  generation its hide, unhide and activation authorizations accept.
+
+## External borders transport (`stache_macos::borders`, Tiling part 09 slice A)
+
+`stache_macos::borders` is the safe native transport to an externally managed `JankyBorders`
+service. It is consumed by the Tiling borders runner (part 09 slice B: color/style/blacklist policy and
+the `borders.enabled` consent). The module sends NUL-separated argv batches (the legacy
+`encode_mach_args` bytes) as one complex Mach message with a single out-of-line descriptor to
+`git.felix.borders`, and offers a bounded `borders` CLI fallback through the SDK `CommandExecutor`
+(`resolve_binary`, `run_captured_prepared`, 2 s child deadline, 64 KiB per-stream cap, cancel/reap
+only the exact child; no shell).
+
+- **Never launch, leave on stop.** Every attempt starts with `ServiceAttempt::begin`, a fresh
+  `bootstrap_look_up`; only the returned attempt can send or run the CLI fallback. An absent service
+  yields `MissingService` and sends/spawns nothing. The service can still exit between the lookup and
+  a CLI invocation (documented residual race). Stache never starts, restarts or kills a service, and
+  releasing the connection sends no mutation (no `width=0`); the service keeps the last settings.
+- **Rights.** `BordersConnection` owns one send right from the lookup, is `!Send`/`!Sync`, has no
+  statics, and deallocates the right exactly once (replace, `release`, or drop). The temporary
+  bootstrap-port right is deallocated after each lookup.
+- **Outcomes.** `Sent` (kernel accepted; not an acknowledgement of applied settings), `MissingService`,
+  `Rejected` (argv encoding failure or a message-validation code such as `MACH_SEND_TOO_LARGE`,
+  `NO_BUFFER`, `INVALID_DATA` or a filter code, proven not enqueued; the only case that allows the CLI
+  fallback). `MACH_SEND_INVALID_DEST` and `MACH_SEND_INVALID_RIGHT` prove the service is gone in this
+  attempt, so they map to `MissingService` (the right is released, no CLI fallback, because running
+  the `borders` CLI could itself become the service) and `Uncertain` (`MACH_SEND_TIMED_OUT`, interrupted, in progress or any unknown code; no
+  fallback or autonomous retry after it). Per-message timeout is clamped to 1-500 ms (legacy used 0/100
+  ms). Empty and NUL-containing arguments are rejected instead of splitting or truncating argv.
+- **What is proven.** `mach_msg_header_t` (24 B), body (4 B) and OOL descriptor (16 B) sizes/offsets
+  are compile-time asserted against `<mach/message.h>` (44 B message, 4-byte packing); encoding,
+  outcome mapping, right lifecycle and the CLI argv are covered with fakes (`FakeTransport`, a fake
+  kernel, a fake process factory). Default tests never look up a service, send a message or spawn a
+  process.
+- **What is not proven.** Compatibility with any real `JankyBorders` version or protocol, service
+  acknowledgement, and real send-timeout behavior against a full queue are unverified until the
+  approved manual protocol test in the Tiling validation plan.

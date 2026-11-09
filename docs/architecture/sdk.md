@@ -52,6 +52,34 @@ joins the workers it owns.
 | `service_recovered`                 | `true`  | no      | Unavailable dependents are retried                 |
 | `shutdown`                          | any     | any     | Resources stopped; later starts are refused        |
 
+### Tiling module lifecycle (parts 05-06, registered default disabled)
+
+`stache_tiling::TilingModule` (built by the host-lifetime `TilingRuntime` and
+registered by `TilingFactory::production`, default disabled) shows the
+intended use of the lifecycle contract for a module with native resources:
+
+- **Start** acquires, in order, the backend epoch, the effect worker, the actor,
+  the reservation watcher, the native display feed (observer plus worker; its
+  initial layout reaches the actor first), the accepted-config coordinator worker, queues the
+  initial enumeration plus the accepted configuration and last publishes the
+  action authority for the accepted revision. Any failure unwinds every earlier
+  stage exactly; an unwind the backend cannot finish leaves a quarantine instead
+  of a silent drop. `start` returns without waiting for any window to move.
+  Accessibility is declared `PromptPolicy::UserOnly`; a missing grant is the
+  registry's `WaitingForPermission` and nothing is acquired or prompted.
+- **Reconfigure** only stages pure, fallible work. A coordinator worker waits on
+  the `AcceptedWatch`, and only after it observes a revision does it submit that
+  coherent `(revision, config)` pair to the actor and the issuance gate. There is
+  no module-local config counter, no `revision + 1`, and no native work under the
+  publication lock; a rejected candidate changes nothing.
+- **Stop** seals the authority with one atomic store (also from the registry's
+  invalidation listener), publishes the stopping status, wakes every wait, then
+  runs fresh finite 2 s per-hop stages: frame drain, the restore of runtime-hidden
+  applications, reservation watcher, display feed, backend epoch, actor and effect worker. A stage that does
+  not finish stays owed in a quarantine holding the exact resources. The registry
+  retries a failed stop before any restart (`start_slot` stops first), so the next
+  stop or enable re-runs only the owed stages; a blocked join is never detached.
+
 ### Permission requirements and prompt policy
 
 `ModuleDescriptor::permissions` stays the static list. A module may also override
@@ -318,6 +346,15 @@ A module that sets `ModuleDescriptor::reserves_screen` (default `false`, like
   must use; applying the topology itself still belongs to Bar 03. The reservation
   hub is a single hub closed by `Registry::invalidate`, so it has no late-created
   cell gap.
+- **Tiling consumer (parts 05-06, registered default disabled).** `stache-tiling`
+  `module.rs` is the first consumer of this observer and of `AcceptedWatch`. Its
+  `start` spawns a `ReservationWatcher` (subscribe-before-fetch) and waits, within
+  one finite hop, until the first snapshot reached the actor, and only then
+  publishes the action authority, so reservations are consumed before the first
+  frame effect. The watcher reads through `ModuleContext::observe_screen_reservations`
+  (the app factory injects `stache_app::display::sdk_display_id` as the
+  `DisplayProjection`). Tiling still declares no `reserves_screen` and applies no
+  topology. The `lib.rs` composition registers the module default disabled.
 - **Reading.** Subscribe before fetch: `read()` then
   `wait_for_change(seen_revision, timeout, token)` with the same race-free
   check-and-sleep, cancellation wake, precedence (cancel, close, change,
@@ -555,7 +592,12 @@ extend the registry contract narrowly instead of weakening `reconfigure`.
   is removed after the last unsubscribe is acknowledged (see _Deferred tap
   removal_ below when a suppressed press is still in flight); the listen-only tap
   exists only for passive subscribers, and passive-only use never creates the
-  suppressing tap. Readiness is published only after the `Enable` acknowledgement.
+  suppressing tap (Tiling's passive drag observer is the first such consumer; the
+  tap needs Input Monitoring, which is not a typed `Permission`, so a refused
+  install surfaces only as `InputError::Native` and the consumer degrades). A
+  passive event that finds the subscriber snapshot busy is dropped and counted as
+  contention; only a tap disable is reported to observers as a discontinuity.
+  Readiness is published only after the `Enable` acknowledgement.
   Acknowledgements wait up to `ACKNOWLEDGEMENT_BUDGET` (2 s) in
   `CANCELLATION_QUANTUM` (10 ms) slices on an injectable `InputClock`; both equal
   the `stache-macos::applications` constants. A cancelled or timed-out queued

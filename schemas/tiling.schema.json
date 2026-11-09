@@ -1,0 +1,813 @@
+{
+  "$id": "https://raw.githubusercontent.com/marcosmoura/stache/main/schemas/tiling.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TilingConfig",
+  "description": "Virtual workspaces, layouts, gaps, floating presets and borders.\n\nTiling is disabled by default. Setting `enabled: true` (with Accessibility\ngranted) starts window management: Stache moves and resizes windows and\nhides and unhides applications to implement virtual workspaces.",
+  "type": "object",
+  "properties": {
+    "animations": {
+      "description": "Window transition animations.",
+      "$ref": "#/$defs/AnimationConfig",
+      "default": {
+        "duration": 200,
+        "easing": "ease-out",
+        "enabled": false
+      }
+    },
+    "borders": {
+      "description": "Window borders.",
+      "$ref": "#/$defs/BordersConfig",
+      "default": {
+        "enabled": false,
+        "floating": {
+          "color": "#94e2d5",
+          "width": 4
+        },
+        "focused": {
+          "color": "#b4befe",
+          "width": 4
+        },
+        "ignore": [],
+        "monocle": {
+          "color": "#cba6f7",
+          "width": 4
+        },
+        "unfocused": {
+          "color": "#6c7086",
+          "width": 4
+        }
+      }
+    },
+    "defaultLayout": {
+      "description": "Layout for workspaces that do not specify one.",
+      "$ref": "#/$defs/LayoutType",
+      "default": "dwindle"
+    },
+    "enabled": {
+      "description": "Whether the tiling window manager should run.",
+      "type": "boolean",
+      "default": false
+    },
+    "floating": {
+      "description": "Floating window defaults and presets.",
+      "$ref": "#/$defs/FloatingConfig",
+      "default": {
+        "defaultPosition": "center",
+        "presets": []
+      }
+    },
+    "gaps": {
+      "description": "Gaps, global or per display.",
+      "$ref": "#/$defs/GapsConfigValue",
+      "default": {
+        "inner": 0,
+        "outer": 0
+      }
+    },
+    "ignore": {
+      "description": "Windows that are never managed.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/WindowRule"
+      }
+    },
+    "master": {
+      "description": "Master layout settings.",
+      "$ref": "#/$defs/MasterConfig",
+      "default": {
+        "position": "auto",
+        "ratio": 60
+      }
+    },
+    "workspaces": {
+      "description": "Workspace definitions. Empty means one default workspace per display.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/WorkspaceConfig"
+      }
+    }
+  },
+  "$defs": {
+    "AnimationConfig": {
+      "description": "Animation configuration for window transitions.",
+      "type": "object",
+      "properties": {
+        "duration": {
+          "description": "Animation duration in milliseconds for large movements.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 200,
+          "minimum": 0
+        },
+        "easing": {
+          "description": "Easing function for animations.",
+          "$ref": "#/$defs/EasingType",
+          "default": "ease-out"
+        },
+        "enabled": {
+          "description": "Whether animations are enabled.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "BorderAnimationConfig": {
+      "description": "Color animation for gradient borders.",
+      "type": "object",
+      "properties": {
+        "duration": {
+          "description": "Duration in milliseconds of one color-swap leg.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "easing": {
+          "description": "Easing of each leg.",
+          "$ref": "#/$defs/EasingType",
+          "default": "linear"
+        }
+      },
+      "required": [
+        "duration"
+      ]
+    },
+    "BorderStateConfig": {
+      "description": "One border state: `false` or an object with a width and a color source.",
+      "anyOf": [
+        {
+          "description": "`false` disables the border for this state.",
+          "type": "boolean"
+        },
+        {
+          "description": "Solid color.",
+          "type": "object",
+          "properties": {
+            "color": {
+              "description": "Solid color.",
+              "type": "string"
+            },
+            "width": {
+              "description": "Width in pixels.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "width",
+            "color"
+          ]
+        },
+        {
+          "description": "Gradient color.",
+          "type": "object",
+          "properties": {
+            "animation": {
+              "description": "Optional color animation.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BorderAnimationConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "gradient": {
+              "description": "Gradient.",
+              "$ref": "#/$defs/GradientConfig"
+            },
+            "width": {
+              "description": "Width in pixels.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "width",
+            "gradient"
+          ]
+        },
+        {
+          "description": "Glow effect.",
+          "type": "object",
+          "properties": {
+            "glow": {
+              "description": "Glow color.",
+              "type": "string"
+            },
+            "width": {
+              "description": "Width in pixels.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "width",
+            "glow"
+          ]
+        }
+      ]
+    },
+    "BorderStyle": {
+      "description": "Border corner style.",
+      "oneOf": [
+        {
+          "description": "Rounded corners.",
+          "type": "string",
+          "const": "round"
+        },
+        {
+          "description": "Square corners.",
+          "type": "string",
+          "const": "square"
+        }
+      ]
+    },
+    "BordersConfig": {
+      "description": "Window border configuration.",
+      "type": "object",
+      "properties": {
+        "dwindle": {
+          "description": "Windows in dwindle layout.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BorderStateConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "enabled": {
+          "description": "Whether borders are enabled. Setting this to `true` is your explicit\nconsent for Stache to overwrite the shared `JankyBorders` settings it names:\nwidth, style, hidpi, active and inactive colors and the blacklist. Their\nprevious values are not read or restored. Stache never starts, restarts or\nkills the `JankyBorders` service (it must already be running) and, when\nborders stop or are disabled, leaves the last settings it sent in place.",
+          "type": "boolean",
+          "default": false
+        },
+        "floating": {
+          "description": "Floating windows.",
+          "$ref": "#/$defs/BorderStateConfig",
+          "default": {
+            "color": "#94e2d5",
+            "width": 4
+          }
+        },
+        "focused": {
+          "description": "Focused windows.",
+          "$ref": "#/$defs/BorderStateConfig",
+          "default": {
+            "color": "#b4befe",
+            "width": 4
+          }
+        },
+        "grid": {
+          "description": "Windows in grid layout.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BorderStateConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hidpi": {
+          "description": "Retina support (`hidpi`); omitted uses the external service default (true).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "ignore": {
+          "description": "Windows that never get a border, in addition to the global ignore rules.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/WindowRule"
+          }
+        },
+        "master": {
+          "description": "Windows in master layout.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BorderStateConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "monocle": {
+          "description": "Windows in monocle layout.",
+          "$ref": "#/$defs/BorderStateConfig",
+          "default": {
+            "color": "#cba6f7",
+            "width": 4
+          }
+        },
+        "split": {
+          "description": "Windows in split layout.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BorderStateConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "splitHorizontal": {
+          "description": "Windows in horizontal split layout.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BorderStateConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "splitVertical": {
+          "description": "Windows in vertical split layout.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BorderStateConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "style": {
+          "description": "Border style; omitted uses the external service default (round).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BorderStyle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unfocused": {
+          "description": "Unfocused windows; `false` hides them.",
+          "$ref": "#/$defs/BorderStateConfig",
+          "default": {
+            "color": "#6c7086",
+            "width": 4
+          }
+        }
+      }
+    },
+    "DimensionValue": {
+      "description": "A dimension that is either pixels (`1440`) or a percentage (`\"50%\"`).",
+      "anyOf": [
+        {
+          "description": "Value in pixels.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        {
+          "description": "Value as a percentage string such as `\"50%\"`.",
+          "type": "string"
+        }
+      ]
+    },
+    "EasingType": {
+      "description": "Easing function for animations.",
+      "oneOf": [
+        {
+          "description": "Linear interpolation.",
+          "type": "string",
+          "const": "linear"
+        },
+        {
+          "description": "Slow start.",
+          "type": "string",
+          "const": "ease-in"
+        },
+        {
+          "description": "Slow end.",
+          "type": "string",
+          "const": "ease-out"
+        },
+        {
+          "description": "Slow start and end.",
+          "type": "string",
+          "const": "ease-in-out"
+        },
+        {
+          "description": "Exponential ease out: very fast start, slow end.",
+          "type": "string",
+          "const": "ease-out-expo"
+        },
+        {
+          "description": "Spring physics.",
+          "type": "string",
+          "const": "spring"
+        }
+      ]
+    },
+    "FloatingConfig": {
+      "description": "Floating window configuration.",
+      "type": "object",
+      "properties": {
+        "defaultPosition": {
+          "description": "Default position for newly floating windows.",
+          "$ref": "#/$defs/FloatingPosition",
+          "default": "center"
+        },
+        "presets": {
+          "description": "Named presets.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/FloatingPreset"
+          }
+        }
+      }
+    },
+    "FloatingPosition": {
+      "description": "Default position for newly floating windows.",
+      "oneOf": [
+        {
+          "description": "Center the window on its display.",
+          "type": "string",
+          "const": "center"
+        },
+        {
+          "description": "Keep the application's frame.",
+          "type": "string",
+          "const": "default"
+        }
+      ]
+    },
+    "FloatingPreset": {
+      "description": "A floating window preset.",
+      "type": "object",
+      "properties": {
+        "center": {
+          "description": "Center on the display; `x` and `y` are ignored.",
+          "type": "boolean",
+          "default": false
+        },
+        "height": {
+          "description": "Height in pixels (`900`) or percent (`\"100%\"`).",
+          "$ref": "#/$defs/DimensionValue"
+        },
+        "name": {
+          "description": "Unique preset name, compared case-insensitively.",
+          "type": "string"
+        },
+        "width": {
+          "description": "Width in pixels (`1440`) or percent (`\"50%\"`).",
+          "$ref": "#/$defs/DimensionValue"
+        },
+        "x": {
+          "description": "X position; ignored when `center` is true.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DimensionValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "y": {
+          "description": "Y position; ignored when `center` is true.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DimensionValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "width",
+        "height"
+      ]
+    },
+    "GapValue": {
+      "description": "A gap value: uniform, per axis (inner) or per side (outer).",
+      "anyOf": [
+        {
+          "description": "Same value for all sides and axes.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        {
+          "description": "Different values per axis.",
+          "type": "object",
+          "properties": {
+            "horizontal": {
+              "description": "Horizontal gap.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "vertical": {
+              "description": "Vertical gap.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "horizontal",
+            "vertical"
+          ]
+        },
+        {
+          "description": "Different values per side.",
+          "type": "object",
+          "properties": {
+            "bottom": {
+              "description": "Bottom gap.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "left": {
+              "description": "Left gap.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "right": {
+              "description": "Right gap.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "top": {
+              "description": "Top gap.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "top",
+            "right",
+            "bottom",
+            "left"
+          ]
+        }
+      ]
+    },
+    "GapsConfig": {
+      "description": "Gaps for a single display or for every display.",
+      "type": "object",
+      "properties": {
+        "inner": {
+          "description": "Gaps between windows.",
+          "$ref": "#/$defs/GapValue",
+          "default": 0
+        },
+        "outer": {
+          "description": "Gaps from display edges.",
+          "$ref": "#/$defs/GapValue",
+          "default": 0
+        }
+      }
+    },
+    "GapsConfigValue": {
+      "description": "Gaps that apply globally or per display.",
+      "anyOf": [
+        {
+          "description": "Same gaps for every display.",
+          "$ref": "#/$defs/GapsConfig"
+        },
+        {
+          "description": "Per-display gaps.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ScreenGapsConfig"
+          }
+        }
+      ]
+    },
+    "GradientConfig": {
+      "description": "Gradient border color.",
+      "type": "object",
+      "properties": {
+        "angle": {
+          "description": "Angle in degrees; 0 is left to right, 90 bottom to top.",
+          "type": "number",
+          "format": "double",
+          "default": 90.0
+        },
+        "from": {
+          "description": "Starting color.",
+          "type": "string"
+        },
+        "to": {
+          "description": "Ending color.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ]
+    },
+    "LayoutType": {
+      "description": "Layout type for workspaces; `dwindle` is the single authoritative default.",
+      "oneOf": [
+        {
+          "description": "Binary space partitioning.",
+          "type": "string",
+          "const": "dwindle"
+        },
+        {
+          "description": "Split based on screen orientation.",
+          "type": "string",
+          "const": "split"
+        },
+        {
+          "description": "Windows arranged vertically.",
+          "type": "string",
+          "const": "split-vertical"
+        },
+        {
+          "description": "Windows arranged horizontally.",
+          "type": "string",
+          "const": "split-horizontal"
+        },
+        {
+          "description": "All windows maximized and stacked.",
+          "type": "string",
+          "const": "monocle"
+        },
+        {
+          "description": "One master window with a stack.",
+          "type": "string",
+          "const": "master"
+        },
+        {
+          "description": "Windows arranged in a grid.",
+          "type": "string",
+          "const": "grid"
+        },
+        {
+          "description": "Windows move and resize freely.",
+          "type": "string",
+          "const": "floating"
+        }
+      ]
+    },
+    "MasterConfig": {
+      "description": "Master layout configuration.",
+      "type": "object",
+      "properties": {
+        "position": {
+          "description": "Position of the master window.",
+          "$ref": "#/$defs/MasterPosition",
+          "default": "auto"
+        },
+        "ratio": {
+          "description": "Master window size as a percentage, 0 to 100.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 60,
+          "minimum": 0
+        }
+      }
+    },
+    "MasterPosition": {
+      "description": "Position of the master window in the master layout.",
+      "oneOf": [
+        {
+          "description": "Master window on the left.",
+          "type": "string",
+          "const": "left"
+        },
+        {
+          "description": "Master window on the right.",
+          "type": "string",
+          "const": "right"
+        },
+        {
+          "description": "Master window on top.",
+          "type": "string",
+          "const": "top"
+        },
+        {
+          "description": "Master window on the bottom.",
+          "type": "string",
+          "const": "bottom"
+        },
+        {
+          "description": "Left on landscape displays, top on portrait displays.",
+          "type": "string",
+          "const": "auto"
+        }
+      ]
+    },
+    "ScreenGapsConfig": {
+      "description": "Gaps for one named display.",
+      "type": "object",
+      "properties": {
+        "inner": {
+          "description": "Gaps between windows.",
+          "$ref": "#/$defs/GapValue",
+          "default": 0
+        },
+        "outer": {
+          "description": "Gaps from display edges.",
+          "$ref": "#/$defs/GapValue",
+          "default": 0
+        },
+        "screen": {
+          "description": "Display: `main`/`primary`, `secondary` or a display name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "screen"
+      ]
+    },
+    "WindowRule": {
+      "description": "A window matching rule; every specified field must match (AND).\n\nA rule with no field never matches anything.",
+      "type": "object",
+      "properties": {
+        "appId": {
+          "description": "Bundle identifier, matched case-insensitively and exactly.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "appName": {
+          "description": "Application name, matched as a case-insensitive substring.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "Window title, matched as a case-insensitive substring.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "WorkspaceConfig": {
+      "description": "A workspace definition.",
+      "type": "object",
+      "properties": {
+        "layout": {
+          "description": "Layout; omitted uses `defaultLayout`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LayoutType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "description": "Unique workspace name.",
+          "type": "string"
+        },
+        "preset-on-open": {
+          "description": "Floating preset applied when windows open here. Parsed and validated\nbut inert: nothing reads it at runtime.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rules": {
+          "description": "Rules that assign windows to this workspace.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/WindowRule"
+          }
+        },
+        "screen": {
+          "description": "Display: `main`/`primary`, `secondary` or a display name.",
+          "type": "string",
+          "default": "main"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    }
+  }
+}

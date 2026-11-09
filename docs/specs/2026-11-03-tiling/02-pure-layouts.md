@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 02 — Pure layouts, rules and geometry policy
@@ -21,10 +21,10 @@ Add Tiling `src/{geometry.rs,rules.rs,layout/,presets.rs,minimum_size.rs}` and p
 
 ## Acceptance criteria
 
-- [ ] TI-02-01: All eight pure algorithms/gaps/master/ratio/preset cases preserve intended legacy geometry with deterministic finite plans and explicit infeasible outcomes.
-- [ ] TI-02-02: Grid 0/1/10/11/large cases retain every identity; stable overflow/promotion/layout switching never center, auto-preset, focus-displace or overwrite explicit floating.
-- [ ] TI-02-03: Prepared/unprepared rule tests catch the appId bug, preserve AND/first-match/exclusions and missing/Unicode metadata behavior.
-- [ ] TI-02-04: One-shot floating-position/preset precedence and bounded minimum-size handling cover unresizable and impossible geometry without native assumptions.
+- [x] TI-02-01: All eight pure algorithms/gaps/master/ratio/preset cases preserve intended legacy geometry with deterministic finite plans and explicit infeasible outcomes.
+- [x] TI-02-02: Grid 0/1/10/11/large cases retain every identity; stable overflow/promotion/layout switching never center, auto-preset, focus-displace or overwrite explicit floating.
+- [x] TI-02-03: Prepared/unprepared rule tests catch the appId bug, preserve AND/first-match/exclusions and missing/Unicode metadata behavior.
+- [x] TI-02-04: One-shot floating-position/preset precedence and bounded minimum-size handling cover unresizable and impossible geometry without native assumptions.
 
 ## Tests
 

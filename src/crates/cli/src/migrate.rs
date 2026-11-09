@@ -2,8 +2,7 @@
 //!
 //! The legacy application is never imported. This module reads JSON values,
 //! converts every section the catalog owns through its authoritative type, and
-//! copies the remaining unported sections verbatim into same-ID files that the
-//! loader does not register.
+//! warns about any other key instead of copying it.
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -17,8 +16,6 @@ use stache_sdk::config::{ConfigEnvironment, ConfigFileId, ConfigPaths};
 use stache_sdk::{ConfigCatalog, GlobalConfig, LoggingConfig, ModuleId, StartupCommands};
 
 use crate::{MigrateArgs, fail, write_atomic};
-
-const UNPORTED: [&str; 1] = ["tiling"];
 
 pub(crate) fn run<W: Write, E: Write>(
     args: &MigrateArgs,
@@ -208,10 +205,6 @@ fn plan(
                 reports.push("converted logging -> global.jsonc".to_owned());
             }
             "widgets" => reports.push("warning: dropped widgets (not ported)".to_owned()),
-            known if UNPORTED.contains(&known) => {
-                files.insert(format!("{known}.jsonc"), prettify(value)?);
-                reports.push(format!("copied {known} -> {known}.jsonc"));
-            }
             unknown => {
                 reports.push(format!("warning: unknown key `{unknown}` was not migrated"));
             }
@@ -560,7 +553,7 @@ mod tests {
     pub(super) fn parse(value: &str) -> Value { serde_json::from_str(value).expect("json") }
 
     #[test]
-    fn converts_known_sections_and_copies_unported_ones() {
+    fn converts_known_sections_and_warns_about_unregistered_ones() {
         let source = Path::new("/legacy/config.jsonc");
         let plan = plan(
             &parse(
@@ -581,10 +574,10 @@ mod tests {
             "warning: unknown logging key `unexpected` was not migrated",
             "converted logging -> global.jsonc",
             "validated proxyAudio -> proxyAudio.jsonc",
-            "copied tiling -> tiling.jsonc",
+            "warning: unknown key `tiling` was not migrated",
             "warning: dropped widgets (not ported)",
         ]);
-        assert!(plan.files.contains_key("tiling.jsonc"));
+        assert!(!plan.files.contains_key("tiling.jsonc"));
         assert!(plan.files.contains_key("global.jsonc"));
         assert!(plan.files.contains_key("proxyAudio.jsonc"));
         assert!(!plan.files.contains_key("widgets.jsonc"));
@@ -601,7 +594,7 @@ mod tests {
         let plan = plan(&legacy, source, &catalog).expect("plan");
         assert!(plan.reports.contains(&"validated commandQuit -> commandQuit.jsonc".to_owned()));
         assert!(!plan.reports.iter().any(|line| line.starts_with("copied commandQuit")));
-        assert!(plan.reports.contains(&"copied tiling -> tiling.jsonc".to_owned()));
+        assert!(!plan.reports.iter().any(|line| line.starts_with("copied ")));
 
         let plan = super::plan(&legacy, source, &super::tests::catalog()).expect("plan");
         assert!(!plan.files.contains_key("commandQuit.jsonc"));
@@ -897,7 +890,6 @@ mod integration_tests {
         let contents = r#"{
             "execOnStartup": "open -a Terminal",
             "proxyAudio": { "enabled": true, "output": [{ "name": "Speakers" }] },
-            "tiling": { "enabled": true },
             "unknownThing": true
         }"#;
         fs::write(&source, contents).expect("source");
@@ -906,18 +898,11 @@ mod integration_tests {
             run_migration(Some(&source), &destination, false, &ConfigEnvironment::default());
         assert_eq!(code, ExitCode::SUCCESS, "{err}");
         assert!(out.contains("converted execOnStartup -> global.jsonc"));
-        assert!(out.contains("copied tiling -> tiling.jsonc"));
         assert!(out.contains("warning: unknown key `unknownThing` was not migrated"));
         assert_eq!(fs::read_to_string(&source).expect("source"), contents);
         assert!(destination.join("global.jsonc").exists());
         assert!(destination.join("proxyAudio.jsonc").exists());
-        assert!(destination.join("tiling.jsonc").exists());
         assert!(!destination.join("unknownThing.jsonc").exists());
-        let tiling: Value = serde_json::from_str(
-            &fs::read_to_string(destination.join("tiling.jsonc")).expect("tiling"),
-        )
-        .expect("tiling json");
-        assert_eq!(tiling, parse(r#"{ "enabled": true }"#));
     }
 
     #[test]
@@ -982,7 +967,7 @@ mod integration_tests {
     }
 
     #[test]
-    fn discovery_uses_the_injected_home_and_creates_no_unported_files() {
+    fn discovery_uses_the_injected_home_and_creates_only_registered_files() {
         let root = tempfile::tempdir().expect("temp dir");
         let home = root.path().join("home");
         let source = home.join(".stache.json");

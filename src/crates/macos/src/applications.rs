@@ -43,6 +43,11 @@
 //!   [`PressAuthorization`].
 //! - [`display`]: [`ApplicationObservation::display_for`], a best-effort display
 //!   hint from public window geometry.
+//! - [`visibility`]: [`ApplicationObservation::hide_exact`] and
+//!   [`ApplicationObservation::unhide_exact`], exact-instance hide/unhide under
+//!   the same issuance model as [`ApplicationObservation::activate_exact`].
+//! - [`lifecycle`]: [`ApplicationObservation::watch_lifecycle`], pure launch,
+//!   terminate, hide and unhide events carrying the exact [`ApplicationId`].
 //!
 //! ## Linearization
 //!
@@ -80,7 +85,7 @@
 //! removed or superseded observation stays inert.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
@@ -107,6 +112,8 @@ pub mod activation;
 pub mod display;
 pub mod frontmost;
 pub mod graceful;
+pub mod lifecycle;
+pub mod visibility;
 
 pub use activation::{ActivationAuthorization, ActivationCancel, ActivationOutcome};
 pub use display::{
@@ -119,6 +126,8 @@ pub use frontmost::{
     PreflightRejection, RefreshTicket, Unconfirmed, classify_preflight,
 };
 pub use graceful::{GracefulOutcome, PressAuthorization, PressCancel};
+pub use lifecycle::{LifecycleEvent, LifecycleKind, LifecycleSink};
+pub use visibility::{VisibilityAuthorization, VisibilityOperation, VisibilityOutcome};
 
 /// How long one dispatched native operation may wait for its acknowledgement.
 ///
@@ -156,6 +165,33 @@ pub struct ApplicationId {
     handle: BackendHandle,
     generation: u64,
     token: u64,
+}
+
+impl ApplicationId {
+    /// The reserved id carried by `LifecycleKind::TerminatedUnresolved`.
+    /// `intern` never allocates it, so it names no instance.
+    pub(crate) const fn unresolved(handle: BackendHandle, generation: u64) -> Self {
+        Self {
+            handle,
+            generation,
+            token: u64::MAX,
+        }
+    }
+}
+
+#[cfg(any(test, feature = "testing"))]
+impl ApplicationId {
+    /// A synthetic id for fakes: equal tokens are equal ids, different tokens
+    /// are different application instances.
+    #[must_use]
+    pub fn for_testing(token: u64) -> Self {
+        static SEED: BackendHandle = BackendHandle(u64::MAX);
+        Self {
+            handle: SEED,
+            generation: 1,
+            token,
+        }
+    }
 }
 
 /// An opaque key a backend uses to keep main-thread-owned state per control.
@@ -460,6 +496,20 @@ pub trait ApplicationBackend: Send + Sync {
         Err(ApplicationError::Unavailable)
     }
 
+    /// Every live running application with its metadata, interned as exact
+    /// instances of this handle's generation. [`FrontmostApplication`] is the
+    /// shared metadata record; `is_current_process` marks Stache itself.
+    ///
+    /// # Errors
+    /// Returns [`ApplicationError::NotMainThread`] off-main or a query failure.
+    /// The default implementation reports [`ApplicationError::Unavailable`].
+    fn running_details(
+        &self,
+        _handle: BackendHandle,
+    ) -> Result<Vec<FrontmostApplication>, ApplicationError> {
+        Err(ApplicationError::Unavailable)
+    }
+
     /// Requests graceful termination of the exact instance through `permit`.
     ///
     /// The backend runs the main exact-identity/current-frontmost preflight
@@ -504,6 +554,66 @@ pub trait ApplicationBackend: Send + Sync {
         _permit: IssuancePermit<'_>,
     ) -> Result<ActivationOutcome, ApplicationError> {
         Err(ApplicationError::Unavailable)
+    }
+
+    /// Hides or unhides the exact retained instance through `permit`.
+    ///
+    /// The backend resolves the retained instance and validates liveness and
+    /// owner generation first (not running or foreign is
+    /// [`VisibilityOutcome::Stale`]). It must call [`IssuancePermit::issue`] at
+    /// the exact native `hide`/`unhide` site and, inside that closure, check
+    /// [`VisibilityAuthorization::is_expired`] (returning
+    /// [`VisibilityOutcome::ExpiredBeforeSend`]) and then
+    /// [`VisibilityAuthorization::commit_send`] (returning
+    /// [`VisibilityOutcome::Cancelled`] on failure). It returns
+    /// [`VisibilityOutcome::Stale`] when the permit returns `None`. It never
+    /// touches any other instance and never activates.
+    ///
+    /// # Errors
+    /// Returns [`ApplicationError::NotMainThread`] off-main.
+    fn request_visibility(
+        &self,
+        _handle: BackendHandle,
+        _application: ApplicationId,
+        _operation: VisibilityOperation,
+        _authorization: &VisibilityAuthorization,
+        _permit: IssuancePermit<'_>,
+    ) -> Result<VisibilityOutcome, ApplicationError> {
+        Err(ApplicationError::Unavailable)
+    }
+
+    /// Registers launch, terminate, hide and unhide observation for one
+    /// generation.
+    ///
+    /// The native callbacks must only intern or look up the instance and enqueue
+    /// the pure [`LifecycleEvent`] on a *later* main turn (see
+    /// [`lifecycle`]), never call `notify` inline. The default implementation
+    /// reports [`ApplicationError::Unavailable`].
+    ///
+    /// # Errors
+    /// Returns [`ApplicationError::AlreadyInstalled`] when already registered, a
+    /// registration failure or [`ApplicationError::NotMainThread`].
+    fn observe_lifecycle(
+        &self,
+        _handle: BackendHandle,
+        _generation: u64,
+        _notify: LifecycleSink,
+    ) -> Result<(), ApplicationError> {
+        Err(ApplicationError::Unavailable)
+    }
+
+    /// Removes only the lifecycle observers for one generation. Idempotent; a
+    /// superseded generation is left untouched. [`ApplicationBackend::unobserve`]
+    /// also removes them.
+    ///
+    /// # Errors
+    /// Returns a removal failure; ownership stays with the caller.
+    fn unobserve_lifecycle(
+        &self,
+        _handle: BackendHandle,
+        _generation: u64,
+    ) -> Result<(), ApplicationError> {
+        Ok(())
     }
 
     /// Best-effort display hint for the exact instance from public geometry.
@@ -1194,6 +1304,17 @@ impl ApplicationObservation {
         self.query(move |backend, handle| backend.running_applications(handle, &bundle_id))
     }
 
+    /// Every live running application with metadata, as exact instances of this
+    /// observation. Runs a main-thread query bounded by the acknowledgement
+    /// budget.
+    ///
+    /// # Errors
+    /// Returns [`ApplicationError::NotInstalled`] after cleanup, a dispatch
+    /// rejection, a timeout or an unavailable backend.
+    pub fn running_details(&self) -> Result<Vec<FrontmostApplication>, ApplicationError> {
+        self.query(|backend, handle| backend.running_details(handle))
+    }
+
     /// Whether the exact instance is still alive.
     ///
     /// An instance from another control is not running for this observation.
@@ -1842,6 +1963,9 @@ struct ObserverState {
     token: Retained<ProtocolObject<dyn NSObjectProtocol>>,
     /// The optional workspace activation observer of the same generation.
     activation: Option<Retained<ProtocolObject<dyn NSObjectProtocol>>>,
+    /// The lifecycle observers (launch, terminate, hide, unhide); empty when not
+    /// installed.
+    lifecycle: Vec<Retained<ProtocolObject<dyn NSObjectProtocol>>>,
 }
 
 /// Retained native instances for one control, owned by one generation.
@@ -1856,10 +1980,61 @@ struct InstanceStore {
     generation: u64,
     next: u64,
     entries: BTreeMap<u64, Retained<NSRunningApplication>>,
+    /// Pruned terminated instances, oldest first, so a `DidTerminate` that runs
+    /// after another application's intern still names the original id.
+    tombstones: VecDeque<(u64, Retained<NSRunningApplication>)>,
 }
 
+/// The most pruned terminated instances kept to resolve a late `DidTerminate`.
+/// The oldest is evicted first; an evicted termination is reported as
+/// `LifecycleKind::TerminatedUnresolved`.
+const TERMINATED_TOMBSTONES: usize = 64;
+
 impl InstanceStore {
-    fn prune(&mut self) { self.entries.retain(|_, application| !application.isTerminated()); }
+    /// Drops terminated instances from the live set, moving them to the bounded
+    /// tombstone list instead of forgetting their ids.
+    fn prune(&mut self) {
+        let dead: Vec<u64> = self
+            .entries
+            .iter()
+            .filter(|(_, application)| application.isTerminated())
+            .map(|(token, _)| *token)
+            .collect();
+        for token in dead {
+            if let Some(application) = self.entries.remove(&token) {
+                self.tombstones.push_back((token, application));
+                while self.tombstones.len() > TERMINATED_TOMBSTONES {
+                    self.tombstones.pop_front();
+                }
+            }
+        }
+    }
+
+    /// The token of an already interned equal instance, without pruning.
+    ///
+    /// A terminated instance must keep resolving to the id a consumer holds, so
+    /// this never calls [`Self::prune`], never inserts and also checks the
+    /// tombstones of pruned instances.
+    fn find(&self, application: &NSRunningApplication) -> Option<u64> {
+        let equal = |candidate: &Retained<NSRunningApplication>| {
+            candidate.isEqual(Some(AsRef::<AnyObject>::as_ref(application)))
+        };
+        self.entries
+            .iter()
+            .find_map(|(token, candidate)| equal(candidate).then_some(*token))
+            .or_else(|| {
+                self.tombstones
+                    .iter()
+                    .find_map(|(token, candidate)| equal(candidate).then_some(*token))
+            })
+    }
+
+    /// Resolves a termination and clears its tombstone: the id is delivered once.
+    fn take_terminated(&mut self, application: &NSRunningApplication) -> Option<u64> {
+        let token = self.find(application)?;
+        self.tombstones.retain(|(held, _)| *held != token);
+        Some(token)
+    }
 
     fn intern(
         &mut self,
@@ -1868,11 +2043,9 @@ impl InstanceStore {
         application: &NSRunningApplication,
     ) -> ApplicationId {
         self.prune();
-        let existing = self.entries.iter().find_map(|(token, candidate)| {
-            candidate
-                .isEqual(Some(AsRef::<AnyObject>::as_ref(application)))
-                .then_some(*token)
-        });
+        // A pruned (terminated) instance keeps its id while tombstoned, so a
+        // late notification for it never mints a second id.
+        let existing = self.find(application);
         let token = existing.unwrap_or_else(|| {
             let token = self.next;
             self.next += 1;
@@ -2018,6 +2191,7 @@ impl ApplicationBackend for SystemApplicationBackend {
                 center,
                 token,
                 activation: None,
+                lifecycle: Vec::new(),
             });
             INSTANCES.with(|cell| {
                 let mut stores = cell.borrow_mut();
@@ -2055,6 +2229,9 @@ impl ApplicationBackend for SystemApplicationBackend {
                 state.center.removeObserver(AsRef::<AnyObject>::as_ref(&state.token));
                 if let Some(activation) = &state.activation {
                     state.center.removeObserver(AsRef::<AnyObject>::as_ref(activation));
+                }
+                for token in &state.lifecycle {
+                    state.center.removeObserver(AsRef::<AnyObject>::as_ref(token));
                 }
             }
         }
@@ -2304,6 +2481,43 @@ impl ApplicationBackend for SystemApplicationBackend {
         Ok(())
     }
 
+    fn running_details(
+        &self,
+        handle: BackendHandle,
+    ) -> Result<Vec<FrontmostApplication>, ApplicationError> {
+        let _main = require_main()?;
+        let generation = OBSERVERS
+            .with(|cell| cell.borrow().get(&handle).map(|state| state.generation))
+            .ok_or(ApplicationError::NotInstalled)?;
+        let running = NSWorkspace::sharedWorkspace().runningApplications();
+        let current = NSRunningApplication::currentApplication();
+        INSTANCES
+            .with(|cell| {
+                let mut stores = cell.borrow_mut();
+                let store = stores.get_mut(&handle)?;
+                if store.generation != generation {
+                    return None;
+                }
+                store.prune();
+                let mut details = Vec::new();
+                for application in running.to_vec() {
+                    if application.isTerminated() {
+                        continue;
+                    }
+                    details.push(FrontmostApplication {
+                        id: store.intern(handle, generation, &application),
+                        bundle_identifier: application.bundleIdentifier().map(|id| id.to_string()),
+                        name: application.localizedName().map(|name| name.to_string()),
+                        is_current_process: application
+                            .isEqual(Some(AsRef::<AnyObject>::as_ref(&*current))),
+                        pid: Some(application.processIdentifier()),
+                    });
+                }
+                Some(details)
+            })
+            .ok_or(ApplicationError::NotInstalled)
+    }
+
     fn frontmost(
         &self,
         handle: BackendHandle,
@@ -2409,6 +2623,65 @@ impl ApplicationBackend for SystemApplicationBackend {
             return Ok(ActivationOutcome::Stale);
         };
         Ok(outcome)
+    }
+
+    fn request_visibility(
+        &self,
+        handle: BackendHandle,
+        application: ApplicationId,
+        operation: VisibilityOperation,
+        authorization: &VisibilityAuthorization,
+        permit: IssuancePermit<'_>,
+    ) -> Result<VisibilityOutcome, ApplicationError> {
+        let _main = require_main()?;
+        // Preflight is outside the gate and immediately before the permit: the
+        // exact retained instance of the current generation must still be live.
+        if !self.is_running(handle, application)? {
+            return Ok(VisibilityOutcome::Stale);
+        }
+        let Some(current) = Self::retained_instance(handle, application) else {
+            return Ok(VisibilityOutcome::Stale);
+        };
+        let Some(outcome) = permit.issue(|| {
+            if authorization.is_expired() {
+                return VisibilityOutcome::ExpiredBeforeSend;
+            }
+            // One-shot ordering with a concurrent cancel: whichever CAS wins.
+            if !authorization.commit_send() {
+                return VisibilityOutcome::Cancelled;
+            }
+            // Public `-[NSRunningApplication hide]`/`unhide` of exactly this
+            // instance; see the `visibility` module documentation.
+            let accepted = match operation {
+                VisibilityOperation::Hide => current.hide(),
+                VisibilityOperation::Unhide => current.unhide(),
+            };
+            if accepted {
+                VisibilityOutcome::Requested
+            } else {
+                VisibilityOutcome::Refused
+            }
+        }) else {
+            return Ok(VisibilityOutcome::Stale);
+        };
+        Ok(outcome)
+    }
+
+    fn observe_lifecycle(
+        &self,
+        handle: BackendHandle,
+        generation: u64,
+        notify: LifecycleSink,
+    ) -> Result<(), ApplicationError> {
+        lifecycle::observe_system(handle, generation, &notify)
+    }
+
+    fn unobserve_lifecycle(
+        &self,
+        handle: BackendHandle,
+        generation: u64,
+    ) -> Result<(), ApplicationError> {
+        lifecycle::unobserve_system(handle, generation)
     }
 
     fn display_hint(
@@ -2520,3 +2793,9 @@ mod graceful_tests;
 
 #[cfg(test)]
 mod activation_tests;
+
+#[cfg(test)]
+mod visibility_tests;
+
+#[cfg(test)]
+mod lifecycle_tests;

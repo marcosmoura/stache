@@ -9,9 +9,12 @@ pub mod accessibility;
 pub mod activation;
 pub mod applications;
 pub mod audio;
+pub mod ax;
+pub mod borders;
 pub mod caps_remap;
 pub mod desktop;
 pub mod display;
+pub mod displays;
 pub mod hold_hud;
 pub mod hotkeys;
 pub mod input;
@@ -21,6 +24,7 @@ pub mod main_thread;
 pub mod menu;
 pub mod settings;
 pub mod termination;
+pub mod windows;
 
 pub use accessibility::{AccessibilityPermission, is_trusted, request_trust};
 pub use activation::ActivationObserver;
@@ -33,14 +37,23 @@ pub use applications::{
     ApplicationControl, ApplicationError, ApplicationId, ApplicationObservation, BackendHandle,
     CANCELLATION_QUANTUM, DisplayHint, DisplayRect, DisplaySource, FINDER_BUNDLE_IDENTIFIER,
     FrontmostApplication, FrontmostClass, FrontmostListener, FrontmostPreflight, FrontmostSnapshot,
-    FrontmostState, FrontmostWatch, GracefulOutcome, IssuancePermit, NativeOpenCompletion,
-    OpenCompletion, OpenCompletionContext, OpenRequest, PreflightRejection, PressAuthorization,
-    PressCancel, RefreshTicket, ScreenRecord, SystemApplicationBackend, TerminateOutcome,
-    Unconfirmed, WindowRecord, appkit_rect_from_cg, classify_preflight, select_display,
+    FrontmostState, FrontmostWatch, GracefulOutcome, IssuancePermit, LifecycleEvent, LifecycleKind,
+    LifecycleSink, NativeOpenCompletion, OpenCompletion, OpenCompletionContext, OpenRequest,
+    PreflightRejection, PressAuthorization, PressCancel, RefreshTicket, ScreenRecord,
+    SystemApplicationBackend, TerminateOutcome, Unconfirmed, VisibilityAuthorization,
+    VisibilityOperation, VisibilityOutcome, WindowRecord, appkit_rect_from_cg, classify_preflight,
+    select_display,
 };
 pub use audio::{
     AudioBackend, AudioChangeSubscription, AudioDevice, AudioDeviceId, AudioDirection, AudioError,
     AudioWakeup, CoreAudioBackend,
+};
+#[cfg(any(test, feature = "testing"))]
+pub use borders::testing::{FakeSend, FakeTransport};
+pub use borders::{
+    BORDERS_BINARY, BordersConnection, BordersTransport, CLI_CHILD_DEADLINE, CLI_OUTPUT_CAP,
+    CliOutcome, CliRunner, EncodeError, MACH_SEND_DEADLINE_MAX, MAX_PAYLOAD_BYTES, MissingService,
+    Rejection, SERVICE_NAME, SendOutcome, ServiceAttempt, encode_mach_args,
 };
 #[cfg(any(test, feature = "testing"))]
 pub use desktop::testing::{FakeDesktop, FakeSetCall};
@@ -51,6 +64,13 @@ pub use desktop::{
     SystemDesktopClock,
 };
 pub use display::is_screen_mirroring_active;
+#[cfg(any(test, feature = "testing"))]
+pub use displays::testing::FakeDisplayBackend;
+pub use displays::{
+    DisplayBackend, DisplayControl, DisplayError, DisplayInfo, DisplayLayout, DisplayObserver,
+    SystemDisplayBackend, TopologyHint, appkit_point_from_ax, appkit_rect_from_ax,
+    ax_point_from_appkit, ax_rect_from_appkit, refresh_hz_from_native,
+};
 pub use input::MacInputBackend;
 #[cfg(any(test, feature = "testing"))]
 pub use keep_awake::testing::{

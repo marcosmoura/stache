@@ -13,6 +13,7 @@ use stache_menu_anywhere::MenuAnywhereConfig;
 use stache_notunes::NoTunesConfig;
 use stache_proxy_audio::ProxyAudioConfig;
 use stache_sdk::{CommandCatalog, ConfigCatalog, GlobalConfig};
+use stache_tiling::{LayoutType, TilingConfig};
 use stache_wallpapers::WallpapersConfig;
 
 const LEGACY: &str = include_str!("fixtures/legacy-config.jsonc");
@@ -32,6 +33,7 @@ fn the_catalog_owns_the_global_and_module_files() {
         "menuAnywhere",
         "notunes",
         "proxyAudio",
+        "tiling",
         "wallpapers"
     ]);
     assert_eq!(
@@ -278,12 +280,48 @@ fn migration_converts_the_legacy_fixture_into_valid_typed_files() {
     assert!(!out.contains("copied wallpapers"));
     assert!(out.contains("validated commandQuit -> commandQuit.jsonc"));
     assert!(!out.contains("copied commandQuit"));
-    assert!(out.contains("copied tiling -> tiling.jsonc"));
+    assert!(out.contains("validated tiling -> tiling.jsonc"), "{out}");
+    assert!(!out.contains("copied tiling"));
     assert!(out.contains("validated bar -> bar.jsonc"), "{out}");
     assert!(!out.contains("copied bar"));
     assert!(out.contains("warning: bar `padding` was omitted"), "{out}");
     assert!(out.contains("warning: dropped widgets (not ported)"));
     assert!(out.contains("warning: unknown key `futureKey` was not migrated"));
+}
+
+#[test]
+fn tiling_migration_validates_keeps_shapes_and_warns_about_corrections() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let source = root.path().join("legacy.jsonc");
+    let legacy = r#"{ "tiling": {
+        "enabled": true, "defaultLayout": "grid",
+        "gaps": { "inner": { "horizontal": 4, "vertical": 6 }, "outer": 8 },
+        "floating": { "presets": [{ "name": "wide", "width": "80%", "height": 600 }] },
+        "workspaces": [{ "name": "web", "screen": "secondary", "preset-on-open": "wide" }]
+    } }"#;
+    fs::write(&source, legacy).expect("source");
+    let destination = root.path().join("new");
+    let (code, out, err) = migrate(&source, &destination, false);
+    assert_eq!(code, ExitCode::SUCCESS, "{err}");
+    assert!(out.contains("validated tiling -> tiling.jsonc"), "{out}");
+    assert!(
+        out.contains("warning: tiling grid layout now tiles at most 10"),
+        "{out}"
+    );
+    assert!(out.contains("defaultPosition"), "{out}");
+    assert_eq!(fs::read_to_string(&source).expect("source"), legacy);
+    let path = destination.join("tiling.jsonc");
+    let text = fs::read_to_string(&path).expect("tiling");
+    catalog().inspect(TilingConfig::ID, &path, &text).expect("validates");
+    let decoded: TilingConfig = serde_json::from_str(&text).expect("typed");
+    assert!(decoded.enabled && decoded.default_layout == LayoutType::Grid);
+    assert_eq!(decoded.workspaces[0].preset_on_open.as_deref(), Some("wide"));
+
+    let invalid = root.path().join("invalid.jsonc");
+    fs::write(&invalid, r#"{ "tiling": { "master": { "ratio": 500 } } }"#).expect("invalid");
+    let (code, _, err) = migrate(&invalid, &root.path().join("rejected"), false);
+    assert_ne!(code, ExitCode::SUCCESS);
+    assert!(err.contains("master.ratio"), "{err}");
 }
 
 fn migrate(

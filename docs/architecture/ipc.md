@@ -207,6 +207,53 @@ file never blocks the others. The desktop `core.reload` wrapper asks the host
 worker to publish the resulting module status once, so a CLI reload updates the
 tray and test window without a restart.
 
+### Tiling methods
+
+`stache-tiling` serves module `tiling` through `TilingIpc` (registered by
+`TilingFactory::ipc_handlers`, wrapped in the host gate). The methods are
+`pause`, `resume`, `query`, `window` and `workspace`. Every request type denies
+unknown fields and is decoded once; every `Response::Ok.data` is encoded once.
+
+- `query` takes `{"kind":"screens|workspaces|windows|apps"}` with optional
+  `screen`, `workspace`, `focusedScreen`, `focusedWorkspace` filters (conflicting
+  filters are `InvalidParams`) and answers a bare array of rows in actor snapshot
+  order, never filtered by name sort. Row fields are fixed and camelCase:
+  screens `id,name,isMain,isBuiltin,scaleFactor,frame,visibleFrame`, workspaces
+  `id` (string)`,name,screenName,layout,isVisible,isFocused,windowCount`, windows
+  `id,pid,appId,appName,title,workspace,frame,isMinimized,isFullscreen,isFloating,isFocused`
+  and apps `pid,name,bundleId,isHidden`. That declaration order is the frozen JSON
+  key order the CLI renders. A disabled, paused, pending-cleanup or not yet
+  initialized module answers a typed error, never an empty list.
+- `window` takes `{focus?, swap?, toggleFloating?, preset?, resize?: [{dimension,
+  amount}], sendToScreen?, sendToWorkspace?}`; `workspace` takes `{focus?,
+  layout?, balance?, sendToScreen?}`. Actions always run in the fixed order focus,
+  swap, toggle-floating, preset, resize pairs (as supplied), send-to-screen,
+  send-to-workspace (workspace: focus, layout, balance, send-to-screen), whatever
+  the field order. Each action waits for its actor record before the next
+  selector resolves and the first reported failure stops the list. Earlier
+  admitted actions are not rolled back; resize dimension/amount are validated when
+  that pair executes, so earlier actions may already have run. Focus accepts
+  directions case-insensitively (`prev` aliases `previous`) or a numeric window id
+  resolved once to the exact current window; swap and `layout` are exact.
+- `pause`/`resume` take `{}` and wait for the registry acknowledgement.
+  They are single-flight: while another pause or resume is still running (including
+  one abandoned after its deadline) the request is not started and answers a typed
+  `uncertain` outcome with `notAttempted` action status and
+  `unknown: [{subject: "stage:lifecycle", reason: "inProgress"}]`, which the CLI prints
+  as the uncertain error (exit 1); it is not reported as pending cleanup.
+
+Mutations answer `Response::Ok` with `OperationResponse`, tagged by `outcome`:
+`enqueued` (the actor admitted the request), `applied` (the stated scope is
+confirmed, for example an acknowledged pause), `partial` or `uncertain`, each with
+`request.actions[]`, `targets`, `failed`, `notAttempted` and `unknown` evidence.
+`enqueued` is **admission**, not proof that a window moved. Known immediate
+failures (a refusal, a proven no-send, a dead target, a missing workspace) are
+typed wire errors with fixed bodies (`ipc::body`), not `Ok` bodies. Existing
+`WireErrorKind`s are used (`Unavailable`, `Disabled`, `Handler`, `InvalidParams`,
+`UnknownMethod`); no wire variant was added. One request has a finite budget
+(4 s, hops capped at 2 s) inside the client's 5 s total; host begin-shutdown
+cancels waits, and no request is retried after a possible send.
+
 ### Accessibility gate
 
 The host publishes its Accessibility gate state (`checking`, `blocked`,
@@ -368,6 +415,65 @@ built-ins. See [wallpapers.md](../features/wallpapers.md#cli).
 
 Contributed executors receive the same `ansi` flag as built-ins
 (`CliExecutor::execute`), so a contributed command follows one terminal policy.
+
+## Tiling command
+
+`tiling pause|resume|query|window|workspace` is contributed by `stache-tiling`
+(`src/cli.rs`, `src/cli/render.rs`), added in `src/crates/app/src/commands.rs`.
+The composition root injects the config and identity environment and the JSON
+styling; the module crate owns the clap tree, renderers and error adapters, so
+`stache-cli` stays SDK-only. The command never starts the desktop, the
+Accessibility owner or the module: it needs a running host with the **same
+configuration directory** and otherwise fails. `-c/--config` is a directory
+(before or after any subcommand); before each request the CLI reads `core.status`
+and compares the canonical directory with the host's, and a mismatch is refused
+(`Running host uses config directory "..."; requested "...". Use the same config
+directory or stop that host.`) before any Tiling request is sent.
+
+Grammar (see [tiling.md](../features/tiling.md#cli) for examples):
+
+```text
+stache tiling pause|resume
+stache tiling query [-j|--json] [-d|--detailed] [screens|apps]
+stache tiling query [-j|--json] [-d|--detailed] workspaces [--focused-screen|--screen NAME]
+stache tiling query [-j|--json] [-d|--detailed] windows [--focused-screen|--focused-workspace|--screen NAME] [--workspace NAME]
+stache tiling window [--focus DIRECTION|WINDOW_ID] [--swap DIRECTION] [--toggle-floating] [--preset NAME] [--resize DIMENSION AMOUNT]... [--send-to-screen NAME] [--send-to-workspace NAME]
+stache tiling workspace [--focus NAME] [--layout LAYOUT] [--balance] [--send-to-screen NAME]
+```
+
+`-j`/`-d` are global within `query`. `query` alone prints the query help and a
+blank line and exits 0. Swap and `--layout` are exact lowercase enums, so an
+invalid value exits 2; focus is a free string and resize dimension/amount are
+validated semantically by the host (exit 1).
+
+| Situation                                                 | Stream | Exit | Body                                                                                          |
+| --------------------------------------------------------- | ------ | ---- | --------------------------------------------------------------------------------------------- |
+| Parse, arity, value-enum or flag-conflict error           | stderr | 2    | clap text                                                                                     |
+| Mutation `enqueued` or `applied`                          | none   | 0    | silent (admission, not native success)                                                        |
+| Mutation `partial`                                        | stderr | 1    | `stache: IPC error: Tiling operation partially applied.`                                      |
+| Mutation `uncertain` (or a non-`applied` pause)           | stderr | 1    | `stache: IPC error: Tiling operation outcome is uncertain; it may already have taken effect.` |
+| Action/semantic error or host refusal                     | stderr | 1    | `stache: IPC error: {body}`                                                                   |
+| No window/workspace flags; bad resize dimension or amount | stderr | 1    | `stache: {body}` (legacy argument errors; no host contact for the empty request)              |
+| Query success                                             | stdout | 0    | table, or the whole pretty JSON array plus a newline                                          |
+| Query failure, table mode                                 | stdout | 1    | `Stache app is not running.` when offline, else `Error: {body}`                               |
+| Query failure, `--json`                                   | stdout | 1    | `{"error":"Stache app is not running"}` or `{"error":"{body}"}` (serde-escaped)               |
+
+Typed SDK client errors map through the module adapter, never the SDK's
+lowercase `Display`: not running becomes `Stache app is not running`, timeout
+`Connection timed out`, I/O `IO error: {source}`, an invalid envelope `Invalid
+response: {detail}`, a request that cannot be serialized `Cannot serialize tiling
+request` and a remote error its frozen body. Data that does not decode into the
+typed rows is `Invalid response: the Tiling response could not be decoded`; the
+payload is never echoed and a failed decode is never an empty success. Control
+characters in bodies and in table cells print as visible escapes (`\u001b`).
+
+Tables are rounded (`╭ ─ ┬ ╮ │ ├ ┼ ┤ ╰ ┴ ╯`), one space of padding, widths measured in
+terminal columns, `✓`/`✗` glyphs, headings `Screens (N)`, `Workspaces (N)`,
+`Windows (N)` and `Running Apps (N)` and empty bodies `No screens detected.`, `No
+workspaces found.`, `No windows found.` and `No running apps found.`. ANSI
+(bold headings, green/red glyphs, dimmed empty bodies, red `Error:`) is emitted
+only when stdout is a terminal; stripped of escapes it equals the piped text.
+Contributed executors receive the same `ansi` flag as built-ins.
 
 ## Output
 

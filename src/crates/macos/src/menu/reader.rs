@@ -21,9 +21,7 @@ use super::snapshot::{
     ActionToken, MarkState, MenuItemKind, MenuItemSnapshot, MenuSnapshot, PresentationId,
     SubmenuSnapshot, key_equivalent,
 };
-
-/// Messaging timeout set on every element before it is messaged.
-pub const ELEMENT_TIMEOUT: Duration = Duration::from_millis(500);
+pub use crate::ax::ELEMENT_TIMEOUT;
 /// Cumulative read deadline, started before the first AX read.
 pub const READ_DEADLINE: Duration = Duration::from_millis(1500);
 /// Maximum visited elements.
