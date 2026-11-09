@@ -28,6 +28,7 @@ Read when navigating the shipped foundation, explicitly planned rewrites or the 
 | Tiling (core, workspaces, CLI; default off) | [feature](features/tiling.md), [spec](specs/2026-11-03-tiling/00-overview.md)                               |
 | Tiling CLI and socket methods               | [features/tiling.md#cli](features/tiling.md#cli), [architecture/ipc.md](architecture/ipc.md#tiling-command) |
 | Tiling animation pipeline (planned)         | [spec](specs/2026-11-09-tiling-animation/00-overview.md)                                                    |
+| Tiling native borders (planned)             | [spec](specs/2026-11-09-tiling-borders/00-overview.md)                                                      |
 | Tiling–Bar integration (planned)            | [spec](specs/2026-11-08-tiling-bar/00-overview.md)                                                          |
 | Coordinated teardown                        | [spec](specs/2026-11-03-teardown/00-overview.md)                                                            |
 | Release/packaging (planned)                 | [spec](specs/2026-11-03-release/00-overview.md)                                                             |
