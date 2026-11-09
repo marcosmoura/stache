@@ -10,7 +10,7 @@ use super::DimensionValue;
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, Type,
 )]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum FloatingPosition {
     /// Center the window on its display.
     #[default]
@@ -21,7 +21,7 @@ pub enum FloatingPosition {
 
 /// A floating window preset.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Type)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct FloatingPreset {
     /// Unique preset name, compared case-insensitively.
     pub name: String,
@@ -42,7 +42,7 @@ pub struct FloatingPreset {
 
 /// Floating window configuration.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Type)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default, rename_all = "snake_case")]
 pub struct FloatingConfig {
     /// Default position for newly floating windows.
     pub default_position: FloatingPosition,

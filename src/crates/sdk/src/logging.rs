@@ -30,7 +30,7 @@ use crate::module::ModuleId;
     JsonSchema,
     Type,
 )]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum LogLevel {
     /// Development detail.
     Debug,
@@ -105,7 +105,7 @@ impl Logger for DiscardLogger {
 
 /// A shared, atomically updated minimum log level.
 ///
-/// The configuration store updates it when `global.jsonc` is accepted, and an
+/// The configuration store updates it when `global.toml` is accepted, and an
 /// injected [`Logger`] can consult [`LogFilter::allows`] before formatting a
 /// record. This keeps level changes live without a process-wide logger.
 #[derive(Debug)]

@@ -78,17 +78,19 @@ const RELAUNCH_EXIT_BOUND: Duration = Duration::from_secs(30);
 const PROXY_AUDIO: &str = "proxyAudio";
 
 /// Baseline file written before the host starts: valid and explicitly disabled.
-const INITIAL_CONFIG: &str = r#"{
-  "enabled": false,
-  "output": [{ "name": "stache-smoke disabled baseline", "strategy": "exact" }]
-}
+const INITIAL_CONFIG: &str = r#"enabled = false
+
+[[output]]
+name = "stache-smoke disabled baseline"
+strategy = "exact"
 "#;
 
 /// Changed file the reload must accept: still valid, still disabled.
-const RELOAD_CONFIG: &str = r#"{
-  "enabled": false,
-  "output": [{ "name": "stache-smoke disabled reload", "strategy": "exact" }]
-}
+const RELOAD_CONFIG: &str = r#"enabled = false
+
+[[output]]
+name = "stache-smoke disabled reload"
+strategy = "exact"
 "#;
 
 /// Writes the disabled `proxyAudio` baseline before the host starts.
@@ -415,8 +417,8 @@ fn run_checks(context: &SmokeContext) {
     let initial_file = initial
         .config
         .iter()
-        .find(|file| file.file == "proxyAudio.jsonc")
-        .unwrap_or_else(|| fail("proxyAudio.jsonc is missing from the host status"));
+        .find(|file| file.file == "proxyAudio.toml")
+        .unwrap_or_else(|| fail("proxyAudio.toml is missing from the host status"));
     if initial_file.state != ConfigFileState::Valid || !initial_file.active {
         fail("the pre-start proxyAudio config was not loaded as valid");
     }
@@ -518,14 +520,14 @@ const READY_SCRIPT: &str = r"
       const info = await window.__TAURI_INTERNALS__.invoke('app_info');
       const text = document.body.innerText;
       const proxy = status && status.config &&
-        status.config.find((entry) => entry.file === 'proxyAudio.jsonc');
+        status.config.find((entry) => entry.file === 'proxyAudio.toml');
       const module = status && status.modules &&
         status.modules.find((entry) => entry.id === 'proxyAudio');
       if (status && status.ready && info && info.identifier &&
           module && module.enabled === false && module.state === 'disabled' &&
           proxy && proxy.state === 'valid' && proxy.active === true &&
-          text.includes('Host ready') && text.includes('global.jsonc') &&
-          text.includes('proxyAudio.jsonc')) {
+          text.includes('Host ready') && text.includes('global.toml') &&
+          text.includes('proxyAudio.toml')) {
         finish('ready');
         return;
       }
@@ -535,8 +537,8 @@ const READY_SCRIPT: &str = r"
         else if (!module || module.enabled !== false || module.state !== 'disabled') finish('fail-proxy-state');
         else if (!proxy || proxy.state !== 'valid' || proxy.active !== true) finish('fail-proxy-file');
         else if (!text.includes('Host test surface')) finish('fail-surface-' + encodeURIComponent(location.search + '|' + text.slice(0, 80)));
-        else if (!text.includes('global.jsonc')) finish('fail-global');
-        else if (!text.includes('proxyAudio.jsonc')) finish('fail-proxy');
+        else if (!text.includes('global.toml')) finish('fail-global');
+        else if (!text.includes('proxyAudio.toml')) finish('fail-proxy');
         else finish('fail-dom');
         return;
       }
@@ -579,14 +581,14 @@ const EVENT_SCRIPT: &str = r"
     const module = status && status.modules &&
       status.modules.find((entry) => entry.id === 'proxyAudio');
     const file = status && status.config &&
-      status.config.find((entry) => entry.file === 'proxyAudio.jsonc');
+      status.config.find((entry) => entry.file === 'proxyAudio.toml');
     if (!module) return 'fail-no-module';
     if (module.revision === previous) return 'fail-stale-revision';
     if (module.revision !== expected) return 'fail-snapshot-revision';
     if (module.enabled !== false || module.state !== 'disabled') return 'fail-snapshot-state';
     if (!file || file.state !== 'valid' || file.active !== true) return 'fail-snapshot-file';
     const card = findCard('proxyAudio');
-    const configCard = findCard('proxyAudio.jsonc');
+    const configCard = findCard('proxyAudio.toml');
     if (!card || !configCard) return 'fail-dom-card';
     if (rowValue(card, 'Revision') !== expected || rowValue(card, 'Enabled') !== 'No') {
       return 'fail-dom-revision';
@@ -637,7 +639,7 @@ fn wait_for_disabled_revision(context: &SmokeContext, previous: &str) -> String 
             if module.enabled || module.state != ModuleState::Disabled {
                 fail("the reload enabled or started proxyAudio");
             }
-            let file = status.config.iter().find(|file| file.file == "proxyAudio.jsonc");
+            let file = status.config.iter().find(|file| file.file == "proxyAudio.toml");
             if file.is_some_and(|file| file.state == ConfigFileState::Valid && file.active)
                 && let Ok(revision) = module.revision.parse::<u64>()
                 && revision > previous

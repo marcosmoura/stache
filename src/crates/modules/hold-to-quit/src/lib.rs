@@ -1,12 +1,12 @@
 //! Hold-to-Quit configuration and runtime.
 //!
 //! [`CommandQuitConfig`] is the single authoritative source for
-//! `commandQuit.jsonc`, its schema, template and typed migration.
+//! `commandQuit.toml`, its schema, template and typed migration.
 //! [`HoldToQuitRuntime`] is the host-lifetime runtime service: it subscribes one
 //! suppressing handler to the shared input service for a Command-only `Cmd+Q`,
 //! shows the native HUD for the press and asks the exact application instance
 //! that was frontmost at key-down to quit gracefully once the hold reaches
-//! `holdDuration`.
+//! `hold_duration`.
 //!
 //! The crate owns policy only. Every native object stays behind `stache-macos`
 //! (the HUD, application observation and graceful terminate) and the host

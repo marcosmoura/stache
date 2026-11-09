@@ -833,7 +833,7 @@ fn default_position_keeps_the_application_frame_and_adoption_never_centers() {
     let mut world = World::new(
         Some(serde_json::json!({
             "workspaces": [{"name": "f", "layout": "floating"}],
-            "floating": {"defaultPosition": "default"}
+            "floating": {"default_position": "default"}
         })),
         false,
     );
@@ -883,7 +883,7 @@ fn preset_world(layout: &str) -> World {
     World::new(
         Some(serde_json::json!({
             "workspaces": [{"name": "w", "layout": layout}],
-            "floating": {"presets": presets(), "defaultPosition": "center"}
+            "floating": {"presets": presets(), "default_position": "center"}
         })),
         false,
     )
@@ -951,8 +951,8 @@ fn a_preset_outside_a_floating_workspace_is_a_silent_admitted_no_op() {
 fn preset_on_open_is_inert() {
     let mut world = World::new(
         Some(serde_json::json!({
-            "workspaces": [{"name": "w", "layout": "floating", "preset-on-open": "half"}],
-            "floating": {"presets": presets(), "defaultPosition": "default"}
+            "workspaces": [{"name": "w", "layout": "floating", "preset_on_open": "half"}],
+            "floating": {"presets": presets(), "default_position": "default"}
         })),
         false,
     );
@@ -1275,7 +1275,7 @@ fn reload_treats_a_rename_as_remove_plus_add_and_keeps_the_windows() {
 #[test]
 fn reload_keeps_a_user_layout_until_the_configured_layout_changes() {
     let mut world = World::new(
-        Some(serde_json::json!({"defaultLayout": "dwindle", "workspaces": [
+        Some(serde_json::json!({"default_layout": "dwindle", "workspaces": [
             {"name": "a"}, {"name": "b"}, {"name": "m", "layout": "monocle"}
         ]})),
         false,
@@ -1293,7 +1293,7 @@ fn reload_keeps_a_user_layout_until_the_configured_layout_changes() {
 
     // Unchanged layout configuration (other edits): the override and ratios stay.
     world.reload(
-        serde_json::json!({"defaultLayout": "dwindle", "gaps": {"inner": 3}, "workspaces": [
+        serde_json::json!({"default_layout": "dwindle", "gaps": {"inner": 3}, "workspaces": [
             {"name": "a"}, {"name": "b"}, {"name": "m", "layout": "monocle"}
         ]}),
     );
@@ -1301,7 +1301,7 @@ fn reload_keeps_a_user_layout_until_the_configured_layout_changes() {
     assert_eq!(world.ws("a").ratios.master_ratio, master);
 
     // A default-layout edit reaches followers only, not the user override or explicit layouts.
-    world.reload(serde_json::json!({"defaultLayout": "split", "workspaces": [
+    world.reload(serde_json::json!({"default_layout": "split", "workspaces": [
         {"name": "a"}, {"name": "b"}, {"name": "m", "layout": "monocle"}
     ]}));
     assert_eq!(
@@ -1313,7 +1313,7 @@ fn reload_keeps_a_user_layout_until_the_configured_layout_changes() {
     assert_eq!(world.ws("m").layout, LayoutType::Monocle);
 
     // A changed configured layout replaces the layout and clears incompatible ratios.
-    world.reload(serde_json::json!({"defaultLayout": "split", "workspaces": [
+    world.reload(serde_json::json!({"default_layout": "split", "workspaces": [
         {"name": "a", "layout": "grid"}, {"name": "b"}, {"name": "m", "layout": "monocle"}
     ]}));
     assert_eq!(world.ws("a").layout, LayoutType::Grid);
@@ -1385,7 +1385,7 @@ fn newly_ignored_windows_release_tiling_and_visibility_needs_and_are_read_again_
     let editor = world.add(1, 1, "w", 0.0);
     let browser = world.add(2, 1, "w", 0.0);
     assert!(world.requirement().app(app(1)).is_some());
-    world.reload(serde_json::json!({"ignore": [{"appName": "Editor"}]}));
+    world.reload(serde_json::json!({"ignore": [{"app_name": "Editor"}]}));
     assert!(!world.state.windows.contains_key(&editor));
     assert!(world.state.windows.contains_key(&browser));
     assert!(

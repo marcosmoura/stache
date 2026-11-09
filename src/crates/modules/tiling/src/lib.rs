@@ -1,6 +1,6 @@
 //! The Tiling configuration.
 //!
-//! [`TilingConfig`] is the single authoritative source for `tiling.jsonc`,
+//! [`TilingConfig`] is the single authoritative source for `tiling.toml`,
 //! schema, template and migration. The crate also holds a pure layout library,
 //! the owner-confined window adapter seam, an unregistered tracking harness
 //! with a gated frame-write executor and the [`TilingModule`] lifecycle. The

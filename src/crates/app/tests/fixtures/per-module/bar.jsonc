@@ -1,0 +1,11 @@
+{
+  "$schema": "https://raw.githubusercontent.com/marcosmoura/stache/main/schemas/bar.schema.json",
+  "enabled": true,
+  "height": 32,
+  "padding": 8,
+  "weather": {
+    "provider": "visual-crossing",
+    "apiKeys": "/Users/me/.keys.env",
+    "defaultLocation": "Lisbon", // trailing comma follows
+  },
+}

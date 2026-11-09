@@ -81,7 +81,26 @@ impl ConfigPaths {
     /// The file for one exact module identifier.
     #[must_use]
     pub fn module_file(&self, id: ModuleId) -> PathBuf {
+        self.directory.join(format!("{}.toml", id.as_str()))
+    }
+
+    /// The per-module JSONC file of an earlier release for one identifier.
+    ///
+    /// Only `config migrate` reads it; the runtime ignores it.
+    #[must_use]
+    pub fn module_jsonc_file(&self, id: ModuleId) -> PathBuf {
         self.directory.join(format!("{}.jsonc", id.as_str()))
+    }
+
+    /// The names of `<id>.jsonc` files that have no `<id>.toml` next to them.
+    ///
+    /// Only the given identifiers are considered, in the given order.
+    #[must_use]
+    pub fn stale_jsonc_files(&self, ids: impl IntoIterator<Item = ModuleId>) -> Vec<String> {
+        ids.into_iter()
+            .filter(|id| self.module_jsonc_file(*id).is_file() && !self.module_file(*id).exists())
+            .map(|id| format!("{}.jsonc", id.as_str()))
+            .collect()
     }
 
     /// The file for one catalog entry, including the global file.
@@ -127,6 +146,12 @@ fn push_pair(candidates: &mut Vec<PathBuf>, directory: &Path) {
 fn push_file_pair(candidates: &mut Vec<PathBuf>, directory: &Path, stem: &str) {
     candidates.push(directory.join(format!("{stem}.jsonc")));
     candidates.push(directory.join(format!("{stem}.json")));
+}
+
+/// The hint printed for one stale `<id>.jsonc` file name.
+#[must_use]
+pub fn stale_jsonc_hint(file_name: &str) -> String {
+    format!("note: {file_name} is ignored; run `stache config migrate`")
 }
 
 /// A missing default directory.
@@ -192,9 +217,28 @@ mod tests {
         let paths = ConfigPaths::new("/config");
         assert_eq!(
             paths.module_file(ModuleId::new("proxyAudio")),
-            Path::new("/config/proxyAudio.jsonc")
+            Path::new("/config/proxyAudio.toml")
         );
-        assert_eq!(paths.global_file(), Path::new("/config/global.jsonc"));
+        assert_eq!(paths.global_file(), Path::new("/config/global.toml"));
+    }
+
+    #[test]
+    fn stale_jsonc_files_need_a_jsonc_and_no_toml() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let paths = ConfigPaths::new(root.path());
+        let ids = [
+            ModuleId::new("tiling"),
+            ModuleId::new("bar"),
+            ModuleId::new("keepAwake"),
+        ];
+        std::fs::write(root.path().join("tiling.jsonc"), "{}").expect("tiling");
+        std::fs::write(root.path().join("bar.jsonc"), "{}").expect("bar");
+        std::fs::write(root.path().join("bar.toml"), "").expect("bar toml");
+        assert_eq!(paths.stale_jsonc_files(ids), vec!["tiling.jsonc".to_owned()]);
+        assert_eq!(
+            stale_jsonc_hint("tiling.jsonc"),
+            "note: tiling.jsonc is ignored; run `stache config migrate`"
+        );
     }
 
     #[test]

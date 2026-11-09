@@ -10,7 +10,7 @@ Rust paths are relative to `src/crates/`.
 `proxyAudio` keeps the default input and output device on the best available
 one: it watches `CoreAudio` for device and default-device changes and re-applies
 an ordered configuration list. AirPlay and HDMI are special-cased above the
-list. The module is inert unless `proxyAudio.jsonc` sets `enabled`.
+list. The module is inert unless `proxyAudio.toml` sets `enabled`.
 
 ## Entry points
 
@@ -28,7 +28,7 @@ surface.
 ## Key types
 
 - `config.rs`: `ProxyAudioConfig { enabled, input, output }`,
-  `AudioDevicePriority { name, strategy, dependsOn }`, `AudioDeviceDependency`,
+  `AudioDevicePriority { name, strategy, depends_on }`, `AudioDeviceDependency`,
   `MatchStrategy::{Exact, Contains, StartsWith, Regex}`. This is the single
   authoritative type used by runtime, schema and migration.
 - `macos/src/audio.rs`: the safe `AudioBackend` trait, `CoreAudioBackend`,
@@ -60,7 +60,7 @@ the device's input/output stream support.
 
 Matching is case-insensitive for `Exact`/`Contains`/`StartsWith`. `Regex`
 compiles the raw pattern and matches case-sensitively against the name. A
-`dependsOn` device must appear in the same candidate list (input or output);
+`depends_on` device must appear in the same candidate list (input or output);
 the dependency is never selected. `AudioDeviceType::detect` is name based and
 never returns `Hdmi`.
 
@@ -83,14 +83,14 @@ removes the exact addresses/callback/client data, and the registry cancels and
 joins the worker. Stop is safe after a partial start and is idempotent.
 
 Config validation happens in the SDK before `configure`/`reconfigure`. Invalid
-JSON or an invalid regex is rejected with a diagnostic; a running module keeps
+TOML or an invalid regex is rejected with a diagnostic; a running module keeps
 its previous configuration and revision. A paused or disabled reload only
 stages the next-start snapshot. Pause, disable, failure and permission rules
 are the shared registry rules; the module declares no permission.
 
 ## Config
 
-Root key `proxyAudio` in `proxyAudio.jsonc`; both lists are ordered. Defaults
+`proxyAudio.toml` has `enabled` and two ordered lists, `input` and `output`. Defaults
 and schema descriptions come from the typed `Default`; see
 [architecture/config.md](../architecture/config.md).
 

@@ -148,7 +148,7 @@ pub fn render_outcome(outcome: &WallpapersSetOutcome) -> Result<(), String> {
             quoted(requested)
         ),
         WallpapersOutcomeCause::NoAcceptedConfig => {
-            "No accepted Wallpapers configuration is available. Fix wallpapers.jsonc and reload, \
+            "No accepted Wallpapers configuration is available. Fix wallpapers.toml and reload, \
              then retry."
                 .to_owned()
         }

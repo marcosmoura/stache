@@ -1,0 +1,5 @@
+{
+  "$schema": "https://raw.githubusercontent.com/marcosmoura/stache/main/schemas/notunes.schema.json",
+  "enabled": true,
+  "targetApp": "com.spotify.client",
+}

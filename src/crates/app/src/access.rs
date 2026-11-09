@@ -3,7 +3,7 @@
 //! [`AccessGate`] is a pure state machine over one fresh Accessibility status.
 //! It fails closed: only `Granted` opens it, `Denied` and `Unknown` block. Each
 //! observation returns the [`AccessTransition`] the host runner turns into
-//! effects (log record, deferred `execOnStartup`), so the runner never
+//! effects (log record, deferred `exec_on_startup`), so the runner never
 //! re-derives them. Module stop and restart are not done here: the registry's
 //! baseline requirement already stops and restarts modules on the same status.
 

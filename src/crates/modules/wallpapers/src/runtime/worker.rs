@@ -133,7 +133,7 @@ impl Module for WallpapersModule {
                 WallpapersConfig::ID,
                 Operation::Start,
                 ErrorCategory::Lifecycle,
-                "no accepted Wallpapers configuration is available; fix wallpapers.jsonc and retry",
+                "no accepted Wallpapers configuration is available; fix wallpapers.toml and retry",
             ));
         };
         let pool = resolve_pool(&pair.config, self.service.source_context()).map_err(|error| {

@@ -10,7 +10,7 @@
       "$ref": "#/$defs/AnimationConfig",
       "default": {
         "duration": 200,
-        "easing": "ease-out",
+        "easing": "ease_out",
         "enabled": false
       }
     },
@@ -38,7 +38,7 @@
         }
       }
     },
-    "defaultLayout": {
+    "default_layout": {
       "description": "Layout for workspaces that do not specify one.",
       "$ref": "#/$defs/LayoutType",
       "default": "dwindle"
@@ -52,7 +52,7 @@
       "description": "Floating window defaults and presets.",
       "$ref": "#/$defs/FloatingConfig",
       "default": {
-        "defaultPosition": "center",
+        "default_position": "center",
         "presets": []
       }
     },
@@ -104,7 +104,7 @@
         "easing": {
           "description": "Easing function for animations.",
           "$ref": "#/$defs/EasingType",
-          "default": "ease-out"
+          "default": "ease_out"
         },
         "enabled": {
           "description": "Whether animations are enabled.",
@@ -320,7 +320,7 @@
             }
           ]
         },
-        "splitHorizontal": {
+        "split_horizontal": {
           "description": "Windows in horizontal split layout.",
           "anyOf": [
             {
@@ -331,7 +331,7 @@
             }
           ]
         },
-        "splitVertical": {
+        "split_vertical": {
           "description": "Windows in vertical split layout.",
           "anyOf": [
             {
@@ -389,22 +389,22 @@
         {
           "description": "Slow start.",
           "type": "string",
-          "const": "ease-in"
+          "const": "ease_in"
         },
         {
           "description": "Slow end.",
           "type": "string",
-          "const": "ease-out"
+          "const": "ease_out"
         },
         {
           "description": "Slow start and end.",
           "type": "string",
-          "const": "ease-in-out"
+          "const": "ease_in_out"
         },
         {
           "description": "Exponential ease out: very fast start, slow end.",
           "type": "string",
-          "const": "ease-out-expo"
+          "const": "ease_out_expo"
         },
         {
           "description": "Spring physics.",
@@ -417,7 +417,7 @@
       "description": "Floating window configuration.",
       "type": "object",
       "properties": {
-        "defaultPosition": {
+        "default_position": {
           "description": "Default position for newly floating windows.",
           "$ref": "#/$defs/FloatingPosition",
           "default": "center"
@@ -638,12 +638,12 @@
         {
           "description": "Windows arranged vertically.",
           "type": "string",
-          "const": "split-vertical"
+          "const": "split_vertical"
         },
         {
           "description": "Windows arranged horizontally.",
           "type": "string",
-          "const": "split-horizontal"
+          "const": "split_horizontal"
         },
         {
           "description": "All windows maximized and stacked.",
@@ -742,14 +742,14 @@
       "description": "A window matching rule; every specified field must match (AND).\n\nA rule with no field never matches anything.",
       "type": "object",
       "properties": {
-        "appId": {
+        "app_id": {
           "description": "Bundle identifier, matched case-insensitively and exactly.",
           "type": [
             "string",
             "null"
           ]
         },
-        "appName": {
+        "app_name": {
           "description": "Application name, matched as a case-insensitive substring.",
           "type": [
             "string",
@@ -770,7 +770,7 @@
       "type": "object",
       "properties": {
         "layout": {
-          "description": "Layout; omitted uses `defaultLayout`.",
+          "description": "Layout; omitted uses `default_layout`.",
           "anyOf": [
             {
               "$ref": "#/$defs/LayoutType"
@@ -784,7 +784,7 @@
           "description": "Unique workspace name.",
           "type": "string"
         },
-        "preset-on-open": {
+        "preset_on_open": {
           "description": "Floating preset applied when windows open here. Parsed and validated\nbut inert: nothing reads it at runtime.",
           "type": [
             "string",

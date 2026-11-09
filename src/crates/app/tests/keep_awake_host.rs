@@ -45,7 +45,7 @@ use stache_sdk::{
 const WAIT: Duration = Duration::from_secs(10);
 const BARRIER: Duration = Duration::from_secs(5);
 const FAILURE_CODE: i32 = -536_870_000;
-const GOOD: &str = "{ \"enabled\": true }\n";
+const GOOD: &str = "enabled = true\n";
 
 fn fixture() -> Fixture {
     let root = tempfile::tempdir().expect("root");
@@ -473,13 +473,13 @@ fn disabled_case(source: Option<&str>) {
 #[test]
 fn a_disabled_module_answers_status_without_native_activity() {
     disabled_case(None);
-    disabled_case(Some("{ \"enabled\": false }\n"));
+    disabled_case(Some("enabled = false\n"));
 }
 
 #[test]
 fn an_invalid_initial_file_is_diagnosed_and_a_valid_rewrite_recovers() {
     let fixture = fixture();
-    fixture.write("{ \"enabled\": ");
+    fixture.write("enabled = ");
     let mut harness = Harness::new(&fixture, NativeLockState::Unlocked);
     harness.start(&fixture);
     harness.wait_ready();
@@ -493,7 +493,7 @@ fn an_invalid_initial_file_is_diagnosed_and_a_valid_rewrite_recovers() {
             .module
             .diagnostic
             .as_deref()
-            .is_some_and(|diagnostic| diagnostic.contains("keepAwake.jsonc")),
+            .is_some_and(|diagnostic| diagnostic.contains("keepAwake.toml")),
         "the held file diagnostic is visible: {status:?}"
     );
     assert_eq!(status.runtime, KeepAwakeRuntimeStatus::default());
@@ -990,12 +990,8 @@ fn a_running_lease_survives_rejected_files_and_identical_good_bytes_repair() {
     let releases = harness.assertion.release_attempts().len();
 
     for (label, text, fragment) in [
-        ("malformed JSON", "{ \"enabled\": ", "keepAwake.jsonc"),
-        (
-            "wrong value type",
-            "{ \"enabled\": \"yes\" }\n",
-            "expected a boolean",
-        ),
+        ("malformed TOML", "enabled = ", "keepAwake.toml"),
+        ("wrong value type", "enabled = \"yes\"\n", "expected a boolean"),
     ] {
         fixture.write(text);
         let status = harness.wait_status(label, |status| {
@@ -1071,8 +1067,8 @@ fn a_running_lease_survives_rejected_files_and_identical_good_bytes_repair() {
 }
 
 #[test]
-fn host_enable_and_disable_edit_jsonc_and_an_echo_creates_no_new_resources() {
-    let source = "{\n  // Keep this comment.\n  \"enabled\": false\n}\n";
+fn host_enable_and_disable_edit_toml_and_an_echo_creates_no_new_resources() {
+    let source = "# Keep this comment.\nenabled = false # note\n";
     let fixture = fixture();
     fixture.write(source);
     let mut harness = Harness::new(&fixture, NativeLockState::Unlocked);
@@ -1089,8 +1085,7 @@ fn host_enable_and_disable_edit_jsonc_and_an_echo_creates_no_new_resources() {
             && status.runtime.assertion_state == AssertionState::Active
     });
     let edited = fixture.read();
-    assert!(edited.contains("// Keep this comment."), "{edited}");
-    assert!(edited.contains("\"enabled\": true"), "{edited}");
+    assert_eq!(edited, "# Keep this comment.\nenabled = true # note\n");
     let created = harness.assertion.created().len();
     let installs = harness.observation.install_calls().len();
     assert_eq!(created, 3);
@@ -1122,8 +1117,7 @@ fn host_enable_and_disable_edit_jsonc_and_an_echo_creates_no_new_resources() {
             && status.runtime.assertion_state == AssertionState::Inactive
     });
     let edited = fixture.read();
-    assert!(edited.contains("// Keep this comment."), "{edited}");
-    assert!(edited.contains("\"enabled\": false"), "{edited}");
+    assert_eq!(edited, "# Keep this comment.\nenabled = false # note\n");
     wait_until("disable released the lease", || {
         harness.assertion.release_attempts().len() == 3
     });

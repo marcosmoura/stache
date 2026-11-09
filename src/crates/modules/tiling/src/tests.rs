@@ -60,24 +60,24 @@ fn all_eight_layouts_and_six_easings_parse_and_serialize() {
     let layouts = [
         "dwindle",
         "split",
-        "split-vertical",
-        "split-horizontal",
+        "split_vertical",
+        "split_horizontal",
         "monocle",
         "master",
         "grid",
         "floating",
     ];
     for name in layouts {
-        let config = accepted(&json!({ "defaultLayout": name }));
+        let config = accepted(&json!({ "default_layout": name }));
         assert_eq!(config.default_layout.as_str(), name);
         assert_eq!(serde_json::to_value(config.default_layout).unwrap(), json!(name));
     }
     for name in [
         "linear",
-        "ease-in",
-        "ease-out",
-        "ease-in-out",
-        "ease-out-expo",
+        "ease_in",
+        "ease_out",
+        "ease_in_out",
+        "ease_out_expo",
         "spring",
     ] {
         let config = accepted(&json!({ "animations": { "easing": name } }));
@@ -86,7 +86,7 @@ fn all_eight_layouts_and_six_easings_parse_and_serialize() {
             json!(name)
         );
     }
-    rejected(&json!({ "defaultLayout": "Dwindle" }));
+    rejected(&json!({ "default_layout": "Dwindle" }));
     rejected(&json!({ "animations": { "easing": "bounce" } }));
 }
 
@@ -146,8 +146,8 @@ fn workspaces_default_screen_and_keep_preset_on_open_spelling() {
         "workspaces": [
             { "name": "code" },
             { "name": "web", "layout": "grid", "screen": "secondary",
-              "rules": [{ "appId": "com.apple.Safari", "title": "docs" }, {}],
-              "preset-on-open": "wide" },
+              "rules": [{ "app_id": "com.apple.Safari", "title": "docs" }, {}],
+              "preset_on_open": "wide" },
         ],
     }));
     assert_eq!(config.workspaces[0].screen, "main");
@@ -155,10 +155,10 @@ fn workspaces_default_screen_and_keep_preset_on_open_spelling() {
     assert_eq!(config.workspaces[1].layout, Some(LayoutType::Grid));
     assert!(!config.workspaces[1].rules[1].has_criteria());
     let out = serde_json::to_value(&config).unwrap();
-    assert_eq!(out["workspaces"][1]["preset-on-open"], "wide");
-    assert!(out["workspaces"][0].get("preset-on-open").is_none());
+    assert_eq!(out["workspaces"][1]["preset_on_open"], "wide");
+    assert!(out["workspaces"][0].get("preset_on_open").is_none());
     assert!(out["workspaces"][1]["rules"][1].as_object().unwrap().is_empty());
-    rejected(&json!({ "workspaces": [{ "name": "a", "presetOnOpen": "x", "layout": "nope" }] }));
+    rejected(&json!({ "workspaces": [{ "name": "a", "preset_on_open": "x", "layout": "nope" }] }));
     rejected(&json!({ "workspaces": [{ "layout": "grid" }] }));
 }
 
@@ -172,17 +172,19 @@ fn duplicate_names_and_missing_presets_are_rejected() {
         { "name": "p", "width": 100, "height": 100 }, { "name": "P", "width": 1, "height": 1 }
     ] } }));
     assert!(error.contains("duplicate preset"), "{error}");
-    let error = rejected(&json!({ "workspaces": [{ "name": "a", "preset-on-open": "missing" }] }));
+    let error = rejected(&json!({ "workspaces": [{ "name": "a", "preset_on_open": "missing" }] }));
     assert!(error.contains("missing"), "{error}");
 }
 
 #[test]
 fn presets_accept_pixels_percentages_positions_and_center() {
-    let config = accepted(&json!({ "floating": { "defaultPosition": "default", "presets": [
+    let config = accepted(
+        &json!({ "floating": { "default_position": "default", "presets": [
         { "name": "a", "width": 1440, "height": 900, "x": 10, "y": "5%" },
         { "name": "b", "width": "50%", "height": "100%", "center": true, "x": "10", "y": 0 },
         { "name": "c", "width": " 25.5% ", "height": 300 },
-    ] } }));
+    ] } }),
+    );
     assert_eq!(config.floating.default_position, FloatingPosition::Default);
     assert_eq!(
         config.floating.presets[0].y,
@@ -215,7 +217,7 @@ fn malformed_preset_dimensions_are_rejected() {
         &json!({ "floating": { "presets": [{ "name": "a", "width": 10, "height": 10, "x": "wide" }] } }),
     );
     rejected(&json!({ "floating": { "presets": [{ "name": "a", "width": 10 }] } }));
-    rejected(&json!({ "floating": { "defaultPosition": "left" } }));
+    rejected(&json!({ "floating": { "default_position": "left" } }));
 }
 
 #[test]
@@ -239,8 +241,8 @@ fn borders_accept_every_state_shape() {
         "floating": { "width": 3, "gradient": { "from": "#f00", "to": "00ff00aa" } },
         "grid": { "width": 1, "gradient": { "from": "#fff", "to": "#000", "angle": 180.5 },
                   "animation": { "duration": 350 } },
-        "splitVertical": false,
-        "ignore": [{ "appName": "Preview" }],
+        "split_vertical": false,
+        "ignore": [{ "app_name": "Preview" }],
     } }));
     let b = &config.borders;
     assert_eq!(b.style, Some(BorderStyle::Square));
@@ -258,7 +260,7 @@ fn borders_accept_every_state_shape() {
         out["borders"]["monocle"],
         json!({ "width": 2, "glow": "rgba(137, 180, 250, 0.2)" })
     );
-    assert_eq!(out["borders"]["splitVertical"], json!(false));
+    assert_eq!(out["borders"]["split_vertical"], json!(false));
     assert!(out["borders"].get("dwindle").is_none());
     assert_eq!(serde_json::from_value::<TilingConfig>(out).unwrap(), config);
 }
@@ -290,38 +292,38 @@ fn unsupported_value_types_are_rejected() {
     rejected(&json!({ "enabled": "yes" }));
     rejected(&json!({ "animations": { "duration": -1 } }));
     rejected(&json!({ "workspaces": {} }));
-    rejected(&json!({ "ignore": [{ "appId": 3 }] }));
+    rejected(&json!({ "ignore": [{ "app_id": 3 }] }));
 }
 
 #[test]
 fn schema_template_and_default_agree() {
     let catalog = catalog();
     let template = catalog.template(TilingConfig::ID).expect("template");
-    assert!(template.contains("\"enabled\": false"), "{template}");
-    assert!(template.contains("defaultLayout"), "{template}");
+    assert!(template.contains("\nenabled = false\n"), "{template}");
+    assert!(template.contains("default_layout"), "{template}");
     assert_eq!(
         catalog.default_value(TilingConfig::ID).unwrap(),
         &serde_json::to_value(TilingConfig::default()).unwrap()
     );
     let schema = serde_json::to_string(&catalog.schema(TilingConfig::ID).expect("schema")).unwrap();
-    assert!(schema.contains("preset-on-open"), "{schema}");
+    assert!(schema.contains("preset_on_open"), "{schema}");
 }
 
 #[test]
 fn catalog_reports_validation_and_unknown_keys() {
     let catalog = catalog();
-    let path = Path::new("tiling.jsonc");
+    let path = Path::new("tiling.toml");
     let warnings = catalog
-        .inspect(TilingConfig::ID, path, r#"{ "enabled": true, "extra": 1 }"#)
+        .inspect(TilingConfig::ID, path, "enabled = true\nextra = 1\n")
         .expect("valid");
     assert_eq!(warnings, ["extra"]);
     let diagnostic = catalog
-        .inspect(TilingConfig::ID, path, r#"{ "master": { "ratio": 500 } }"#)
+        .inspect(TilingConfig::ID, path, "master = { ratio = 500 }\n")
         .expect_err("invalid");
     assert_eq!(diagnostic.kind, DiagnosticKind::Validation);
     assert!(diagnostic.message.contains("master.ratio"), "{diagnostic}");
     let diagnostic = catalog
-        .inspect(TilingConfig::ID, path, r#"{ "defaultLayout": "tall" }"#)
+        .inspect(TilingConfig::ID, path, "default_layout = \"tall\"\n")
         .expect_err("invalid");
     assert_ne!(diagnostic.kind, DiagnosticKind::Validation);
 }
@@ -348,7 +350,7 @@ fn migration_keeps_sections_and_warns_about_corrections() {
     let mut omitted = json!({ "enabled": true });
     let notes = TilingConfig::migrate_legacy_section(&mut omitted);
     assert_eq!(notes.len(), 2, "{notes:?}");
-    assert!(notes.iter().any(|n| n.contains("defaultPosition")));
+    assert!(notes.iter().any(|n| n.contains("default_position")));
     assert!(notes.iter().any(|n| n.contains("dwindle")));
 
     let mut explicit = json!({ "enabled": true, "defaultLayout": "dwindle",

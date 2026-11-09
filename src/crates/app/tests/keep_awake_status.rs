@@ -329,11 +329,11 @@ fn held_file_diagnostic_overrides_the_registry_diagnostic() {
         "without a held file diagnostic the snapshot diagnostic is the fallback"
     );
 
-    fixture.write("{ \"enabled\": ");
+    fixture.write("enabled = ");
     let outcome = fixture.store.reload_one(KeepAwakeConfig::ID).expect("reload rejected file");
     assert!(matches!(outcome, ReloadOutcome::Rejected(_)));
     let held = context.diagnostic(KeepAwakeConfig::ID).expect("held diagnostic").to_string();
-    assert!(held.contains("keepAwake.jsonc"), "{held}");
+    assert!(held.contains("keepAwake.toml"), "{held}");
 
     let overridden = status_of(&handler(&context));
     assert_eq!(overridden.module.diagnostic.as_deref(), Some(held.as_str()));
@@ -342,7 +342,7 @@ fn held_file_diagnostic_overrides_the_registry_diagnostic() {
 #[test]
 fn an_identical_good_repair_clears_the_held_diagnostic() {
     let fixture = fixture();
-    let good = "{ \"enabled\": true }\n";
+    let good = "enabled = true\n";
     fixture.write(good);
     register_module(&fixture.registry, &fixture.store, FakeModule {
         fail_start: false,
@@ -351,7 +351,7 @@ fn an_identical_good_repair_clears_the_held_diagnostic() {
     let context = fixture.context();
     assert!(context.diagnostic(KeepAwakeConfig::ID).is_none());
 
-    fixture.write("{ \"enabled\": ");
+    fixture.write("enabled = ");
     let rejected = fixture.store.reload_one(KeepAwakeConfig::ID).expect("rejected reload");
     assert!(matches!(rejected, ReloadOutcome::Rejected(_)));
     assert!(context.diagnostic(KeepAwakeConfig::ID).is_some());
@@ -380,7 +380,7 @@ fn an_identical_good_repair_clears_the_held_diagnostic() {
 #[test]
 fn querying_status_never_reads_disk_or_accepts_changed_bytes() {
     let fixture = fixture();
-    fixture.write("{ \"enabled\": false }\n");
+    fixture.write("enabled = false\n");
     register_module(&fixture.registry, &fixture.store, FakeModule {
         fail_start: false,
     })
@@ -398,7 +398,7 @@ fn querying_status_never_reads_disk_or_accepts_changed_bytes() {
     );
     assert!(context.diagnostic(KeepAwakeConfig::ID).is_none());
 
-    fixture.write("{ \"enabled\": true, \"unknown\": 1 }\n");
+    fixture.write("enabled = true\nunknown = 1\n");
     let changed = status_of(&handler(&context));
     assert_eq!(changed, before, "changed bytes are not accepted by a query");
     assert!(context.diagnostic(KeepAwakeConfig::ID).is_none());

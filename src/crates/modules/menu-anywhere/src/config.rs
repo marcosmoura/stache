@@ -11,7 +11,7 @@ use stache_sdk::{ConfigError, ModuleConfig, ModuleId};
 
 /// A keyboard modifier that must be held while clicking.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, Type)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub enum MenuAnywhereModifier {
     /// The Control key.
     Control,
@@ -27,7 +27,7 @@ pub enum MenuAnywhereModifier {
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, Type,
 )]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub enum MenuAnywhereMouseButton {
     /// The secondary (right) button.
     #[default]
@@ -103,7 +103,7 @@ impl ModifierMask {
 ///
 /// This configuration is inert: no runtime consumes it yet.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, JsonSchema, Type)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default, rename_all = "snake_case")]
 pub struct MenuAnywhereConfig {
     /// Whether the feature should run.
     pub enabled: bool,
@@ -113,8 +113,8 @@ pub struct MenuAnywhereConfig {
     /// CAUTION: `[]` is valid and captures every unmodified matching click
     /// system-wide while enabled.
     pub modifiers: Vec<MenuAnywhereModifier>,
-    /// The mouse button that summons the menu: "rightClick" or "middleClick".
-    /// "middleClick" means button number 2 only, not back or forward buttons.
+    /// The mouse button that summons the menu: `right_click` or `middle_click`.
+    /// `middle_click` means button number 2 only, not back or forward buttons.
     pub mouse_button: MenuAnywhereMouseButton,
 }
 
@@ -123,7 +123,7 @@ pub struct MenuAnywhereConfig {
 /// A derived struct decoder also accepts an empty sequence, which would let
 /// `[]` pass as the defaults.
 #[derive(Deserialize)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default, rename_all = "snake_case")]
 struct Fields {
     enabled: bool,
     modifiers: Vec<MenuAnywhereModifier>,
@@ -214,7 +214,7 @@ mod tests {
     fn inspect(text: &str) -> Result<Vec<String>, stache_sdk::config::ConfigDiagnostic> {
         catalog().inspect(
             MenuAnywhereConfig::ID,
-            std::path::Path::new("menuAnywhere.jsonc"),
+            std::path::Path::new("menuAnywhere.toml"),
             text,
         )
     }
@@ -248,13 +248,13 @@ mod tests {
         let encoded = serde_json::to_value(&config).expect("encode");
         assert_eq!(
             encoded,
-            json!({ "enabled": true, "modifiers": ["shift", "option"], "mouseButton": "middleClick" })
+            json!({ "enabled": true, "modifiers": ["shift", "option"], "mouse_button": "middle_click" })
         );
         let decoded: MenuAnywhereConfig = serde_json::from_value(encoded).expect("decode");
         assert_eq!(decoded, config);
         assert_eq!(
             serde_json::to_value(MenuAnywhereConfig::default()).expect("encode"),
-            json!({ "enabled": false, "modifiers": ["control", "command"], "mouseButton": "rightClick" })
+            json!({ "enabled": false, "modifiers": ["control", "command"], "mouse_button": "right_click" })
         );
     }
 
@@ -271,11 +271,11 @@ mod tests {
             assert_eq!(config.modifiers, [expected]);
         }
         for (spelling, expected) in [
-            ("rightClick", MenuAnywhereMouseButton::RightClick),
-            ("middleClick", MenuAnywhereMouseButton::MiddleClick),
+            ("right_click", MenuAnywhereMouseButton::RightClick),
+            ("middle_click", MenuAnywhereMouseButton::MiddleClick),
         ] {
             let config: MenuAnywhereConfig =
-                serde_json::from_value(json!({ "mouseButton": spelling })).expect("decode");
+                serde_json::from_value(json!({ "mouse_button": spelling })).expect("decode");
             assert_eq!(config.mouse_button, expected);
         }
     }
@@ -303,34 +303,27 @@ mod tests {
             duplicated.required_modifiers(),
             ModifierMask::from_bits_truncate(0b0101)
         );
-        assert!(inspect(r#"{ "modifiers": [] }"#).is_ok());
-        assert!(inspect(r#"{ "modifiers": ["shift", "shift"] }"#).is_ok());
+        assert!(inspect("modifiers = []\n").is_ok());
+        assert!(inspect("modifiers = [\"shift\", \"shift\"]\n").is_ok());
     }
 
     #[test]
     fn invalid_types_and_enums_fail_with_field_paths() {
         for text in [
-            r#"{ "modifiers": ["hyper"] }"#,
-            r#"{ "modifiers": "command" }"#,
-            r#"{ "modifiers": null }"#,
-            r#"{ "mouseButton": "leftClick" }"#,
-            r#"{ "mouseButton": 2 }"#,
-            r#"{ "mouseButton": null }"#,
-            r#"{ "enabled": "yes" }"#,
-            "[]",
-            "null",
-            "true",
-            r#""command""#,
-            "[true]",
+            "modifiers = [\"hyper\"]\n",
+            "modifiers = \"command\"\n",
+            "mouse_button = \"left_click\"\n",
+            "mouse_button = 2\n",
+            "enabled = \"yes\"\n",
         ] {
             let diagnostic = inspect(text).expect_err(text);
             assert_eq!(diagnostic.kind, DiagnosticKind::Type, "{text}");
         }
         for (text, field) in [
-            (r#"{ "modifiers": ["hyper"] }"#, "modifiers"),
-            (r#"{ "mouseButton": "leftClick" }"#, "mouseButton"),
-            (r#"{ "enabled": "yes" }"#, "enabled"),
-            (r#"{ "modifiers": [1] }"#, "modifiers"),
+            ("modifiers = [\"hyper\"]\n", "modifiers"),
+            ("mouse_button = \"left_click\"\n", "mouse_button"),
+            ("enabled = \"yes\"\n", "enabled"),
+            ("modifiers = [1]\n", "modifiers"),
         ] {
             let diagnostic = inspect(text).expect_err(text);
             assert!(diagnostic.to_string().contains(field), "{text}: {diagnostic}");
@@ -339,7 +332,7 @@ mod tests {
 
     #[test]
     fn unknown_keys_are_warnings_in_the_catalog() {
-        let warnings = inspect(r#"{ "enabled": true, "preset": "wide" }"#).expect("valid");
+        let warnings = inspect("enabled = true\npreset = \"wide\"\n").expect("valid");
         assert_eq!(warnings, ["preset"]);
     }
 
@@ -423,13 +416,17 @@ mod tests {
             description.contains("`[]`") && description.contains("system-wide"),
             "{description}"
         );
-        let button = value["properties"]["mouseButton"]["description"].as_str().expect("text");
+        let button = value["properties"]["mouse_button"]["description"].as_str().expect("text");
         assert!(button.contains("button number 2 only"), "{button}");
 
         let template = catalog.template(MenuAnywhereConfig::ID).expect("template");
         assert!(template.contains("system-wide"), "{template}");
-        assert!(template.contains("\"enabled\": false"), "{template}");
-        assert!(template.contains("\"control\""), "{template}");
-        assert!(template.contains("\"rightClick\""), "{template}");
+        assert!(template.starts_with("#:schema "), "{template}");
+        assert!(template.contains("\nenabled = false\n"), "{template}");
+        assert!(
+            template.contains("modifiers = [\"control\", \"command\"]"),
+            "{template}"
+        );
+        assert!(template.contains("mouse_button = \"right_click\""), "{template}");
     }
 }

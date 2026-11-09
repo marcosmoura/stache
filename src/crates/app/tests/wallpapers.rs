@@ -160,10 +160,7 @@ fn outcome(handler: &Arc<dyn IpcHandler>, params: &WallpapersSetParams) -> Wallp
 fn registration_exposes_the_set_route_and_status_diagnostics() {
     let fixture = Fixture::new();
     let image = fixture.image("wall.png");
-    fixture.write(
-        "wallpapers.jsonc",
-        "{ \"enabled\": false, \"list\": [\"wall.png\"] }\n",
-    );
+    fixture.write("wallpapers.toml", "enabled = false\nlist = [\"wall.png\"]\n");
     let registry = Fixture::registry();
     let store = fixture.store(&registry);
     let desktop = FakeDesktop::with_snapshot(snapshot());
@@ -197,7 +194,7 @@ fn registration_exposes_the_set_route_and_status_diagnostics() {
 #[test]
 fn an_invalid_initial_file_is_diagnosed_and_has_no_accepted_configuration() {
     let fixture = Fixture::new();
-    fixture.write("wallpapers.jsonc", "{ \"enabled\": ");
+    fixture.write("wallpapers.toml", "enabled = ");
     let registry = Fixture::registry();
     let store = fixture.store(&registry);
     let desktop = FakeDesktop::with_snapshot(snapshot());
@@ -235,10 +232,7 @@ fn the_installed_watch_observes_accepted_revisions() {
     let fixture = Fixture::new();
     fixture.image("a.png");
     fixture.image("b.png");
-    fixture.write(
-        "wallpapers.jsonc",
-        "{ \"enabled\": false, \"list\": [\"a.png\"] }\n",
-    );
+    fixture.write("wallpapers.toml", "enabled = false\nlist = [\"a.png\"]\n");
     let registry = Fixture::registry();
     let store = fixture.store(&registry);
     let desktop = FakeDesktop::with_snapshot(snapshot());
@@ -261,8 +255,8 @@ fn the_installed_watch_observes_accepted_revisions() {
     );
 
     fixture.write(
-        "wallpapers.jsonc",
-        "{ \"enabled\": false, \"list\": [\"a.png\", \"b.png\"] }\n",
+        "wallpapers.toml",
+        "enabled = false\nlist = [\"a.png\", \"b.png\"]\n",
     );
     assert_eq!(
         store.reload_one(WallpapersConfig::ID).expect("reload"),
@@ -285,8 +279,8 @@ fn rejected_and_deleted_reloads_keep_the_last_accepted_pool_for_explicit_request
     fixture.image("a.png");
     fixture.image("b.png");
     fixture.write(
-        "wallpapers.jsonc",
-        "{ \"enabled\": false, \"list\": [\"a.png\", \"b.png\"] }\n",
+        "wallpapers.toml",
+        "enabled = false\nlist = [\"a.png\", \"b.png\"]\n",
     );
     let registry = Fixture::registry();
     let store = fixture.store(&registry);
@@ -300,7 +294,7 @@ fn rejected_and_deleted_reloads_keep_the_last_accepted_pool_for_explicit_request
         screen: WallpaperScreen::All,
     };
 
-    fixture.write("wallpapers.jsonc", "{ \"enabled\": ");
+    fixture.write("wallpapers.toml", "enabled = ");
     assert!(!matches!(
         store.reload_one(WallpapersConfig::ID).expect("rejected reload"),
         ReloadOutcome::Applied { .. }
@@ -308,7 +302,7 @@ fn rejected_and_deleted_reloads_keep_the_last_accepted_pool_for_explicit_request
     let rejected = outcome(&handlers[0].1, &params);
     assert_eq!(rejected.status, WallpapersOutcomeStatus::FullSuccess);
 
-    fs::remove_file(fixture.config.directory().join("wallpapers.jsonc")).expect("delete");
+    fs::remove_file(fixture.config.directory().join("wallpapers.toml")).expect("delete");
     assert!(!matches!(
         store.reload_one(WallpapersConfig::ID).expect("deleted reload"),
         ReloadOutcome::Applied { .. }

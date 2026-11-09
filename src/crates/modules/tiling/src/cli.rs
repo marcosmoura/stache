@@ -30,6 +30,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
+use clap::builder::{PossibleValue, PossibleValuesParser};
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -66,16 +67,19 @@ pub const SERIALIZE_BODY: &str = "Cannot serialize tiling request";
 pub const DECODE_BODY: &str = "Invalid response: the Tiling response could not be decoded";
 
 const DIRECTIONS: [&str; 6] = ["up", "down", "left", "right", "previous", "next"];
-const LAYOUTS: [&str; 8] = [
-    "dwindle",
-    "split",
-    "split-vertical",
-    "split-horizontal",
-    "monocle",
-    "master",
-    "grid",
-    "floating",
-];
+/// Layout values with the pre-snake_case kebab spellings kept as CLI-only aliases.
+fn layout_values() -> PossibleValuesParser {
+    PossibleValuesParser::new([
+        PossibleValue::new("dwindle"),
+        PossibleValue::new("split"),
+        PossibleValue::new("split_vertical").alias("split-vertical"),
+        PossibleValue::new("split_horizontal").alias("split-horizontal"),
+        PossibleValue::new("monocle"),
+        PossibleValue::new("master"),
+        PossibleValue::new("grid"),
+        PossibleValue::new("floating"),
+    ])
+}
 
 // -------------------------------------------------------------- transport
 
@@ -356,10 +360,10 @@ fn workspace_command() -> Command {
             text(
                 "layout",
                 "LAYOUT",
-                "Change the layout of the focused workspace (dwindle, split, split-vertical, \
-                 split-horizontal, monocle, master, grid, floating)",
+                "Change the layout of the focused workspace (dwindle, split, split_vertical, \
+                 split_horizontal, monocle, master, grid, floating)",
             )
-            .value_parser(LAYOUTS),
+            .value_parser(layout_values()),
         )
         .arg(flag("balance", "Balance windows in the focused workspace"))
         .arg(text(
@@ -763,7 +767,8 @@ fn workspace_params(sub: &ArgMatches) -> WorkspaceParams {
     WorkspaceParams {
         focus: sub.get_one::<String>("focus").cloned(),
         layout: sub.get_one::<String>("layout").and_then(|name| {
-            serde_json::from_value::<LayoutType>(Value::String(name.clone())).ok()
+            // Clap passes the matched spelling through, so fold the kebab aliases here.
+            serde_json::from_value::<LayoutType>(Value::String(name.replace('-', "_"))).ok()
         }),
         balance: sub.get_flag("balance"),
         send_to_screen: sub.get_one::<String>("send-to-screen").cloned(),

@@ -69,34 +69,34 @@ Read when changing the shipped foundation boundaries.
 - `src/crates/modules/proxy-audio`: the proxyAudio pilot — authoritative configuration, priority
   policy, `CoreAudio` watcher, `audio list` command and read-only `proxyAudio.list` handler. See
   [proxy-audio.md](../features/proxy-audio.md).
-- `src/crates/modules/notunes`: the noTunes blocker — authoritative `notunes.jsonc`
+- `src/crates/modules/notunes`: the noTunes blocker — authoritative `notunes.toml`
   configuration, an optional user-chosen replacement target (path or bundle
   identifier) and the launch policy that terminates Apple Music/iTunes through the
   safe application boundary. See [notunes.md](../features/notunes.md).
-- `src/crates/modules/hold-to-quit`: the Hold-to-Quit module — authoritative `commandQuit.jsonc`
-  (`enabled`, `holdDuration`, `dismissDelay`, `position`, `animation`), schema, template and typed migration, plus `HoldToQuitRuntime`: an
+- `src/crates/modules/hold-to-quit`: the Hold-to-Quit module — authoritative `commandQuit.toml`
+  (`enabled`, `hold_duration`, `dismiss_delay`, `position`, `animation`), schema, template and typed migration, plus `HoldToQuitRuntime`: an
   allocation-free input callback over the shared service, one worker, the HUD owner (`HudHost`)
   and an injected host frontmost lease. The app's `hold_to_quit.rs` is its factory and teardown
   owners. See [hold-to-quit.md](../features/hold-to-quit.md).
-- `src/crates/modules/menu-anywhere`: the MenuAnywhere module — authoritative `menuAnywhere.jsonc`
-  (`enabled`, `modifiers`, `mouseButton`), schema, template and migration, plus `MenuAnywhereRuntime`: a
+- `src/crates/modules/menu-anywhere`: the MenuAnywhere module — authoritative `menuAnywhere.toml`
+  (`enabled`, `modifiers`, `mouse_button`), schema, template and migration, plus `MenuAnywhereRuntime`: a
   pure-decision input callback over the shared service (one published tuple, one busy reservation, a
   one-slot queue), a trigger worker that captures the exact frontmost instance and drives the
   `stache-macos` `menu` adapter, and a config worker that publishes the accepted trigger after the
   registry's accepted revision. Native objects stay behind the `MenuHost` seam. The app's
   `MenuAnywhereFactory` (in `host.rs`, appended to `ModuleFactories::production`) registers it.
   See [menu-anywhere.md](../features/menu-anywhere.md).
-- `src/crates/modules/keybindings`: the Keybindings module — `keybindings.jsonc`
+- `src/crates/modules/keybindings`: the Keybindings module — `keybindings.toml`
   configuration with legacy-map migration, shortcut planning, the bounded command
   dispatcher, Caps Lock ownership, and the `KeybindingsRuntime` lifecycle with its
   published runtime status. The app composes it in `app/src/keybindings.rs` and
   registers it through `KeybindingsFactory`. See [keybindings.md](../features/keybindings.md).
 - `src/crates/modules/keep-awake`: the Keep Awake module — authoritative
-  `keepAwake.jsonc` configuration, lock-aware one-lease power policy and the
+  `keepAwake.toml` configuration, lock-aware one-lease power policy and the
   module's published runtime status. It owns no socket handler: the app composes
   the read-only `keepAwake.status` envelope from the module snapshot reader. See
   [keep-awake.md](../features/keep-awake.md).
-- `src/crates/modules/wallpapers`: authoritative `wallpapers.jsonc`
+- `src/crates/modules/wallpapers`: authoritative `wallpapers.toml`
   configuration, schema, template, migration, shared pool/explicit-file source
   resolution, the processing/cache/apply library, a host-lifetime coordinator
   and one wakeable rotation timer. The app's `WallpapersFactory` mounts it and
@@ -139,7 +139,7 @@ app-owned envelope without mutable registry/store or disk access. `WallpapersFac
 contributes `wallpapers.set` and installs the module's typed accepted watch through
 `host::register_module_observed` before registry start. Registration creates no
 listener or assertion and installs no observer; each module starts only from an accepted
-`enabled: true` configuration. Every factory keeps the default acknowledged no-op
+`enabled = true` configuration. Every factory keeps the default acknowledged no-op
 shutdown hooks except Wallpapers, which overrides `begin_shutdown` to close its
 host service admission and wake waits without joining, and `finish_shutdown` to
 drain after module stop; both hooks are generic, and the host retains the factory
@@ -356,7 +356,7 @@ request starts teardown: Tauri's last-window `ExitRequested` (`code: None`, from
 reaches the coordinator through the default menu's Quit item, with the Test Window frontmost, but
 a repeat Cmd-Q does not escalate while the reply is pending; a signal does. Logout, restart and
 shutdown have not been verified end to end.
-`execOnStartup` runs once, through the shared SDK command runner, on its own owned thread, never for CLI, reload or a
+`exec_on_startup` runs once, through the shared SDK command runner, on its own owned thread, never for CLI, reload or a
 second launch. It starts when the Accessibility gate first opens in a launch (right after setup when
 trust already exists, otherwise after the first grant) and never reruns on a later reopening; a long-lived command cannot delay readiness or shutdown. See [ipc.md](ipc.md) and
 [config.md](config.md).

@@ -28,7 +28,7 @@ fn config() -> Arc<TilingConfig> {
             "workspaces": [
                 { "name": "main", "layout": "master", "screen": "main" },
                 { "name": "files", "layout": "master", "screen": "main",
-                  "rules": [{ "appId": "com.apple.finder" }] },
+                  "rules": [{ "app_id": "com.apple.finder" }] },
             ],
         }))
         .expect("config"),

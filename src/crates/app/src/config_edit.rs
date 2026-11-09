@@ -4,7 +4,7 @@
 //! then commits only if the file still has the bytes that were inspected. A
 //! conflict, an invalid disk file or a failed validation leaves the file
 //! untouched. The actual write is a same-directory temporary file followed by a
-//! rename, so readers never observe partial JSONC. Replacing an existing file
+//! rename, so readers never observe partial TOML. Replacing an existing file
 //! keeps its permission bits; the rename still breaks hard links to the old
 //! inode.
 //!
@@ -17,7 +17,8 @@ use std::path::{Path, PathBuf};
 
 use stache_sdk::config::{ConfigDiagnostic, DiagnosticKind};
 use stache_sdk::{
-    ConfigCatalog, ConfigFileId, ConfigPaths, ModuleId, set_enabled as set_enabled_text,
+    ConfigCatalog, ConfigEdit as ConfigEditResult, ConfigFileId, ConfigPaths, ModuleId,
+    set_enabled as set_enabled_text,
 };
 use tempfile::NamedTempFile;
 
@@ -266,6 +267,18 @@ pub fn plan_enabled(
         });
     };
     catalog.inspect(id, &path, candidate).map_err(EnableEditError::Invalid)?;
+    // Safety net: the edited text must carry the requested root `enabled`.
+    if !matches!(
+        set_enabled_text(candidate, enabled),
+        Ok(ConfigEditResult::Unchanged)
+    ) {
+        return Err(EnableEditError::Invalid(invalid(
+            &path,
+            format!(
+                "the edit did not set the root `enabled` key to {enabled}; the file was not changed"
+            ),
+        )));
+    }
     Ok(PendingEdit {
         path,
         original,
@@ -306,21 +319,21 @@ mod tests {
         let paths = paths(root.path());
         fs::create_dir_all(paths.directory()).expect("config dir");
         let path = paths.file(ConfigFileId::module(ModuleId::new("proxyAudio")));
-        let source = r#"{
-  // Audio routing is opt-in.
-  "enabled": false,
-  "output": [{ "name": "Speakers", "strategy": "exact" }] // keep me
-}
+        let source = r#"#:schema https://example.invalid/proxyAudio.schema.json
+
+# Audio routing is opt-in.
+enabled = false # tray toggles this
+
+[[output]]
+name = "Speakers" # keep me
+strategy = "exact"
 "#;
         write(&path, source);
         let edit = plan_enabled(&catalog, &paths, ModuleId::new("proxyAudio"), true).expect("plan");
         assert!(edit.is_change());
         assert_eq!(edit.commit().expect("commit"), CommitOutcome::Written);
         let edited = fs::read_to_string(&path).expect("read");
-        assert!(edited.contains("// Audio routing is opt-in."));
-        assert!(edited.contains("// keep me"));
-        assert!(edited.contains("\"name\": \"Speakers\""));
-        assert!(edited.contains("\"enabled\": true"));
+        assert_eq!(edited, source.replace("enabled = false", "enabled = true"));
         catalog.inspect(ModuleId::new("proxyAudio"), &path, &edited).expect("valid");
         let entries: Vec<String> = fs::read_dir(paths.directory())
             .expect("read directory")
@@ -328,7 +341,7 @@ mod tests {
             .collect();
         assert_eq!(
             entries,
-            vec!["proxyAudio.jsonc"],
+            vec!["proxyAudio.toml"],
             "no temporary file is left behind"
         );
     }
@@ -340,7 +353,7 @@ mod tests {
         let paths = paths(root.path());
         fs::create_dir_all(paths.directory()).expect("config dir");
         let path = paths.file(ConfigFileId::module(ModuleId::new("proxyAudio")));
-        write(&path, "{ \"enabled\": false }\n");
+        write(&path, "enabled = false\n");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("mode");
         let edit = plan_enabled(&catalog, &paths, ModuleId::new("proxyAudio"), true).expect("plan");
         assert_eq!(edit.commit().expect("commit"), CommitOutcome::Written);
@@ -358,13 +371,13 @@ mod tests {
         let paths = paths(root.path());
         fs::create_dir_all(paths.directory()).expect("config dir");
         let path = paths.file(ConfigFileId::module(ModuleId::new("proxyAudio")));
-        write(&path, "{ \"enabled\": false }\n");
+        write(&path, "enabled = false\n");
         let edit = plan_enabled(&catalog, &paths, ModuleId::new("proxyAudio"), true).expect("plan");
-        write(&path, "{ \"enabled\": false, \"output\": [] } // external\n");
+        write(&path, "enabled = false\noutput = [] # external\n");
         assert!(matches!(edit.commit(), Err(EnableEditError::Conflict { .. })));
         assert_eq!(
             fs::read_to_string(&path).expect("read"),
-            "{ \"enabled\": false, \"output\": [] } // external\n"
+            "enabled = false\noutput = [] # external\n"
         );
     }
 
@@ -376,14 +389,11 @@ mod tests {
         let path = paths.file(ConfigFileId::module(ModuleId::new("proxyAudio")));
         let edit = plan_enabled(&catalog, &paths, ModuleId::new("proxyAudio"), true).expect("plan");
         fs::create_dir_all(paths.directory()).expect("config dir");
-        write(
-            &path,
-            "{ \"enabled\": false, \"output\": [] } // created concurrently\n",
-        );
+        write(&path, "enabled = false\noutput = [] # created concurrently\n");
         assert!(matches!(edit.commit(), Err(EnableEditError::Conflict { .. })));
         assert_eq!(
             fs::read_to_string(&path).expect("read"),
-            "{ \"enabled\": false, \"output\": [] } // created concurrently\n"
+            "enabled = false\noutput = [] # created concurrently\n"
         );
     }
 
@@ -393,18 +403,15 @@ mod tests {
         let catalog = catalog().expect("catalog");
         let paths = paths(root.path());
         fs::create_dir_all(paths.directory()).expect("config dir");
-        let target = paths.directory().join("real.jsonc");
-        write(&target, "{ \"enabled\": false }\n");
+        let target = paths.directory().join("real.toml");
+        write(&target, "enabled = false\n");
         let path = paths.file(ConfigFileId::module(ModuleId::new("proxyAudio")));
         std::os::unix::fs::symlink(&target, &path).expect("symlink");
         assert!(matches!(
             plan_enabled(&catalog, &paths, ModuleId::new("proxyAudio"), true),
             Err(EnableEditError::Symlink { .. })
         ));
-        assert_eq!(
-            fs::read_to_string(&target).expect("target"),
-            "{ \"enabled\": false }\n"
-        );
+        assert_eq!(fs::read_to_string(&target).expect("target"), "enabled = false\n");
         assert!(fs::symlink_metadata(&path).expect("path").file_type().is_symlink());
     }
 
@@ -416,9 +423,10 @@ mod tests {
         fs::create_dir_all(paths.directory()).expect("config dir");
         let path = paths.file(ConfigFileId::module(ModuleId::new("proxyAudio")));
         for source in [
-            "{ \"enabled\": \"yes\" }",
-            "{ \"enabled\": ",
-            "{ \"enabled\": true, \"output\": [{ \"name\": \"\" }] }",
+            "enabled = \"yes\"",
+            "enabled = ",
+            "enabled = true\n[[output]]\nname = \"\"\n",
+            "# only a comment\n[enabled]\nx = 1\n",
         ] {
             write(&path, source);
             assert!(matches!(
@@ -438,8 +446,8 @@ mod tests {
         let edit = plan_enabled(&catalog, &paths, ModuleId::new("proxyAudio"), true).expect("plan");
         assert_eq!(edit.commit().expect("commit"), CommitOutcome::Written);
         let text = fs::read_to_string(&path).expect("created");
-        assert!(text.contains("$schema"));
-        assert!(text.contains("\"enabled\": true"));
+        assert!(text.starts_with("#:schema "), "{text}");
+        assert!(text.contains("\nenabled = true\n"), "{text}");
         catalog.inspect(ModuleId::new("proxyAudio"), &path, &text).expect("valid");
     }
 
@@ -450,15 +458,12 @@ mod tests {
         let paths = paths(root.path());
         fs::create_dir_all(paths.directory()).expect("config dir");
         let path = paths.file(ConfigFileId::module(ModuleId::new("proxyAudio")));
-        write(&path, "{ \"enabled\": false }\n");
+        write(&path, "enabled = false\n");
         let edit =
             plan_enabled(&catalog, &paths, ModuleId::new("proxyAudio"), false).expect("plan");
         assert!(!edit.is_change());
         assert_eq!(edit.commit().expect("commit"), CommitOutcome::Unchanged);
-        assert_eq!(
-            fs::read_to_string(&path).expect("read"),
-            "{ \"enabled\": false }\n"
-        );
+        assert_eq!(fs::read_to_string(&path).expect("read"), "enabled = false\n");
     }
 
     #[test]

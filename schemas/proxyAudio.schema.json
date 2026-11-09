@@ -48,7 +48,7 @@
       "description": "One entry in an input or output priority list.",
       "type": "object",
       "properties": {
-        "dependsOn": {
+        "depends_on": {
           "description": "A device that must be connected before this entry is eligible.",
           "anyOf": [
             {
@@ -87,7 +87,7 @@
         {
           "description": "Case-insensitive prefix match.",
           "type": "string",
-          "const": "startsWith"
+          "const": "starts_with"
         },
         {
           "description": "Case-sensitive regular expression.",

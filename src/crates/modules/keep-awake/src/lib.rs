@@ -1,7 +1,7 @@
 //! Keep Awake configuration, runtime and published status.
 //!
 //! [`KeepAwakeConfig`] is the single authoritative source for
-//! `keepAwake.jsonc`, its schema, template and migration.
+//! `keepAwake.toml`, its schema, template and migration.
 //! [`KeepAwakeModule`] is the owned lock-aware runtime: it installs lock
 //! observation, probes before acquiring and holds at most one complete
 //! all-three assertion lease per generation.

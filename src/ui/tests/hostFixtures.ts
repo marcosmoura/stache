@@ -37,8 +37,8 @@ export function moduleStatus(overrides: Partial<ModuleStatusView> = {}): ModuleS
 
 export function configFile(overrides: Partial<ConfigFileView> = {}): ConfigFileView {
   return {
-    file: 'global.jsonc',
-    path: '/tmp/stache/global.jsonc',
+    file: 'global.toml',
+    path: '/tmp/stache/global.toml',
     state: 'valid',
     active: true,
     diagnostic: null,

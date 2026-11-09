@@ -21,7 +21,7 @@ Rebuild the legacy status bar as `stache-bar`: one non-activating panel on the p
 Approved by the user; parts must not re-decide them.
 
 1. **Visual identity.** Layout, sizes, spacing, colors, fonts, icons, animations, transitions, hover/active states, media overlay, laptop media query (`width <= 2036px`) and empty states equal legacy. A visual-parity gate ([04](04-ui-shell-parity.md)) blocks merge; any deviation needs user approval.
-2. **Module.** Crate `src/crates/modules/bar`, package `stache-bar`, catalog ID/file `bar`/`bar.jsonc`. `height`/`padding` default 28/12; weather keys kept. Typed migration through noTunes' catalog-driven migration.
+2. **Module.** Crate `src/crates/modules/bar`, package `stache-bar`, catalog ID/file `bar`/`bar.toml` (was `bar.jsonc`; see [config](../../architecture/config.md)). `height`/`padding` default 28/12; weather keys kept. Typed migration through noTunes' catalog-driven migration.
 3. **Window.** Primary display only. `WindowKind::NonActivatingPanel` gets native semantics in the host/`stache-macos`, surface `bar`, all Spaces + stationary. Private SkyLight only if the part 03 gate proves public APIs insufficient, then separately approved and wrapped in `stache-macos`.
    - **Level** (confirmed 2026-11-08): legacy's effective level, below normal windows (`BelowNormalWindowLevel`). Legacy set `kCGMainMenuWindowLevelKey` then tao `set_always_on_bottom(true)`, which overrides it (`_legacy/app/native/src/platform/window.rs:147-172`); the creation-time `alwaysOnTop: true` (`_legacy/app/native/tauri.conf.json:31`) is overridden too. Part 03 owns it.
    - **Primary display** (confirmed 2026-11-08): `NSScreen.screens[0]`, the menu-bar display with origin (0,0), matching legacy tao `primary_monitor` and `src/crates/macos/src/desktop.rs:40-41`. Never `mainScreen`. Part 03 owns it.
@@ -32,7 +32,7 @@ Approved by the user; parts must not re-decide them.
 8. **Click actions** fixed per component: CPU→Activity Monitor, Wi-Fi→`x-apple.systempreferences:com.apple.wifi-settings-extension`, Clock→Calendar, Battery→`x-apple.systempreferences:com.apple.Battery-Settings.extension`, Weather→Weather, Media→its fixed bundle map. Typed outcome via the `stache-macos` open adapter.
 9. **Wi-Fi** native where no permission is needed; SSID via `ipconfig getsummary` behind a gate; never a Location prompt.
 10. **Media** keeps the private MediaRemote adapter as an owned, bounded, gated child process; hidden when unavailable.
-11. **Weather** keeps providers, geolocation → ipapi.co → ipinfo.io → `defaultLocation`, env-file key, CSP pinning, 20 min. User approved possible geolocation consent; do not promise a single prompt or prompt-free weather.
+11. **Weather** keeps providers, geolocation → ipapi.co → ipinfo.io → `default_location` (was `defaultLocation`), env-file key, CSP pinning, 20 min. User approved possible geolocation consent; do not promise a single prompt or prompt-free weather.
 12. **CPU temperature** SMC then `ismc`/`smctemp`; battery via `starship-battery` or IOKit.
 13. **Font** system-installed Maple Mono NF with the legacy fallback stack; not bundled.
 14. **Module→UI data** through tauri-specta generated commands/events, delivered by a host bridge (the SDK bus is pull-only).
@@ -88,7 +88,7 @@ The mandatory C01–C20 applicability audit is in [review lessons](review-lesson
 ## Intentional compatibility changes
 
 1. `height`/`padding` defaults become 28/12. Legacy `#[derive(Default)]` produced 0 (`_legacy/app/native/src/config/types/bar.rs:88-102`, `_legacy/stache.schema.json:209-221`); legacy files that omitted them rendered 0. Migration keeps every explicit value, including 0, materializes omitted defaults and warns about the corrected omission behavior. No redesign accompanies this approved default correction.
-2. One file `bar.jsonc` replaces the root `bar` key.
+2. One file `bar.toml` (was `bar.jsonc`) replaces the root `bar` key.
 3. Reload reconfigures in place instead of restarting the app (`_legacy/docs/gotchas.md:35-40`).
 4. Clock, Battery and Weather clicks open Calendar, Battery settings and Weather instead of removed widgets (`_legacy/app/ui/hooks/useWidgetToggle.ts`). The clickable look is unchanged.
 5. No generic `open_app` allowlist command (`_legacy/app/native/src/modules/bar/components/apps.rs:42-55`); actions are fixed typed commands.

@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use stache_sdk::{ConfigError, ModuleConfig, ModuleId};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default, rename_all = "snake_case")]
 pub struct TickerConfig {
     /// Whether the module should run.
     pub enabled: bool,
@@ -29,7 +29,7 @@ pub struct TickerConfig {
 }
 
 impl TickerConfig {
-    /// The catalog identifier and file stem (`ticker.jsonc`).
+    /// The catalog identifier and file stem (`ticker.toml`).
     pub const ID: ModuleId = ModuleId::new("ticker");
 }
 
@@ -46,7 +46,10 @@ impl ModuleConfig for TickerConfig {
 ```
 
 Doc comments become schema descriptions and template comments. Field names in
-serde are the user-facing keys; defaults must be real `Default` values, not a
+serde are the user-facing keys, and every config type (including nested types and
+unit enums) uses `rename_all = "snake_case"`. The composed-catalog spelling guard
+in `src/crates/app/tests/config_catalog.rs` fails any registered schema with a
+non-snake_case property or enum value; defaults must be real `Default` values, not a
 hand-written template. Add the crate to the root workspace members and register
 it in the app catalog; registration is the only type-erasure boundary.
 
@@ -60,9 +63,9 @@ let mut catalog = ConfigCatalog::new();
 catalog.register::<TickerConfig>(TickerConfig::ID)?;
 ```
 
-The config file is `~/.config/stache/ticker.jsonc` (or the selected
-`--config` directory). Comments and trailing commas are accepted; every other
-JSON extension is rejected. Missing files use the typed default; malformed
+The config file is `~/.config/stache/ticker.toml` (or the selected
+`--config` directory). The file is TOML 1.0: `#` comments are accepted and a
+first-line `#:schema <url>` points editors at the generated schema. Missing files use the typed default; malformed
 files leave the module inactive with a diagnostic instead of silently using
 defaults. Keys the type does not declare are ignored with a warning and do not
 reject the file.

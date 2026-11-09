@@ -5,11 +5,12 @@ use std::path::Path;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use specta::Type;
+use stache_sdk::config::bounds;
 use stache_sdk::{ConfigError, ModuleConfig, ModuleId};
 
 /// Wallpaper cycling mode.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Type)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum WallpaperMode {
     /// Select a random wallpaper each time.
     #[default]
@@ -25,7 +26,7 @@ pub enum WallpaperMode {
 /// strings are trimmed; paths are resolved relative to the configuration
 /// directory, never the process working directory.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Type)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default, rename_all = "snake_case")]
 pub struct WallpapersConfig {
     /// Whether Wallpapers should run.
     pub enabled: bool,
@@ -36,11 +37,14 @@ pub struct WallpapersConfig {
     /// Wallpaper filenames to use. If `path` is specified, this list is ignored.
     pub list: Vec<String>,
     /// Time in seconds between wallpaper changes. Zero changes only once, when
-    /// rotation starts.
+    /// rotation starts. The largest accepted value is 9223372036854775807, the
+    /// largest TOML integer.
     ///
     /// The Rust field and schema are `u64`; the generated TypeScript uses
     /// `number`, which loses precision above 2^53.
     #[specta(type = specta_typescript::Number)]
+    #[serde(deserialize_with = "bounds::deserialize")]
+    #[schemars(range(max = i64::MAX))]
     pub interval: u64,
     /// Wallpaper selection mode: random or sequential.
     pub mode: WallpaperMode,
@@ -51,7 +55,7 @@ pub struct WallpapersConfig {
 }
 
 impl WallpapersConfig {
-    /// The catalog identifier and file stem (`wallpapers.jsonc`).
+    /// The catalog identifier and file stem (`wallpapers.toml`).
     pub const ID: ModuleId = ModuleId::new("wallpapers");
 }
 
@@ -63,6 +67,7 @@ impl ModuleConfig for WallpapersConfig {
     /// Missing, unreadable or unsupported sources are source-resolution
     /// failures, not configuration failures; an empty source list is valid.
     fn validate(&self) -> Result<(), ConfigError> {
+        bounds::validate_field("interval", self.interval)?;
         if self.path.contains('\0') {
             return Err(ConfigError::new("path must not contain a NUL byte"));
         }
@@ -127,7 +132,7 @@ mod tests {
     }
 
     fn inspect(text: &str) -> Result<Vec<String>, stache_sdk::config::ConfigDiagnostic> {
-        catalog().inspect(WallpapersConfig::ID, Path::new("wallpapers.jsonc"), text)
+        catalog().inspect(WallpapersConfig::ID, Path::new("wallpapers.toml"), text)
     }
 
     #[test]
@@ -155,24 +160,44 @@ mod tests {
         assert_eq!(WallpapersConfig::ID.as_str(), "wallpapers");
     }
 
+    fn from_json(
+        value: serde_json::Value,
+    ) -> Result<WallpapersConfig, stache_sdk::config::ConfigDiagnostic> {
+        stache_sdk::config::loader::deserialize(
+            stache_sdk::config::ConfigFileId::module(WallpapersConfig::ID),
+            Path::new("wallpapers.toml"),
+            value,
+        )
+    }
+
+    fn decode(text: &str) -> WallpapersConfig {
+        catalog()
+            .decode_typed::<WallpapersConfig>(
+                WallpapersConfig::ID,
+                Path::new("wallpapers.toml"),
+                text,
+            )
+            .expect("decode")
+            .0
+    }
+
     #[test]
-    fn empty_objects_keep_every_field_default() {
-        let config: WallpapersConfig = serde_json::from_str("{}").expect("decode");
-        assert_eq!(config, WallpapersConfig::default());
+    fn comment_only_files_keep_every_field_default() {
+        assert_eq!(decode("# nothing\n"), WallpapersConfig::default());
     }
 
     #[test]
     fn explicit_values_roundtrip_including_the_sequential_mode() {
-        let text = r#"{
-            "enabled": true,
-            "path": "~/Pictures",
-            "list": ["a.jpg", "b.png"],
-            "interval": 60,
-            "mode": "sequential",
-            "radius": 12,
-            "blur": 4
-        }"#;
-        let config: WallpapersConfig = serde_json::from_str(text).expect("decode");
+        let text = r#"
+enabled = true
+path = "~/Pictures"
+list = ["a.jpg", "b.png"]
+interval = 60
+mode = "sequential"
+radius = 12
+blur = 4
+"#;
+        let config = decode(text);
         assert!(config.enabled);
         assert_eq!(config.path, "~/Pictures");
         assert_eq!(config.list, ["a.jpg", "b.png"]);
@@ -187,26 +212,48 @@ mod tests {
     #[test]
     fn numeric_boundaries_are_accepted() {
         let text = format!(
-            r#"{{ "interval": {}, "radius": {}, "blur": {} }}"#,
-            u64::MAX,
+            "interval = {}\nradius = {}\nblur = {}\n",
+            i64::MAX,
             u32::MAX,
             u32::MAX
         );
-        let config: WallpapersConfig = serde_json::from_str(&text).expect("decode");
-        assert_eq!(config.interval, u64::MAX);
+        let config = decode(&text);
+        assert_eq!(config.interval, bounds::MAX);
         assert_eq!(config.radius, u32::MAX);
         assert_eq!(config.blur, u32::MAX);
         inspect(&text).expect("the boundary values are valid");
+        assert!(from_json(json!({ "interval": bounds::MAX })).is_ok());
+    }
+
+    #[test]
+    fn values_above_the_toml_integer_range_are_rejected_naming_the_field() {
+        let diagnostic = from_json(json!({ "interval": bounds::MAX + 1 })).expect_err("too large");
+        assert_eq!(diagnostic.kind, DiagnosticKind::Type);
+        assert_eq!(diagnostic.field.as_deref(), Some("interval"));
+        assert!(
+            diagnostic.message.contains("9223372036854775808"),
+            "{diagnostic}"
+        );
+        assert_eq!(
+            inspect("interval = 9223372036854775808\n")
+                .expect_err("TOML cannot hold it")
+                .kind,
+            DiagnosticKind::Parse
+        );
+        let config = WallpapersConfig {
+            interval: u64::MAX,
+            ..WallpapersConfig::default()
+        };
+        assert!(config.validate().expect_err("above the bound").message().contains("interval"));
     }
 
     #[test]
     fn numeric_overflows_and_negatives_are_type_diagnostics() {
         for text in [
-            r#"{ "interval": 18446744073709551616 }"#,
-            r#"{ "interval": -1 }"#,
-            r#"{ "radius": 4294967296 }"#,
-            r#"{ "blur": -1 }"#,
-            r#"{ "mode": "Random" }"#,
+            "interval = -1\n",
+            "radius = 4294967296\n",
+            "blur = -1\n",
+            "mode = \"Random\"\n",
         ] {
             let diagnostic = inspect(text).expect_err(text);
             assert_eq!(diagnostic.kind, DiagnosticKind::Type, "{text}");
@@ -215,14 +262,14 @@ mod tests {
 
     #[test]
     fn a_non_boolean_enabled_value_is_a_type_diagnostic() {
-        let diagnostic = inspect(r#"{ "enabled": "yes" }"#).expect_err("wrong type");
+        let diagnostic = inspect("enabled = \"yes\"\n").expect_err("wrong type");
         assert_eq!(diagnostic.kind, DiagnosticKind::Type);
         assert_eq!(diagnostic.field.as_deref(), Some("enabled"));
     }
 
     #[test]
     fn unknown_keys_are_warnings_but_the_file_stays_valid() {
-        let warnings = inspect(r#"{ "enabled": true, "enable": true }"#).expect("valid");
+        let warnings = inspect("enabled = true\nenable = true\n").expect("valid");
         assert_eq!(warnings, ["enable"]);
     }
 
@@ -232,7 +279,7 @@ mod tests {
         assert_eq!(empty.kind, DiagnosticKind::Type);
         assert!(empty.message.contains("file is empty"), "{empty}");
 
-        let malformed = inspect("{ \"enabled\": ").expect_err("malformed file");
+        let malformed = inspect("enabled = ").expect_err("malformed file");
         assert_eq!(malformed.kind, DiagnosticKind::Parse);
     }
 
@@ -252,7 +299,7 @@ mod tests {
         let error = entry.validate().expect_err("NUL entry");
         assert!(error.message().contains("list[1]"), "{error}");
 
-        let diagnostic = inspect(r#"{ "path": "bad\u0000path" }"#).expect_err("NUL");
+        let diagnostic = inspect("path = \"bad\\u0000path\"\n").expect_err("NUL");
         assert_eq!(diagnostic.kind, DiagnosticKind::Validation);
     }
 
@@ -260,14 +307,17 @@ mod tests {
     fn the_template_and_schema_are_deterministic_and_descriptive() {
         let catalog = catalog();
         let template = catalog.template(WallpapersConfig::ID).expect("template");
+        assert!(template.starts_with(
+            "#:schema https://raw.githubusercontent.com/marcosmoura/stache/main/schemas/wallpapers.schema.json\n\n# Whether Wallpapers should run.\nenabled = false\n"
+        ), "{template}");
         for key in [
-            "\"enabled\": false",
-            "\"path\": \"\"",
-            "\"list\": []",
-            "\"interval\": 0",
-            "\"mode\": \"random\"",
-            "\"radius\": 0",
-            "\"blur\": 0",
+            "enabled = false",
+            "path = \"\"",
+            "list = []",
+            "interval = 0",
+            "mode = \"random\"",
+            "radius = 0",
+            "blur = 0",
         ] {
             assert!(template.contains(key), "{key}: {template}");
         }
@@ -286,6 +336,10 @@ mod tests {
         assert_eq!(schema["title"], "WallpapersConfig");
         assert_eq!(schema["properties"]["enabled"]["default"], false);
         assert_eq!(schema["properties"]["mode"]["default"], "random");
+        assert_eq!(
+            schema["properties"]["interval"]["maximum"],
+            9_223_372_036_854_775_807_i64
+        );
     }
 
     #[test]

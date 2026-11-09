@@ -173,7 +173,7 @@ export type AudioDevicePriority_Deserialize = {
 	/**  How the device name is matched. */
 	strategy?: MatchStrategy,
 	/**  A device that must be connected before this entry is eligible. */
-	dependsOn?: AudioDeviceDependency_Deserialize | null,
+	depends_on?: AudioDeviceDependency_Deserialize | null,
 };
 
 /**  One entry in an input or output priority list. */
@@ -183,7 +183,7 @@ export type AudioDevicePriority_Serialize = {
 	/**  How the device name is matched. */
 	strategy: MatchStrategy,
 	/**  A device that must be connected before this entry is eligible. */
-	dependsOn?: AudioDeviceDependency_Serialize,
+	depends_on?: AudioDeviceDependency_Serialize,
 };
 
 /**  The device direction requested by `proxyAudio.list`. */
@@ -408,9 +408,9 @@ export type BordersConfig_Deserialize = {
 	/**  Windows in split layout. */
 	split?: BorderStateConfig_Deserialize | null,
 	/**  Windows in vertical split layout. */
-	splitVertical?: BorderStateConfig_Deserialize | null,
+	split_vertical?: BorderStateConfig_Deserialize | null,
 	/**  Windows in horizontal split layout. */
-	splitHorizontal?: BorderStateConfig_Deserialize | null,
+	split_horizontal?: BorderStateConfig_Deserialize | null,
 	/**  Windows that never get a border, in addition to the global ignore rules. */
 	ignore?: WindowRule_Deserialize[],
 };
@@ -447,9 +447,9 @@ export type BordersConfig_Serialize = {
 	/**  Windows in split layout. */
 	split?: BorderStateConfig_Serialize,
 	/**  Windows in vertical split layout. */
-	splitVertical?: BorderStateConfig_Serialize,
+	split_vertical?: BorderStateConfig_Serialize,
 	/**  Windows in horizontal split layout. */
-	splitHorizontal?: BorderStateConfig_Serialize,
+	split_horizontal?: BorderStateConfig_Serialize,
 	/**  Windows that never get a border, in addition to the global ignore rules. */
 	ignore: WindowRule_Serialize[],
 };
@@ -491,7 +491,7 @@ export type ConfigFileView = ConfigFileView_Serialize | ConfigFileView_Deseriali
 
 /**  One configuration file as seen by the host. */
 export type ConfigFileView_Deserialize = {
-	/**  File name, for example `proxyAudio.jsonc`. */
+	/**  File name, for example `proxyAudio.toml`. */
 	file: string,
 	/**  Absolute path. */
 	path: string,
@@ -507,7 +507,7 @@ export type ConfigFileView_Deserialize = {
 
 /**  One configuration file as seen by the host. */
 export type ConfigFileView_Serialize = {
-	/**  File name, for example `proxyAudio.jsonc`. */
+	/**  File name, for example `proxyAudio.toml`. */
 	file: string,
 	/**  Absolute path. */
 	path: string,
@@ -570,13 +570,13 @@ export type EasingType =
 /**  Linear interpolation. */
 "linear" |
 /**  Slow start. */
-"ease-in" |
+"ease_in" |
 /**  Slow end. */
-"ease-out" |
+"ease_out" |
 /**  Slow start and end. */
-"ease-in-out" |
+"ease_in_out" |
 /**  Exponential ease out: very fast start, slow end. */
-"ease-out-expo" |
+"ease_out_expo" |
 /**  Spring physics. */
 "spring";
 
@@ -586,7 +586,7 @@ export type FloatingConfig = FloatingConfig_Serialize | FloatingConfig_Deseriali
 /**  Floating window configuration. */
 export type FloatingConfig_Deserialize = {
 	/**  Default position for newly floating windows. */
-	defaultPosition?: FloatingPosition,
+	default_position?: FloatingPosition,
 	/**  Named presets. */
 	presets?: FloatingPreset_Deserialize[],
 };
@@ -594,7 +594,7 @@ export type FloatingConfig_Deserialize = {
 /**  Floating window configuration. */
 export type FloatingConfig_Serialize = {
 	/**  Default position for newly floating windows. */
-	defaultPosition: FloatingPosition,
+	default_position: FloatingPosition,
 	/**  Named presets. */
 	presets: FloatingPreset_Serialize[],
 };
@@ -702,7 +702,7 @@ export type GapsConfig_Serialize = {
  *  The global configuration shared by every module.
  *
  *  The registry never hosts this type as a module; it is a catalog entry whose
- *  file name is `global.jsonc`. `enabled` exists only to satisfy
+ *  file name is `global.toml`. `enabled` exists only to satisfy
  *  [`ModuleConfig`] and is always `true`.
  */
 export type GlobalConfig = GlobalConfig_Serialize | GlobalConfig_Deserialize;
@@ -711,28 +711,28 @@ export type GlobalConfig = GlobalConfig_Serialize | GlobalConfig_Deserialize;
  *  The global configuration shared by every module.
  *
  *  The registry never hosts this type as a module; it is a catalog entry whose
- *  file name is `global.jsonc`. `enabled` exists only to satisfy
+ *  file name is `global.toml`. `enabled` exists only to satisfy
  *  [`ModuleConfig`] and is always `true`.
  */
 export type GlobalConfig_Deserialize = {
 	/**  Logging behavior for the host. */
 	logging?: LoggingConfig_Deserialize,
 	/**  Commands to execute once per desktop launch. */
-	execOnStartup?: StartupCommands,
+	exec_on_startup?: StartupCommands,
 };
 
 /**
  *  The global configuration shared by every module.
  *
  *  The registry never hosts this type as a module; it is a catalog entry whose
- *  file name is `global.jsonc`. `enabled` exists only to satisfy
+ *  file name is `global.toml`. `enabled` exists only to satisfy
  *  [`ModuleConfig`] and is always `true`.
  */
 export type GlobalConfig_Serialize = {
 	/**  Logging behavior for the host. */
 	logging: LoggingConfig_Serialize,
 	/**  Commands to execute once per desktop launch. */
-	execOnStartup: StartupCommands,
+	exec_on_startup: StartupCommands,
 };
 
 /**  Gradient border color. */
@@ -1030,9 +1030,9 @@ export type LayoutType =
 /**  Split based on screen orientation. */
 "split" |
 /**  Windows arranged vertically. */
-"split-vertical" |
+"split_vertical" |
 /**  Windows arranged horizontally. */
-"split-horizontal" |
+"split_horizontal" |
 /**  All windows maximized and stacked. */
 "monocle" |
 /**  One master window with a stack. */
@@ -1080,10 +1080,10 @@ export type LogLevel =
 /**  A failure. */
 "error";
 
-/**  Logging behavior selected by `global.jsonc`. */
+/**  Logging behavior selected by `global.toml`. */
 export type LoggingConfig = LoggingConfig_Serialize | LoggingConfig_Deserialize;
 
-/**  Logging behavior selected by `global.jsonc`. */
+/**  Logging behavior selected by `global.toml`. */
 export type LoggingConfig_Deserialize = {
 	/**  Minimum severity the host writes. */
 	level?: LogLevel,
@@ -1091,7 +1091,7 @@ export type LoggingConfig_Deserialize = {
 	debug?: boolean,
 };
 
-/**  Logging behavior selected by `global.jsonc`. */
+/**  Logging behavior selected by `global.toml`. */
 export type LoggingConfig_Serialize = {
 	/**  Minimum severity the host writes. */
 	level: LogLevel,
@@ -1138,7 +1138,7 @@ export type MatchStrategy =
 /**  Case-insensitive containment. */
 "contains" |
 /**  Case-insensitive prefix match. */
-"startsWith" |
+"starts_with" |
 /**  Case-sensitive regular expression. */
 "regex";
 
@@ -1166,10 +1166,10 @@ export type MenuAnywhereConfig_Deserialize = {
 	 */
 	modifiers?: MenuAnywhereModifier[],
 	/**
-	 *  The mouse button that summons the menu: "rightClick" or "middleClick".
-	 *  "middleClick" means button number 2 only, not back or forward buttons.
+	 *  The mouse button that summons the menu: `right_click` or `middle_click`.
+	 *  `middle_click` means button number 2 only, not back or forward buttons.
 	 */
-	mouseButton?: MenuAnywhereMouseButton,
+	mouse_button?: MenuAnywhereMouseButton,
 };
 
 /**
@@ -1189,10 +1189,10 @@ export type MenuAnywhereConfig_Serialize = {
 	 */
 	modifiers: MenuAnywhereModifier[],
 	/**
-	 *  The mouse button that summons the menu: "rightClick" or "middleClick".
-	 *  "middleClick" means button number 2 only, not back or forward buttons.
+	 *  The mouse button that summons the menu: `right_click` or `middle_click`.
+	 *  `middle_click` means button number 2 only, not back or forward buttons.
 	 */
-	mouseButton: MenuAnywhereMouseButton,
+	mouse_button: MenuAnywhereMouseButton,
 };
 
 /**  A keyboard modifier that must be held while clicking. */
@@ -1209,12 +1209,12 @@ export type MenuAnywhereModifier =
 /**  The mouse button that summons the menu. */
 export type MenuAnywhereMouseButton =
 /**  The secondary (right) button. */
-"rightClick" |
+"right_click" |
 /**
  *  The middle button, button number 2 only. Other extra buttons such as
  *  back and forward never match.
  */
-"middleClick";
+"middle_click";
 
 /**  Observed lifecycle state of one module, without SDK-only payloads. */
 export type ModuleState =
@@ -1343,7 +1343,7 @@ export type NoTunesConfig_Deserialize = {
 	 *  path or a bundle identifier. Omitting it blocks without launching
 	 *  anything.
 	 */
-	targetApp?: string | null,
+	target_app?: string | null,
 };
 
 /**  Automatic Apple Music and iTunes blocking. */
@@ -1355,7 +1355,7 @@ export type NoTunesConfig_Serialize = {
 	 *  path or a bundle identifier. Omitting it blocks without launching
 	 *  anything.
 	 */
-	targetApp?: string,
+	target_app?: string,
 };
 
 /**  Automatic audio-device selection. */
@@ -1523,7 +1523,7 @@ export type TilingConfig_Deserialize = {
 	/**  Whether the tiling window manager should run. */
 	enabled?: boolean,
 	/**  Layout for workspaces that do not specify one. */
-	defaultLayout?: LayoutType,
+	default_layout?: LayoutType,
 	/**  Workspace definitions. Empty means one default workspace per display. */
 	workspaces?: WorkspaceConfig_Deserialize[],
 	/**  Windows that are never managed. */
@@ -1551,7 +1551,7 @@ export type TilingConfig_Serialize = {
 	/**  Whether the tiling window manager should run. */
 	enabled: boolean,
 	/**  Layout for workspaces that do not specify one. */
-	defaultLayout: LayoutType,
+	default_layout: LayoutType,
 	/**  Workspace definitions. Empty means one default workspace per display. */
 	workspaces: WorkspaceConfig_Serialize[],
 	/**  Windows that are never managed. */
@@ -1747,7 +1747,8 @@ export type WallpapersConfig_Deserialize = {
 	list?: string[],
 	/**
 	 *  Time in seconds between wallpaper changes. Zero changes only once, when
-	 *  rotation starts.
+	 *  rotation starts. The largest accepted value is 9223372036854775807, the
+	 *  largest TOML integer.
 	 *
 	 *  The Rust field and schema are `u64`; the generated TypeScript uses
 	 *  `number`, which loses precision above 2^53.
@@ -1782,7 +1783,8 @@ export type WallpapersConfig_Serialize = {
 	list: string[],
 	/**
 	 *  Time in seconds between wallpaper changes. Zero changes only once, when
-	 *  rotation starts.
+	 *  rotation starts. The largest accepted value is 9223372036854775807, the
+	 *  largest TOML integer.
 	 *
 	 *  The Rust field and schema are `u64`; the generated TypeScript uses
 	 *  `number`, which loses precision above 2^53.
@@ -1969,12 +1971,12 @@ export type WeatherConfig_Deserialize = {
 	 *  configuration directory. Environment variables and shell syntax are not
 	 *  expanded, and the process working directory is never used.
 	 */
-	apiKeys?: string,
+	api_keys?: string,
 	/**
 	 *  Default location for weather data when geolocation fails.
 	 *  Can be a city name, address, or coordinates.
 	 */
-	defaultLocation?: string,
+	default_location?: string,
 };
 
 /**  Weather settings for the status bar. */
@@ -1990,12 +1992,12 @@ export type WeatherConfig_Serialize = {
 	 *  configuration directory. Environment variables and shell syntax are not
 	 *  expanded, and the process working directory is never used.
 	 */
-	apiKeys: string,
+	api_keys: string,
 	/**
 	 *  Default location for weather data when geolocation fails.
 	 *  Can be a city name, address, or coordinates.
 	 */
-	defaultLocation: string,
+	default_location: string,
 };
 
 /**  Weather data provider. */
@@ -2003,9 +2005,9 @@ export type WeatherProvider =
 /**  Use Visual Crossing when an API key file is configured, otherwise Open Meteo. */
 "auto" |
 /**  Force Visual Crossing (requires an API key file). */
-"visual-crossing" |
+"visual_crossing" |
 /**  Use Open Meteo (free, no API key required). */
-"open-meteo";
+"open_meteo";
 
 /**
  *  A window matching rule; every specified field must match (AND).
@@ -2021,11 +2023,11 @@ export type WindowRule = WindowRule_Serialize | WindowRule_Deserialize;
  */
 export type WindowRule_Deserialize = {
 	/**  Bundle identifier, matched case-insensitively and exactly. */
-	appId?: string | null,
+	app_id?: string | null,
 	/**  Window title, matched as a case-insensitive substring. */
 	title?: string | null,
 	/**  Application name, matched as a case-insensitive substring. */
-	appName?: string | null,
+	app_name?: string | null,
 };
 
 /**
@@ -2035,11 +2037,11 @@ export type WindowRule_Deserialize = {
  */
 export type WindowRule_Serialize = {
 	/**  Bundle identifier, matched case-insensitively and exactly. */
-	appId?: string,
+	app_id?: string,
 	/**  Window title, matched as a case-insensitive substring. */
 	title?: string,
 	/**  Application name, matched as a case-insensitive substring. */
-	appName?: string,
+	app_name?: string,
 };
 
 /**  A workspace definition. */
@@ -2049,7 +2051,7 @@ export type WorkspaceConfig = WorkspaceConfig_Serialize | WorkspaceConfig_Deseri
 export type WorkspaceConfig_Deserialize = {
 	/**  Unique workspace name. */
 	name: string,
-	/**  Layout; omitted uses `defaultLayout`. */
+	/**  Layout; omitted uses `default_layout`. */
 	layout?: LayoutType | null,
 	/**  Display: `main`/`primary`, `secondary` or a display name. */
 	screen?: string,
@@ -2059,14 +2061,14 @@ export type WorkspaceConfig_Deserialize = {
 	 *  Floating preset applied when windows open here. Parsed and validated
 	 *  but inert: nothing reads it at runtime.
 	 */
-	"preset-on-open"?: string | null,
+	preset_on_open?: string | null,
 };
 
 /**  A workspace definition. */
 export type WorkspaceConfig_Serialize = {
 	/**  Unique workspace name. */
 	name: string,
-	/**  Layout; omitted uses `defaultLayout`. */
+	/**  Layout; omitted uses `default_layout`. */
 	layout?: LayoutType,
 	/**  Display: `main`/`primary`, `secondary` or a display name. */
 	screen: string,
@@ -2076,7 +2078,7 @@ export type WorkspaceConfig_Serialize = {
 	 *  Floating preset applied when windows open here. Parsed and validated
 	 *  but inert: nothing reads it at runtime.
 	 */
-	"preset-on-open"?: string,
+	preset_on_open?: string,
 };
 
 /* Tauri Specta runtime */

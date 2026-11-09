@@ -5,7 +5,7 @@
 //! join a module, wait for the socket or block on configuration I/O.
 //!
 //! Enable is configuration-backed and executes through the host's validated
-//! JSONC edit. Pause/resume are session-only and never touch a file. The menu is
+//! TOML edit. Pause/resume are session-only and never touch a file. The menu is
 //! built from a pure row description so wording and action eligibility are
 //! testable without `AppKit`.
 
@@ -443,8 +443,8 @@ mod tests {
         failed.diagnostic = Some("bad field".to_owned());
         snapshot.modules = vec![failed];
         snapshot.config = vec![ConfigFileView {
-            file: "proxyAudio.jsonc".to_owned(),
-            path: "/tmp/proxyAudio.jsonc".to_owned(),
+            file: "proxyAudio.toml".to_owned(),
+            path: "/tmp/proxyAudio.toml".to_owned(),
             state: ConfigFileState::Invalid,
             active: false,
             diagnostic: Some("parse error".to_owned()),

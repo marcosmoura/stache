@@ -15,7 +15,6 @@ testing = []
 
 [dependencies]
 clap = { version = "4.6.7", features = ["derive"] }
-jsonc-parser = { version = "0.34.0", features = ["serde"] }
 notify-debouncer-full = "0.7.0"
 rustix = { version = "1.1.6", features = ["fs", "process"] }
 schemars = "1.2.3"
@@ -24,6 +23,8 @@ serde_ignored = "0.1.14"
 serde_json = "1.0.154"
 serde_path_to_error = "0.1.20"
 specta = { version = "=2.0.0-rc.26", features = ["derive"] }
+toml = "1.2.0"
+toml_edit = { version = "0.25.18", features = ["serde"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"

@@ -462,7 +462,7 @@ mod tests {
         fn reload(&self) -> HandlerResult<CoreReload> {
             Ok(CoreReload {
                 files: vec![CoreFileOutcome {
-                    file: "global.jsonc".to_owned(),
+                    file: "global.toml".to_owned(),
                     outcome: CoreApplyOutcome::Applied { revision: 2 },
                     diagnostic: None,
                 }],
@@ -534,7 +534,7 @@ mod tests {
         let _server = crate::ipc::server::IpcServer::start(&paths, router()).expect("server");
         let client = IpcClient::new(paths.socket_path().expect("socket"));
         let report = client.reload().expect("reload");
-        assert_eq!(report.files[0].file, "global.jsonc");
+        assert_eq!(report.files[0].file, "global.toml");
         let status = client.status().expect("status");
         assert_eq!(status.directory, Path::new("/config"));
     }

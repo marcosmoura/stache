@@ -53,7 +53,7 @@ export function removeTempRoot(root: string): void {
   rmSync(root, { recursive: true, force: true });
 }
 
-/** Writes the two configuration files used by a Stache Next scenario. */
+/** Writes the two TOML configuration files used by a Stache Next scenario. */
 export function writeNextConfigs(
   root: string,
   enabled: boolean,
@@ -63,27 +63,46 @@ export function writeNextConfigs(
 
   mkdirSync(directory, { recursive: true });
 
-  const globalContent = `${JSON.stringify(
-    { logging: { level: 'info', debug: false }, execOnStartup: [] },
-    null,
-    2,
-  )}\n`;
-  const proxyAudioContent = `${JSON.stringify(
-    {
-      enabled,
-      input: enabled ? priorityList(audio.defaultInput) : [],
-      output: enabled ? priorityList(audio.defaultOutput) : [],
-    },
-    null,
-    2,
-  )}\n`;
+  const globalContent = [
+    'exec_on_startup = []',
+    '',
+    '[logging]',
+    'level = "info"',
+    'debug = false',
+    '',
+  ].join('\n');
+  const proxyAudioContent = [
+    `enabled = ${enabled ? 'true' : 'false'}`,
+    ...priorityTables('input', enabled ? priorityList(audio.defaultInput) : []),
+    ...priorityTables('output', enabled ? priorityList(audio.defaultOutput) : []),
+    '',
+  ].join('\n');
 
   const files = [
-    writeConfigFile(directory, 'global.jsonc', globalContent),
-    writeConfigFile(directory, 'proxyAudio.jsonc', proxyAudioContent),
+    writeConfigFile(directory, 'global.toml', globalContent),
+    writeConfigFile(directory, 'proxyAudio.toml', proxyAudioContent),
   ];
 
   return { directory, files };
+}
+
+/** Renders one priority list as `input = []` or an array of tables. */
+function priorityTables(key: 'input' | 'output', entries: PriorityEntry[]): string[] {
+  if (entries.length === 0) {
+    return [`${key} = []`];
+  }
+
+  return entries.flatMap((entry) => [
+    '',
+    `[[${key}]]`,
+    `name = ${tomlString(entry.name)}`,
+    `strategy = ${tomlString(entry.strategy)}`,
+  ]);
+}
+
+/** A TOML basic string: JSON escaping plus the DEL control character. */
+function tomlString(value: string): string {
+  return JSON.stringify(value).replaceAll('\u007f', '\\u007f');
 }
 
 /**
@@ -126,7 +145,12 @@ function writeConfigFile(directory: string, fileName: string, content: string): 
   return { path: filePath, content };
 }
 
-function priorityList(name: string | null): Array<{ name: string; strategy: 'exact' }> {
+interface PriorityEntry {
+  name: string;
+  strategy: 'exact';
+}
+
+function priorityList(name: string | null): PriorityEntry[] {
   return name === null ? [] : [{ name, strategy: 'exact' }];
 }
 

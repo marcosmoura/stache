@@ -121,7 +121,7 @@ or UI surface consumes them yet.
 `FloatingConfig`, `FloatingPosition`, `FloatingPreset`, `DimensionValue`,
 `BordersConfig`, `BorderStyle`, `BorderStateConfig`, `GradientConfig` and
 `BorderAnimationConfig`) are exported the same way. They are catalog types for
-the Tiling configuration; the shipped Tiling runtime consumes them when `enabled: true`.
+the Tiling configuration; the shipped Tiling runtime consumes them when `enabled = true`.
 
 Serde phases make `ProxyAudioConfig` and `AudioDevicePriority` unions of
 `_Serialize` and `_Deserialize` shapes. Unified serde mode is rejected because

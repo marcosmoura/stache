@@ -1,0 +1,12 @@
+{
+  "$schema": "https://raw.githubusercontent.com/marcosmoura/stache/main/schemas/proxyAudio.schema.json",
+  "enabled": true,
+  "input": [{ "name": "AirPods Pro" }],
+  "output": [
+    {
+      "name": "External Speakers",
+      "strategy": "startsWith",
+      "dependsOn": { "name": "MiniFuse", "strategy": "contains" },
+    },
+  ],
+}

@@ -65,40 +65,50 @@ cargo build -p stache-app --bin stache
 ./target/debug/stache config init
 ```
 
-`config init` writes `global.jsonc`, `commandQuit.jsonc`, `keepAwake.jsonc`,
-`keybindings.jsonc`, `notunes.jsonc` and `proxyAudio.jsonc`; each
-file is validated separately, and runtime-backed modules reload independently. `keepAwake.jsonc`
-starts disabled: setting `enabled: true` (or tray Enable) starts the lock-aware power assertion,
+`config init` writes `global.toml`, `commandQuit.toml`, `keepAwake.toml`,
+`keybindings.toml`, `notunes.toml` and `proxyAudio.toml`; each
+file is validated separately, and runtime-backed modules reload independently. `keepAwake.toml`
+starts disabled: setting `enabled = true` (or tray Enable) starts the lock-aware power assertion,
 and an invalid file keeps the last accepted lease and reports a diagnostic.
 
-2. Enable what you need. `proxyAudio.jsonc`:
+2. Enable what you need. `proxyAudio.toml`:
 
-```jsonc
-{
-  "$schema": "https://raw.githubusercontent.com/marcosmoura/stache/main/schemas/proxyAudio.schema.json",
-  "enabled": true,
-  "input": [{ "name": "MacBook Pro", "strategy": "contains" }],
-  "output": [
-    { "name": "AirPods", "strategy": "contains" },
-    { "name": "MacBook Pro", "strategy": "contains" },
-  ],
-}
+```toml
+#:schema https://raw.githubusercontent.com/marcosmoura/stache/main/schemas/proxyAudio.schema.json
+enabled = true
+
+[[input]]
+name = "MacBook Pro"
+strategy = "contains"
+
+[[output]]
+name = "AirPods"
+strategy = "contains"
+
+[[output]]
+name = "MacBook Pro"
+strategy = "contains"
 ```
 
-`notunes.jsonc`:
+`notunes.toml`:
 
-```jsonc
-{
-  "$schema": "https://raw.githubusercontent.com/marcosmoura/stache/main/schemas/notunes.schema.json",
-  "enabled": true,
-  "targetApp": "com.spotify.client",
-}
+```toml
+#:schema https://raw.githubusercontent.com/marcosmoura/stache/main/schemas/notunes.schema.json
+enabled = true
+target_app = "com.spotify.client"
 ```
 
-`targetApp` is optional: leave it out to block without launching anything.
+`target_app` is optional: leave it out to block without launching anything.
 
 3. Launch Stache Next from the bundle, or run `bun run tauri:dev`. It lives in the menu bar; the tray
    exposes Enable/Disable, Pause/Resume and Retry for each module, plus Quit.
+
+### Upgrading
+
+Configuration files are now `<id>.toml` with snake_case keys, and Stache no longer reads `.jsonc`.
+After updating, run `stache config migrate` once: it converts your existing per-module `.jsonc`
+files (or a legacy single `config.jsonc`) to `.toml` and leaves the originals untouched. Until
+then `stache config path` and the startup log tell you which `.jsonc` files are being ignored.
 
 ## CLI
 
@@ -107,7 +117,7 @@ One `stache` binary is both the desktop host and the command line:
 ```bash
 stache config init              # write every registered config template
 stache config path              # print the directory and each file's state
-stache config migrate           # move a legacy single-file config into per-module files
+stache config migrate           # convert a legacy single file or per-module .jsonc files to TOML
 stache reload                   # ask the running app to reread every file
 stache schema proxyAudio        # print one JSON Schema
 stache cache path               # print the cache directory

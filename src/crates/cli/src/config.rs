@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Subcommand};
-use stache_sdk::config::{PathReport, PathState, inspect_paths};
+use stache_sdk::config::{PathReport, PathState, inspect_paths, stale_jsonc_hint};
 use stache_sdk::ipc::{CoreFileState, CoreStatus, IO_TIMEOUT, IpcClient, RetryPolicy};
 use stache_sdk::{ConfigCatalog, ConfigPaths};
 
@@ -19,7 +19,7 @@ pub enum ConfigCommand {
     Init(InitArgs),
     /// List the directory and its expected files.
     Path,
-    /// Convert a legacy configuration file.
+    /// Convert the legacy file or per-module `.jsonc` files to TOML.
     Migrate(MigrateArgs),
 }
 
@@ -40,8 +40,9 @@ pub struct InitArgs {
 /// Options for `config migrate`.
 #[derive(Args)]
 pub struct MigrateArgs {
-    /// Legacy file to read instead of discovery.
-    #[arg(long, value_name = "FILE")]
+    /// Source to read instead of discovery: a directory of per-module
+    /// `<id>.jsonc` files, one such file, or a legacy single file.
+    #[arg(long, value_name = "PATH")]
     pub from: Option<PathBuf>,
     /// Replace planned destination files that already exist.
     #[arg(short = 'f', long)]
@@ -77,7 +78,7 @@ fn init<W: Write, E: Write>(
     if args.stdout {
         let blocks: Vec<String> = templates
             .iter()
-            .map(|(name, template)| format!("// file: {name}\n{template}"))
+            .map(|(name, template)| format!("# file: {name}\n{template}"))
             .collect();
         let _ = write!(out, "{}", blocks.join("\n"));
         return ExitCode::SUCCESS;
@@ -124,13 +125,16 @@ fn path<W: Write, E: Write>(
     err: &mut E,
 ) -> ExitCode {
     let report = inspect_paths(catalog, paths);
+    let stale = paths.stale_jsonc_files(catalog.ids());
     if let Some(status) = remote_status(environment)
         && status.directory == report.directory
     {
         render_core_status(&status, out, err);
+        render_stale_hints(&stale, out);
         return ExitCode::SUCCESS;
     }
     render_path_report(&report, out);
+    render_stale_hints(&stale, out);
     ExitCode::SUCCESS
 }
 
@@ -181,6 +185,13 @@ pub(crate) fn render_path_report<W: Write>(report: &PathReport, out: &mut W) {
         for warning in &entry.warnings {
             let _ = writeln!(out, "    warning: unknown key `{warning}` is ignored");
         }
+    }
+}
+
+/// Prints one hint per `<id>.jsonc` that has no `<id>.toml` next to it.
+fn render_stale_hints<W: Write>(stale: &[String], out: &mut W) {
+    for name in stale {
+        let _ = writeln!(out, "{}", stale_jsonc_hint(name));
     }
 }
 
@@ -254,6 +265,29 @@ mod tests {
     }
 
     #[test]
+    fn config_path_hints_at_a_jsonc_without_a_toml_and_stays_quiet_otherwise() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let directory = root.path().join("config");
+        fs::create_dir_all(&directory).expect("dir");
+        fs::write(directory.join("sample.jsonc"), "{}").expect("jsonc");
+        let hint = "note: sample.jsonc is ignored; run `stache config migrate`\n";
+
+        let (code, out, err) = execute(ConfigCommand::Path, &catalog(), &directory);
+        assert_eq!(code, ExitCode::SUCCESS, "{err}");
+        assert!(out.ends_with(hint), "{out}");
+        assert_eq!(out.matches("stache config migrate").count(), 1, "{out}");
+        assert!(
+            out.contains("  sample.toml\n"),
+            "the marker line is unchanged: {out}"
+        );
+
+        fs::write(directory.join("sample.toml"), "").expect("toml");
+        let (code, out, err) = execute(ConfigCommand::Path, &catalog(), &directory);
+        assert_eq!(code, ExitCode::SUCCESS, "{err}");
+        assert!(!out.contains("migrate"), "{out}");
+    }
+
+    #[test]
     fn init_stdout_prints_delimited_templates_in_file_order_without_writing() {
         let root = tempfile::tempdir().expect("temp dir");
         let directory = root.path().join("config");
@@ -271,7 +305,7 @@ mod tests {
         let sample = catalog().template(ModuleId::new("sample")).expect("sample template");
         assert_eq!(
             out,
-            format!("// file: global.jsonc\n{global}\n// file: sample.jsonc\n{sample}")
+            format!("# file: global.toml\n{global}\n# file: sample.toml\n{sample}")
         );
         assert!(!directory.exists());
     }
@@ -290,7 +324,7 @@ mod tests {
             &directory,
         );
         assert_eq!(code, ExitCode::SUCCESS);
-        let sample = directory.join("sample.jsonc");
+        let sample = directory.join("sample.toml");
         fs::write(&sample, "{ \"enabled\": true }").expect("marker write");
         let sentinel = fs::read_to_string(&sample).expect("marker read");
 
@@ -327,8 +361,8 @@ mod tests {
         );
         assert_eq!(code, ExitCode::SUCCESS, "{err}");
         assert_eq!(fs::read_to_string(&unrelated).expect("unrelated"), "keep me");
-        assert!(directory.join("global.jsonc").exists());
-        assert!(directory.join("sample.jsonc").exists());
+        assert!(directory.join("global.toml").exists());
+        assert!(directory.join("sample.toml").exists());
     }
 
     #[test]
@@ -338,7 +372,7 @@ mod tests {
         let root = tempfile::tempdir().expect("temp dir");
         let directory = root.path().join("config");
         fs::create_dir_all(&directory).expect("dir");
-        let global = directory.join("global.jsonc");
+        let global = directory.join("global.toml");
         fs::write(&global, "{}\n").expect("global");
         fs::set_permissions(&global, fs::Permissions::from_mode(0o644)).expect("mode");
 
@@ -363,7 +397,7 @@ mod tests {
     fn a_per_file_write_failure_is_reported_without_claiming_transactionality() {
         let root = tempfile::tempdir().expect("temp dir");
         let directory = root.path().join("config");
-        fs::create_dir_all(directory.join("global.jsonc")).expect("blocking directory");
+        fs::create_dir_all(directory.join("global.toml")).expect("blocking directory");
         let (code, _out, err) = execute(
             ConfigCommand::Init(InitArgs {
                 force: true,
@@ -378,7 +412,7 @@ mod tests {
             err.contains("wrote 0 of 2 files (no cross-file transaction)"),
             "{err}"
         );
-        assert!(!directory.join("sample.jsonc").exists());
+        assert!(!directory.join("sample.toml").exists());
     }
 
     #[test]
@@ -386,13 +420,13 @@ mod tests {
         let root = tempfile::tempdir().expect("temp dir");
         let directory = root.path().join("config");
         fs::create_dir_all(&directory).expect("dir");
-        fs::write(directory.join("global.jsonc"), "{ }").expect("global");
-        fs::write(directory.join("sample.jsonc"), "{ \"enabled\": ").expect("broken");
+        fs::write(directory.join("global.toml"), "# defaults\n").expect("global");
+        fs::write(directory.join("sample.toml"), "enabled = ").expect("broken");
         let (code, out, err) = execute(ConfigCommand::Path, &catalog(), &directory);
         assert_eq!(code, ExitCode::SUCCESS, "{err}");
         assert!(out.starts_with(&format!("{}\n", directory.display())));
-        assert!(out.contains("  global.jsonc (exists, offline)\n"));
-        assert!(out.contains("  sample.jsonc (exists, invalid)\n"));
+        assert!(out.contains("  global.toml (exists, offline)\n"));
+        assert!(out.contains("  sample.toml (exists, invalid)\n"));
         assert!(out.contains(": "));
     }
 
@@ -402,8 +436,8 @@ mod tests {
         let directory = root.path().join("config");
         let (code, out, _err) = execute(ConfigCommand::Path, &catalog(), &directory);
         assert_eq!(code, ExitCode::SUCCESS);
-        assert!(out.contains("  global.jsonc\n"));
-        assert!(out.contains("  sample.jsonc\n"));
+        assert!(out.contains("  global.toml\n"));
+        assert!(out.contains("  sample.toml\n"));
     }
 
     #[test]
@@ -411,10 +445,10 @@ mod tests {
         let root = tempfile::tempdir().expect("temp dir");
         let directory = root.path().join("config");
         fs::create_dir_all(&directory).expect("dir");
-        fs::write(directory.join("global.jsonc"), "{}").expect("global");
+        fs::write(directory.join("global.toml"), "# defaults\n").expect("global");
         fs::write(
-            directory.join("sample.jsonc"),
-            "{ \"$schema\": \"./schemas/sample.schema.json\", \"enabled\": true, \"enable\": true }",
+            directory.join("sample.toml"),
+            "#:schema ./schemas/sample.schema.json\nenabled = true\nenable = true\n",
         )
         .expect("sample");
         let (code, out, err) = execute(ConfigCommand::Path, &catalog(), &directory);
@@ -422,7 +456,7 @@ mod tests {
         assert_eq!(
             out,
             format!(
-                "{}\n  global.jsonc (exists, offline)\n  sample.jsonc (exists, offline)\n    warning: unknown key `enable` is ignored\n",
+                "{}\n  global.toml (exists, offline)\n  sample.toml (exists, offline)\n    warning: unknown key `enable` is ignored\n",
                 directory.display()
             )
         );
@@ -433,10 +467,10 @@ mod tests {
         let root = tempfile::tempdir().expect("temp dir");
         let directory = root.path().join("config");
         fs::create_dir_all(&directory).expect("dir");
-        fs::write(directory.join("sample.jsonc"), " \n\t").expect("empty sample");
+        fs::write(directory.join("sample.toml"), " \n\t").expect("empty sample");
         let (code, out, err) = execute(ConfigCommand::Path, &catalog(), &directory);
         assert_eq!(code, ExitCode::SUCCESS, "{err}");
-        assert!(out.contains("  sample.jsonc (exists, invalid)\n"));
-        assert!(out.contains("file is empty; write `{}` to use defaults"));
+        assert!(out.contains("  sample.toml (exists, invalid)\n"));
+        assert!(out.contains("file is empty; add a `#` comment or a key to use defaults"));
     }
 }

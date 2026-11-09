@@ -978,10 +978,7 @@ fn a_catalogued_wallpapers_file_stays_unbound_and_inactive() {
     use stache_app::bindings::ConfigFileState;
 
     let fixture = fixture();
-    fixture.write(
-        "wallpapers.jsonc",
-        "{ \"enabled\": true, \"path\": \"images\" }\n",
-    );
+    fixture.write("wallpapers.toml", "enabled = true\npath = \"images\"\n");
     let mut harness = plain_harness();
     harness.start(&fixture, false, None);
     harness.wait_ready();
@@ -989,7 +986,7 @@ fn a_catalogued_wallpapers_file_stays_unbound_and_inactive() {
     let wallpapers = status
         .config
         .iter()
-        .find(|file| file.file == "wallpapers.jsonc")
+        .find(|file| file.file == "wallpapers.toml")
         .expect("wallpapers is a catalog file in core status");
     assert_eq!(wallpapers.state, ConfigFileState::Valid);
     assert!(
@@ -1061,7 +1058,7 @@ fn a_factory_can_read_the_accepted_config_through_the_factory_context() {
     }
 
     let fixture = fixture();
-    fixture.write("testModule.jsonc", "{ \"enabled\": false, \"value\": 1 }\n");
+    fixture.write("testModule.toml", "enabled = false\nvalue = 1\n");
     let registry = Arc::new(stache_sdk::Registry::new(
         Arc::new(DiscardLogger),
         Arc::new(EventBus::new()),
@@ -1089,7 +1086,7 @@ fn a_factory_can_read_the_accepted_config_through_the_factory_context() {
     assert_eq!(accepted.revision, 1);
     assert_eq!(accepted.config.value, 1);
 
-    fixture.write("testModule.jsonc", "{ \"enabled\": true, \"value\": 2 }\n");
+    fixture.write("testModule.toml", "enabled = true\nvalue = 2\n");
     assert_eq!(
         store.reload_one(TestConfig::ID).expect("reload"),
         ReloadOutcome::Applied { revision: 2 }
@@ -1147,7 +1144,7 @@ fn a_host_startup_failure_reports_a_failure_exit_code() {
 #[test]
 fn repeated_shutdown_requests_converge_on_one_exit() {
     let fixture = fixture();
-    fixture.write("testModule.jsonc", "{ \"enabled\": true }\n");
+    fixture.write("testModule.toml", "enabled = true\n");
     let mut harness = plain_harness();
     harness.start(&fixture, false, None);
     harness.wait_ready();
@@ -1170,9 +1167,9 @@ fn a_blocking_startup_command_does_not_delay_ready_controls_or_shutdown() {
     let fixture = fixture();
     let pid_file = fixture.root().join("startup.pid");
     fixture.write(
-        "global.jsonc",
+        "global.toml",
         &format!(
-            "{{ \"execOnStartup\": [\"/bin/sh -c 'echo $$ > {}; exec /bin/sleep 60'\"] }}\n",
+            "exec_on_startup = [\"/bin/sh -c 'echo $$ > {}; exec /bin/sleep 60'\"]\n",
             pid_file.display()
         ),
     );
@@ -1231,8 +1228,8 @@ fn a_blocking_startup_command_does_not_delay_ready_controls_or_shutdown() {
 #[test]
 fn startup_commands_run_once_and_reload_never_reruns_them() {
     let fixture = fixture();
-    fixture.write("global.jsonc", "{ \"execOnStartup\": [\"open -a Terminal\"] }\n");
-    fixture.write("testModule.jsonc", "{ \"enabled\": false }\n");
+    fixture.write("global.toml", "exec_on_startup = [\"open -a Terminal\"]\n");
+    fixture.write("testModule.toml", "enabled = false\n");
     let commands = Arc::new(FakeCommands::default());
     let mut harness = Harness::new(
         FakePermissions::new(PermissionStatus::Granted),
@@ -1252,7 +1249,7 @@ fn startup_commands_run_once_and_reload_never_reruns_them() {
         "open -a Terminal".to_owned()
     ]);
 
-    fixture.write("testModule.jsonc", "{ \"enabled\": true }\n");
+    fixture.write("testModule.toml", "enabled = true\n");
     wait_for(&harness.handle, "reload", |status| {
         status.modules.iter().any(|module| module.state == ModuleState::Running)
     });
@@ -1264,8 +1261,8 @@ fn startup_commands_run_once_and_reload_never_reruns_them() {
 #[test]
 fn enable_edits_preserve_comments_and_apply_once() {
     let fixture = fixture();
-    let source = "{\n  // Keep this comment.\n  \"enabled\": false,\n  \"value\": 7\n}\n";
-    fixture.write("testModule.jsonc", source);
+    let source = "# Keep this comment.\nenabled = false # note\nvalue = 7\n";
+    fixture.write("testModule.toml", source);
     let mut harness = plain_harness();
     harness.start(&fixture, false, None);
     harness.wait_ready();
@@ -1282,10 +1279,11 @@ fn enable_edits_preserve_comments_and_apply_once() {
             .iter()
             .any(|module| module.id == "testModule" && module.state == ModuleState::Running)
     });
-    let edited = fixture.read("testModule.jsonc");
-    assert!(edited.contains("// Keep this comment."));
-    assert!(edited.contains("\"value\": 7"));
-    assert!(edited.contains("\"enabled\": true"));
+    let edited = fixture.read("testModule.toml");
+    assert_eq!(
+        edited,
+        "# Keep this comment.\nenabled = true # note\nvalue = 7\n"
+    );
     // The store applies the committed bytes; the later watcher event is an
     // unchanged no-op rather than a second reconfigure.
     std::thread::sleep(Duration::from_millis(500));
@@ -1298,7 +1296,7 @@ fn enable_edits_preserve_comments_and_apply_once() {
 #[test]
 fn pause_is_session_only_and_disabled_cannot_resume() {
     let fixture = fixture();
-    fixture.write("testModule.jsonc", "{ \"enabled\": true }\n");
+    fixture.write("testModule.toml", "enabled = true\n");
     let mut harness = plain_harness();
     harness.start(&fixture, false, None);
     harness.wait_ready();
@@ -1306,7 +1304,7 @@ fn pause_is_session_only_and_disabled_cannot_resume() {
     wait_for(&harness.handle, "paused", |status| {
         status.modules.iter().any(|module| module.state == ModuleState::Paused)
     });
-    assert_eq!(fixture.read("testModule.jsonc"), "{ \"enabled\": true }\n");
+    assert_eq!(fixture.read("testModule.toml"), "enabled = true\n");
 
     harness.handle.resume("testModule");
     wait_for(&harness.handle, "resumed", |status| {
@@ -1328,7 +1326,7 @@ fn pause_is_session_only_and_disabled_cannot_resume() {
             .any(|module| module.state == ModuleState::Disabled),
         "a disabled module cannot resume"
     );
-    assert!(fixture.read("testModule.jsonc").contains("\"enabled\": false"));
+    assert!(fixture.read("testModule.toml").contains("enabled = false"));
     harness.handle.request_shutdown();
     assert!(harness.wait_exit());
 }
@@ -1336,13 +1334,13 @@ fn pause_is_session_only_and_disabled_cannot_resume() {
 #[test]
 fn an_invalid_disk_file_is_reported_and_never_overwritten() {
     let fixture = fixture();
-    let invalid = "{ \"enabled\": ";
-    fixture.write("testModule.jsonc", invalid);
+    let invalid = "enabled = ";
+    fixture.write("testModule.toml", invalid);
     let mut harness = plain_harness();
     harness.start(&fixture, false, None);
     harness.wait_ready();
     let status = harness.handle.status();
-    assert!(status.config.iter().any(|file| file.file == "testModule.jsonc"
+    assert!(status.config.iter().any(|file| file.file == "testModule.toml"
         && file.state == stache_app::bindings::ConfigFileState::Invalid));
     assert!(
         status
@@ -1354,7 +1352,7 @@ fn an_invalid_disk_file_is_reported_and_never_overwritten() {
     harness.handle.set_enabled("testModule", true);
     wait_for(&harness.handle, "action error", |status| status.error.is_some());
     assert_eq!(
-        fixture.read("testModule.jsonc"),
+        fixture.read("testModule.toml"),
         invalid,
         "invalid bytes must stay"
     );
@@ -1365,16 +1363,16 @@ fn an_invalid_disk_file_is_reported_and_never_overwritten() {
 #[test]
 fn a_valid_external_edit_is_applied_once_by_the_watcher() {
     let fixture = fixture();
-    fixture.write("testModule.jsonc", "{ \"enabled\": false }\n");
+    fixture.write("testModule.toml", "enabled = false\n");
     let mut harness = plain_harness();
     harness.start(&fixture, false, None);
     harness.wait_ready();
-    fixture.write("testModule.jsonc", "{ \"enabled\": true }\n");
+    fixture.write("testModule.toml", "enabled = true\n");
     wait_for(&harness.handle, "started by watcher", |status| {
         status.modules.iter().any(|module| module.state == ModuleState::Running)
     });
     assert_eq!(harness.counters.configure.load(Ordering::SeqCst), 1);
-    fixture.write("testModule.jsonc", "{ \"enabled\": true }\n");
+    fixture.write("testModule.toml", "enabled = true\n");
     std::thread::sleep(Duration::from_millis(400));
     assert_eq!(harness.counters.configure.load(Ordering::SeqCst), 1);
     assert_eq!(harness.counters.reconfigure.load(Ordering::SeqCst), 0);
@@ -1385,7 +1383,7 @@ fn a_valid_external_edit_is_applied_once_by_the_watcher() {
 #[test]
 fn a_grant_starts_waiting_modules_without_restart_and_prompts_once() {
     let fixture = fixture();
-    fixture.write("testModule.jsonc", "{ \"enabled\": true }\n");
+    fixture.write("testModule.toml", "enabled = true\n");
     let permissions = FakePermissions::new(PermissionStatus::Denied);
     *permissions.grant_on_request.lock().expect("grant") = true;
     let mut harness = Harness::new(
@@ -1412,7 +1410,7 @@ fn a_grant_starts_waiting_modules_without_restart_and_prompts_once() {
 #[test]
 fn revocation_stops_the_module_and_a_new_grant_recovers_without_restart() {
     let fixture = fixture();
-    fixture.write("testModule.jsonc", "{ \"enabled\": true }\n");
+    fixture.write("testModule.toml", "enabled = true\n");
     let permissions = FakePermissions::new(PermissionStatus::Denied);
     *permissions.grant_on_request.lock().expect("grant") = true;
     let mut harness = Harness::new(
@@ -1452,11 +1450,11 @@ fn revocation_stops_the_module_and_a_new_grant_recovers_without_restart() {
 #[test]
 fn a_cli_reload_publishes_the_new_module_state() {
     let fixture = fixture();
-    fixture.write("testModule.jsonc", "{ \"enabled\": false }\n");
+    fixture.write("testModule.toml", "enabled = false\n");
     let mut harness = plain_harness();
     harness.start(&fixture, false, None);
     harness.wait_ready();
-    fixture.write("testModule.jsonc", "{ \"enabled\": true }\n");
+    fixture.write("testModule.toml", "enabled = true\n");
     let client = IpcClient::new(fixture.app.socket_path().expect("socket"));
     let report = client.reload().expect("core reload");
     assert!(!report.has_failures(), "{report:?}");
@@ -1470,7 +1468,7 @@ fn a_cli_reload_publishes_the_new_module_state() {
 #[test]
 fn an_unchanged_enable_retries_a_failed_start_instead_of_only_clearing_the_error() {
     let fixture = fixture();
-    fixture.write("testModule.jsonc", "{ \"enabled\": true }\n");
+    fixture.write("testModule.toml", "enabled = true\n");
     let mut harness = plain_harness();
     harness.counters.fail_next_start.store(true, Ordering::SeqCst);
     harness.start(&fixture, false, None);
@@ -1491,7 +1489,7 @@ fn an_unchanged_enable_retries_a_failed_start_instead_of_only_clearing_the_error
 #[test]
 fn retry_restarts_a_failed_module() {
     let fixture = fixture();
-    fixture.write("testModule.jsonc", "{ \"enabled\": true }\n");
+    fixture.write("testModule.toml", "enabled = true\n");
     let mut harness = plain_harness();
     harness.counters.fail_next_start.store(true, Ordering::SeqCst);
     harness.start(&fixture, false, None);
@@ -1512,8 +1510,8 @@ fn retry_restarts_a_failed_module() {
 #[test]
 fn a_startup_command_failure_survives_a_later_successful_action() {
     let fixture = fixture();
-    fixture.write("global.jsonc", "{ \"execOnStartup\": [\"false\"] }\n");
-    fixture.write("testModule.jsonc", "{ \"enabled\": true }\n");
+    fixture.write("global.toml", "exec_on_startup = [\"false\"]\n");
+    fixture.write("testModule.toml", "enabled = true\n");
     let mut harness = Harness::new(
         FakePermissions::new(PermissionStatus::Granted),
         Arc::new(InlineMain),
@@ -1526,7 +1524,7 @@ fn a_startup_command_failure_survives_a_later_successful_action() {
         status
             .error
             .as_deref()
-            .is_some_and(|error| error.contains("execOnStartup failed"))
+            .is_some_and(|error| error.contains("exec_on_startup failed"))
     });
 
     harness.handle.pause("testModule");
@@ -1543,7 +1541,7 @@ fn a_startup_command_failure_survives_a_later_successful_action() {
             .status()
             .error
             .as_deref()
-            .is_some_and(|error| error.contains("execOnStartup failed")),
+            .is_some_and(|error| error.contains("exec_on_startup failed")),
         "a later successful action must not hide a failed startup command"
     );
     harness.handle.request_shutdown();
@@ -1553,7 +1551,7 @@ fn a_startup_command_failure_survives_a_later_successful_action() {
 #[test]
 fn a_successful_enable_clears_a_stale_action_error() {
     let fixture = fixture();
-    fixture.write("testModule.jsonc", "{ \"enabled\": false }\n");
+    fixture.write("testModule.toml", "enabled = false\n");
     let mut harness = plain_harness();
     harness.start(&fixture, false, None);
     harness.wait_ready();
@@ -1584,7 +1582,7 @@ fn a_successful_enable_clears_a_stale_action_error() {
 #[test]
 fn shutdown_during_a_blocked_start_stops_once_without_deadlock() {
     let fixture = fixture();
-    fixture.write("testModule.jsonc", "{ \"enabled\": true }\n");
+    fixture.write("testModule.toml", "enabled = true\n");
     let gate = Gate::new();
     let mut harness = plain_harness();
     harness.start(&fixture, false, Some(gate.clone()));
@@ -1758,7 +1756,7 @@ fn tray_row<'a>(rows: &'a [TrayRow], id: &str) -> &'a TrayItem {
 #[test]
 fn notunes_start_publishes_generic_status_and_tray_rows_without_opening_anything() {
     let fixture = fixture();
-    fixture.write("notunes.jsonc", "{ \"enabled\": true }\n");
+    fixture.write("notunes.toml", "enabled = true\n");
     let mut notunes = NotunesHarness::new(FakePermissions::new(PermissionStatus::Granted));
     let music = notunes.backend.add_running("com.apple.Music");
     notunes.start(&fixture);
@@ -1825,7 +1823,7 @@ fn notunes_start_publishes_generic_status_and_tray_rows_without_opening_anything
 #[test]
 fn an_invalid_notunes_file_is_diagnosed_and_recovers_after_a_valid_rewrite() {
     let fixture = fixture();
-    fixture.write("notunes.jsonc", "{ \"targetApp\": \"winamp\" }\n");
+    fixture.write("notunes.toml", "target_app = \"winamp\"\n");
     let mut notunes = NotunesHarness::new(FakePermissions::new(PermissionStatus::Granted));
     notunes.start(&fixture);
     notunes.harness.wait_ready();
@@ -1834,7 +1832,7 @@ fn an_invalid_notunes_file_is_diagnosed_and_recovers_after_a_valid_rewrite() {
     let view = status
         .config
         .iter()
-        .find(|file| file.file == "notunes.jsonc")
+        .find(|file| file.file == "notunes.toml")
         .expect("generic config diagnostics list the file");
     assert_eq!(
         view.state,
@@ -1844,7 +1842,7 @@ fn an_invalid_notunes_file_is_diagnosed_and_recovers_after_a_valid_rewrite() {
     assert!(
         view.diagnostic
             .as_deref()
-            .is_some_and(|diagnostic| diagnostic.contains("targetApp")),
+            .is_some_and(|diagnostic| diagnostic.contains("target_app")),
         "{view:?}"
     );
     let module = status
@@ -1869,8 +1867,8 @@ fn an_invalid_notunes_file_is_diagnosed_and_recovers_after_a_valid_rewrite() {
     );
 
     fixture.write(
-        "notunes.jsonc",
-        "{ \"enabled\": true, \"targetApp\": \"com.example.player\" }\n",
+        "notunes.toml",
+        "enabled = true\ntarget_app = \"com.example.player\"\n",
     );
     wait_for(&notunes.harness.handle, "recovered blocker", |status| {
         status
@@ -1882,7 +1880,7 @@ fn an_invalid_notunes_file_is_diagnosed_and_recovers_after_a_valid_rewrite() {
     let view = status
         .config
         .iter()
-        .find(|file| file.file == "notunes.jsonc")
+        .find(|file| file.file == "notunes.toml")
         .expect("config entry");
     assert_eq!(view.state, stache_app::bindings::ConfigFileState::Valid);
     let module = status
@@ -1904,7 +1902,7 @@ fn an_invalid_notunes_file_is_diagnosed_and_recovers_after_a_valid_rewrite() {
 #[test]
 fn notunes_follows_enable_pause_resume_disable_and_releases_observation() {
     let fixture = fixture();
-    fixture.write("notunes.jsonc", "{ \"enabled\": false }\n");
+    fixture.write("notunes.toml", "enabled = false\n");
     let mut notunes = NotunesHarness::new(FakePermissions::new(PermissionStatus::Granted));
     notunes.start(&fixture);
     notunes.harness.wait_ready();
@@ -1964,7 +1962,7 @@ fn notunes_follows_enable_pause_resume_disable_and_releases_observation() {
 #[test]
 fn a_denied_permission_neither_blocks_notunes_nor_prompts() {
     let fixture = fixture();
-    fixture.write("notunes.jsonc", "{ \"enabled\": true }\n");
+    fixture.write("notunes.toml", "enabled = true\n");
     let permissions = FakePermissions::new(PermissionStatus::Denied);
     let mut notunes = NotunesHarness::new(permissions.clone());
     notunes.start(&fixture);
@@ -2005,7 +2003,7 @@ fn a_denied_permission_neither_blocks_notunes_nor_prompts() {
 #[test]
 fn a_blocked_configuration_commit_is_uncertain_named_and_still_dispatches() {
     let fixture = fixture();
-    fixture.write("testModule.jsonc", "{ \"enabled\": false }\n");
+    fixture.write("testModule.toml", "enabled = false\n");
     let gate = Gate::new();
     let mut harness = plain_harness();
     harness.configure_gate = Some(gate.clone());
@@ -2022,7 +2020,7 @@ fn a_blocked_configuration_commit_is_uncertain_named_and_still_dispatches() {
         std::thread::sleep(Duration::from_millis(5));
     }
     assert!(
-        fixture.read("testModule.jsonc").contains("\"enabled\": true"),
+        fixture.read("testModule.toml").contains("enabled = true"),
         "the configuration commit must already be on disk"
     );
 
@@ -2093,7 +2091,7 @@ fn a_clean_restart_relaunches_once_after_releasing_the_claim() {
 #[test]
 fn a_partial_restart_finishes_without_relaunching() {
     let fixture = fixture();
-    fixture.write("testModule.jsonc", "{ \"enabled\": true }\n");
+    fixture.write("testModule.toml", "enabled = true\n");
     let mut harness = plain_harness();
     harness.start(&fixture, false, None);
     harness.wait_ready();
@@ -2118,7 +2116,7 @@ fn a_partial_restart_finishes_without_relaunching() {
 #[test]
 fn an_uncertain_restart_finishes_without_relaunching() {
     let fixture = fixture();
-    fixture.write("testModule.jsonc", "{ \"enabled\": false }\n");
+    fixture.write("testModule.toml", "enabled = false\n");
     let gate = Gate::new();
     let mut harness = plain_harness();
     harness.configure_gate = Some(gate.clone());
@@ -2197,7 +2195,7 @@ fn only_the_first_non_zero_exit_code_is_recorded() {
 #[test]
 fn a_terminate_install_failure_stays_a_status_condition() {
     let fixture = fixture();
-    fixture.write("testModule.jsonc", "{ \"enabled\": false }\n");
+    fixture.write("testModule.toml", "enabled = false\n");
     let mut harness = plain_harness();
     harness.start(&fixture, false, None);
     harness.wait_ready();
@@ -2210,7 +2208,7 @@ fn a_terminate_install_failure_stays_a_status_condition() {
             .is_some_and(|error| error.contains("terminate observation is unavailable"))
     });
 
-    fixture.write("testModule.jsonc", "{ \"enabled\": true }\n");
+    fixture.write("testModule.toml", "enabled = true\n");
     wait_for(&harness.handle, "later success", |status| {
         status.modules.iter().any(|module| module.state == ModuleState::Running)
     });
@@ -2481,7 +2479,7 @@ fn real_threads_a_hung_owner_is_uncertain_by_the_deadline() {
 #[test]
 fn real_threads_a_blocked_host_worker_is_uncertain_despite_acknowledged_owners() {
     let fixture = fixture();
-    fixture.write("testModule.jsonc", "{ \"enabled\": false }\n");
+    fixture.write("testModule.toml", "enabled = false\n");
     let gate = Gate::new();
     let drain = DrainThread::new();
     let mut harness = real_harness(drain.main_executor());
@@ -2843,7 +2841,7 @@ impl ModuleFactory for BlockedFinishFactory {
 #[test]
 fn factory_state_outlives_the_runner_until_its_drain_returns() {
     let fixture = fixture();
-    fixture.write("testModule.jsonc", "{ \"enabled\": false }\n");
+    fixture.write("testModule.toml", "enabled = false\n");
     let events = Arc::new(Mutex::new(Vec::new()));
     let gate = Gate::new();
     let (sender, entered) = mpsc::channel();
@@ -2934,7 +2932,7 @@ impl ModuleFactory for SocketOrderFactory {
 #[test]
 fn begin_shutdown_wakes_a_running_socket_handler_before_its_join() {
     let fixture = fixture();
-    fixture.write("testModule.jsonc", "{ \"enabled\": false }\n");
+    fixture.write("testModule.toml", "enabled = false\n");
     let events = Arc::new(Mutex::new(Vec::new()));
     let gate = Gate::new();
     let factories = ModuleFactories::new().with(SocketOrderFactory {
@@ -2974,10 +2972,7 @@ fn begin_shutdown_wakes_a_running_socket_handler_before_its_join() {
 #[test]
 fn a_blocked_wallpapers_native_call_is_unacknowledged_until_released() {
     let fixture = fixture();
-    fixture.write(
-        "wallpapers.jsonc",
-        "{ \"enabled\": false, \"list\": [\"wall.png\"] }\n",
-    );
+    fixture.write("wallpapers.toml", "enabled = false\nlist = [\"wall.png\"]\n");
     let image = fixture.paths.directory().join("wall.png");
     write_wallpaper_png(&image);
 
@@ -3055,10 +3050,7 @@ fn a_blocked_wallpapers_native_call_is_unacknowledged_until_released() {
 #[test]
 fn an_enabled_wallpapers_module_applies_one_initial_job_without_a_timer() {
     let fixture = fixture();
-    fixture.write(
-        "wallpapers.jsonc",
-        "{ \"enabled\": true, \"list\": [\"wall.png\"] }\n",
-    );
+    fixture.write("wallpapers.toml", "enabled = true\nlist = [\"wall.png\"]\n");
     let image = fixture.paths.directory().join("wall.png");
     write_wallpaper_png(&image);
 
@@ -3095,10 +3087,7 @@ fn an_enabled_wallpapers_module_applies_one_initial_job_without_a_timer() {
 #[test]
 fn the_host_socket_merges_the_wallpapers_route() {
     let fixture = fixture();
-    fixture.write(
-        "wallpapers.jsonc",
-        "{ \"enabled\": false, \"list\": [\"wall.png\"] }\n",
-    );
+    fixture.write("wallpapers.toml", "enabled = false\nlist = [\"wall.png\"]\n");
     let image = fixture.paths.directory().join("wall.png");
     write_wallpaper_png(&image);
 
@@ -3168,7 +3157,7 @@ struct WallpaperWire {
 impl WallpaperWire {
     fn start(config: &str) -> Self {
         let fixture = fixture();
-        fixture.write("wallpapers.jsonc", config);
+        fixture.write("wallpapers.toml", config);
         let image = fixture.paths.directory().join("wall.png");
         write_wallpaper_png(&image);
         let desktop = FakeDesktop::with_snapshot(two_display_snapshot());
@@ -3194,7 +3183,7 @@ impl WallpaperWire {
         }
     }
 
-    fn disabled() -> Self { Self::start("{ \"enabled\": false, \"list\": [\"wall.png\"] }\n") }
+    fn disabled() -> Self { Self::start("enabled = false\nlist = [\"wall.png\"]\n") }
 
     fn params(&self, selection: WallpaperSelection) -> WallpapersSetParams {
         WallpapersSetParams {
@@ -3376,7 +3365,7 @@ fn wire_roundtrip_different_config_directory_is_refused() {
 
 #[test]
 fn wire_roundtrip_no_accepted_configuration() {
-    let wire = WallpaperWire::start("{ \"enabled\": ");
+    let wire = WallpaperWire::start("enabled = ");
     let params = wire.params(WallpaperSelection::Random);
     let (actual, expected) = wire.roundtrip(&params);
     assert_eq!(actual, expected);
@@ -3599,7 +3588,7 @@ fn cli_set_succeeds_over_the_real_socket_while_the_module_is_disabled() {
 
 #[test]
 fn cli_set_works_for_a_paused_module_without_lifecycle_changes() {
-    let wire = WallpaperWire::start("{ \"enabled\": true, \"list\": [\"wall.png\"] }\n");
+    let wire = WallpaperWire::start("enabled = true\nlist = [\"wall.png\"]\n");
     // The enabled interval-zero module applies once on start.
     wait_for(&wire.harness.handle, "wallpapers running", |status| {
         status
@@ -3700,20 +3689,18 @@ fn cli_refuses_a_different_config_directory_and_accepts_an_alias() {
 
 #[test]
 fn cli_reports_no_accepted_config_then_works_after_a_fix_without_restart() {
-    let wire = WallpaperWire::start("{ \"enabled\": ");
+    let wire = WallpaperWire::start("enabled = ");
     let (code, out, err, local) = wire.cli(&["set", "--random"]);
     assert_eq!(code, ExitCode::FAILURE);
     assert_eq!(out, "");
     assert_eq!(
         err,
-        "stache: Wallpaper error: No accepted Wallpapers configuration is available. Fix wallpapers.jsonc and reload, then retry.\n"
+        "stache: Wallpaper error: No accepted Wallpapers configuration is available. Fix wallpapers.toml and reload, then retry.\n"
     );
     assert!(local.calls().is_empty() && wire.desktop.calls().is_empty());
 
-    wire.fixture.write(
-        "wallpapers.jsonc",
-        "{ \"enabled\": false, \"list\": [\"wall.png\"] }\n",
-    );
+    wire.fixture
+        .write("wallpapers.toml", "enabled = false\nlist = [\"wall.png\"]\n");
     let report = wire.client.reload().expect("reload");
     assert!(!report.has_failures(), "{report:?}");
     let (code, out, err, local) = wire.cli(&["set", "WALL"]);
@@ -3728,11 +3715,10 @@ fn cli_reports_no_accepted_config_then_works_after_a_fix_without_restart() {
 
 #[test]
 fn cli_name_resolves_against_the_last_good_accepted_pool_after_a_rejected_reload() {
-    let wire =
-        WallpaperWire::start("{ \"enabled\": false, \"list\": [\"wall.png\", \"second.png\"] }\n");
+    let wire = WallpaperWire::start("enabled = false\nlist = [\"wall.png\", \"second.png\"]\n");
     write_wallpaper_png(&wire.fixture.paths.directory().join("second.png"));
     // Disk is now malformed; the host keeps its last accepted pool.
-    wire.fixture.write("wallpapers.jsonc", "{ \"list\": [");
+    wire.fixture.write("wallpapers.toml", "list = [");
     let report = wire.client.reload().expect("reload");
     assert!(report.has_failures(), "the malformed file is rejected");
     // Nothing is a bare file in the cwd called `second`, so it is a name.
@@ -3799,7 +3785,7 @@ fn cli_never_falls_back_after_a_host_restart_with_a_different_config() {
     let mut fixture = wire.stop();
     let second_config = fixture.root().join("config-b");
     fixture.paths = ConfigPaths::new(&second_config);
-    fixture.write("wallpapers.jsonc", "{ \"enabled\": false }\n");
+    fixture.write("wallpapers.toml", "enabled = false\n");
     let desktop = FakeDesktop::with_snapshot(two_display_snapshot());
     let backend: Arc<dyn GuardedDesktopBackend> = Arc::new(desktop.clone());
     let factory = WallpapersFactory::with_service(wallpapers_service(&fixture, backend));
@@ -3897,10 +3883,7 @@ fn cli_absent_socket_applies_once_locally_and_a_later_host_initial_job_may_overr
     // starting, so the CLI applies once locally. The host then runs its normal
     // initial job and its image is the last one set. No coordination exists.
     let fixture = fixture();
-    fixture.write(
-        "wallpapers.jsonc",
-        "{ \"enabled\": true, \"list\": [\"pool.png\"] }\n",
-    );
+    fixture.write("wallpapers.toml", "enabled = true\nlist = [\"pool.png\"]\n");
     let pool = fixture.paths.directory().join("pool.png");
     write_wallpaper_png(&pool);
     // A distinct source image so the two cache outputs differ.
@@ -3988,10 +3971,7 @@ impl Processor for FirstCallBlocks {
 #[test]
 fn cli_deadline_expiry_while_queued_round_trips_over_the_real_socket_with_fake_time() {
     let fixture = fixture();
-    fixture.write(
-        "wallpapers.jsonc",
-        "{ \"enabled\": false, \"list\": [\"wall.png\"] }\n",
-    );
+    fixture.write("wallpapers.toml", "enabled = false\nlist = [\"wall.png\"]\n");
     let image = fixture.paths.directory().join("wall.png");
     write_wallpaper_png(&image);
     let desktop = FakeDesktop::with_snapshot(two_display_snapshot());
@@ -4139,10 +4119,7 @@ fn cli_set_with_fake_time(
     ) -> (Arc<dyn Processor>, Arc<dyn GuardedDesktopBackend>),
 ) -> (ExitCode, String, String, FakeDesktop, FakeDesktop) {
     let fixture = fixture();
-    fixture.write(
-        "wallpapers.jsonc",
-        "{ \"enabled\": false, \"list\": [\"wall.png\"] }\n",
-    );
+    fixture.write("wallpapers.toml", "enabled = false\nlist = [\"wall.png\"]\n");
     let image = fixture.paths.directory().join("wall.png");
     write_wallpaper_png(&image);
     let desktop = FakeDesktop::with_snapshot(two_display_snapshot());
@@ -4279,7 +4256,7 @@ mod caps_recovery {
     #[test]
     fn kb_04_07_a_stale_journal_is_restored_once_while_the_keybindings_module_is_disabled() {
         let fixture = fixture();
-        fixture.write("keybindings.jsonc", "{ \"enabled\": false, \"bindings\": {} }\n");
+        fixture.write("keybindings.toml", "enabled = false\nbindings = {}\n");
         let world = stale(vec![KEY_A]);
         let (mut harness, runs) = harness_with(&world);
         harness.start(&fixture, false, None);
@@ -4301,7 +4278,7 @@ mod caps_recovery {
     #[test]
     fn kb_04_07_an_invalid_keybindings_config_does_not_block_recovery_or_startup() {
         let fixture = fixture();
-        fixture.write("keybindings.jsonc", "{ \"enabled\": tru");
+        fixture.write("keybindings.toml", "enabled = tru");
         let world = stale(vec![KEY_A]);
         let (mut harness, _runs) = harness_with(&world);
         harness.start(&fixture, false, None);
@@ -4480,10 +4457,10 @@ impl HoldHarness {
 }
 
 #[test]
-fn hq_04_01_enable_writes_jsonc_and_pause_writes_nothing() {
+fn hq_04_01_enable_writes_toml_and_pause_writes_nothing() {
     let fixture = fixture();
-    let source = "{\n  // Keep this comment.\n  \"enabled\": false,\n  \"holdDuration\": 900\n}\n";
-    fixture.write("commandQuit.jsonc", source);
+    let source = "# Keep this comment.\nenabled = false # note\nhold_duration = 900\n";
+    fixture.write("commandQuit.toml", source);
     let mut hold = HoldHarness::new(FakePermissions::new(PermissionStatus::Granted));
     hold.start(&fixture);
     hold.harness.wait_ready();
@@ -4496,10 +4473,11 @@ fn hq_04_01_enable_writes_jsonc_and_pause_writes_nothing() {
 
     hold.harness.handle.set_enabled("commandQuit", true);
     hold.wait_state(ModuleState::Running);
-    let edited = fixture.read("commandQuit.jsonc");
-    assert!(edited.contains("// Keep this comment."));
-    assert!(edited.contains("\"holdDuration\": 900"));
-    assert!(edited.contains("\"enabled\": true"));
+    let edited = fixture.read("commandQuit.toml");
+    assert_eq!(
+        edited,
+        "# Keep this comment.\nenabled = true # note\nhold_duration = 900\n"
+    );
     assert_eq!(hold.fakes.leaser.held(), 1);
     assert_eq!(hold.fakes.hud_backend.panels_live(), 1);
 
@@ -4509,11 +4487,7 @@ fn hq_04_01_enable_writes_jsonc_and_pause_writes_nothing() {
 
     hold.harness.handle.pause("commandQuit");
     hold.wait_state(ModuleState::Paused);
-    assert_eq!(
-        fixture.read("commandQuit.jsonc"),
-        edited,
-        "pause is session-only"
-    );
+    assert_eq!(fixture.read("commandQuit.toml"), edited, "pause is session-only");
     assert_eq!(hold.fakes.leaser.held(), 0);
     assert_eq!(hold.q_down(), Disposition::Pass);
     hold.harness.handle.resume("commandQuit");
@@ -4525,12 +4499,12 @@ fn hq_04_01_enable_writes_jsonc_and_pause_writes_nothing() {
 #[test]
 fn hq_04_01_a_malformed_or_deleted_file_keeps_the_last_good_runtime_with_a_diagnostic() {
     let fixture = fixture();
-    fixture.write("commandQuit.jsonc", "{ \"enabled\": true }\n");
+    fixture.write("commandQuit.toml", "enabled = true\n");
     let mut hold = HoldHarness::new(FakePermissions::new(PermissionStatus::Granted));
     hold.start(&fixture);
     hold.harness.wait_ready();
     hold.wait_state(ModuleState::Running);
-    fixture.write("commandQuit.jsonc", "{ \"enabled\": ");
+    fixture.write("commandQuit.toml", "enabled = ");
     wait_for(&hold.harness.handle, "a diagnostic", |status| {
         status.modules.iter().any(|m| m.id == "commandQuit" && m.diagnostic.is_some())
     });
@@ -4540,7 +4514,7 @@ fn hq_04_01_a_malformed_or_deleted_file_keeps_the_last_good_runtime_with_a_diagn
         "the last good state keeps running"
     );
     assert_eq!(hold.fakes.leaser.held(), 1);
-    std::fs::remove_file(fixture.paths.directory().join("commandQuit.jsonc")).expect("delete");
+    std::fs::remove_file(fixture.paths.directory().join("commandQuit.toml")).expect("delete");
     wait_for(&hold.harness.handle, "a deletion diagnostic", |status| {
         status.modules.iter().any(|m| m.id == "commandQuit" && m.diagnostic.is_some())
     });
@@ -4552,7 +4526,7 @@ fn hq_04_01_a_malformed_or_deleted_file_keeps_the_last_good_runtime_with_a_diagn
 #[test]
 fn hq_04_01_permission_denied_then_granted_then_revoked_never_prompts_automatically() {
     let fixture = fixture();
-    fixture.write("commandQuit.jsonc", "{ \"enabled\": true }\n");
+    fixture.write("commandQuit.toml", "enabled = true\n");
     let permissions = FakePermissions::new(PermissionStatus::Denied);
     let mut hold = HoldHarness::new(permissions.clone());
     hold.start(&fixture);
@@ -4580,7 +4554,7 @@ fn hq_04_01_permission_denied_then_granted_then_revoked_never_prompts_automatica
 #[test]
 fn hq_04_01_a_hud_install_failure_is_failed_start_and_retry_recovers() {
     let fixture = fixture();
-    fixture.write("commandQuit.jsonc", "{ \"enabled\": true }\n");
+    fixture.write("commandQuit.toml", "enabled = true\n");
     let mut hold = HoldHarness::new(FakePermissions::new(PermissionStatus::Granted));
     hold.fakes
         .hud_backend
@@ -4611,7 +4585,7 @@ fn hq_04_01_a_hud_install_failure_is_failed_start_and_retry_recovers() {
 #[test]
 fn hq_04_01_a_runtime_hud_failure_is_degraded_pass_through_with_a_detail() {
     let fixture = fixture();
-    fixture.write("commandQuit.jsonc", "{ \"enabled\": true }\n");
+    fixture.write("commandQuit.toml", "enabled = true\n");
     let mut hold = HoldHarness::new(FakePermissions::new(PermissionStatus::Granted));
     hold.start(&fixture);
     hold.harness.wait_ready();
@@ -4669,8 +4643,8 @@ fn hq_04_01_a_runtime_hud_failure_is_degraded_pass_through_with_a_detail() {
 #[test]
 fn hq_04_01_unrelated_modules_keep_working_and_no_extra_surface_exists() {
     let fixture = fixture();
-    fixture.write("commandQuit.jsonc", "{ \"enabled\": true }\n");
-    fixture.write("testModule.jsonc", "{ \"enabled\": true }\n");
+    fixture.write("commandQuit.toml", "enabled = true\n");
+    fixture.write("testModule.toml", "enabled = true\n");
     let mut hold = HoldHarness::new(FakePermissions::new(PermissionStatus::Granted));
     hold.fakes.leaser.fail_next_lease();
     hold.start(&fixture);
@@ -4881,9 +4855,9 @@ impl GateHarness {
         let mut fixture = fixture();
         fixture.catalog.register::<AlphaConfig>(AlphaConfig::ID).expect("alpha");
         fixture.catalog.register::<BetaConfig>(BetaConfig::ID).expect("beta");
-        fixture.write("gateAlpha.jsonc", "{ \"enabled\": true }\n");
-        fixture.write("gateBeta.jsonc", "{ \"enabled\": true }\n");
-        fixture.write("global.jsonc", "{ \"execOnStartup\": [\"open -a Terminal\"] }\n");
+        fixture.write("gateAlpha.toml", "enabled = true\n");
+        fixture.write("gateBeta.toml", "enabled = true\n");
+        fixture.write("global.toml", "exec_on_startup = [\"open -a Terminal\"]\n");
         let commands = Arc::new(FakeCommands::default());
         let mut harness = Harness::new(
             permissions.clone(),
@@ -5002,14 +4976,18 @@ fn ag_02_01_an_untrusted_launch_blocks_every_module_before_any_lifecycle_call() 
     std::thread::sleep(Duration::from_millis(100));
     assert_eq!(gate.lifecycle(), Vec::<String>::new());
     assert_eq!(gate.permissions.requests.load(Ordering::SeqCst), 0);
-    assert_eq!(gate.startup_runs(), 0, "execOnStartup waits for the first grant");
+    assert_eq!(
+        gate.startup_runs(),
+        0,
+        "exec_on_startup waits for the first grant"
+    );
     gate.shutdown();
 }
 
 #[test]
 fn ag_02_01_a_gated_test_module_never_configures_or_starts() {
     let fixture = fixture();
-    fixture.write("testModule.jsonc", "{ \"enabled\": true }\n");
+    fixture.write("testModule.toml", "enabled = true\n");
     let permissions = FakePermissions::new(PermissionStatus::Denied);
     let mut harness = Harness::new(
         permissions.clone(),
@@ -5038,7 +5016,7 @@ fn ag_02_01_a_gated_test_module_never_configures_or_starts() {
 #[test]
 fn ag_02_02_with_every_module_disabled_the_gate_still_blocks_and_polls_fast() {
     let fixture = fixture();
-    fixture.write("testModule.jsonc", "{ \"enabled\": false }\n");
+    fixture.write("testModule.toml", "enabled = false\n");
     let permissions = FakePermissions::new(PermissionStatus::Denied);
     let mut harness = Harness::new(
         permissions.clone(),
@@ -5084,7 +5062,7 @@ fn ag_02_03_denied_denied_granted_opens_without_restart_in_dependency_order() {
     while gate.startup_runs() == 0 {
         assert!(
             Instant::now() < deadline,
-            "execOnStartup did not run after the grant"
+            "exec_on_startup did not run after the grant"
         );
         std::thread::sleep(Duration::from_millis(5));
     }
@@ -5128,7 +5106,7 @@ fn ag_02_05_revocation_stops_in_reverse_order_and_a_second_grant_restarts_withou
     gate.wait_running();
     let deadline = Instant::now() + Duration::from_secs(10);
     while gate.startup_runs() == 0 {
-        assert!(Instant::now() < deadline, "execOnStartup did not run");
+        assert!(Instant::now() < deadline, "exec_on_startup did not run");
         std::thread::sleep(Duration::from_millis(5));
     }
 
@@ -5155,7 +5133,7 @@ fn ag_02_05_revocation_stops_in_reverse_order_and_a_second_grant_restarts_withou
         "start:gateBeta"
     ]);
     std::thread::sleep(Duration::from_millis(100));
-    assert_eq!(gate.startup_runs(), 1, "reopening never reruns execOnStartup");
+    assert_eq!(gate.startup_runs(), 1, "reopening never reruns exec_on_startup");
     assert_eq!(gate.access_sequence(), [
         (AccessState::Open, false),
         (AccessState::Blocked, true),
@@ -5194,7 +5172,7 @@ fn ag_02_07_only_an_explicit_request_while_blocked_calls_request() {
     gate.harness.handle.refresh_permissions();
     gate.harness.handle.set_enabled("gateAlpha", false);
     gate.harness.handle.set_enabled("gateAlpha", true);
-    gate.fixture.write("gateBeta.jsonc", "{ \"enabled\": true }\n// reload\n");
+    gate.fixture.write("gateBeta.toml", "enabled = true\n# reload\n");
     gate.processed(3);
     std::thread::sleep(Duration::from_millis(100));
     assert_eq!(
@@ -5341,10 +5319,7 @@ fn gated_harness(permissions: Arc<FakePermissions>) -> Harness {
 #[test]
 fn ag_03_02_module_methods_answer_unavailable_through_a_real_router_while_blocked() {
     let fixture = fixture();
-    fixture.write(
-        "wallpapers.jsonc",
-        "{ \"enabled\": false, \"list\": [\"wall.png\"] }\n",
-    );
+    fixture.write("wallpapers.toml", "enabled = false\nlist = [\"wall.png\"]\n");
     let image = fixture.paths.directory().join("wall.png");
     write_wallpaper_png(&image);
     let desktop = FakeDesktop::with_snapshot(wallpaper_snapshot());
@@ -5480,7 +5455,7 @@ impl ModuleFactory for BusyStartFactory {
 #[test]
 fn ag_03_06_a_gated_request_answers_while_the_lifecycle_lock_and_host_worker_are_busy() {
     let fixture = fixture();
-    fixture.write("testModule.jsonc", "{ \"enabled\": true }\n");
+    fixture.write("testModule.toml", "enabled = true\n");
     let counters = Arc::new(Counters::default());
     let start_gate = Gate::new();
     let calls = Arc::new(AtomicUsize::new(0));
@@ -5758,10 +5733,11 @@ impl MenuHarness {
 }
 
 #[test]
-fn ma_03_06_enable_writes_jsonc_runs_the_trigger_and_pause_writes_nothing() {
+fn ma_03_06_enable_writes_toml_runs_the_trigger_and_pause_writes_nothing() {
     let fixture = fixture();
-    let source = "{\n  // Keep this comment.\n  \"enabled\": false,\n  \"modifiers\": [\"control\", \"command\"]\n}\n";
-    fixture.write("menuAnywhere.jsonc", source);
+    let source =
+        "# Keep this comment.\nenabled = false # note\nmodifiers = [\"control\", \"command\"]\n";
+    fixture.write("menuAnywhere.toml", source);
     let mut menu = MenuHarness::new(FakePermissions::new(PermissionStatus::Granted));
     menu.start(&fixture);
     menu.harness.wait_ready();
@@ -5774,9 +5750,11 @@ fn ma_03_06_enable_writes_jsonc_runs_the_trigger_and_pause_writes_nothing() {
 
     menu.harness.handle.set_enabled("menuAnywhere", true);
     menu.wait_state(ModuleState::Running);
-    let edited = fixture.read("menuAnywhere.jsonc");
-    assert!(edited.contains("// Keep this comment."));
-    assert!(edited.contains("\"enabled\": true"));
+    let edited = fixture.read("menuAnywhere.toml");
+    assert_eq!(
+        edited,
+        "# Keep this comment.\nenabled = true # note\nmodifiers = [\"control\", \"command\"]\n"
+    );
     assert_eq!(menu.fakes.apps.activation_observers(), 1);
     assert_eq!(menu.fakes.menu.opens(), 1);
     assert_eq!(menu.fakes.menu.ax.call_count(), 0, "no read until a trigger");
@@ -5788,7 +5766,7 @@ fn ma_03_06_enable_writes_jsonc_runs_the_trigger_and_pause_writes_nothing() {
     menu.harness.handle.pause("menuAnywhere");
     menu.wait_state(ModuleState::Paused);
     assert_eq!(
-        fixture.read("menuAnywhere.jsonc"),
+        fixture.read("menuAnywhere.toml"),
         edited,
         "pause is session-only"
     );
@@ -5802,7 +5780,7 @@ fn ma_03_06_enable_writes_jsonc_runs_the_trigger_and_pause_writes_nothing() {
 #[test]
 fn ma_03_06_permission_only_checks_and_only_the_explicit_tray_request_prompts() {
     let fixture = fixture();
-    fixture.write("menuAnywhere.jsonc", "{ \"enabled\": true }\n");
+    fixture.write("menuAnywhere.toml", "enabled = true\n");
     let permissions = FakePermissions::new(PermissionStatus::Denied);
     let mut menu = MenuHarness::new(permissions.clone());
     menu.start(&fixture);
@@ -5817,10 +5795,7 @@ fn ma_03_06_permission_only_checks_and_only_the_explicit_tray_request_prompts() 
     );
 
     // Reload, activation-style refresh and polling only check.
-    fixture.write(
-        "menuAnywhere.jsonc",
-        "{ \"enabled\": true, \"modifiers\": [\"shift\"] }\n",
-    );
+    fixture.write("menuAnywhere.toml", "enabled = true\nmodifiers = [\"shift\"]\n");
     let revision = menu.view().expect("view").revision;
     wait_for(&menu.harness.handle, "the reloaded revision", |status| {
         status.modules.iter().any(|m| m.id == "menuAnywhere" && m.revision != revision)
@@ -5857,7 +5832,7 @@ fn ma_03_06_permission_only_checks_and_only_the_explicit_tray_request_prompts() 
 #[test]
 fn ma_03_06_a_disabled_to_enabled_file_edit_only_checks_permission() {
     let fixture = fixture();
-    fixture.write("menuAnywhere.jsonc", "{ \"enabled\": false }\n");
+    fixture.write("menuAnywhere.toml", "enabled = false\n");
     let permissions = FakePermissions::new(PermissionStatus::Denied);
     let mut menu = MenuHarness::new(permissions.clone());
     menu.start(&fixture);
@@ -5865,7 +5840,7 @@ fn ma_03_06_a_disabled_to_enabled_file_edit_only_checks_permission() {
     assert_eq!(menu.state(), Some(ModuleState::Disabled));
     let revision = menu.view().expect("view").revision;
 
-    fixture.write("menuAnywhere.jsonc", "{ \"enabled\": true }\n");
+    fixture.write("menuAnywhere.toml", "enabled = true\n");
     wait_for(&menu.harness.handle, "the enabled revision", |status| {
         status.modules.iter().any(|m| m.id == "menuAnywhere" && m.revision != revision)
     });
@@ -5890,14 +5865,14 @@ fn wait_until_true(what: &str, condition: impl Fn() -> bool) {
 #[test]
 fn ma_03_06_a_malformed_deleted_then_repaired_file_keeps_the_runtime_and_clears_the_diagnostic() {
     let fixture = fixture();
-    fixture.write("menuAnywhere.jsonc", "{ \"enabled\": true }\n");
+    fixture.write("menuAnywhere.toml", "enabled = true\n");
     let mut menu = MenuHarness::new(FakePermissions::new(PermissionStatus::Granted));
     menu.start(&fixture);
     menu.harness.wait_ready();
     menu.wait_state(ModuleState::Running);
     let revision = menu.view().expect("view").revision;
 
-    fixture.write("menuAnywhere.jsonc", "{ \"enabled\": ");
+    fixture.write("menuAnywhere.toml", "enabled = ");
     wait_for(&menu.harness.handle, "a diagnostic", |status| {
         status.modules.iter().any(|m| m.id == "menuAnywhere" && m.diagnostic.is_some())
     });
@@ -5913,16 +5888,13 @@ fn ma_03_06_a_malformed_deleted_then_repaired_file_keeps_the_runtime_and_clears_
     );
     assert_eq!(menu.fakes.apps.activation_observers(), 1);
 
-    std::fs::remove_file(fixture.paths.directory().join("menuAnywhere.jsonc")).expect("delete");
+    std::fs::remove_file(fixture.paths.directory().join("menuAnywhere.toml")).expect("delete");
     wait_for(&menu.harness.handle, "a deletion diagnostic", |status| {
         status.modules.iter().any(|m| m.id == "menuAnywhere" && m.diagnostic.is_some())
     });
     assert_eq!(menu.state(), Some(ModuleState::Running));
 
-    fixture.write(
-        "menuAnywhere.jsonc",
-        "{ \"enabled\": true, \"modifiers\": [\"shift\"] }\n",
-    );
+    fixture.write("menuAnywhere.toml", "enabled = true\nmodifiers = [\"shift\"]\n");
     wait_for(&menu.harness.handle, "the repaired file", |status| {
         status
             .modules
@@ -5936,7 +5908,7 @@ fn ma_03_06_a_malformed_deleted_then_repaired_file_keeps_the_runtime_and_clears_
 #[test]
 fn ma_03_06_a_start_failure_is_failed_with_full_rollback_and_retry_recovers() {
     let fixture = fixture();
-    fixture.write("menuAnywhere.jsonc", "{ \"enabled\": true }\n");
+    fixture.write("menuAnywhere.toml", "enabled = true\n");
     let mut menu = MenuHarness::new(FakePermissions::new(PermissionStatus::Granted));
     menu.fakes.menu.fail_next_open();
     menu.start(&fixture);
@@ -5962,7 +5934,7 @@ fn ma_03_06_a_start_failure_is_failed_with_full_rollback_and_retry_recovers() {
 #[test]
 fn ma_03_06_an_unhealthy_running_module_is_projected_unavailable_with_its_reason() {
     let fixture = fixture();
-    fixture.write("menuAnywhere.jsonc", "{ \"enabled\": true }\n");
+    fixture.write("menuAnywhere.toml", "enabled = true\n");
     let mut menu = MenuHarness::new(FakePermissions::new(PermissionStatus::Granted));
     menu.start(&fixture);
     menu.harness.wait_ready();
@@ -5985,7 +5957,7 @@ fn ma_03_06_an_unhealthy_running_module_is_projected_unavailable_with_its_reason
 #[test]
 fn ma_03_08_supported_host_shutdown_with_an_open_menu_cancels_it_and_exits() {
     let fixture = fixture();
-    fixture.write("menuAnywhere.jsonc", "{ \"enabled\": true }\n");
+    fixture.write("menuAnywhere.toml", "enabled = true\n");
     let mut menu = MenuHarness::new(FakePermissions::new(PermissionStatus::Granted));
     menu.start(&fixture);
     menu.harness.wait_ready();
@@ -6025,7 +5997,7 @@ fn ma_03_08_supported_host_shutdown_with_an_open_menu_cancels_it_and_exits() {
 #[test]
 fn ma_03_06_a_missing_shared_input_service_is_projected_unavailable_not_failed() {
     let fixture = fixture();
-    fixture.write("menuAnywhere.jsonc", "{ \"enabled\": true }\n");
+    fixture.write("menuAnywhere.toml", "enabled = true\n");
     let mut menu = MenuHarness::new(FakePermissions::new(PermissionStatus::Granted));
     menu.harness.input = None;
     menu.start(&fixture);

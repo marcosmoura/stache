@@ -1,0 +1,4 @@
+{
+  "$schema": "https://raw.githubusercontent.com/marcosmoura/stache/main/schemas/keepAwake.schema.json",
+  "enabled": true,
+}

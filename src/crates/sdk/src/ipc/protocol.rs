@@ -289,12 +289,12 @@ mod tests {
         let reload = CoreReload {
             files: vec![
                 CoreFileOutcome {
-                    file: "global.jsonc".to_owned(),
+                    file: "global.toml".to_owned(),
                     outcome: CoreApplyOutcome::Applied { revision: 2 },
                     diagnostic: None,
                 },
                 CoreFileOutcome {
-                    file: "proxyAudio.jsonc".to_owned(),
+                    file: "proxyAudio.toml".to_owned(),
                     outcome: CoreApplyOutcome::Rejected,
                     diagnostic: Some("bad value".to_owned()),
                 },
@@ -309,7 +309,7 @@ mod tests {
         let status = CoreStatus {
             directory: PathBuf::from("/config"),
             files: vec![CoreFileStatus {
-                file: "global.jsonc".to_owned(),
+                file: "global.toml".to_owned(),
                 state: CoreFileState::Valid,
                 active: true,
                 diagnostic: None,

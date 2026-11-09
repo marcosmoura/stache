@@ -114,7 +114,7 @@ fn grammar_errors_exit_two_and_both_neither_exit_one_before_any_work() {
     // A malformed config proves no config read happens first.
     let config = root.path().join("cfg");
     fs::create_dir_all(&config).expect("config");
-    fs::write(config.join("wallpapers.jsonc"), "{ nope").expect("malformed");
+    fs::write(config.join("wallpapers.toml"), "nope =").expect("malformed");
     let config_arg = config.to_str().expect("utf-8");
     let both = run(
         root.path(),
@@ -156,7 +156,7 @@ fn the_global_config_flag_is_honored_by_the_contributed_list_command() {
     let config = root.path().join("cfg");
     fs::create_dir_all(&config).expect("config");
     fs::write(config.join("a.png"), b"not decoded by list").expect("image");
-    fs::write(config.join("wallpapers.jsonc"), "{ \"list\": [\"a.png\"] }").expect("config");
+    fs::write(config.join("wallpapers.toml"), "list = [\"a.png\"]\n").expect("config");
     let config_arg = config.to_str().expect("utf-8");
 
     // Before and after the subcommand, and in `--config=` form.

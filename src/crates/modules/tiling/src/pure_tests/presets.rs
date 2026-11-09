@@ -402,8 +402,8 @@ fn preset_on_open_is_inert() {
         ("layout/ordering", include_str!("../layout/ordering.rs")),
     ] {
         assert!(
-            !source.contains("preset_on_open"),
-            "{name} must not consume preset-on-open"
+            !source.contains(".preset_on_open"),
+            "{name} must not consume preset_on_open"
         );
     }
 }

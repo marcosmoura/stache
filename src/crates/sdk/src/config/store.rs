@@ -337,7 +337,7 @@ impl ConfigStore {
         }
     }
 
-    /// Reads `global.jsonc` for the first time and applies its logging level.
+    /// Reads `global.toml` for the first time and applies its logging level.
     ///
     /// A missing or rejected file is reported through the returned value while
     /// the injected [`LogFilter`] keeps its current level.
@@ -378,7 +378,7 @@ impl ConfigStore {
         }
     }
 
-    /// Rereads `global.jsonc` and updates the logging level in place.
+    /// Rereads `global.toml` and updates the logging level in place.
     ///
     /// Startup commands are never executed here or anywhere else in the config
     /// code; the host decides when the desktop launches.
@@ -861,14 +861,17 @@ mod tests {
             panic!("an empty file must not use defaults silently");
         };
         assert_eq!(diagnostic.kind, DiagnosticKind::Type);
-        assert_eq!(diagnostic.message, "file is empty; write `{}` to use defaults");
+        assert_eq!(
+            diagnostic.message,
+            "file is empty; add a `#` comment or a key to use defaults"
+        );
         assert!(store.warnings(file).is_empty());
     }
 
     #[test]
     fn a_malformed_initial_file_is_registered_rejected_and_recovers() {
         let (_root, registry, store, events) = empty_setup();
-        write(&store, ModuleId::new("alpha"), "{ \"value\": ");
+        write(&store, ModuleId::new("alpha"), "value = ");
         let initial: Initial<TestConfig> = store.initial(ModuleId::new("alpha")).expect("initial");
         let Initial::Invalid(diagnostic) = initial else {
             panic!("expected invalid");
@@ -892,11 +895,7 @@ mod tests {
         assert!(broken.diagnostic.is_some());
         registry.start_all().expect("start");
 
-        write(
-            &store,
-            ModuleId::new("alpha"),
-            "{ \"enabled\": true, \"value\": 2 }",
-        );
+        write(&store, ModuleId::new("alpha"), "enabled = true\nvalue = 2\n");
         assert_eq!(
             store.reload_one(ModuleId::new("alpha")).expect("reload"),
             ReloadOutcome::Applied { revision: 1 }
@@ -926,11 +925,7 @@ mod tests {
         store.bind(handle).expect("bind");
         registry.start_all().expect("start");
 
-        write(
-            &store,
-            ModuleId::new("alpha"),
-            "{ \"enabled\": true, \"value\": 8 }",
-        );
+        write(&store, ModuleId::new("alpha"), "enabled = true\nvalue = 8\n");
         assert_eq!(
             store.reload_one(ModuleId::new("alpha")).expect("reload"),
             ReloadOutcome::Applied { revision: 2 },
@@ -945,11 +940,7 @@ mod tests {
         assert!(matches!(failed.status, crate::ModuleStatus::Failed(_)));
         assert_eq!(failed.revision, 2);
 
-        write(
-            &store,
-            ModuleId::new("alpha"),
-            "{ \"enabled\": true, \"value\": 8 }",
-        );
+        write(&store, ModuleId::new("alpha"), "enabled = true\nvalue = 8\n");
         assert_eq!(
             store.reload_one(ModuleId::new("alpha")).expect("retry"),
             ReloadOutcome::Unchanged,
@@ -964,7 +955,7 @@ mod tests {
     #[test]
     fn a_malformed_initial_file_is_never_replaced_by_defaults() {
         let (_root, _registry, store, _handle) = setup();
-        write(&store, ModuleId::new("alpha"), "{ \"value\": ");
+        write(&store, ModuleId::new("alpha"), "value = ");
         let initial: Initial<TestConfig> = store.initial(ModuleId::new("alpha")).expect("initial");
         match initial {
             Initial::Invalid(diagnostic) => assert_eq!(diagnostic.kind, DiagnosticKind::Parse),
@@ -975,11 +966,7 @@ mod tests {
     #[test]
     fn an_invalid_initial_value_is_loaded_for_registration_and_diagnosed() {
         let (_root, _registry, store, _handle) = setup();
-        write(
-            &store,
-            ModuleId::new("alpha"),
-            "{ \"enabled\": true, \"value\": 99 }",
-        );
+        write(&store, ModuleId::new("alpha"), "enabled = true\nvalue = 99\n");
         let initial: Initial<TestConfig> = store.initial(ModuleId::new("alpha")).expect("initial");
         assert!(matches!(initial, Initial::Loaded(_)));
         let diagnostic = store
@@ -991,11 +978,7 @@ mod tests {
     #[test]
     fn reloading_one_file_applies_only_that_module() {
         let (_root, registry, store, handle) = setup();
-        write(
-            &store,
-            ModuleId::new("alpha"),
-            "{ \"enabled\": true, \"value\": 2 }",
-        );
+        write(&store, ModuleId::new("alpha"), "enabled = true\nvalue = 2\n");
         let outcome = store.reload_one(ModuleId::new("alpha")).expect("reload");
         assert_eq!(outcome, ReloadOutcome::Applied { revision: 2 });
         assert_eq!(registry.snapshot(handle).expect("snapshot").revision, 2);
@@ -1004,7 +987,7 @@ mod tests {
     #[test]
     fn unchanged_content_does_not_touch_the_registry() {
         let (_root, registry, store, handle) = setup();
-        let text = "{ \"enabled\": true, \"value\": 2 }";
+        let text = "enabled = true\nvalue = 2\n";
         write(&store, ModuleId::new("alpha"), text);
         assert_eq!(
             store.reload_one(ModuleId::new("alpha")).expect("first"),
@@ -1025,7 +1008,7 @@ mod tests {
         write(
             &store,
             ModuleId::new("alpha"),
-            "{ \"enabled\": true, \"value\": 2, \"enable\": true }",
+            "enabled = true\nvalue = 2\nenable = true\n",
         );
         assert_eq!(
             store.reload_one(ModuleId::new("alpha")).expect("reload"),
@@ -1047,11 +1030,7 @@ mod tests {
         );
         assert_eq!(store.warnings(file), ["enable"]);
 
-        write(
-            &store,
-            ModuleId::new("alpha"),
-            "{ \"enabled\": true, \"value\": 2 }",
-        );
+        write(&store, ModuleId::new("alpha"), "enabled = true\nvalue = 2\n");
         assert_eq!(
             store.reload_one(ModuleId::new("alpha")).expect("typo removed"),
             ReloadOutcome::Unchanged
@@ -1063,11 +1042,7 @@ mod tests {
     fn a_rejected_candidate_keeps_last_good_revision_and_runtime() {
         let (_root, registry, store, handle) = setup();
         registry.start_all().expect("start");
-        write(
-            &store,
-            ModuleId::new("alpha"),
-            "{ \"enabled\": true, \"value\": 99 }",
-        );
+        write(&store, ModuleId::new("alpha"), "enabled = true\nvalue = 99\n");
         let outcome = store.reload_one(ModuleId::new("alpha")).expect("reload");
         let ReloadOutcome::Rejected(diagnostic) = outcome else {
             panic!("expected rejection");
@@ -1087,18 +1062,14 @@ mod tests {
     fn reverting_to_the_last_good_bytes_clears_diagnostics() {
         let (_root, registry, store, handle) = setup();
         registry.start_all().expect("start");
-        let good = "{ \"enabled\": true, \"value\": 2 }";
+        let good = "enabled = true\nvalue = 2\n";
         write(&store, ModuleId::new("alpha"), good);
         assert_eq!(
             store.reload_one(ModuleId::new("alpha")).expect("good"),
             ReloadOutcome::Applied { revision: 2 }
         );
 
-        write(
-            &store,
-            ModuleId::new("alpha"),
-            "{ \"enabled\": true, \"value\": 99 }",
-        );
+        write(&store, ModuleId::new("alpha"), "enabled = true\nvalue = 99\n");
         assert!(matches!(
             store.reload_one(ModuleId::new("alpha")).expect("bad"),
             ReloadOutcome::Rejected(_)
@@ -1125,7 +1096,7 @@ mod tests {
     fn recreating_the_last_good_bytes_clears_the_deletion_diagnostic() {
         let (_root, registry, store, handle) = setup();
         registry.start_all().expect("start");
-        let good = "{ \"enabled\": true, \"value\": 2 }";
+        let good = "enabled = true\nvalue = 2\n";
         write(&store, ModuleId::new("alpha"), good);
         assert_eq!(
             store.reload_one(ModuleId::new("alpha")).expect("good"),
@@ -1156,7 +1127,7 @@ mod tests {
     fn a_failed_reconfigure_is_retried_on_identical_content() {
         let (_root, registry, store, handle, events) = setup_full();
         registry.start_all().expect("start");
-        let text = "{ \"enabled\": true, \"value\": 7 }";
+        let text = "enabled = true\nvalue = 7\n";
         write(&store, ModuleId::new("alpha"), text);
         assert!(matches!(
             store.reload_one(ModuleId::new("alpha")).expect("first"),
@@ -1187,7 +1158,7 @@ mod tests {
     #[test]
     fn an_identical_bad_save_reports_the_diagnostic_again() {
         let (_root, _registry, store, _handle) = setup();
-        let text = "{ \"enabled\": ";
+        let text = "enabled = ";
         write(&store, ModuleId::new("alpha"), text);
         assert!(matches!(
             store.reload_one(ModuleId::new("alpha")).expect("first"),
@@ -1203,11 +1174,7 @@ mod tests {
     fn deleting_and_recreating_a_file_preserves_then_replaces_last_good() {
         let (_root, registry, store, handle) = setup();
         registry.start_all().expect("start");
-        write(
-            &store,
-            ModuleId::new("alpha"),
-            "{ \"enabled\": true, \"value\": 2 }",
-        );
+        write(&store, ModuleId::new("alpha"), "enabled = true\nvalue = 2\n");
         assert_eq!(
             store.reload_one(ModuleId::new("alpha")).expect("reload"),
             ReloadOutcome::Applied { revision: 2 }
@@ -1221,11 +1188,7 @@ mod tests {
         assert_eq!(diagnostic.kind, DiagnosticKind::Deleted);
         assert_eq!(registry.snapshot(handle).expect("snapshot").revision, 2);
 
-        write(
-            &store,
-            ModuleId::new("alpha"),
-            "{ \"enabled\": true, \"value\": 3 }",
-        );
+        write(&store, ModuleId::new("alpha"), "enabled = true\nvalue = 3\n");
         assert_eq!(
             store.reload_one(ModuleId::new("alpha")).expect("reload"),
             ReloadOutcome::Applied { revision: 3 }
@@ -1257,11 +1220,7 @@ mod tests {
         let (_root, registry, store, handle) = setup();
         registry.start_all().expect("start");
         registry.pause(handle).expect("pause");
-        write(
-            &store,
-            ModuleId::new("alpha"),
-            "{ \"enabled\": true, \"value\": 4 }",
-        );
+        write(&store, ModuleId::new("alpha"), "enabled = true\nvalue = 4\n");
         assert_eq!(
             store.reload_one(ModuleId::new("alpha")).expect("reload"),
             ReloadOutcome::Applied { revision: 2 }
@@ -1277,22 +1236,19 @@ mod tests {
         write(
             &store,
             ModuleId::new("global"),
-            "{ \"logging\": { \"level\": \"debug\" } }",
+            "logging = { level = \"debug\" }\n",
         );
         assert!(matches!(store.load_global(), Initial::Loaded(_)));
         assert_eq!(store.log_filter().level(), LogLevel::Debug);
 
-        fs::write(
-            store.paths().global_file(),
-            "{ \"logging\": { \"level\": \"error\" } }",
-        )
-        .expect("write global");
+        fs::write(store.paths().global_file(), "logging = { level = \"error\" }\n")
+            .expect("write global");
         assert!(matches!(store.reload_global(), ReloadOutcome::Applied {
             revision: 2
         }));
         assert_eq!(store.log_filter().level(), LogLevel::Error);
 
-        fs::write(store.paths().global_file(), "{ \"logging\": ").expect("write broken global");
+        fs::write(store.paths().global_file(), "logging = ").expect("write broken global");
         assert!(matches!(store.reload_global(), ReloadOutcome::Rejected(_)));
         assert_eq!(store.log_filter().level(), LogLevel::Error);
         assert!(
@@ -1304,7 +1260,7 @@ mod tests {
     #[test]
     fn a_malformed_initial_global_file_keeps_the_default_level() {
         let (_root, _registry, store, _handle) = setup();
-        fs::write(store.paths().global_file(), "{ \"logging\": ").expect("write broken global");
+        fs::write(store.paths().global_file(), "logging = ").expect("write broken global");
         assert!(matches!(store.load_global(), Initial::Invalid(_)));
         assert_eq!(store.log_filter().level(), LogLevel::Info);
         assert!(store.global_config().is_none());
@@ -1317,13 +1273,13 @@ mod tests {
         let command = format!("touch {}", sentinel.display());
         fs::write(
             store.paths().global_file(),
-            format!("{{ \"execOnStartup\": \"{command}\" }}"),
+            format!("exec_on_startup = \"{command}\"\n"),
         )
         .expect("write global");
         store.load_global();
         fs::write(
             store.paths().global_file(),
-            format!("{{ \"execOnStartup\": [\"{command}\"] }}"),
+            format!("exec_on_startup = [\"{command}\"]\n"),
         )
         .expect("rewrite global");
         let _ = store.reload_global();
@@ -1333,16 +1289,8 @@ mod tests {
     #[test]
     fn apply_only_reloads_the_named_files() {
         let (_root, registry, store, handle) = setup();
-        write(
-            &store,
-            ModuleId::new("alpha"),
-            "{ \"enabled\": true, \"value\": 2 }",
-        );
-        write(
-            &store,
-            ModuleId::new("beta"),
-            "{ \"enabled\": true, \"value\": 2 }",
-        );
+        write(&store, ModuleId::new("alpha"), "enabled = true\nvalue = 2\n");
+        write(&store, ModuleId::new("beta"), "enabled = true\nvalue = 2\n");
         let mut changes = ChangeSet::default();
         changes.files.insert(ConfigFileId::module(ModuleId::new("alpha")));
         let outcomes = store.apply(&changes);
@@ -1355,8 +1303,8 @@ mod tests {
     fn path_inspection_marks_missing_valid_and_invalid_files() {
         let (root, _registry, _store, _handle) = setup();
         let paths = ConfigPaths::new(root.path().join("config"));
-        fs::write(paths.module_file(ModuleId::new("alpha")), "{ \"value\": 2 }").expect("write");
-        fs::write(paths.module_file(ModuleId::new("beta")), "{ \"value\": 99 }").expect("write");
+        fs::write(paths.module_file(ModuleId::new("alpha")), "value = 2\n").expect("write");
+        fs::write(paths.module_file(ModuleId::new("beta")), "value = 99\n").expect("write");
         let report = inspect_paths(&catalog(), &paths);
         assert_eq!(report.entries.len(), 3);
         assert_eq!(report.entries[0].file, ConfigFileId::Global);

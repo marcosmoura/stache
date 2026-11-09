@@ -1,0 +1,6 @@
+{
+  "$schema": "https://raw.githubusercontent.com/marcosmoura/stache/main/schemas/menuAnywhere.schema.json",
+  "enabled": true,
+  "modifiers": ["shift", "option"],
+  "mouseButton": "middleClick",
+}

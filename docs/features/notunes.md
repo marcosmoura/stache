@@ -11,17 +11,17 @@ native call goes through `stache_macos::ApplicationControl`.
 
 ## Configuration
 
-`notunes.jsonc` is the authoritative document (`NoTunesConfig`):
+`notunes.toml` is the authoritative document (`NoTunesConfig`):
 
-| Key         | Values                                           | Default |
-| ----------- | ------------------------------------------------ | ------- |
-| `enabled`   | `true` / `false`                                 | `false` |
-| `targetApp` | optional; an absolute `.app` path or a bundle ID | absent  |
+| Key          | Values                                           | Default |
+| ------------ | ------------------------------------------------ | ------- |
+| `enabled`    | `true` / `false`                                 | `false` |
+| `target_app` | optional; an absolute `.app` path or a bundle ID | absent  |
 
 Nothing about the replacement is hardcoded in the policy, defaults, template or
 schema: there is no preset list, no player discovery and no cached fallback. A
 target is either an absolute path such as `/Applications/Spotify.app` or a bundle
-identifier such as `com.spotify.client`. Omitting `targetApp` blocks without
+identifier such as `com.spotify.client`. Omitting `target_app` blocks without
 launching anything. The legacy `spotify`, `tidal`, `feishin` and `none` spellings
 are rejected by the module; only `config migrate` still knows them, to translate
 them into a bundle identifier or an absent key.

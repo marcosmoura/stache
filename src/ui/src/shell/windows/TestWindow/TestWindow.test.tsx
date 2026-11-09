@@ -80,7 +80,7 @@ test('renders status, modules and configuration with exact revision text', async
           state: 'invalid',
           active: false,
           diagnostic: 'Unknown top-level key "theme".',
-          warnings: ['input[0].dependsOn is ignored.'],
+          warnings: ['input[0].depends_on is ignored.'],
         }),
       ],
     }),
@@ -98,7 +98,7 @@ test('renders status, modules and configuration with exact revision text', async
     .element(screen.getByRole('heading', { name: 'Configuration', exact: true }))
     .toBeVisible();
   await expect.element(screen.getByText('Unknown top-level key "theme".')).toBeVisible();
-  await expect.element(screen.getByText('input[0].dependsOn is ignored.')).toBeVisible();
+  await expect.element(screen.getByText('input[0].depends_on is ignored.')).toBeVisible();
 
   expect(screen.getByText(revision).element().textContent).toBe(revision);
 });
@@ -108,7 +108,7 @@ test('separates a host error from configuration diagnostics', async () => {
     hostStatus({
       ready: false,
       error: 'Module registry could not start.',
-      config: [configFile({ diagnostic: 'File is not valid JSONC.' })],
+      config: [configFile({ diagnostic: 'File is not valid TOML.' })],
     }),
   );
 
@@ -118,7 +118,7 @@ test('separates a host error from configuration diagnostics', async () => {
   await expect.element(screen.getByText('Host error')).toBeVisible();
   await expect.element(screen.getByText('Module registry could not start.')).toBeVisible();
   await expect.element(screen.getByText('File diagnostic')).toBeVisible();
-  await expect.element(screen.getByText('File is not valid JSONC.')).toBeVisible();
+  await expect.element(screen.getByText('File is not valid TOML.')).toBeVisible();
 });
 
 test('shows loading, then an empty host without modules or configuration', async () => {

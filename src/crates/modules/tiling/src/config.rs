@@ -28,7 +28,7 @@ pub use workspaces::{WindowRule, WorkspaceConfig};
 /// granted) starts window management: Stache moves and resizes windows and
 /// hides and unhides applications to implement virtual workspaces.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema, Type)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default, rename_all = "snake_case")]
 pub struct TilingConfig {
     /// Whether the tiling window manager should run.
     pub enabled: bool,
@@ -68,7 +68,7 @@ impl TilingConfig {
                 && !self.floating.has_preset(preset)
             {
                 return Err(format!(
-                    "{at}.preset-on-open: no floating preset named `{preset}`"
+                    "{at}.preset_on_open: no floating preset named `{preset}`"
                 ));
             }
         }
@@ -106,14 +106,14 @@ impl ModuleConfig for TilingConfig {
                 object.get("floating").and_then(|floating| floating.get("defaultPosition"));
             if position.is_none_or(|value| value.as_str() == Some("center")) {
                 notes.push(
-                    "tiling floating.defaultPosition `center` will now center newly floating \
+                    "tiling floating.default_position `center` will now center newly floating \
                      windows once; use `default` to keep application frames"
                         .to_owned(),
                 );
             }
             if !object.contains_key("defaultLayout") {
                 notes.push(
-                    "tiling defaultLayout was omitted; dwindle is now the single default"
+                    "tiling default_layout was omitted; dwindle is now the single default"
                         .to_owned(),
                 );
             }

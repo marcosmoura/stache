@@ -774,8 +774,14 @@ fn every_workspace_action_alone_and_combined_is_silent_admission() {
         (vec!["--focus", "b"], vec![Intent::FocusWorkspace(
             "b".to_owned(),
         )]),
+        (vec!["--layout", "split_vertical"], vec![Intent::SetLayout(
+            LayoutType::SplitVertical,
+        )]),
         (vec!["--layout", "split-vertical"], vec![Intent::SetLayout(
             LayoutType::SplitVertical,
+        )]),
+        (vec!["--layout", "split-horizontal"], vec![Intent::SetLayout(
+            LayoutType::SplitHorizontal,
         )]),
         (vec!["--balance"], vec![Intent::Balance]),
         (vec!["--send-to-screen", "secondary"], vec![
@@ -808,6 +814,8 @@ fn every_workspace_action_alone_and_combined_is_silent_admission() {
     for layout in [
         "dwindle",
         "split",
+        "split_vertical",
+        "split_horizontal",
         "split-vertical",
         "split-horizontal",
         "monocle",
@@ -819,6 +827,21 @@ fn every_workspace_action_alone_and_combined_is_silent_admission() {
         silent_ok(&stage.run(&["tiling", "workspace", "--layout", layout]));
         assert_eq!(intents(&stage).len(), 1, "{layout}");
     }
+}
+
+#[test]
+fn the_layout_help_names_snake_case_and_rejects_unknown_values() {
+    let stage = Stage::standard();
+    let help = stage.run(&["tiling", "workspace", "--help"]);
+    assert!(
+        help.out.contains("split_vertical, split_horizontal"),
+        "{}",
+        help.out
+    );
+    assert!(!help.out.contains("split-vertical"), "{}", help.out);
+    let rejected = stage.run(&["tiling", "workspace", "--layout", "splitVertical"]);
+    assert_ne!(rejected.code, ExitCode::SUCCESS);
+    assert!(intents(&stage).is_empty());
 }
 
 #[test]
@@ -1509,7 +1532,7 @@ fn workspace_and_query_flags_become_the_exact_wire_requests() {
     assert_eq!(
         sent[0].params,
         json!({
-            "focus": "Code", "layout": "split-horizontal", "balance": true,
+            "focus": "Code", "layout": "split_horizontal", "balance": true,
             "sendToScreen": "secondary"
         })
     );

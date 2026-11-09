@@ -9,6 +9,7 @@ use schemars::{JsonSchema, Schema};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use toml_edit::DocumentMut;
 
 use crate::config::diagnostics::{ConfigDiagnostic, ConfigFileId};
 use crate::config::global::GlobalConfig;
@@ -35,6 +36,7 @@ impl DecodedConfig {
 struct ConfigKind {
     type_id: TypeId,
     default: Value,
+    document: fn() -> Result<DocumentMut, toml_edit::ser::Error>,
     decode: fn(Value) -> Result<DecodedConfig, DecodeFailure>,
     validate: fn(&dyn Any) -> Result<(), ConfigError>,
     schema: fn() -> Schema,
@@ -55,10 +57,7 @@ fn decode_value<C: DeserializeOwned + Send + Sync + 'static>(
     let result = serde_ignored::deserialize::<_, _, C>(
         serde_path_to_error::Deserializer::new(value, &mut track),
         |path| {
-            let path = path.to_string();
-            if path != "$schema" {
-                warnings.push(path);
-            }
+            warnings.push(path.to_string());
         },
     );
     match result {
@@ -112,9 +111,12 @@ impl ConfigCatalog {
         }
         let default = serde_json::to_value(C::default())
             .map_err(|error| CatalogError::Serialize { id, message: error.to_string() })?;
+        template::to_document(&C::default())
+            .map_err(|error| CatalogError::Serialize { id, message: error.to_string() })?;
         self.kinds.insert(id, ConfigKind {
             type_id: TypeId::of::<C>(),
             default,
+            document: || template::to_document(&C::default()),
             decode: decode_value::<C>,
             validate: validate_value::<C>,
             schema: || schemars::schema_for!(C),
@@ -163,15 +165,34 @@ impl ConfigCatalog {
         self.kinds.get(&id).map(|kind| &kind.default)
     }
 
-    /// The commented template for one identifier.
+    /// The commented TOML template for one identifier.
+    ///
+    /// The default is serialized straight to TOML, so keys keep the type's
+    /// declaration order.
     #[must_use]
     pub fn template(&self, id: ModuleId) -> Option<String> {
         let kind = self.kinds.get(&id)?;
         let schema = (kind.schema)();
-        Some(template::render(
+        let document = (kind.document)().ok()?;
+        Some(template::render(ConfigFileId::module(id), document, &schema))
+    }
+
+    /// Renders an already validated JSON value as a commented TOML file.
+    ///
+    /// Key order follows the JSON value (alphabetical), which is not
+    /// significant for migrated files. Unknown keys are written as given.
+    ///
+    /// # Errors
+    /// Returns the reason when the value is not representable in TOML, for
+    /// example a `null` or an integer above `i64::MAX`, or when the
+    /// identifier is not registered.
+    pub fn render_value(&self, id: ModuleId, value: &Value) -> Result<String, String> {
+        let kind = self.kinds.get(&id).ok_or_else(|| format!("{id} is not registered"))?;
+        let document = template::to_document(value).map_err(|error| error.to_string())?;
+        Ok(template::render(
             ConfigFileId::module(id),
-            &kind.default,
-            &schema,
+            document,
+            &(kind.schema)(),
         ))
     }
 
@@ -208,8 +229,24 @@ impl ConfigCatalog {
         path: &Path,
         text: &str,
     ) -> Result<DecodedConfig, ConfigDiagnostic> {
+        let value = loader::parse_text(ConfigFileId::module(id), path, text)?;
+        self.decode_json(id, path, value)
+    }
+
+    /// Deserializes an already parsed JSON value into the registered type.
+    ///
+    /// Migration uses this to type-check converted legacy JSON before it is
+    /// written as TOML.
+    ///
+    /// # Errors
+    /// Returns a type diagnostic naming the failing field.
+    pub fn decode_json(
+        &self,
+        id: ModuleId,
+        path: &Path,
+        value: Value,
+    ) -> Result<DecodedConfig, ConfigDiagnostic> {
         let file = ConfigFileId::module(id);
-        let value = loader::parse_text(file, path, text)?;
         let kind = self.kinds.get(&id).ok_or_else(|| {
             ConfigDiagnostic::application(file, path, "configuration is not registered")
         })?;
@@ -250,8 +287,33 @@ impl ConfigCatalog {
         path: &Path,
         text: &str,
     ) -> Result<Vec<String>, ConfigDiagnostic> {
-        let file = ConfigFileId::module(id);
         let decoded = self.decode(id, path, text)?;
+        self.validate_decoded(id, path, decoded)
+    }
+
+    /// Deserializes and validates an already parsed JSON value.
+    ///
+    /// Returns the unknown keys the decoder ignored.
+    ///
+    /// # Errors
+    /// Returns a type or validation diagnostic.
+    pub fn inspect_json(
+        &self,
+        id: ModuleId,
+        path: &Path,
+        value: Value,
+    ) -> Result<Vec<String>, ConfigDiagnostic> {
+        let decoded = self.decode_json(id, path, value)?;
+        self.validate_decoded(id, path, decoded)
+    }
+
+    fn validate_decoded(
+        &self,
+        id: ModuleId,
+        path: &Path,
+        decoded: DecodedConfig,
+    ) -> Result<Vec<String>, ConfigDiagnostic> {
+        let file = ConfigFileId::module(id);
         let kind = self.kinds.get(&id).ok_or_else(|| {
             ConfigDiagnostic::application(file, path, "configuration is not registered")
         })?;
@@ -381,24 +443,30 @@ mod tests {
         let ids: Vec<&str> = catalog.ids().map(ModuleId::as_str).collect();
         assert_eq!(ids, ["global", "sample"]);
         let template = catalog.template(GlobalConfig::ID).expect("template");
-        assert!(template.contains("\"$schema\""));
-        assert!(template.contains("\"execOnStartup\""));
+        assert!(template.starts_with(
+            "#:schema https://raw.githubusercontent.com/marcosmoura/stache/main/schemas/global.schema.json\n"
+        ));
+        assert!(template.contains("exec_on_startup = []"));
+        assert!(template.contains("\n# "));
     }
 
     #[test]
     fn unknown_keys_are_warnings_but_the_file_stays_valid() {
         let mut catalog = ConfigCatalog::new();
         catalog.register::<Sample>(ModuleId::new("sample")).expect("sample");
-        let text = r#"{
-            "$schema": "./schemas/sample.schema.json",
-            "enabled": true,
-            "enable": true,
-            "nested": { "typo": 1 }
-        }"#;
+        let text = "\
+#:schema ./schemas/sample.schema.json
+enabled = true
+enable = true
+\"$schema\" = \"./schemas/sample.schema.json\"
+
+[nested]
+typo = 1
+";
         let warnings = catalog
-            .inspect(ModuleId::new("sample"), Path::new("sample.jsonc"), text)
+            .inspect(ModuleId::new("sample"), Path::new("sample.toml"), text)
             .expect("the file is still valid");
-        assert_eq!(warnings, ["enable", "nested"]);
+        assert_eq!(warnings, ["$schema", "enable", "nested"]);
     }
 
     #[test]
@@ -408,8 +476,8 @@ mod tests {
         let warnings = catalog
             .inspect(
                 GlobalConfig::ID,
-                Path::new("global.jsonc"),
-                "{ \"logging\": { \"levl\": \"debug\" } }",
+                Path::new("global.toml"),
+                "[logging]\nlevl = \"debug\"\n",
             )
             .expect("the file is still valid");
         assert_eq!(warnings, ["logging.levl"]);
@@ -422,8 +490,8 @@ mod tests {
         let diagnostic = catalog
             .inspect(
                 ModuleId::new("sample"),
-                Path::new("sample.jsonc"),
-                "{ \"enabled\": \"yes\" }",
+                Path::new("sample.toml"),
+                "enabled = \"yes\"\n",
             )
             .expect_err("the wrong type is rejected");
         assert_eq!(diagnostic.kind, crate::config::DiagnosticKind::Type);

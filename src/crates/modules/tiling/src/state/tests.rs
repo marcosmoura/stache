@@ -109,7 +109,7 @@ fn rules_assign_the_first_matching_workspace_else_the_focused_one() {
     let cfg = config(serde_json::json!({
         "workspaces": [
             {"name": "main"},
-            {"name": "web", "rules": [{"appId": "com.editor", "title": "docs"}]}
+            {"name": "web", "rules": [{"app_id": "com.editor", "title": "docs"}]}
         ]
     }));
     let (state, _) = step(state, Input::Config { revision: 1, config: cfg });
@@ -342,7 +342,7 @@ fn focus_of_an_unknown_window_requests_a_read() {
 fn focus_switches_visible_workspace_on_its_screen() {
     let (state, mut feed) = fresh_state();
     let cfg = config(serde_json::json!({
-        "workspaces": [{"name": "one"}, {"name": "two", "rules": [{"appName": "Editor"}]}]
+        "workspaces": [{"name": "one"}, {"name": "two", "rules": [{"app_name": "Editor"}]}]
     }));
     let (state, _) = step(state, Input::Config { revision: 1, config: cfg });
     let (a, b) = (feed.token(1, 1), feed.token(1, 2));

@@ -8,7 +8,7 @@ use specta::Type;
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, Type,
 )]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "snake_case")]
 pub enum LayoutType {
     /// Binary space partitioning.
     #[default]
@@ -30,14 +30,14 @@ pub enum LayoutType {
 }
 
 impl LayoutType {
-    /// The kebab-case name used by configuration, CLI and state projections.
+    /// The `snake_case` name used by configuration, CLI and state projections.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Dwindle => "dwindle",
             Self::Split => "split",
-            Self::SplitVertical => "split-vertical",
-            Self::SplitHorizontal => "split-horizontal",
+            Self::SplitVertical => "split_vertical",
+            Self::SplitHorizontal => "split_horizontal",
             Self::Monocle => "monocle",
             Self::Master => "master",
             Self::Grid => "grid",
@@ -50,7 +50,7 @@ impl LayoutType {
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, Type,
 )]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "snake_case")]
 pub enum EasingType {
     /// Linear interpolation.
     Linear,
@@ -69,7 +69,7 @@ pub enum EasingType {
 
 /// Animation configuration for window transitions.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Type)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default, rename_all = "snake_case")]
 pub struct AnimationConfig {
     /// Whether animations are enabled.
     pub enabled: bool,
@@ -93,7 +93,7 @@ impl Default for AnimationConfig {
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, Type,
 )]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "snake_case")]
 pub enum MasterPosition {
     /// Master window on the left.
     Left,
@@ -110,7 +110,7 @@ pub enum MasterPosition {
 
 /// Master layout configuration.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Type)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default, rename_all = "snake_case")]
 pub struct MasterConfig {
     /// Master window size as a percentage, 0 to 100.
     pub ratio: u32,

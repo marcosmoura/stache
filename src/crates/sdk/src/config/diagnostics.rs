@@ -1,7 +1,7 @@
 //! Configuration diagnostics with file, field and parse locations.
 //!
 //! A diagnostic always names the file it belongs to. Parse errors carry the
-//! source line and column reported by the JSONC parser; type errors carry the
+//! source line and column reported by the TOML parser; type errors carry the
 //! serde field path. Both are separate from the module lifecycle status.
 
 use std::fmt;
@@ -13,7 +13,7 @@ use crate::module::ModuleId;
 /// One configuration file known to the catalog.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ConfigFileId {
-    /// The global file, `global.jsonc`.
+    /// The global file, `global.toml`.
     Global,
     /// A module file named after its exact identifier.
     Module(ModuleId),
@@ -45,12 +45,21 @@ impl ConfigFileId {
         }
     }
 
+    /// The identifier that names the file, `global` for the global file.
+    #[must_use]
+    pub const fn stem(self) -> &'static str {
+        match self {
+            Self::Global => "global",
+            Self::Module(id) => id.as_str(),
+        }
+    }
+
     /// The file name used inside a configuration directory.
     #[must_use]
     pub fn file_name(self) -> String {
         match self {
-            Self::Global => "global.jsonc".to_owned(),
-            Self::Module(id) => format!("{}.jsonc", id.as_str()),
+            Self::Global => "global.toml".to_owned(),
+            Self::Module(id) => format!("{}.toml", id.as_str()),
         }
     }
 }
@@ -64,7 +73,7 @@ impl fmt::Display for ConfigFileId {
 pub enum DiagnosticKind {
     /// The file could not be read.
     Io,
-    /// The file is not valid JSONC under the enabled syntax options.
+    /// The file is not valid TOML.
     Parse,
     /// The file parsed but does not match the registered type.
     Type,
@@ -112,23 +121,16 @@ impl ConfigDiagnostic {
         Self::new(file, path, DiagnosticKind::Io, error.to_string())
     }
 
-    /// A JSONC syntax error at a known source position.
+    /// A TOML syntax error at a known source position.
     #[must_use]
-    pub fn parse(
-        file: ConfigFileId,
-        path: &Path,
-        error: &jsonc_parser::errors::ParseError,
-    ) -> Self {
+    pub fn parse(file: ConfigFileId, path: &Path, location: SourceLocation, message: &str) -> Self {
         Self {
             file,
             path: path.to_path_buf(),
             kind: DiagnosticKind::Parse,
-            location: Some(SourceLocation {
-                line: error.line_display(),
-                column: error.column_display(),
-            }),
+            location: Some(location),
             field: None,
-            message: error.kind().to_string(),
+            message: message.to_owned(),
         }
     }
 
@@ -229,7 +231,7 @@ mod tests {
     #[test]
     fn module_files_use_the_exact_identifier() {
         let file = ConfigFileId::module(ModuleId::new("proxyAudio"));
-        assert_eq!(file.file_name(), "proxyAudio.jsonc");
+        assert_eq!(file.file_name(), "proxyAudio.toml");
         assert_eq!(file.module_id(), Some(ModuleId::new("proxyAudio")));
     }
 
@@ -246,7 +248,7 @@ mod tests {
     fn diagnostics_render_path_location_and_field() {
         let diagnostic = ConfigDiagnostic {
             file: ConfigFileId::module(ModuleId::new("proxyAudio")),
-            path: PathBuf::from("/tmp/proxyAudio.jsonc"),
+            path: PathBuf::from("/tmp/proxyAudio.toml"),
             kind: DiagnosticKind::Type,
             location: Some(SourceLocation { line: 4, column: 7 }),
             field: Some("output[0].strategy".to_owned()),
@@ -254,7 +256,7 @@ mod tests {
         };
         assert_eq!(
             diagnostic.to_string(),
-            "/tmp/proxyAudio.jsonc:4:7: unknown variant `fuzzy` (at `output[0].strategy`)"
+            "/tmp/proxyAudio.toml:4:7: unknown variant `fuzzy` (at `output[0].strategy`)"
         );
     }
 }

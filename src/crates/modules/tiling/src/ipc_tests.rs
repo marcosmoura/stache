@@ -745,6 +745,10 @@ fn mutation_requests_deny_unknown_fields_and_bad_shapes() {
         ("window", Value::Null),
         ("workspace", json!({"layout": "spiral"})),
         ("workspace", json!({"layout": "Grid"})),
+        // The socket takes the canonical snake_case spelling only; the kebab
+        // spellings are CLI-only aliases.
+        ("workspace", json!({"layout": "split-vertical"})),
+        ("workspace", json!({"layout": "splitVertical"})),
         ("workspace", json!({"balance": 1})),
         ("pause", json!({"force": true})),
         ("resume", json!([])),
@@ -868,6 +872,23 @@ fn workspace_actions_run_focus_layout_balance_send_in_order() {
         Intent::Balance,
         Intent::SendWorkspaceToScreen(ScreenTarget::Main),
     ]);
+}
+
+#[test]
+fn split_layouts_use_snake_case_on_the_socket_and_in_query_results() {
+    let (rig, ..) = Rig::standard();
+    rig.ok("workspace", json!({"layout": "split_horizontal"}));
+    assert_eq!(rig.actor.submitted(), vec![Intent::SetLayout(
+        crate::config::LayoutType::SplitHorizontal
+    )]);
+    assert_eq!(
+        serde_json::to_value(crate::config::LayoutType::SplitVertical).expect("encode"),
+        json!("split_vertical")
+    );
+    assert_eq!(
+        crate::config::LayoutType::SplitVertical.as_str(),
+        "split_vertical"
+    );
 }
 
 #[test]

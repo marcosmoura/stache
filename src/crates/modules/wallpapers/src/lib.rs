@@ -1,7 +1,7 @@
 //! Wallpapers configuration, source resolution and the image pipeline.
 //!
 //! [`WallpapersConfig`] is the single authoritative source for
-//! `wallpapers.jsonc`, its schema, template and migration. [`SourceContext`]
+//! `wallpapers.toml`, its schema, template and migration. [`SourceContext`]
 //! and [`SourcePool`] resolve the configured directory or list without decoding
 //! an image, and [`resolve_explicit_file`] validates one explicit CLI file
 //! independently of the configured pool.

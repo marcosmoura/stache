@@ -365,7 +365,7 @@ mod tests {
         fs::write(cache.join("nested").join("two.bin"), [0_u8; 5]).expect("two");
         let configuration = root.path().join(".config").join("stache");
         fs::create_dir_all(&configuration).expect("config");
-        fs::write(configuration.join("global.jsonc"), "{}").expect("config file");
+        fs::write(configuration.join("global.toml"), "# defaults\n").expect("config file");
         let legacy = root.path().join("Library").join("Caches").join("com.marcosmoura.stache");
         fs::create_dir_all(&legacy).expect("legacy cache");
         fs::write(legacy.join("keep.bin"), "keep").expect("legacy file");
@@ -374,7 +374,7 @@ mod tests {
         assert_eq!(code, ExitCode::SUCCESS, "{err}");
         assert_eq!(out, "Cache cleared successfully. Freed 8 bytes.\n");
         assert!(!cache.exists());
-        assert!(configuration.join("global.jsonc").exists());
+        assert!(configuration.join("global.toml").exists());
         assert!(legacy.join("keep.bin").exists());
     }
 

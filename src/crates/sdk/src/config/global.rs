@@ -8,9 +8,9 @@ use crate::error::ConfigError;
 use crate::logging::LogLevel;
 use crate::module::{ModuleConfig, ModuleId};
 
-/// Logging behavior selected by `global.jsonc`.
+/// Logging behavior selected by `global.toml`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Type)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default, rename_all = "snake_case")]
 pub struct LoggingConfig {
     /// Minimum severity the host writes.
     pub level: LogLevel,
@@ -70,10 +70,10 @@ impl StartupCommands {
 /// The global configuration shared by every module.
 ///
 /// The registry never hosts this type as a module; it is a catalog entry whose
-/// file name is `global.jsonc`. `enabled` exists only to satisfy
+/// file name is `global.toml`. `enabled` exists only to satisfy
 /// [`ModuleConfig`] and is always `true`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Type)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default, rename_all = "snake_case")]
 pub struct GlobalConfig {
     /// Logging behavior for the host.
     pub logging: LoggingConfig,
@@ -106,20 +106,20 @@ mod tests {
 
     #[test]
     fn startup_commands_accept_a_string_or_a_list() {
-        let single: StartupCommands = loader::decode(
+        let single: GlobalConfig = loader::decode(
             ConfigFileId::Global,
-            Path::new("global.jsonc"),
-            "\"open -a Terminal\"",
+            Path::new("global.toml"),
+            "exec_on_startup = \"open -a Terminal\"\n",
         )
         .expect("single");
-        assert_eq!(single.commands(), ["open -a Terminal"]);
-        let list: StartupCommands = loader::decode(
+        assert_eq!(single.exec_on_startup.commands(), ["open -a Terminal"]);
+        let list: GlobalConfig = loader::decode(
             ConfigFileId::Global,
-            Path::new("global.jsonc"),
-            "[\"one\", \" two \", \"\"]",
+            Path::new("global.toml"),
+            "exec_on_startup = [\"one\", \" two \", \"\"]\n",
         )
         .expect("list");
-        assert_eq!(list.commands(), ["one", "two"]);
+        assert_eq!(list.exec_on_startup.commands(), ["one", "two"]);
     }
 
     #[test]

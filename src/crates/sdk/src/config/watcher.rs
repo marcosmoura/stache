@@ -271,7 +271,7 @@ mod tests {
         fs::create_dir_all(paths.directory()).expect("create config dir");
         let mut watcher = ConfigWatcher::new(&paths, &catalog()).expect("watcher");
 
-        let temporary = paths.directory().join(".sample.jsonc.swp");
+        let temporary = paths.directory().join(".sample.toml.swp");
         fs::write(&temporary, "{ \"enabled\": true }").expect("write temp");
         fs::rename(&temporary, paths.module_file(ModuleId::new("sample"))).expect("rename");
 

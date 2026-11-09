@@ -8,6 +8,7 @@ Read when navigating the shipped foundation, explicitly planned rewrites or the 
 | Module SDK, lifecycle and threads           | [architecture/sdk.md](architecture/sdk.md)                                                                  |
 | Socket control and CLI                      | [architecture/ipc.md](architecture/ipc.md)                                                                  |
 | Typed config, reload, schemas, CLI          | [architecture/config.md](architecture/config.md)                                                            |
+| TOML configuration and migration            | [architecture/config.md](architecture/config.md), [spec](specs/2026-11-09-toml-config/00-overview.md)       |
 | Typed UI SDK, bindings, test window         | [architecture/ui.md](architecture/ui.md)                                                                    |
 | Audio device switching (proxyAudio)         | [features/proxy-audio.md](features/proxy-audio.md)                                                          |
 | Adding a module                             | [guides/new-module.md](guides/new-module.md)                                                                |

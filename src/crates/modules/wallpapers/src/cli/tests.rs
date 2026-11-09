@@ -200,7 +200,7 @@ impl Rig {
     fn cwd(&self) -> PathBuf { self.root.path().join("cwd") }
 
     fn write_config(&self, text: &str) {
-        fs::write(self.config().join("wallpapers.jsonc"), text).expect("config");
+        fs::write(self.config().join("wallpapers.toml"), text).expect("config");
     }
 
     #[allow(clippy::unused_self)]
@@ -493,7 +493,7 @@ fn the_global_config_flag_reaches_the_subcommand_matches() {
 fn both_and_neither_fail_first_with_exact_text() {
     let rig = Rig::new(FakeTransport::absent());
     // Poison every later step: a malformed config, so any config read fails.
-    rig.write_config("{ not json");
+    rig.write_config("not toml =");
     let both = rig.run(&["set", "image.png", "--random"], false);
     assert_eq!(both.code, ExitCode::FAILURE);
     assert_eq!(both.out, "");
@@ -525,7 +525,7 @@ fn both_and_neither_fail_first_with_exact_text() {
 fn a_bare_existing_file_in_the_cwd_wins_over_a_collection_name() {
     let rig = Rig::new(FakeTransport::replying(ok_response(&success_outcome())));
     let file = rig.png(&rig.cwd().join("wall.png"));
-    rig.write_config("{ \"list\": [\"wall.png\"] }");
+    rig.write_config("list = [\"wall.png\"]\n");
     let run = rig.run(&["set", "wall.png"], false);
     assert_eq!(
         (run.code, run.out.as_str(), run.err.as_str()),
@@ -628,7 +628,7 @@ fn resolve_token_precedence_table() {
 #[test]
 fn a_missing_path_shaped_argument_is_an_argument_error_with_no_side_effects() {
     let rig = Rig::new(FakeTransport::absent());
-    rig.write_config("{ \"list\": [\"missing\"] }");
+    rig.write_config("list = [\"missing\"]\n");
     let run = rig.run(&["set", "./missing.png"], false);
     assert_eq!(run.code, ExitCode::FAILURE);
     assert_eq!(run.out, "");
@@ -847,7 +847,7 @@ fn a_host_reply_renders_success_and_failure_through_the_same_adapter() {
 fn not_running_with_a_missing_config_uses_defaults_for_a_file_but_not_for_random() {
     let rig = Rig::standalone();
     rig.png(&rig.cwd().join("w.png"));
-    assert!(!rig.config().join("wallpapers.jsonc").exists());
+    assert!(!rig.config().join("wallpapers.toml").exists());
     let run = rig.run(&["set", "w.png"], false);
     assert_eq!(run.code, ExitCode::SUCCESS, "{}", run.err);
 
@@ -865,10 +865,10 @@ fn not_running_with_a_missing_config_uses_defaults_for_a_file_but_not_for_random
 #[test]
 fn a_malformed_config_fails_and_never_falls_back_to_defaults() {
     for text in [
-        "{ \"enabled\": ",
+        "enabled = ",
         "",
-        "{ \"interval\": \"soon\" }",
-        "{ \"path\": \"a\\u0000b\" }",
+        "interval = \"soon\"\n",
+        "path = \"a\\u0000b\"\n",
     ] {
         let rig = Rig::standalone();
         rig.png(&rig.cwd().join("w.png"));
@@ -876,7 +876,7 @@ fn a_malformed_config_fails_and_never_falls_back_to_defaults() {
         let run = rig.run(&["set", "w.png"], false);
         assert_eq!(run.code, ExitCode::FAILURE, "{text:?}");
         assert!(run.err.starts_with("stache: Wallpaper error: "), "{}", run.err);
-        assert!(run.err.contains("wallpapers.jsonc"), "{}", run.err);
+        assert!(run.err.contains("wallpapers.toml"), "{}", run.err);
         assert_eq!(rig.processor_calls(), 0);
         assert!(rig.desktop.calls().is_empty());
     }
@@ -885,9 +885,9 @@ fn a_malformed_config_fails_and_never_falls_back_to_defaults() {
 #[test]
 fn a_valid_explicit_file_ignores_a_bad_or_empty_pool() {
     for text in [
-        "{ \"path\": \"does-not-exist\" }",
-        "{ \"list\": [] }",
-        "{ \"list\": [\"missing.png\"], \"enabled\": false }",
+        "path = \"does-not-exist\"\n",
+        "list = []\n",
+        "list = [\"missing.png\"]\nenabled = false\n",
     ] {
         let rig = Rig::standalone();
         rig.png(&rig.cwd().join("w.png"));
@@ -904,9 +904,7 @@ fn a_standalone_name_uses_the_current_config_pool_with_first_match_wins() {
     rig.png(&rig.config().join("one/Sunset.png"));
     rig.png(&rig.config().join("two/sunset.png"));
     rig.png(&rig.config().join("sunset.png.png"));
-    rig.write_config(
-        "{ \"list\": [\"  one/Sunset.png \", \"two/sunset.png\", \"sunset.png.png\"] }",
-    );
+    rig.write_config("list = [\"  one/Sunset.png \", \"two/sunset.png\", \"sunset.png.png\"]\n");
     let run = rig.run(&["set", "SUNSET", "--screen", "main"], false);
     assert_eq!(run.code, ExitCode::SUCCESS, "{}", run.err);
     assert_eq!(rig.desktop.calls().len(), 1);
@@ -918,7 +916,7 @@ fn a_standalone_name_uses_the_current_config_pool_with_first_match_wins() {
 
     // A name that matches nothing is a typed invalid selection.
     let rig2 = Rig::standalone();
-    rig2.write_config("{ \"list\": [] }");
+    rig2.write_config("list = []\n");
     let run = rig2.run(&["set", "nothing"], false);
     assert_eq!(run.code, ExitCode::FAILURE);
     assert!(run.err.contains("(invalid-selection)"), "{}", run.err);
@@ -930,7 +928,7 @@ fn a_config_list_is_relative_to_the_config_directory_not_the_cwd() {
     let rig = Rig::standalone();
     // Same file name in both places; only the config-relative one is a pool entry.
     rig.png(&rig.config().join("pool.png"));
-    rig.write_config("{ \"list\": [\" pool.png \", \"~/home.png\"] }");
+    rig.write_config("list = [\" pool.png \", \"~/home.png\"]\n");
     rig.png(&rig.home().join("home.png"));
     let run = rig.run(&["list"], false);
     assert_eq!(run.code, ExitCode::SUCCESS, "{}", run.err);
@@ -969,7 +967,7 @@ fn standalone_random_draws_independently_per_display() {
     let mut rig = Rig::standalone();
     rig.png(&rig.config().join("a.png"));
     rig.png(&rig.config().join("b.png"));
-    rig.write_config("{ \"list\": [\"a.png\", \"b.png\"] }");
+    rig.write_config("list = [\"a.png\", \"b.png\"]\n");
     rig.draws = vec![1, 0];
     let run = rig.run(&["set", "--random"], false);
     assert_eq!(run.code, ExitCode::SUCCESS, "{}", run.err);
@@ -1069,7 +1067,7 @@ fn the_pre_native_adapters_are_frozen() {
     );
     assert_eq!(
         body(&refused(WallpapersOutcomeCause::NoAcceptedConfig)),
-        "No accepted Wallpapers configuration is available. Fix wallpapers.jsonc and reload, then retry."
+        "No accepted Wallpapers configuration is available. Fix wallpapers.toml and reload, then retry."
     );
     assert_eq!(
         body(&WallpapersSetOutcome::cancelled(
@@ -1264,7 +1262,7 @@ fn list_prints_a_pretty_json_array_and_styles_only_a_terminal() {
     let rig = Rig::new(FakeTransport::absent());
     rig.png(&rig.config().join("pics/a.png"));
     rig.png(&rig.config().join("pics/b.JPG"));
-    rig.write_config("{ \"path\": \"pics\", \"enabled\": false }");
+    rig.write_config("path = \"pics\"\nenabled = false\n");
     let plain = rig.run(&["list"], false);
     assert_eq!(plain.code, ExitCode::SUCCESS);
     assert_eq!(plain.err, "");
@@ -1294,14 +1292,14 @@ fn list_reports_a_valid_empty_pool_but_fails_for_bad_config_or_io() {
         (missing.code, missing.out.as_str()),
         (ExitCode::SUCCESS, "No wallpapers found.\n")
     );
-    rig.write_config("{ \"list\": [\"gone.png\"] }");
+    rig.write_config("list = [\"gone.png\"]\n");
     let empty = rig.run(&["list"], true);
     assert_eq!(
         (empty.code, empty.out.as_str()),
         (ExitCode::SUCCESS, "No wallpapers found.\n")
     );
 
-    rig.write_config("{ \"path\": \"missing-dir\" }");
+    rig.write_config("path = \"missing-dir\"\n");
     let io_failure = rig.run(&["list"], false);
     assert_eq!(io_failure.code, ExitCode::FAILURE);
     assert_eq!(io_failure.out, "");
@@ -1311,7 +1309,7 @@ fn list_reports_a_valid_empty_pool_but_fails_for_bad_config_or_io() {
         io_failure.err
     );
 
-    rig.write_config("{ nope");
+    rig.write_config("nope =");
     let malformed = rig.run(&["list"], false);
     assert_eq!(malformed.code, ExitCode::FAILURE);
     assert_eq!(malformed.out, "");
@@ -1337,7 +1335,7 @@ fn pool_rig(names: &[&str]) -> Rig {
         rig.png(&rig.config().join(name));
     }
     let list = names.iter().map(|n| format!("\"{n}\"")).collect::<Vec<_>>().join(", ");
-    rig.write_config(&format!("{{ \"list\": [{list}], \"enabled\": false }}"));
+    rig.write_config(&format!("list = [{list}]\nenabled = false\n"));
     rig
 }
 
@@ -1345,7 +1343,7 @@ fn pool_rig(names: &[&str]) -> Rig {
 fn an_empty_generate_all_prints_exactly_and_processes_nothing() {
     for ansi in [false, true] {
         let rig = Rig::new(FakeTransport::absent());
-        rig.write_config("{ \"list\": [] }");
+        rig.write_config("list = []\n");
         let run = rig.run(&["generate-all"], ansi);
         assert_eq!(
             (run.code, run.out.as_str(), run.err.as_str()),
@@ -1361,11 +1359,11 @@ fn an_empty_generate_all_prints_exactly_and_processes_nothing() {
 #[test]
 fn generate_all_fails_for_bad_config_or_directory_io() {
     let rig = Rig::new(FakeTransport::absent());
-    rig.write_config("{ nope");
+    rig.write_config("nope =");
     let run = rig.run(&["generate-all"], false);
     assert_eq!((run.code, run.out.as_str()), (ExitCode::FAILURE, ""));
     assert!(run.err.starts_with("stache: Wallpaper error: "));
-    rig.write_config("{ \"path\": \"missing\" }");
+    rig.write_config("path = \"missing\"\n");
     let run = rig.run(&["generate-all"], false);
     assert_eq!((run.code, run.out.as_str()), (ExitCode::FAILURE, ""));
     assert!(run.err.contains("wallpaper directory"));
@@ -1426,7 +1424,7 @@ fn generate_all_reports_generated_then_cached_outputs_and_never_sets() {
 fn a_completed_batch_with_a_bad_image_exits_zero_and_reports_every_result() {
     let rig = pool_rig(&["a.png", "c.png"]);
     fs::write(rig.config().join("bad.png"), b"definitely not an image").expect("bad");
-    rig.write_config("{ \"list\": [\"a.png\", \"bad.png\", \"c.png\"] }");
+    rig.write_config("list = [\"a.png\", \"bad.png\", \"c.png\"]\n");
     let run = rig.run(&["generate-all"], false);
     assert_eq!(run.code, ExitCode::SUCCESS, "{}", run.err);
     assert_eq!(run.err, "");
@@ -1538,7 +1536,7 @@ fn a_native_enumeration_failure_is_a_top_level_failure() {
 #[test]
 fn list_and_generate_all_work_with_the_module_disabled() {
     let rig = pool_rig(&["a.png"]);
-    rig.write_config("{ \"enabled\": false, \"list\": [\"a.png\"] }");
+    rig.write_config("enabled = false\nlist = [\"a.png\"]\n");
     assert_eq!(rig.run(&["list"], false).code, ExitCode::SUCCESS);
     assert_eq!(rig.run(&["generate-all"], false).code, ExitCode::SUCCESS);
     assert_eq!(rig.transport.sends(), 0);
@@ -1650,7 +1648,7 @@ fn production_transport_is_pinned_to_the_legacy_policy_and_client_budget() {
 #[test]
 fn control_characters_in_a_token_and_a_config_path_never_reach_stderr_raw() {
     let rig = Rig::new(FakeTransport::absent());
-    rig.write_config("{ \"list\": [] }");
+    rig.write_config("list = []\n");
     let run = rig.run(&["set", "./\u{1b}[2Jx.png"], false);
     assert_eq!(run.code, ExitCode::FAILURE);
     assert!(run.err.contains("\\u001b"), "{:?}", run.err);
@@ -1659,7 +1657,7 @@ fn control_characters_in_a_token_and_a_config_path_never_reach_stderr_raw() {
 
     // A config directory path containing ESC that cannot be read as a file.
     let weird = rig.root.path().join("bad\u{1b}[2Jconfig");
-    fs::create_dir_all(weird.join("wallpapers.jsonc")).expect("directory in place of the file");
+    fs::create_dir_all(weird.join("wallpapers.toml")).expect("directory in place of the file");
     let root = Command::new("stache")
         .arg(
             Arg::new("config")

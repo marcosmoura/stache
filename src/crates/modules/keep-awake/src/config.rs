@@ -7,14 +7,14 @@ use stache_sdk::{ConfigError, ModuleConfig, ModuleId};
 
 /// Automatic prevention of display, idle and system sleep.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Type)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default, rename_all = "snake_case")]
 pub struct KeepAwakeConfig {
     /// Whether Keep Awake should prevent display, idle and system sleep.
     pub enabled: bool,
 }
 
 impl KeepAwakeConfig {
-    /// The catalog identifier and file stem (`keepAwake.jsonc`).
+    /// The catalog identifier and file stem (`keepAwake.toml`).
     pub const ID: ModuleId = ModuleId::new("keepAwake");
 }
 
@@ -67,12 +67,12 @@ mod tests {
     #[test]
     fn a_non_boolean_enabled_value_is_a_type_diagnostic() {
         let catalog = catalog();
-        for value in [r#""yes""#, "1", "null", "{}"] {
+        for value in [r#""yes""#, "1", "[]", "{}"] {
             let diagnostic = catalog
                 .inspect(
                     KeepAwakeConfig::ID,
-                    std::path::Path::new("keepAwake.jsonc"),
-                    &format!(r#"{{ "enabled": {value} }}"#),
+                    std::path::Path::new("keepAwake.toml"),
+                    &format!("enabled = {value}\n"),
                 )
                 .expect_err("wrong type");
             assert_eq!(diagnostic.kind, DiagnosticKind::Type, "{value}");
@@ -85,13 +85,13 @@ mod tests {
         let diagnostic = catalog()
             .inspect(
                 KeepAwakeConfig::ID,
-                std::path::Path::new("keepAwake.jsonc"),
+                std::path::Path::new("keepAwake.toml"),
                 "  \n",
             )
             .expect_err("empty file");
         assert_eq!(diagnostic.kind, DiagnosticKind::Type);
         assert!(diagnostic.message.contains("file is empty"), "{diagnostic}");
-        assert!(diagnostic.message.contains("write `{}`"), "{diagnostic}");
+        assert!(diagnostic.message.contains("add a `#` comment"), "{diagnostic}");
     }
 
     #[test]
@@ -99,8 +99,8 @@ mod tests {
         let warnings = catalog()
             .inspect(
                 KeepAwakeConfig::ID,
-                std::path::Path::new("keepAwake.jsonc"),
-                r#"{ "enabled": true, "duration": 60 }"#,
+                std::path::Path::new("keepAwake.toml"),
+                "enabled = true\nduration = 60\n",
             )
             .expect("the file stays valid");
         assert_eq!(warnings, ["duration"]);
@@ -112,13 +112,12 @@ mod tests {
         let template = catalog.template(KeepAwakeConfig::ID).expect("template");
         assert_eq!(
             template,
-            r#"{
-  // Schema for editor validation.
-  "$schema": "https://raw.githubusercontent.com/marcosmoura/stache/main/schemas/keepAwake.schema.json",
-  // Whether Keep Awake should prevent display, idle and system sleep.
-  "enabled": false
-}
-"#
+            "\
+#:schema https://raw.githubusercontent.com/marcosmoura/stache/main/schemas/keepAwake.schema.json
+
+# Whether Keep Awake should prevent display, idle and system sleep.
+enabled = false
+"
         );
         let schema = catalog.schema_json(KeepAwakeConfig::ID).expect("schema").expect("render");
         let schema: serde_json::Value = serde_json::from_str(&schema).expect("schema JSON");

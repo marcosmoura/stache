@@ -231,7 +231,7 @@ pub const fn focused_state(config: &BordersConfig, focus: FocusInput) -> &Border
 }
 
 /// The blacklist value: system bundle ids, system names, the tiling `ignore`
-/// rules then the border `ignore` rules (each rule's `appId` then `appName`),
+/// rules then the border `ignore` rules (each rule's `app_id` then `app_name`),
 /// joined with commas.
 #[must_use]
 pub fn blacklist(tiling_ignore: &[WindowRule], border_ignore: &[WindowRule]) -> String {

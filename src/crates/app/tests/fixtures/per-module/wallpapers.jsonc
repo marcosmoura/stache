@@ -1,0 +1,9 @@
+{
+  "$schema": "https://raw.githubusercontent.com/marcosmoura/stache/main/schemas/wallpapers.schema.json",
+  "enabled": true,
+  "path": "/Users/me/Pictures/wall",
+  "mode": "sequential",
+  "interval": 600,
+  "blur": 4,
+  "radius": 12,
+}

@@ -9,7 +9,7 @@ use super::{EasingType, WindowRule};
 
 /// Gradient border color.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Type)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct GradientConfig {
     /// Starting color.
     pub from: String,
@@ -34,7 +34,7 @@ impl Default for GradientConfig {
 
 /// Color animation for gradient borders.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Type)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct BorderAnimationConfig {
     /// Duration in milliseconds of one color-swap leg.
     pub duration: u32,
@@ -110,7 +110,7 @@ impl BorderStateConfig {
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, Type,
 )]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum BorderStyle {
     /// Rounded corners.
     #[default]
@@ -121,7 +121,7 @@ pub enum BorderStyle {
 
 /// Window border configuration.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Type)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default, rename_all = "snake_case")]
 pub struct BordersConfig {
     /// Whether borders are enabled. Setting this to `true` is your explicit
     /// consent for Stache to overwrite the shared `JankyBorders` settings it names:
@@ -199,8 +199,8 @@ impl BordersConfig {
             ("master", &self.master),
             ("grid", &self.grid),
             ("split", &self.split),
-            ("splitVertical", &self.split_vertical),
-            ("splitHorizontal", &self.split_horizontal),
+            ("split_vertical", &self.split_vertical),
+            ("split_horizontal", &self.split_horizontal),
         ] {
             if let Some(state) = state {
                 state.validate(&format!("borders.{name}"))?;

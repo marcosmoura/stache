@@ -28,7 +28,7 @@
 //!   acknowledgement budget. Only a `Shown` event for the live press creates the
 //!   one-shot [`PressAuthorization`] and moves to Tracking. `Stale` cancels the
 //!   press; `Unavailable` and `Failed` cancel it and enter HUD-degraded mode.
-//! * **Tracking** parks until the checked deadline (`down + holdDuration`; an
+//! * **Tracking** parks until the checked deadline (`down + hold_duration`; an
 //!   unrepresentable deadline is a cancellable indefinite wait). At the deadline
 //!   the worker drains the inbox and HUD events once, so a release or cancel
 //!   delivered at or before the deadline wins, then rechecks the live press,
@@ -39,8 +39,8 @@
 //!   by `step`, the frontmost activation listener's cancel, or a cancel found at
 //!   the deadline) the worker cancels and clears the authorization at once, then
 //!   calls `HudControl::freeze` and keeps one `Linger { press, until }` beside
-//!   `Idle` for `dismissDelay` (read from the armed configuration) before the
-//!   one `hide`. `dismissDelay` 0 hides at once with no freeze. While idle with a
+//!   `Idle` for `dismiss_delay` (read from the armed configuration) before the
+//!   one `hide`. `dismiss_delay` 0 hides at once with no freeze. While idle with a
 //!   linger the worker parks for the remaining linger only; with none it parks
 //!   with no timeout. A new claimed down takes the linger and, right after
 //!   enqueuing its show, hides the old press (FIFO main queue: a no-op when the
@@ -949,7 +949,7 @@ struct Active {
 /// A released press whose HUD stays visible, frozen, until `until`.
 ///
 /// The press is no longer live: it holds no authorization and can never issue.
-/// `until` is `None` when `now + dismissDelay` is unrepresentable; the linger
+/// `until` is `None` when `now + dismiss_delay` is unrepresentable; the linger
 /// then lasts until the next show, stop, revision change or degrade.
 struct Linger {
     press: u64,
@@ -961,7 +961,7 @@ struct Linger {
 enum Dismissal {
     /// Hide now.
     Immediate,
-    /// Freeze the bar and hide after `dismissDelay`.
+    /// Freeze the bar and hide after `dismiss_delay`.
     Linger,
 }
 

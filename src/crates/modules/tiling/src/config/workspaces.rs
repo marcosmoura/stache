@@ -10,7 +10,7 @@ use super::LayoutType;
 ///
 /// A rule with no field never matches anything.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Type)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default, rename_all = "snake_case")]
 pub struct WindowRule {
     /// Bundle identifier, matched case-insensitively and exactly.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -35,11 +35,11 @@ fn default_screen() -> String { "main".to_owned() }
 
 /// A workspace definition.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Type)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct WorkspaceConfig {
     /// Unique workspace name.
     pub name: String,
-    /// Layout; omitted uses `defaultLayout`.
+    /// Layout; omitted uses `default_layout`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<LayoutType>,
     /// Display: `main`/`primary`, `secondary` or a display name.
@@ -50,10 +50,6 @@ pub struct WorkspaceConfig {
     pub rules: Vec<WindowRule>,
     /// Floating preset applied when windows open here. Parsed and validated
     /// but inert: nothing reads it at runtime.
-    #[serde(
-        default,
-        rename = "preset-on-open",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset_on_open: Option<String>,
 }

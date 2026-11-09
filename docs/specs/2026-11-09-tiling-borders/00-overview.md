@@ -86,24 +86,23 @@ The [merge gate](../../workflow.md#merge-gate) blocks merging while any part is 
 
 ## Open questions
 
-- **OQ-A animation schema — approved 2026-11-09** as proposed, with the recommended defaults (a)–(e). The gradient angle keeps its documented convention (0 = left→right, 90 = bottom→top) drawn exactly; the visual change for 45/90/135 is accepted. Approved shape (additive; every existing configuration keeps its meaning):
+- **OQ-A animation schema — approved 2026-11-09** as proposed, with the recommended defaults (a)–(e). The gradient angle keeps its documented convention (0 = left→right, 90 = bottom→top) drawn exactly; the visual change for 45/90/135 is accepted. Approved shape (additive; every existing configuration keeps its meaning), shown in `tiling.toml` with the snake_case spelling every configuration key and enum value uses ([config](../../architecture/config.md#key-spelling)); the values were approved as `pingPong` and `easeOut` before the TOML switch:
 
-  ```jsonc
-  "borders": {
-    // New, optional. Focus color cross-fade (Hyprland `border`). Absent = instant, as today.
-    "transition": { "duration": 200, "easing": "easeOut" },
-    "focused": {
-      "width": 4,
-      "gradient": { "from": "#b4befe", "to": "#cba6f7", "angle": 45 },
-      // Existing object, one new optional field `style`.
-      // "pingPong" (default, legacy): colors swap, `duration` per leg.
-      // "once" | "loop" (Hyprland `borderangle`): the angle turns 360°, `duration` per turn.
-      "animation": { "style": "loop", "duration": 4000, "easing": "linear" }
-    }
-  }
+  ```toml
+  [borders]
+  # New, optional. Focus color cross-fade (Hyprland `border`). Absent = instant, as today.
+  transition = { duration = 200, easing = "ease_out" }
+  
+  [borders.focused]
+  width = 4
+  gradient = { from = "#b4befe", to = "#cba6f7", angle = 45 }
+  # Existing table, one new optional field `style`.
+  # "ping_pong" (default, legacy): colors swap, `duration` per leg.
+  # "once" | "loop" (Hyprland `borderangle`): the angle turns 360°, `duration` per turn.
+  animation = { style = "loop", duration = 4000, easing = "linear" }
   ```
 
-  Recommended defaults: (a) `style` absent = `pingPong`, so legacy configs animate exactly as today (focused window only); (b) `once`/`loop` apply to every bordered window whose active state carries them (Hyprland-like, so an animated `unfocused` gradient rotates too), not only the focused one; (c) rotation increases the angle (counterclockwise under the angle convention), no `direction` field; (d) `transition` absent = instant, `easing` default `easeOut`, `duration: 0` = instant; (e) border animations ignore `tiling.animations.enabled` and the system Reduce Motion setting, consistent with the [animation spec](../2026-11-09-tiling-animation/00-overview.md) OQ-5.
+  Recommended defaults: (a) `style` absent = `ping_pong`, so legacy configs animate exactly as today (focused window only); (b) `once`/`loop` apply to every bordered window whose active state carries them (Hyprland-like, so an animated `unfocused` gradient rotates too), not only the focused one; (c) rotation increases the angle (counterclockwise under the angle convention), no `direction` field; (d) `transition` absent = instant, `easing` default `ease_out`, `duration = 0` = instant; (e) border animations ignore `tiling.animations.enabled` and the system Reduce Motion setting, consistent with the [animation spec](../2026-11-09-tiling-animation/00-overview.md) OQ-5.
 
 - **OQ-B unattainable Space-switch guarantee.** If part 05's native check finds a scenario (most likely a trackpad Space swipe or a fullscreen transition started by the green button) where no available mechanism hides borders before the first transition frame, part 05 fails and stays open. Recommended: the user then chooses between another mechanism found in that run and an explicitly approved documented limit; nothing is accepted silently.
 

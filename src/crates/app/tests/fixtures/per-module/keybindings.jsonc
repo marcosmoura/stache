@@ -1,0 +1,10 @@
+{
+  "$schema": "https://raw.githubusercontent.com/marcosmoura/stache/main/schemas/keybindings.schema.json",
+  "enabled": true,
+  "bindings": {
+    "CapsLock+a": "stache tiling workspace --layout split-vertical",
+    "§": ["open -a Safari", "echo enabledApps"],
+    "cmd+shift+.": "stache reload",
+    "enabledApps": "echo shortcut-named-like-a-key",
+  },
+}

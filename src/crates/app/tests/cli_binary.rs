@@ -136,7 +136,7 @@ fn schema_is_piped_as_plain_json() {
 
     let output = workspace.run(&["schema", "proxyAudio"]);
     assert!(output.status.success(), "{}", stderr(&output));
-    assert!(stdout(&output).contains("dependsOn"));
+    assert!(stdout(&output).contains("depends_on"));
 
     let output = workspace.run(&["schema", "keepAwake"]);
     assert!(output.status.success(), "{}", stderr(&output));
@@ -172,7 +172,7 @@ fn schema_is_piped_as_plain_json() {
             .is_some_and(|id| id.ends_with("/schemas/menuAnywhere.schema.json"))
     );
     assert_eq!(value["properties"]["enabled"]["default"], false);
-    assert_eq!(value["properties"]["mouseButton"]["default"], "rightClick");
+    assert_eq!(value["properties"]["mouse_button"]["default"], "right_click");
     assert_eq!(
         value["properties"]["modifiers"]["default"],
         serde_json::json!(["control", "command"])
@@ -188,8 +188,8 @@ fn schema_is_piped_as_plain_json() {
     assert!(output.status.success(), "{}", stderr(&output));
     let body = stdout(&output);
     let value: serde_json::Value = serde_json::from_str(&body).expect("notunes schema JSON");
-    let target = &value["properties"]["targetApp"];
-    let types = target["type"].as_array().expect("targetApp has explicit types");
+    let target = &value["properties"]["target_app"];
+    let types = target["type"].as_array().expect("target_app has explicit types");
     assert!(types.iter().any(|kind| kind == "string"), "{types:?}");
     assert!(value.get("$defs").is_none(), "{body}");
     for preset in ["tidal", "spotify", "feishin", "none"] {
@@ -345,12 +345,12 @@ fn config_path_uses_the_explicit_directory() {
     assert!(output.status.success(), "{}", stderr(&output));
     let body = stdout(&output);
     assert!(body.starts_with(&format!("{}\n", directory.display())), "{body}");
-    assert!(body.contains("  global.jsonc\n"), "{body}");
-    assert!(body.contains("  keepAwake.jsonc\n"), "{body}");
-    assert!(body.contains("  keybindings.jsonc\n"), "{body}");
-    assert!(body.contains("  menuAnywhere.jsonc\n"), "{body}");
-    assert!(body.contains("  notunes.jsonc\n"), "{body}");
-    assert!(body.contains("  proxyAudio.jsonc\n"), "{body}");
+    assert!(body.contains("  global.toml\n"), "{body}");
+    assert!(body.contains("  keepAwake.toml\n"), "{body}");
+    assert!(body.contains("  keybindings.toml\n"), "{body}");
+    assert!(body.contains("  menuAnywhere.toml\n"), "{body}");
+    assert!(body.contains("  notunes.toml\n"), "{body}");
+    assert!(body.contains("  proxyAudio.toml\n"), "{body}");
     assert_no_desktop(&workspace);
 }
 
@@ -360,35 +360,30 @@ fn config_init_writes_the_registered_templates() {
     let directory = workspace.home().join("init-config");
     let output = workspace.run(&["config", "init", "-p", directory.to_str().expect("utf-8")]);
     assert!(output.status.success(), "{}", stderr(&output));
-    assert!(directory.join("global.jsonc").exists());
-    assert!(directory.join("proxyAudio.jsonc").exists());
+    assert!(directory.join("global.toml").exists());
+    assert!(directory.join("proxyAudio.toml").exists());
     let command_quit =
-        std::fs::read_to_string(directory.join("commandQuit.jsonc")).expect("commandQuit");
-    assert!(command_quit.contains("\"enabled\": false"), "{command_quit}");
-    assert!(command_quit.contains("\"holdDuration\": 1500"), "{command_quit}");
-    assert!(command_quit.contains("\"dismissDelay\": 1500"), "{command_quit}");
-    assert!(
-        command_quit.contains("\"position\": \"bottom\""),
-        "{command_quit}"
-    );
-    assert!(
-        command_quit.contains("\"animation\": \"fade\""),
-        "{command_quit}"
-    );
-    let keep_awake = std::fs::read_to_string(directory.join("keepAwake.jsonc")).expect("keepAwake");
-    assert!(keep_awake.contains("\"enabled\": false"), "{keep_awake}");
+        std::fs::read_to_string(directory.join("commandQuit.toml")).expect("commandQuit");
+    assert!(command_quit.starts_with("#:schema "), "{command_quit}");
+    assert!(command_quit.contains("enabled = false"), "{command_quit}");
+    assert!(command_quit.contains("hold_duration = 1500"), "{command_quit}");
+    assert!(command_quit.contains("dismiss_delay = 1500"), "{command_quit}");
+    assert!(command_quit.contains("position = \"bottom\""), "{command_quit}");
+    assert!(command_quit.contains("animation = \"fade\""), "{command_quit}");
+    let keep_awake = std::fs::read_to_string(directory.join("keepAwake.toml")).expect("keepAwake");
+    assert!(keep_awake.contains("enabled = false"), "{keep_awake}");
     assert!(!keep_awake.contains("duration"), "{keep_awake}");
     let keybindings =
-        std::fs::read_to_string(directory.join("keybindings.jsonc")).expect("keybindings");
-    assert!(keybindings.contains("\"enabled\": false"), "{keybindings}");
-    assert!(keybindings.contains("\"bindings\": {}"), "{keybindings}");
+        std::fs::read_to_string(directory.join("keybindings.toml")).expect("keybindings");
+    assert!(keybindings.contains("enabled = false"), "{keybindings}");
+    assert!(keybindings.contains("bindings = {}"), "{keybindings}");
     let menu_anywhere =
-        std::fs::read_to_string(directory.join("menuAnywhere.jsonc")).expect("menuAnywhere");
-    assert!(menu_anywhere.contains("\"enabled\": false"), "{menu_anywhere}");
+        std::fs::read_to_string(directory.join("menuAnywhere.toml")).expect("menuAnywhere");
+    assert!(menu_anywhere.contains("enabled = false"), "{menu_anywhere}");
     assert!(menu_anywhere.contains("system-wide"), "{menu_anywhere}");
-    let notunes = std::fs::read_to_string(directory.join("notunes.jsonc")).expect("notunes");
-    assert!(notunes.contains("\"enabled\": false"), "{notunes}");
-    assert!(!notunes.contains("targetApp"), "{notunes}");
+    let notunes = std::fs::read_to_string(directory.join("notunes.toml")).expect("notunes");
+    assert!(notunes.contains("enabled = false"), "{notunes}");
+    assert!(!notunes.contains("target_app"), "{notunes}");
     assert_no_desktop(&workspace);
 }
 
@@ -526,7 +521,7 @@ fn wallpaper_list_and_generate_all_are_local_and_report_empty_pools() {
 
     let config = workspace.home().join("cfg");
     fs::create_dir_all(&config).expect("config");
-    fs::write(config.join("wallpapers.jsonc"), "{ nope").expect("malformed");
+    fs::write(config.join("wallpapers.toml"), "nope =").expect("malformed");
     let output = workspace.run(&["-c", config.to_str().expect("utf-8"), "wallpaper", "list"]);
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(stdout(&output), "");

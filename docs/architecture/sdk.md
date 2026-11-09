@@ -808,7 +808,7 @@ original arguments (see [ipc.md](ipc.md)).
 
 - **Inherited** (`run_sequence`): waits for each step in order and stops at the first
   parse, resolution, spawn, wait or nonzero-exit failure, reported as a typed
-  `StepFailure`. There is no duration deadline. `execOnStartup` uses it through the
+  `StepFailure`. There is no duration deadline. `exec_on_startup` uses it through the
   app's `ProcessCommands` adapter, which keeps the established `startup command N: ...`
   wording and treats cancellation as success.
 - **Captured** (`run_captured`): a caller deadline and separate stdout/stderr caps

@@ -101,10 +101,10 @@ fn host_path_diagnostics_go_to_stderr_without_changing_path_markers() {
     let _server = server(&environment, empty_reload(), CoreStatus {
         directory: directory.clone(),
         files: vec![CoreFileStatus {
-            file: "global.jsonc".to_owned(),
+            file: "global.toml".to_owned(),
             state: CoreFileState::Valid,
             active: false,
-            diagnostic: Some("global.jsonc: rejected by host".to_owned()),
+            diagnostic: Some("global.toml: rejected by host".to_owned()),
             warnings: Vec::new(),
         }],
         access: None,
@@ -119,9 +119,9 @@ fn host_path_diagnostics_go_to_stderr_without_changing_path_markers() {
     assert_eq!(code, ExitCode::SUCCESS);
     assert_eq!(
         out,
-        format!("{}\n  global.jsonc (exists, offline)\n", directory.display())
+        format!("{}\n  global.toml (exists, offline)\n", directory.display())
     );
-    assert_eq!(err, "stache: global.jsonc: rejected by host\n");
+    assert_eq!(err, "stache: global.toml: rejected by host\n");
 }
 
 #[test]
@@ -274,14 +274,14 @@ fn a_rejected_file_is_reported_and_exits_one() {
     let reload = CoreReload {
         files: vec![
             CoreFileOutcome {
-                file: "global.jsonc".to_owned(),
+                file: "global.toml".to_owned(),
                 outcome: CoreApplyOutcome::Applied { revision: 2 },
                 diagnostic: None,
             },
             CoreFileOutcome {
-                file: "proxyAudio.jsonc".to_owned(),
+                file: "proxyAudio.toml".to_owned(),
                 outcome: CoreApplyOutcome::Rejected,
-                diagnostic: Some("/config/proxyAudio.jsonc: unknown variant `fuzzy`".to_owned()),
+                diagnostic: Some("/config/proxyAudio.toml: unknown variant `fuzzy`".to_owned()),
             },
         ],
         access: None,
@@ -297,7 +297,7 @@ fn a_rejected_file_is_reported_and_exits_one() {
     assert_eq!(code, ExitCode::FAILURE);
     assert!(out.is_empty());
     assert!(
-        err.contains("stache: /config/proxyAudio.jsonc: unknown variant `fuzzy`"),
+        err.contains("stache: /config/proxyAudio.toml: unknown variant `fuzzy`"),
         "{err}"
     );
 }
@@ -308,19 +308,19 @@ fn config_path_reports_active_files_from_a_reachable_host() {
     let environment = environment(root.path());
     let directory = root.path().join(".config").join("stache");
     std::fs::create_dir_all(&directory).expect("config dir");
-    std::fs::write(directory.join("global.jsonc"), "{}").expect("global");
+    std::fs::write(directory.join("global.toml"), "# defaults\n").expect("global");
     let status = CoreStatus {
         directory: directory.clone(),
         files: vec![
             CoreFileStatus {
-                file: "global.jsonc".to_owned(),
+                file: "global.toml".to_owned(),
                 state: CoreFileState::Valid,
                 active: true,
                 diagnostic: None,
                 warnings: Vec::new(),
             },
             CoreFileStatus {
-                file: "proxyAudio.jsonc".to_owned(),
+                file: "proxyAudio.toml".to_owned(),
                 state: CoreFileState::Missing,
                 active: false,
                 diagnostic: None,
@@ -339,8 +339,8 @@ fn config_path_reports_active_files_from_a_reachable_host() {
     );
     assert_eq!(code, ExitCode::SUCCESS, "{err}");
     assert!(out.starts_with(&format!("{}\n", directory.display())), "{out}");
-    assert!(out.contains("  global.jsonc (exists, active)\n"), "{out}");
-    assert!(out.contains("  proxyAudio.jsonc\n"), "{out}");
+    assert!(out.contains("  global.toml (exists, active)\n"), "{out}");
+    assert!(out.contains("  proxyAudio.toml\n"), "{out}");
 }
 
 #[test]
@@ -349,7 +349,7 @@ fn config_path_falls_back_to_offline_without_a_host() {
     let environment = environment(root.path());
     let directory = root.path().join(".config").join("stache");
     std::fs::create_dir_all(&directory).expect("config dir");
-    std::fs::write(directory.join("global.jsonc"), "{}").expect("global");
+    std::fs::write(directory.join("global.toml"), "# defaults\n").expect("global");
     let (code, out, err) = run(
         &["stache", "config", "path"],
         &config_catalog(),
@@ -358,7 +358,7 @@ fn config_path_falls_back_to_offline_without_a_host() {
         false,
     );
     assert_eq!(code, ExitCode::SUCCESS, "{err}");
-    assert!(out.contains("  global.jsonc (exists, offline)\n"), "{out}");
+    assert!(out.contains("  global.toml (exists, offline)\n"), "{out}");
 }
 
 #[test]
@@ -505,9 +505,9 @@ const fn waiting(state: CoreAccessState) -> CoreAccess { CoreAccess { state, rev
 
 fn rejected_file() -> CoreFileOutcome {
     CoreFileOutcome {
-        file: "proxyAudio.jsonc".to_owned(),
+        file: "proxyAudio.toml".to_owned(),
         outcome: CoreApplyOutcome::Rejected,
-        diagnostic: Some("/config/proxyAudio.jsonc: bad value".to_owned()),
+        diagnostic: Some("/config/proxyAudio.toml: bad value".to_owned()),
     }
 }
 
@@ -559,7 +559,7 @@ fn a_rejected_file_with_a_blocked_gate_exits_one_and_prints_both_diagnostics_fir
     assert!(out.is_empty());
     assert_eq!(
         err,
-        format!("stache: /config/proxyAudio.jsonc: bad value\n{NOTICE}")
+        format!("stache: /config/proxyAudio.toml: bad value\n{NOTICE}")
     );
 }
 
@@ -571,10 +571,10 @@ fn config_path_prints_the_notice_after_the_host_diagnostics() {
     let status = CoreStatus {
         directory: directory.clone(),
         files: vec![CoreFileStatus {
-            file: "global.jsonc".to_owned(),
+            file: "global.toml".to_owned(),
             state: CoreFileState::Valid,
             active: false,
-            diagnostic: Some("global.jsonc: rejected by host".to_owned()),
+            diagnostic: Some("global.toml: rejected by host".to_owned()),
             warnings: Vec::new(),
         }],
         access: Some(waiting(CoreAccessState::Blocked)),
@@ -590,7 +590,7 @@ fn config_path_prints_the_notice_after_the_host_diagnostics() {
     assert_eq!(code, ExitCode::SUCCESS);
     assert_eq!(
         out,
-        format!("{}\n  global.jsonc (exists, offline)\n", directory.display())
+        format!("{}\n  global.toml (exists, offline)\n", directory.display())
     );
-    assert_eq!(err, format!("stache: global.jsonc: rejected by host\n{NOTICE}"));
+    assert_eq!(err, format!("stache: global.toml: rejected by host\n{NOTICE}"));
 }

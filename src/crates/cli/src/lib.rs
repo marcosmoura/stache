@@ -297,7 +297,7 @@ mod tests {
             &catalog(),
         );
         assert_eq!(code, ExitCode::SUCCESS, "{err}");
-        assert!(explicit.join("global.jsonc").exists());
+        assert!(explicit.join("global.toml").exists());
         assert!(!global.exists());
     }
 }

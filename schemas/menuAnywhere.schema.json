@@ -21,10 +21,10 @@
         "$ref": "#/$defs/MenuAnywhereModifier"
       }
     },
-    "mouseButton": {
-      "description": "The mouse button that summons the menu: \"rightClick\" or \"middleClick\".\n\"middleClick\" means button number 2 only, not back or forward buttons.",
+    "mouse_button": {
+      "description": "The mouse button that summons the menu: `right_click` or `middle_click`.\n`middle_click` means button number 2 only, not back or forward buttons.",
       "$ref": "#/$defs/MenuAnywhereMouseButton",
-      "default": "rightClick"
+      "default": "right_click"
     }
   },
   "$defs": {
@@ -59,12 +59,12 @@
         {
           "description": "The secondary (right) button.",
           "type": "string",
-          "const": "rightClick"
+          "const": "right_click"
         },
         {
           "description": "The middle button, button number 2 only. Other extra buttons such as\nback and forward never match.",
           "type": "string",
-          "const": "middleClick"
+          "const": "middle_click"
         }
       ]
     }

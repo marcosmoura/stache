@@ -63,7 +63,8 @@ actual DMG checksum. Never publish this test cask or expose a public prerelease.
 
 - `Stache Next` and legacy `Stache` may both be installed and running, since their identifiers, cache and
   runtime directories differ. Their configuration directory is shared, and their files differ:
-  legacy reads `config.jsonc`, Stache Next reads `global.jsonc` and per-module files.
+  legacy reads `config.jsonc`, Stache Next reads `global.toml` and per-module `<id>.toml` files
+  (see [config](../../architecture/config.md)); neither reads the other's files.
 - Do not enable the same device-changing automation in both: `proxyAudio` and `notunes` would fight.
 - **Do not install the renamed release alongside legacy.** They share an identifier, which is the
   state Part 04 refuses.
@@ -91,8 +92,13 @@ never by process name; no public `.next` release is needed. In order:
    installs the chosen CLI route, or a DMG/zip user creates the documented link or copies the separate
    CLI. Confirm `which -a stache` resolves this released route, not a leftover Cargo binary.
 7. Before launching the new host, run `stache config migrate` through that released CLI route.
-   Resolve collisions explicitly; do not overwrite existing config automatically. Launch the new app
+   It writes per-module `<id>.toml` files and leaves `config.jsonc` unchanged. Resolve collisions
+   explicitly; do not overwrite existing config automatically. Launch the new app
    and verify its behavior. Keep the backup and original `config.jsonc` until confident.
+   If the same directory also holds per-module `<id>.jsonc` files (left by a Stache Next
+   development build), plain `stache config migrate` converts those instead and only notes the
+   legacy file. In that case run `stache config migrate --from <path to config.jsonc>` (add
+   `--force` only after checking which `.toml` files it would replace).
 8. Optional, with the new app quit: clean leftover legacy cache and `stache.sock` at
    `~/Library/Caches/com.marcosmoura.stache`. This is now also the release cache path; never delete
    it while the release runs. Optionally remove the self-signed `Stache App` certificate and reset
@@ -108,12 +114,17 @@ a not-yet-published release or the legacy Cargo CLI to perform migration before 
 
 ### Config migration
 
-- `stache config migrate` remains explicit. It converts a legacy file into per-module files, leaves the
-  source unchanged, and refuses collisions without `--force`. Discovery follows
+- `stache config migrate` remains explicit. It converts a legacy file into per-module `<id>.toml` files, leaves
+  the source unchanged, and refuses collisions without `--force`. Discovery follows
   `ConfigPaths::legacy_sources`.
-- **Allowed diagnostic.** When a legacy source exists and `global.jsonc` does not, `config path` and the
+- **Allowed diagnostic.** When a legacy source exists and `global.toml` does not, `config path` and the
   host startup log print one line naming the source and `stache config migrate`. Detection uses paths
   only. It does not parse, copy or rewrite, and it prompts nothing.
+  It is separate from the shipped stale-`<id>.jsonc` hint
+  ([config](../../architecture/config.md#path-command-markers)), which stays as it is, but uses the
+  same `note: … run \`stache config migrate\``line format. When per-module`<id>.jsonc`files are
+  also present, it names`stache config migrate --from <source>` instead, because plain migrate
+  would pick the per-module files.
 
 ### CLI access
 
@@ -162,7 +173,7 @@ it is a rehearsal tool, not the public migration route.
       Test: `scripts/release.test.ts`, including isolation of the test-only overrides.
 - [ ] `RELEASE-05-02` The rendered cask has no `quit:`, `KILL`, `terminate_process`, `auto_updates`,
       flight block or config path in `zap`. Test: `scripts/release.test.ts`.
-- [ ] `RELEASE-05-03` The diagnostic appears when a legacy source exists and `global.jsonc` does not, is
+- [ ] `RELEASE-05-03` The diagnostic appears when a legacy source exists and `global.toml` does not, is
       absent otherwise, and leaves the source and directory byte-identical. Test: `cli/tests/commands.rs`,
       with temporary roots.
 - [ ] `RELEASE-05-04` The desktop startup path emits that line without reading the source. Test: app test

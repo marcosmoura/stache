@@ -5,11 +5,11 @@
 //!
 //! - A rule matches when **every** specified criterion matches (AND). A rule
 //!   with no criterion never matches.
-//! - `appId` is an exact, case-insensitive comparison of the bundle id.
-//! - `appName` and `title` are case-insensitive **substring** tests.
+//! - `app_id` is an exact, case-insensitive comparison of the bundle id.
+//! - `app_name` and `title` are case-insensitive **substring** tests.
 //! - Case-insensitivity is Unicode-aware: both sides go through
 //!   [`str::to_lowercase`] (full Unicode lowercase mapping). Legacy used ASCII
-//!   folding for `appId` only on one of its two code paths; the single
+//!   folding for `app_id` only on one of its two code paths; the single
 //!   Unicode-aware rule here removes that divergence. A window value that is
 //!   missing is the empty string, so it only satisfies a criterion that is
 //!   itself empty (an empty substring is contained in everything).

@@ -1,0 +1,7 @@
+// Hand-written in the spellings that preceded the snake_case switch: the
+// per-module files of the previous release. Used only by the migration tests.
+{
+  "$schema": "https://raw.githubusercontent.com/marcosmoura/stache/main/schemas/global.schema.json",
+  "execOnStartup": ["open -a Terminal", "echo camelCase-stays-here"],
+  "logging": { "level": "debug", "debug": true },
+}

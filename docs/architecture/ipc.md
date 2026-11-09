@@ -62,7 +62,7 @@ Built-ins are `config init|path|migrate`, `cache clear|path`, `reload`,
 
 The desktop claims the Next identity's `runtime/instance.lock` before creating
 the tray; a second launch exits successfully without a registry, watcher,
-listener, webview or `execOnStartup`. After the tray exists, the background host
+listener, webview or `exec_on_startup`. After the tray exists, the background host
 starts modules and then `IpcServer` with `ConfigCore` over the one
 `ConfigStore`. The server is owned by the host, not by a Tauri plugin.
 
@@ -444,8 +444,9 @@ stache tiling workspace [--focus NAME] [--layout LAYOUT] [--balance] [--send-to-
 ```
 
 `-j`/`-d` are global within `query`. `query` alone prints the query help and a
-blank line and exits 0. Swap and `--layout` are exact lowercase enums, so an
-invalid value exits 2; focus is a free string and resize dimension/amount are
+blank line and exits 0. Swap and `--layout` are exact enums (`--layout` is snake_case, with
+`split-vertical`/`split-horizontal` accepted as CLI-only aliases; the socket
+accepts snake_case only), so an invalid value exits 2; focus is a free string and resize dimension/amount are
 validated semantically by the host (exit 1).
 
 | Situation                                                 | Stream | Exit | Body                                                                                          |

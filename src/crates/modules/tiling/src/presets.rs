@@ -7,7 +7,7 @@
 //!
 //! - Initial adoption is not a new-window event and never positions.
 //! - A new floating window (including any new window in a Floating layout) and
-//!   an explicit tiled-to-user-floating toggle get `floating.defaultPosition`
+//!   an explicit tiled-to-user-floating toggle get `floating.default_position`
 //!   **once**. `center` keeps the observed size and centres on the owning
 //!   display; `default` leaves the frame alone.
 //! - An explicit preset in a Floating workspace outranks that default. Outside a
@@ -16,7 +16,7 @@
 //!   individually floating window.
 //! - Grid overflow is exempt from automatic positioning.
 //! - Layout change, reload, focus, refresh and reconcile never reposition.
-//! - `preset-on-open` is parsed configuration only. No function in this crate
+//! - `preset_on_open` is parsed configuration only. No function in this crate
 //!   consumes it.
 
 use crate::config::{DimensionValue, FloatingPosition, FloatingPreset, LayoutType};
@@ -258,7 +258,7 @@ pub enum PositionNoOp {
 pub enum PositionDecision {
     /// Centre on the owning display, preserving the observed size.
     Center,
-    /// Leave the application's frame (`defaultPosition = default`).
+    /// Leave the application's frame (`default_position = default`).
     KeepFrame,
     /// Do nothing, with the reason.
     NoOp(PositionNoOp),

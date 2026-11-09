@@ -2,7 +2,7 @@
 
 Read when configuring, running or debugging global shortcuts, Caps Lock chords or `§` shortcuts in Stache Next.
 
-**Behavior.** With `keybindings.jsonc` `enabled: true`, each valid binding becomes a global shortcut
+**Behavior.** With `keybindings.toml` `enabled = true`, each valid binding becomes a global shortcut
 that runs its commands. Nothing is registered, subscribed or spawned until the module starts:
 registration, a disabled file and a pause create no hotkey, tap, remap or worker, and an intentionally
 empty `bindings` map is valid and inactive. Commands run directly (no shell) through the shared
@@ -80,8 +80,8 @@ Invalid entries are skipped with a per-binding diagnostic. Commands are trimmed 
 ones dropped; an empty list captures without spawning. Section entries carry the
 configured modifiers and wait for native layout resolution.
 
-`keybindings.jsonc` is registered (`stache config init`, `stache schema keybindings`)
-with `enabled: false` and `bindings: {}` by default. Values map a shortcut to a string or
+`keybindings.toml` is registered (`stache config init`, `stache schema keybindings`)
+with `enabled = false` and `bindings: {}` by default. Values map a shortcut to a string or
 an ordered string array; a malformed shortcut spelling is not a file rejection.
 `config migrate` wraps the legacy `keybindings` map as `bindings` and enables the file
 only when the map is nonempty; shortcut keys are written in lexical order and each

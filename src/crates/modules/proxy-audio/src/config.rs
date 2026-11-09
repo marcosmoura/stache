@@ -11,7 +11,7 @@ use stache_sdk::{ConfigError, ModuleConfig, ModuleId};
 
 /// Strategy used to match a device name.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Type)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub enum MatchStrategy {
     /// Case-insensitive exact match. This is the default.
     #[default]
@@ -26,7 +26,7 @@ pub enum MatchStrategy {
 
 /// A device that must be present for a priority entry to be considered.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Type)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default, rename_all = "snake_case")]
 pub struct AudioDeviceDependency {
     /// The name or pattern of the required device.
     pub name: String,
@@ -37,7 +37,7 @@ pub struct AudioDeviceDependency {
 
 /// One entry in an input or output priority list.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Type)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default, rename_all = "snake_case")]
 pub struct AudioDevicePriority {
     /// The device name or pattern to match.
     pub name: String,
@@ -51,7 +51,7 @@ pub struct AudioDevicePriority {
 
 /// Automatic audio-device selection.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Type)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default, rename_all = "snake_case")]
 pub struct ProxyAudioConfig {
     /// Whether the module should run.
     pub enabled: bool,
@@ -79,7 +79,7 @@ impl ModuleConfig for ProxyAudioConfig {
                     validate_name(
                         direction,
                         index,
-                        "dependsOn.name",
+                        "depends_on.name",
                         &dependency.name,
                         dependency.strategy,
                     )?;
@@ -144,8 +144,8 @@ mod tests {
             "enabled": true,
             "output": [{
                 "name": "External Speakers",
-                "strategy": "startsWith",
-                "dependsOn": { "name": "MiniFuse", "strategy": "contains" }
+                "strategy": "starts_with",
+                "depends_on": { "name": "MiniFuse", "strategy": "contains" }
             }]
         }))
         .expect("decode");
@@ -161,7 +161,7 @@ mod tests {
     fn match_strategy_spellings_are_camel_case() {
         assert_eq!(
             serde_json::to_string(&MatchStrategy::StartsWith).expect("serialize"),
-            "\"startsWith\""
+            "\"starts_with\""
         );
         assert_eq!(
             serde_json::to_string(&MatchStrategy::Regex).expect("serialize"),

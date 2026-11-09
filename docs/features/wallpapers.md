@@ -1,6 +1,6 @@
 # Wallpapers (configuration, sources, pipeline, runtime, host IPC and CLI shipped)
 
-Read when changing `wallpapers.jsonc`, wallpaper source resolution, the
+Read when changing `wallpapers.toml`, wallpaper source resolution, the
 processing/cache/apply library, the rotation coordinator, the typed set handler
 or its production factory, migration of the legacy wallpaper section or the
 accepted-configuration SDK watch, or the `stache wallpaper` commands. The
@@ -16,7 +16,7 @@ sources, processing, runtime, host IPC and CLI behavior.
 ## Shipped
 
 - `stache-wallpapers` at `src/crates/modules/wallpapers` owns the authoritative
-  `WallpapersConfig` type (catalog ID and file `wallpapers` / `wallpapers.jsonc`),
+  `WallpapersConfig` type (catalog ID and file `wallpapers` / `wallpapers.toml`),
   `WallpaperMode`, the schema, the commented template and the migration hook.
 - The app catalog, generated schema and Specta bindings include the type and the
   `wallpapers.set` request, selection, screen, outcome, cause and per-target
@@ -287,7 +287,7 @@ automated test models this ordering with fakes.
 
 The standalone path does not use `WallpapersService`: its coordinator dispatches
 native work to the main queue, which nothing drains in a CLI process. It runs on
-the process main thread: read the current `wallpapers.jsonc` (missing file means
+the process main thread: read the current `wallpapers.toml` (missing file means
 defaults, a malformed one is an error), resolve the source, take one guarded
 snapshot, range-check the screen, `prepare_plan` (processing workers join on
 main) and `Prepared::apply_guarded` through `NativeDesktop` over `MainThread`,
@@ -329,7 +329,7 @@ operation order. The adapters render typed data only; nothing parses them.
 | Condition                                       | Body                                                                                                                                                             |
 | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Different config                                | `Running host uses config directory {host}; requested {selected}. Use the same config directory or stop that host.`                                              |
-| No accepted config                              | `No accepted Wallpapers configuration is available. Fix wallpapers.jsonc and reload, then retry.`                                                                |
+| No accepted config                              | `No accepted Wallpapers configuration is available. Fix wallpapers.toml and reload, then retry.`                                                                 |
 | Queue full                                      | `Wallpaper queue is full; no native change was issued. Retry after current operations finish.`                                                                   |
 | Deadline before native issuance                 | `Wallpaper deadline expired before native application; no native change was issued. Retry when ready.`                                                           |
 | Cancelled before native issuance                | `Wallpaper operation cancelled before native application; no native change was issued.`                                                                          |
@@ -474,21 +474,19 @@ Further real desktop changes or restoration require explicit each-run approval.
 
 ## Configuration
 
-```jsonc
-{
-  "$schema": "https://raw.githubusercontent.com/marcosmoura/stache/main/schemas/wallpapers.schema.json",
-  "enabled": false,
-  "path": "",
-  "list": [],
-  "interval": 0,
-  "mode": "random",
-  "radius": 0,
-  "blur": 0,
-}
+```toml
+#:schema https://raw.githubusercontent.com/marcosmoura/stache/main/schemas/wallpapers.schema.json
+enabled = false
+path = ""
+list = []
+interval = 0
+mode = "random"
+radius = 0
+blur = 0
 ```
 
-Defaults stay disabled with no sources. `interval` is seconds and `radius`/`blur`
-are `u32` pixels; `mode` is `random` or `sequential`. Unknown keys are warnings,
+Defaults stay disabled with no sources. `interval` is seconds (0 to 9223372036854775807, the
+largest TOML integer) and `radius`/`blur` are `u32` pixels; `mode` is `random` or `sequential`. Unknown keys are warnings,
 never rejections. An empty source list is valid configuration.
 
 `validate` is structural only: it rejects a NUL byte in `path` or a list entry
@@ -504,7 +502,7 @@ The shared resolver implements these rules; runtime and CLI parts reuse it.
   a whitespace-only `path`, is an error and never falls back to the list.
 - Configuration strings for `path` and each `list` entry are trimmed. `~` and
   `~/…` expand from the injected home directory; absolute paths stay absolute;
-  any other path resolves under the directory containing `wallpapers.jsonc`,
+  any other path resolves under the directory containing `wallpapers.toml`,
   never the process working directory. No shell or environment expansion runs.
 - A directory listing is nonrecursive, regular files only, with
   case-insensitive `jpg`, `jpeg`, `png` and `webp` extensions. It is naturally

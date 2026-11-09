@@ -2,10 +2,10 @@
   "$id": "https://raw.githubusercontent.com/marcosmoura/stache/main/schemas/global.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "GlobalConfig",
-  "description": "The global configuration shared by every module.\n\nThe registry never hosts this type as a module; it is a catalog entry whose\nfile name is `global.jsonc`. `enabled` exists only to satisfy\n[`ModuleConfig`] and is always `true`.",
+  "description": "The global configuration shared by every module.\n\nThe registry never hosts this type as a module; it is a catalog entry whose\nfile name is `global.toml`. `enabled` exists only to satisfy\n[`ModuleConfig`] and is always `true`.",
   "type": "object",
   "properties": {
-    "execOnStartup": {
+    "exec_on_startup": {
       "description": "Commands to execute once per desktop launch.",
       "$ref": "#/$defs/StartupCommands",
       "default": []
@@ -46,7 +46,7 @@
       ]
     },
     "LoggingConfig": {
-      "description": "Logging behavior selected by `global.jsonc`.",
+      "description": "Logging behavior selected by `global.toml`.",
       "type": "object",
       "properties": {
         "debug": {

@@ -755,7 +755,7 @@ mod tests {
         let (_root, registry, store) = store_setup();
         fs::write(
             store.paths().module_file(CONFIG),
-            format!("{{ \"enabled\": true, \"value\": {} }}", u32::MAX),
+            format!("enabled = true\nvalue = {}\n", u32::MAX),
         )
         .expect("config");
         let initial: Initial<TestConfig> = store.initial(CONFIG).expect("initial");
@@ -1308,7 +1308,7 @@ mod tests {
         use std::fs;
 
         let (_root, registry, store) = store_setup();
-        fs::write(store.paths().module_file(CONFIG), "{ \"value\": ").expect("malformed");
+        fs::write(store.paths().module_file(CONFIG), "value = ").expect("malformed");
         let initial: Initial<TestConfig> = store.initial(CONFIG).expect("initial");
         let Initial::Invalid(diagnostic) = initial else {
             panic!("expected an invalid initial file");
@@ -1325,11 +1325,8 @@ mod tests {
         let watch = registry.accepted_watch(handle).expect("watch");
         assert!(watch.read().is_none());
 
-        fs::write(
-            store.paths().module_file(CONFIG),
-            "{ \"enabled\": true, \"value\": 2 }",
-        )
-        .expect("valid file");
+        fs::write(store.paths().module_file(CONFIG), "enabled = true\nvalue = 2\n")
+            .expect("valid file");
         assert_eq!(
             store.reload_one(CONFIG).expect("reload"),
             crate::ReloadOutcome::Applied { revision: 1 }
@@ -1344,11 +1341,8 @@ mod tests {
         use std::fs;
 
         let (root, registry, store) = store_setup();
-        fs::write(
-            store.paths().module_file(CONFIG),
-            "{ \"enabled\": false, \"value\": 1 }",
-        )
-        .expect("config");
+        fs::write(store.paths().module_file(CONFIG), "enabled = false\nvalue = 1\n")
+            .expect("config");
         let initial: Initial<TestConfig> = store.initial(CONFIG).expect("initial");
         let Initial::Loaded(config) = initial else {
             panic!("expected a loaded config");

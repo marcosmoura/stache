@@ -7,6 +7,7 @@
 //! separate from the registry status.
 
 pub mod accepted;
+pub mod bounds;
 pub mod catalog;
 pub mod diagnostics;
 pub mod edit;
@@ -23,7 +24,7 @@ pub use catalog::{CatalogError, ConfigCatalog, DecodedConfig};
 pub use diagnostics::{ConfigDiagnostic, ConfigFileId, DiagnosticKind, SourceLocation};
 pub use edit::{ConfigEdit, ConfigEditError, set_enabled};
 pub use global::{GlobalConfig, LoggingConfig, StartupCommands};
-pub use paths::{ConfigEnvironment, ConfigPaths, PathError};
+pub use paths::{ConfigEnvironment, ConfigPaths, PathError, stale_jsonc_hint};
 pub use store::{
     ConfigStore, ConfigStoreError, FileOutcome, Initial, PathEntry, PathReport, PathState,
     ReloadOutcome, inspect_paths,

@@ -1,7 +1,7 @@
 //! `MenuAnywhere` configuration and runtime.
 //!
 //! [`MenuAnywhereConfig`] is the single authoritative source for
-//! `menuAnywhere.jsonc`, schema, template and migration. [`MenuAnywhereRuntime`]
+//! `menuAnywhere.toml`, schema, template and migration. [`MenuAnywhereRuntime`]
 //! is the host-lifetime service: an enabled [`MenuAnywhereModule`] subscribes one
 //! suppressing handler to the shared input service for the configured button and
 //! exact modifier set, then reads the frontmost application's menu bar through

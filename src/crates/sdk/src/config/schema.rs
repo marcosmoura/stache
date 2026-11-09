@@ -1,8 +1,8 @@
 //! Per-file JSON Schemas generated from the registered Rust types.
 //!
 //! Schemas are committed under `schemas/` by the `generate-schema` binary. The
-//! `$id` matches the file's public URL, so a `$schema` key in a configuration
-//! file points at the authoritative schema for that exact file.
+//! `$id` matches the file's public URL, so the `#:schema` first line of a
+//! configuration file points editors at the authoritative schema for that file.
 
 use schemars::Schema;
 
@@ -11,17 +11,14 @@ use crate::config::diagnostics::ConfigFileId;
 /// Directory of the committed schemas in the repository.
 pub const SCHEMA_DIRECTORY: &str = "schemas";
 
-/// Base URL used by committed schema `$id`s and generated `$schema` keys.
+/// Base URL used by committed schema `$id`s and generated `#:schema` lines.
 pub const SCHEMA_BASE_URL: &str =
     "https://raw.githubusercontent.com/marcosmoura/stache/main/schemas";
 
 /// The public URL of one file's schema.
 #[must_use]
 pub fn schema_url(file: ConfigFileId) -> String {
-    format!(
-        "{SCHEMA_BASE_URL}/{}.schema.json",
-        file.file_name().trim_end_matches(".jsonc")
-    )
+    format!("{SCHEMA_BASE_URL}/{}.schema.json", file.stem())
 }
 
 /// Renders a schema deterministically with a trailing newline.
@@ -36,9 +33,7 @@ pub fn render(schema: &Schema) -> Result<String, serde_json::Error> {
 
 /// The committed file name for one schema.
 #[must_use]
-pub fn file_name(file: ConfigFileId) -> String {
-    format!("{}.schema.json", file.file_name().trim_end_matches(".jsonc"))
-}
+pub fn file_name(file: ConfigFileId) -> String { format!("{}.schema.json", file.stem()) }
 
 #[cfg(test)]
 mod tests {

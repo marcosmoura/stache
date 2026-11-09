@@ -634,14 +634,11 @@ mod tests {
         let (_root, store, core, registry, handle) = core();
         fs::write(
             store.paths().module_file(ModuleId::new("alpha")),
-            "{ \"enabled\": true }",
+            "enabled = true\n",
         )
         .expect("good file");
-        fs::write(
-            store.paths().global_file(),
-            "{ \"logging\": { \"level\": \"debug\" } }",
-        )
-        .expect("global file");
+        fs::write(store.paths().global_file(), "logging = { level = \"debug\" }\n")
+            .expect("global file");
         let report = core.reload().expect("reload");
         assert_eq!(report.access, None, "a plain configuration core reports no gate");
         assert_eq!(core.status().expect("status").access, None);
@@ -652,7 +649,7 @@ mod tests {
             CoreApplyOutcome::Applied { .. }
         ));
 
-        fs::write(store.paths().module_file(ModuleId::new("alpha")), "{ not json")
+        fs::write(store.paths().module_file(ModuleId::new("alpha")), "not toml =")
             .expect("bad file");
         let rejected = core.reload().expect("reload");
         assert!(rejected.has_failures());
@@ -661,7 +658,7 @@ mod tests {
             rejected.files[1]
                 .diagnostic
                 .as_deref()
-                .is_some_and(|text| text.contains("alpha.jsonc"))
+                .is_some_and(|text| text.contains("alpha.toml"))
         );
         let snapshot = registry.snapshot(handle).expect("snapshot");
         assert_eq!(snapshot.revision, 2, "the last accepted revision must survive");
@@ -673,11 +670,11 @@ mod tests {
         let (_root, store, core, _registry, _handle) = core();
         fs::write(
             store.paths().module_file(ModuleId::new("alpha")),
-            "{ \"enabled\": true }",
+            "enabled = true\n",
         )
         .expect("good file");
         let status = core.status().expect("status");
-        assert_eq!(status.files[0].file, "global.jsonc");
+        assert_eq!(status.files[0].file, "global.toml");
         assert_eq!(status.files[0].state, CoreFileState::Missing);
         assert!(!status.files[0].active);
         assert_eq!(status.files[1].state, CoreFileState::Valid);
@@ -689,7 +686,7 @@ mod tests {
 
         fs::write(
             store.paths().module_file(ModuleId::new("alpha")),
-            r#"{"enabled":true,"value":1}"#,
+            "enabled = true\nvalue = 1\n",
         )
         .expect("new valid bytes");
         assert!(!core.status().expect("status").files[1].active);
@@ -715,7 +712,7 @@ mod tests {
                 .is_some_and(|text| text.contains("deleted"))
         );
 
-        fs::write(store.paths().module_file(ModuleId::new("alpha")), "{ not json")
+        fs::write(store.paths().module_file(ModuleId::new("alpha")), "not toml =")
             .expect("bad file");
         let status = core.status().expect("status");
         assert_eq!(status.files[1].state, CoreFileState::Invalid);
@@ -725,7 +722,7 @@ mod tests {
     #[test]
     fn unloaded_global_and_unbound_module_are_not_active() {
         let (_root, store, core, registry, _) = core();
-        fs::write(store.paths().global_file(), "{}").expect("global");
+        fs::write(store.paths().global_file(), "# defaults\n").expect("global");
         assert!(!core.status().expect("status").files[0].active);
         store.load_global();
         assert!(core.status().expect("status").files[0].active);
@@ -739,7 +736,8 @@ mod tests {
             store.paths().clone(),
             Arc::new(LogFilter::default()),
         );
-        fs::write(store.paths().module_file(ModuleId::new("alpha")), "{}").expect("module");
+        fs::write(store.paths().module_file(ModuleId::new("alpha")), "# defaults\n")
+            .expect("module");
         unbound.initial::<TestConfig>(ModuleId::new("alpha")).expect("initial");
         assert!(
             !unbound.current_source_accepted(crate::ConfigFileId::module(ModuleId::new("alpha")))

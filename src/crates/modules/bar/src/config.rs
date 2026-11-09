@@ -19,7 +19,7 @@ const DEFAULT_PADDING: u16 = 12;
 
 /// Weather data provider.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Type)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "snake_case")]
 pub enum WeatherProvider {
     /// Use Visual Crossing when an API key file is configured, otherwise Open Meteo.
     #[default]
@@ -32,7 +32,7 @@ pub enum WeatherProvider {
 
 /// Weather settings for the status bar.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Type)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default, rename_all = "snake_case")]
 pub struct WeatherConfig {
     /// Weather data provider.
     pub provider: WeatherProvider,
@@ -50,7 +50,7 @@ pub struct WeatherConfig {
 }
 
 impl WeatherConfig {
-    /// Resolves `apiKeys` against injected home and configuration directories.
+    /// Resolves `api_keys` against injected home and configuration directories.
     ///
     /// Returns `Ok(None)` for an empty (after trimming) value. Reads no file,
     /// environment variable or process state.
@@ -74,7 +74,7 @@ impl WeatherConfig {
         };
         if let Some(rest) = home_anchored {
             let home = home.ok_or_else(|| {
-                ConfigError::new("weather.apiKeys starts with `~` but no home directory is known")
+                ConfigError::new("weather.api_keys starts with `~` but no home directory is known")
             })?;
             return Ok(Some(if rest.is_empty() {
                 home.to_path_buf()
@@ -93,7 +93,7 @@ impl WeatherConfig {
 
 /// Status bar configuration (inert: nothing consumes it yet).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Type)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default, rename_all = "snake_case")]
 pub struct BarConfig {
     /// Whether the status bar is enabled. Validates today but starts nothing.
     pub enabled: bool,
@@ -117,7 +117,7 @@ impl Default for BarConfig {
 }
 
 impl BarConfig {
-    /// The catalog identifier and file stem (`bar.jsonc`).
+    /// The catalog identifier and file stem (`bar.toml`).
     pub const ID: ModuleId = ModuleId::new("bar");
 
     /// The checked sum of height and padding in a wider type.
@@ -130,13 +130,13 @@ impl ModuleConfig for BarConfig {
 
     fn validate(&self) -> Result<(), ConfigError> {
         if self.weather.api_keys.contains('\0') {
-            return Err(ConfigError::new("weather.apiKeys must not contain a NUL byte"));
+            return Err(ConfigError::new("weather.api_keys must not contain a NUL byte"));
         }
         Ok(())
     }
 
     /// Materializes dimensions that the legacy derive rendered as zero and
-    /// flags `weather.apiKeys` paths whose historical base is unknown.
+    /// flags `weather.api_keys` paths whose historical base is unknown.
     fn migrate_legacy_section(section: &mut serde_json::Value) -> Vec<String> {
         let Some(object) = section.as_object_mut() else {
             return Vec::new();
@@ -162,7 +162,7 @@ impl ModuleConfig for BarConfig {
                 && !Path::new(keys).is_absolute()
             {
                 notes.push(format!(
-                    "bar `weather.apiKeys` value `{keys}` is relative; the migrated file resolves it under the configuration directory, which may differ from the legacy base or working directory, so rebase it manually if needed"
+                    "bar `weather.api_keys` value `{keys}` is relative; the migrated file resolves it under the configuration directory, which may differ from the legacy base or working directory, so rebase it manually if needed"
                 ));
             }
         }
@@ -184,10 +184,15 @@ mod tests {
     }
 
     fn inspect(text: &str) -> Result<Vec<String>, stache_sdk::config::ConfigDiagnostic> {
-        catalog().inspect(BarConfig::ID, Path::new("bar.jsonc"), text)
+        catalog().inspect(BarConfig::ID, Path::new("bar.toml"), text)
     }
 
-    fn decode(text: &str) -> BarConfig { serde_json::from_str(text).expect("decode") }
+    fn decode(text: &str) -> BarConfig {
+        catalog()
+            .decode_typed(BarConfig::ID, Path::new("bar.toml"), text)
+            .expect("decode")
+            .0
+    }
 
     #[test]
     fn defaults_match_the_spec() {
@@ -200,7 +205,7 @@ mod tests {
                 "enabled": false,
                 "height": 28,
                 "padding": 12,
-                "weather": { "provider": "auto", "apiKeys": "", "defaultLocation": "" },
+                "weather": { "provider": "auto", "api_keys": "", "default_location": "" },
             })
         );
         assert_eq!(config.height_plus_padding(), 40);
@@ -208,15 +213,15 @@ mod tests {
 
     #[test]
     fn empty_objects_and_omitted_nested_fields_use_defaults() {
-        assert_eq!(decode("{}"), BarConfig::default());
-        assert_eq!(decode(r#"{ "weather": {} }"#), BarConfig::default());
-        assert_eq!(decode(r#"{ "height": 30 }"#).padding, 12);
-        assert_eq!(decode(r#"{ "padding": 3 }"#).height, 28);
-        let weather = decode(r#"{ "weather": { "defaultLocation": "Lisbon" } }"#).weather;
+        assert_eq!(decode("# defaults\n"), BarConfig::default());
+        assert_eq!(decode("weather = {}\n"), BarConfig::default());
+        assert_eq!(decode("height = 30\n").padding, 12);
+        assert_eq!(decode("padding = 3\n").height, 28);
+        let weather = decode("weather = { default_location = \"Lisbon\" }\n").weather;
         assert_eq!(weather.provider, WeatherProvider::Auto);
         assert_eq!(weather.api_keys, "");
         assert_eq!(weather.default_location, "Lisbon");
-        let weather = decode(r#"{ "weather": { "apiKeys": ".env" } }"#).weather;
+        let weather = decode("weather = { api_keys = \".env\" }\n").weather;
         assert_eq!(weather.api_keys, ".env");
         assert_eq!(weather.default_location, "");
     }
@@ -225,16 +230,16 @@ mod tests {
     fn every_provider_spelling_decodes() {
         for (text, expected) in [
             ("auto", WeatherProvider::Auto),
-            ("visual-crossing", WeatherProvider::VisualCrossing),
-            ("open-meteo", WeatherProvider::OpenMeteo),
+            ("visual_crossing", WeatherProvider::VisualCrossing),
+            ("open_meteo", WeatherProvider::OpenMeteo),
         ] {
-            let config = decode(&format!(r#"{{ "weather": {{ "provider": "{text}" }} }}"#));
+            let config = decode(&format!("weather = {{ provider = \"{text}\" }}\n"));
             assert_eq!(config.weather.provider, expected);
             assert_eq!(serde_json::to_value(expected).expect("encode"), json!(text));
-            inspect(&format!(r#"{{ "weather": {{ "provider": "{text}" }} }}"#)).expect("valid");
+            inspect(&format!("weather = {{ provider = \"{text}\" }}\n")).expect("valid");
         }
         for bad in ["visualCrossing", "Auto", "other", ""] {
-            let error = inspect(&format!(r#"{{ "weather": {{ "provider": "{bad}" }} }}"#))
+            let error = inspect(&format!("weather = {{ provider = \"{bad}\" }}\n"))
                 .expect_err("unknown provider");
             assert_eq!(error.kind, DiagnosticKind::Type, "{bad}");
         }
@@ -242,20 +247,20 @@ mod tests {
 
     #[test]
     fn explicit_zero_and_max_dimensions_are_preserved_and_valid() {
-        let config = decode(r#"{ "height": 0, "padding": 0 }"#);
+        let config = decode("height = 0\npadding = 0\n");
         assert_eq!((config.height, config.padding), (0, 0));
-        let config = decode(r#"{ "height": 65535, "padding": 65535 }"#);
+        let config = decode("height = 65535\npadding = 65535\n");
         assert_eq!((config.height, config.padding), (u16::MAX, u16::MAX));
         assert_eq!(config.height_plus_padding(), 131_070);
-        inspect(r#"{ "height": 65535, "padding": 65535 }"#).expect("beyond 8192 stays valid");
-        inspect(r#"{ "height": 0, "padding": 0 }"#).expect("zero is valid");
+        inspect("height = 65535\npadding = 65535\n").expect("beyond 8192 stays valid");
+        inspect("height = 0\npadding = 0\n").expect("zero is valid");
     }
 
     #[test]
     fn negative_overflowing_and_fractional_dimensions_are_type_diagnostics() {
-        for value in ["-1", "65536", "1.5", r#""28""#, "null"] {
+        for value in ["-1", "65536", "1.5", r#""28""#, "[]"] {
             for field in ["height", "padding"] {
-                let error = inspect(&format!(r#"{{ "{field}": {value} }}"#)).expect_err(value);
+                let error = inspect(&format!("{field} = {value}\n")).expect_err(value);
                 assert_eq!(error.kind, DiagnosticKind::Type, "{field} {value}");
                 assert_eq!(error.field.as_deref(), Some(field), "{field} {value}");
             }
@@ -264,31 +269,34 @@ mod tests {
 
     #[test]
     fn enabled_true_validates_without_claiming_a_runtime() {
-        inspect(r#"{ "enabled": true }"#).expect("valid");
-        assert!(decode(r#"{ "enabled": true }"#).enabled());
+        inspect("enabled = true\n").expect("valid");
+        assert!(decode("enabled = true\n").enabled());
     }
 
     #[test]
     fn malformed_wrong_typed_and_empty_files_are_diagnostics() {
-        for value in [r#""yes""#, "1", "null"] {
-            let error = inspect(&format!(r#"{{ "enabled": {value} }}"#)).expect_err(value);
+        for value in [r#""yes""#, "1", "[]"] {
+            let error = inspect(&format!("enabled = {value}\n")).expect_err(value);
             assert_eq!(error.kind, DiagnosticKind::Type, "{value}");
         }
-        assert!(inspect("{ not json").is_err());
+        assert!(inspect("{ not toml").is_err());
         let error = inspect("  \n").expect_err("empty file");
         assert!(error.message.contains("file is empty"), "{error}");
-        assert!(inspect("{}").is_ok(), "an empty object versus an empty file");
+        assert!(
+            inspect("# defaults\n").is_ok(),
+            "an empty object versus an empty file"
+        );
     }
 
     #[test]
     fn unknown_keys_are_warnings() {
-        let warnings = inspect(r#"{ "enabled": true, "future": 1 }"#).expect("valid");
+        let warnings = inspect("enabled = true\nfuture = 1\n").expect("valid");
         assert_eq!(warnings, ["future"]);
     }
 
     #[test]
     fn nul_bytes_in_api_keys_are_rejected() {
-        let error = inspect(r#"{ "weather": { "apiKeys": "a\u0000b" } }"#).expect_err("NUL");
+        let error = inspect("weather = { api_keys = \"a\\u0000b\" }\n").expect_err("NUL");
         assert!(error.message.contains("NUL"), "{error}");
     }
 
@@ -296,9 +304,11 @@ mod tests {
     fn template_and_schema_come_from_the_single_type() {
         let catalog = catalog();
         let template = catalog.template(BarConfig::ID).expect("template");
-        assert!(template.contains(r#""height": 28"#), "{template}");
-        assert!(template.contains(r#""padding": 12"#), "{template}");
-        assert!(template.contains(r#""enabled": false"#), "{template}");
+        assert!(template.starts_with("#:schema "), "{template}");
+        assert!(template.contains("\nheight = 28\n"), "{template}");
+        assert!(template.contains("\npadding = 12\n"), "{template}");
+        assert!(template.contains("\nenabled = false\n"), "{template}");
+        assert!(template.contains("\n[weather]\n"), "{template}");
         let schema = catalog.schema_json(BarConfig::ID).expect("schema").expect("render");
         let schema: serde_json::Value = serde_json::from_str(&schema).expect("schema JSON");
         assert_eq!(schema["title"], "BarConfig");
@@ -307,7 +317,7 @@ mod tests {
         assert_eq!(schema["properties"]["height"]["maximum"], 65535);
         assert_eq!(schema["properties"]["height"]["minimum"], 0);
         let rendered = schema.to_string();
-        for spelling in ["auto", "visual-crossing", "open-meteo"] {
+        for spelling in ["auto", "visual_crossing", "open_meteo"] {
             assert!(rendered.contains(spelling), "{spelling}");
         }
     }

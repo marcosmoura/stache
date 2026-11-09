@@ -25,6 +25,8 @@ use crate::runtime::IssueReport;
 use crate::test_support::{App, Rig, config, config_with_dismiss, wait_until};
 
 const HOLD: u64 = 1500;
+/// The largest accepted duration, `i64::MAX` milliseconds; it overflows `Instant`.
+const MAX_MS: u64 = stache_sdk::config::bounds::MAX;
 
 fn hold_for(ms: u64) -> Duration { Duration::from_millis(ms) }
 
@@ -767,8 +769,8 @@ fn hq_04_03_a_failed_show_cancels_the_press_and_enters_degraded_pass_through() {
 }
 
 #[test]
-fn hq_04_03_a_u64_max_duration_is_a_cancellable_indefinite_wait() {
-    let (rig, _editor) = focused(u64::MAX);
+fn hq_04_03_the_largest_duration_is_a_cancellable_indefinite_wait() {
+    let (rig, _editor) = focused(MAX_MS);
     assert_eq!(rig.q_down(), Disposition::Suppress);
     wait_until("the HUD to be shown", || orders(&rig) == 1);
     rig.wait_parked_for("the hold wait", |timeout| {
@@ -786,8 +788,8 @@ fn hq_04_03_deadline_arithmetic_is_checked() {
     assert_eq!(policy::deadline(now, 0), Some(now));
     assert_eq!(policy::deadline(now, 1500), now.checked_add(hold_for(1500)));
     assert_eq!(
-        policy::deadline(now, u64::MAX),
-        now.checked_add(Duration::from_millis(u64::MAX)),
+        policy::deadline(now, MAX_MS),
+        now.checked_add(Duration::from_millis(MAX_MS)),
         "no overflow panic"
     );
 }
@@ -1959,7 +1961,7 @@ fn hq_05_03_stop_during_a_live_press_hides_it_at_once() {
 fn hq_05_03_a_reconfigure_that_clears_accepting_hides_a_live_press_at_once() {
     let (rig, _editor) = lingering(HOLD, DISMISS);
     begin_hold(&rig, HOLD);
-    // A different dismissDelay is an accepted change too.
+    // A different dismiss_delay is an accepted change too.
     rig.registry
         .reload(rig.handle, config_with_dismiss(HOLD, DISMISS + 1))
         .expect("reload");
@@ -2093,7 +2095,7 @@ fn hq_05_06_the_idle_worker_parks_only_for_the_remaining_linger() {
 
 #[test]
 fn hq_05_01_an_unrepresentable_linger_waits_without_a_timeout() {
-    let (rig, _editor) = lingering(HOLD, u64::MAX);
+    let (rig, _editor) = lingering(HOLD, MAX_MS);
     begin_hold(&rig, HOLD);
     assert_eq!(rig.q_up(), Disposition::Suppress);
     wait_until("the bar to freeze", || freezes(&rig) == 1);

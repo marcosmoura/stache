@@ -1555,7 +1555,7 @@ fn a_malformed_initial_file_reports_no_accepted_config_until_a_later_fix() {
     let handle = registry
         .register_rejected(
             service.module(),
-            ConfigDiagnostic::new("wallpapers.jsonc did not decode"),
+            ConfigDiagnostic::new("wallpapers.toml did not decode"),
         )
         .expect("register rejected");
     let watch = registry.accepted_watch(handle).expect("watch");

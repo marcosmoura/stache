@@ -35,7 +35,7 @@ fn workspaces() -> Vec<WorkspaceDto> {
             id: "1".to_owned(),
             name: "coding".to_owned(),
             screen_name: "Built-in Retina Display".to_owned(),
-            layout: "split-vertical".to_owned(),
+            layout: "split_vertical".to_owned(),
             is_visible: true,
             is_focused: true,
             window_count: 12,
@@ -148,7 +148,7 @@ Workspaces (2)
 ╭────────┬─────────────────┬────────────────┬─────────┬─────────┬─────────╮
 │ Name   │ Screen          │ Layout         │ Windows │ Visible │ Focused │
 ├────────┼─────────────────┼────────────────┼─────────┼─────────┼─────────┤
-│ coding │ Built-in Retin… │ split-vertical │      12 │    ✓    │    ✓    │
+│ coding │ Built-in Retin… │ split_vertical │      12 │    ✓    │    ✓    │
 │ web    │ Ext             │ dwindle        │       0 │    ✗    │    ✗    │
 ╰────────┴─────────────────┴────────────────┴─────────┴─────────┴─────────╯
 ";

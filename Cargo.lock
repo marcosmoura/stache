@@ -3315,6 +3315,7 @@ version = "0.25.0"
 dependencies = [
  "clap",
  "clap_complete",
+ "jsonc-parser",
  "schemars 1.2.3",
  "serde",
  "serde_json",
@@ -3426,7 +3427,6 @@ name = "stache-sdk"
 version = "0.25.0"
 dependencies = [
  "clap",
- "jsonc-parser",
  "notify-debouncer-full",
  "rustix",
  "schemars 1.2.3",
@@ -3436,6 +3436,8 @@ dependencies = [
  "serde_path_to_error",
  "specta",
  "tempfile",
+ "toml 1.2.0+spec-1.1.0",
+ "toml_edit 0.25.18+spec-1.1.0",
 ]
 
 [[package]]
@@ -4093,8 +4095,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ec6e78bd70db9420d8d212fa9dc97f116448a1ceff5d00eabb991d407e21396"
 dependencies = [
  "indexmap 2.14.2",
+ "serde_core",
+ "serde_spanned 1.1.2",
  "toml_datetime 1.1.2+spec-1.1.0",
  "toml_parser",
+ "toml_writer",
  "winnow 1.0.4",
 ]
 

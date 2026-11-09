@@ -8,7 +8,7 @@
 //!
 //! Setup order is deliberate: the application creates the tray first, then
 //! starts this driver. The driver loads configuration, registers factories,
-//! starts modules and opens the control socket. `execOnStartup` runs once per
+//! starts modules and opens the control socket. `exec_on_startup` runs once per
 //! launch, after the Accessibility gate first opens (see [`crate::access`]).
 //! A shutdown requested before or during setup is processed without starting
 //! new modules.
@@ -1008,7 +1008,7 @@ pub struct HostSettings {
 pub struct HostServices {
     /// Registry logger.
     pub logger: Arc<dyn Logger>,
-    /// Live level filter used by the logger and `global.jsonc`.
+    /// Live level filter used by the logger and `global.toml`.
     pub log_filter: Arc<LogFilter>,
     /// Registry event bus.
     pub events: Arc<EventBus>,
@@ -1743,7 +1743,7 @@ struct Runner {
     gated: bool,
     /// The lock-free copy of the gate state the socket handlers read.
     access_cell: AccessCell,
-    /// Where `execOnStartup` stands in this launch.
+    /// Where `exec_on_startup` stands in this launch.
     commands: StartupCommandsPhase,
     app_path: Option<String>,
     /// The guidance window of the current gated episode, if one was opened. A
@@ -1751,7 +1751,7 @@ struct Runner {
     access_window: Option<WindowId>,
 }
 
-/// When `execOnStartup` may run: once per launch, after setup and the gate.
+/// When `exec_on_startup` may run: once per launch, after setup and the gate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StartupCommandsPhase {
     /// Setup is not complete yet.
@@ -1984,6 +1984,7 @@ impl Runner {
         if let Initial::Invalid(diagnostic) = self.store.load_global() {
             self.log_warn(format!("global configuration is invalid: {diagnostic}"));
         }
+        self.log_stale_config_hint();
         // The first nonprompting Accessibility check runs before any module
         // starts. It publishes nothing; the registry's own per-slot check still
         // guards every start, so a racing grant or revocation cannot start a
@@ -2078,7 +2079,7 @@ impl Runner {
         }
     }
 
-    /// Starts `execOnStartup` at most once per launch, and only once setup is
+    /// Starts `exec_on_startup` at most once per launch, and only once setup is
     /// complete and the gate is open (or the host is ungated).
     fn start_startup_commands_once(&mut self) {
         if self.commands != StartupCommandsPhase::Armed
@@ -2112,10 +2113,10 @@ impl Runner {
                     level: stache_sdk::LogLevel::Error,
                     module: ModuleId::new("host"),
                     operation: stache_sdk::Operation::Start,
-                    message: format!("execOnStartup failed: {error}"),
+                    message: format!("exec_on_startup failed: {error}"),
                 });
                 let _ = sender.send(HostCommand::StartupFinished(Some(format!(
-                    "execOnStartup failed: {error}"
+                    "exec_on_startup failed: {error}"
                 ))));
             }
         };
@@ -2127,7 +2128,7 @@ impl Runner {
                     job.stop_bounded(&LateReapWait::new());
                 }
             }
-            Err(error) => self.add_condition(format!("cannot start execOnStartup: {error}")),
+            Err(error) => self.add_condition(format!("cannot start exec_on_startup: {error}")),
         }
     }
 
@@ -2568,6 +2569,19 @@ impl Runner {
         Some(parts.join("; "))
     }
 
+    /// Logs one record listing every `<id>.jsonc` that has no `<id>.toml`.
+    ///
+    /// Called once from `start`; reloads and watcher batches never repeat it.
+    fn log_stale_config_hint(&self) {
+        let stale = self.settings.config.stale_jsonc_files(self.store.catalog().ids());
+        if stale.is_empty() {
+            return;
+        }
+        let hints: Vec<String> =
+            stale.iter().map(|name| stache_sdk::config::stale_jsonc_hint(name)).collect();
+        self.log_warn(hints.join("; "));
+    }
+
     fn log_warn(&self, message: String) { self.log(stache_sdk::LogLevel::Warn, message); }
 
     fn log(&self, level: stache_sdk::LogLevel, message: String) {
@@ -2851,13 +2865,71 @@ mod tests {
         assert_eq!(commands.runs.load(Ordering::SeqCst), expected);
     }
 
+    #[derive(Default)]
+    struct CaptureLogger(Mutex<Vec<stache_sdk::LogRecord>>);
+
+    impl stache_sdk::Logger for CaptureLogger {
+        fn log(&self, record: stache_sdk::LogRecord) {
+            self.0.lock().expect("records").push(record);
+        }
+    }
+
+    #[test]
+    fn tc_03_04_the_stale_jsonc_hint_is_logged_once_at_startup_and_not_on_reload() {
+        let root = tempfile::tempdir().expect("root");
+        let config = root.path().join("config");
+        std::fs::create_dir_all(&config).expect("config dir");
+        std::fs::write(config.join("tiling.jsonc"), "{}").expect("tiling.jsonc");
+        std::fs::write(config.join("bar.jsonc"), "{}").expect("bar.jsonc");
+        std::fs::write(config.join("bar.toml"), "").expect("bar.toml");
+        let mut catalog = ConfigCatalog::new();
+        catalog
+            .register::<stache_sdk::GlobalConfig>(stache_sdk::GlobalConfig::ID)
+            .expect("global");
+        catalog
+            .register::<stache_tiling::TilingConfig>(stache_tiling::TilingConfig::ID)
+            .expect("tiling");
+        let (mut runner, _receiver) = runner_over(
+            root.path(),
+            ModuleFactories::new(),
+            catalog,
+            Arc::new(AllowAll),
+            None,
+        );
+        let capture = Arc::new(CaptureLogger::default());
+        runner.services.logger = capture.clone();
+        runner.start().expect("start");
+        let hints = |capture: &CaptureLogger| -> Vec<String> {
+            capture
+                .0
+                .lock()
+                .expect("records")
+                .iter()
+                .filter(|record| record.message.contains("stache config migrate"))
+                .map(|record| record.message.clone())
+                .collect()
+        };
+        assert_eq!(hints(&capture), vec![
+            "note: tiling.jsonc is ignored; run `stache config migrate`".to_owned()
+        ]);
+        let level = capture.0.lock().expect("records")[0].level;
+        assert_eq!(level, stache_sdk::LogLevel::Warn);
+
+        runner.apply_config(&ChangeSet {
+            rescan: true,
+            files: std::collections::BTreeSet::default(),
+        });
+        assert_eq!(hints(&capture).len(), 1, "reloads never repeat the hint");
+        runner.finish(true);
+    }
+
     #[test]
     fn ag_02_01_startup_commands_run_once_even_when_the_first_opening_precedes_arming() {
         let root = tempfile::tempdir().expect("root");
         std::fs::create_dir_all(root.path().join("config")).expect("config dir");
         std::fs::write(
-            root.path().join("config/global.jsonc"),
-            "{ \"execOnStartup\": [\"true\"] }\n",
+            root.path().join("config/global.toml"),
+            "exec_on_startup = [\"true\"]\n",
         )
         .expect("global config");
         let permissions = Counted::new(PermissionStatus::Granted);
@@ -4366,7 +4438,7 @@ mod tests {
         }
     }
 
-    const KB_ON: &str = r#"{ "enabled": true, "bindings": { "Cmd+Q": "/bin/sh hold-q" } }"#;
+    const KB_ON: &str = "enabled = true\nbindings = { \"Cmd+Q\" = \"/bin/sh hold-q\" }\n";
 
     #[test]
     fn kb_05_01_the_keybindings_factory_is_inert_until_start_and_projects_runtime_details() {
@@ -4400,7 +4472,7 @@ mod tests {
         host.start();
         let revision = host.view().revision;
         // An invalid file is held; the running details are untouched.
-        host.write("{ \"enabled\": ");
+        host.write("enabled = ");
         host.reload();
         let view = host.view();
         assert!(view.diagnostic.is_some(), "the rejected file is held");
@@ -4421,7 +4493,7 @@ mod tests {
             "the file diagnostic never enters the runtime channel"
         );
         // A repaired file clears the diagnostic and advances the runtime.
-        host.write(r#"{ "enabled": true, "bindings": { "Cmd+W": "/bin/sh quick-w" } }"#);
+        host.write("enabled = true\nbindings = { \"Cmd+W\" = \"/bin/sh quick-w\" }\n");
         host.reload();
         let view = host.view();
         assert!(view.diagnostic.is_none());
@@ -4468,7 +4540,7 @@ mod tests {
         assert_eq!(rig.world.mappings(), vec![key, OWNED]);
         let sets_before = rig.world.sets();
         // The module file is invalid and the module is therefore not enabled.
-        let mut host = KbHost::new(rig, Some("{ not valid"));
+        let mut host = KbHost::new(rig, Some("not valid ="));
         host.runner.recovery = Some(Arc::new(crate::caps_recovery::KeybindingsCapsRecovery::new(
             CapsRecoveryStep::new(Arc::clone(&host.rig.remap)),
         )));
@@ -4710,7 +4782,7 @@ mod tests {
         }
     }
 
-    const TI_ON: &str = r#"{ "enabled": true }"#;
+    const TI_ON: &str = "enabled = true\n";
 
     fn ti_wait(what: &str, mut condition: impl FnMut() -> bool) {
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -4834,7 +4906,7 @@ mod tests {
     #[test]
     fn ti_09_requested_borders_without_a_composed_authority_degrade_borders_only() {
         let mut host = TiHost::new(Some(
-            r#"{ "enabled": true, "animations": { "enabled": true }, "borders": { "enabled": true } }"#,
+            "enabled = true\nanimations = { enabled = true }\nborders = { enabled = true }\n",
         ));
         host.start();
         let view = host.view();
@@ -4882,7 +4954,7 @@ mod tests {
         );
         std::fs::write(
             host.config.module_file(stache_notunes::NoTunesConfig::ID),
-            r#"{ "enabled": true }"#,
+            "enabled = true\n",
         )
         .expect("write notunes");
         host.start();
@@ -4899,7 +4971,7 @@ mod tests {
         assert_eq!(state_of(&host, "tiling"), crate::bindings::ModuleState::Running);
         assert_eq!(state_of(&host, "notunes"), crate::bindings::ModuleState::Running);
         host.backend.script_stop(StopOutcome::Unacknowledged);
-        host.write(r#"{ "enabled": false }"#);
+        host.write("enabled = false\n");
         host.reload();
         let view = host.view();
         assert_eq!(
@@ -4919,7 +4991,7 @@ mod tests {
         let mut host = TiHost::new(Some(TI_ON));
         host.start();
         let revision = host.view().revision;
-        host.write("{ \"enabled\": ");
+        host.write("enabled = ");
         host.reload();
         let view = host.view();
         assert!(view.diagnostic.is_some(), "the rejected file is held");
@@ -4929,7 +5001,7 @@ mod tests {
             view.tiling.as_ref().expect("details").state,
             TilingRuntimeState::Running
         );
-        host.write(r#"{ "enabled": true, "defaultLayout": "floating" }"#);
+        host.write("enabled = true\ndefault_layout = \"floating\"\n");
         host.reload();
         let view = host.view();
         assert!(view.diagnostic.is_none());
@@ -4943,7 +5015,7 @@ mod tests {
         // A cleanup error is retained by the runtime and independent of the
         // file diagnostic.
         host.backend.script_stop(StopOutcome::Unacknowledged);
-        host.write(r#"{ "enabled": false }"#);
+        host.write("enabled = false\n");
         host.reload();
         let view = host.view();
         let details = view.tiling.as_ref().expect("details");
@@ -4958,7 +5030,7 @@ mod tests {
             TilingRuntimeState::Quarantined,
             "the file diagnostic never hides the cleanup state"
         );
-        host.write(r#"{ "enabled": false }"#);
+        host.write("enabled = false\n");
         host.reload();
         let view = host.view();
         assert!(
@@ -5026,7 +5098,7 @@ mod tests {
         ti_wait("the resumed module serves queries", || error("query").is_ok());
 
         // A disabled configuration is disabled, and resume cannot override it.
-        host.write(r#"{ "enabled": false }"#);
+        host.write("enabled = false\n");
         host.reload();
         let disabled = error("query").expect_err("disabled");
         assert_eq!(

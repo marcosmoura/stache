@@ -15,7 +15,7 @@
 //! ahead of or behind the tuple can only pass an event, never mix a new
 //! modifier set with an old button or revision.
 //!
-//! * `rightClick` is button number 1 and `middleClick` is button number 2 only.
+//! * `right_click` is button number 1 and `middle_click` is button number 2 only.
 //!   The macOS adapter classifies `rightMouseDown`/`otherMouseDown` into the
 //!   same `MouseDown` kind with the native button number and drops any event
 //!   whose type contradicts its button (left is 0, right is 1, other is 2 or

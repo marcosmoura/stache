@@ -30,8 +30,8 @@
       "description": "Weather status bar configuration.",
       "$ref": "#/$defs/WeatherConfig",
       "default": {
-        "apiKeys": "",
-        "defaultLocation": "",
+        "api_keys": "",
+        "default_location": "",
         "provider": "auto"
       }
     }
@@ -41,12 +41,12 @@
       "description": "Weather settings for the status bar.",
       "type": "object",
       "properties": {
-        "apiKeys": {
+        "api_keys": {
           "description": "Path to an environment file containing API keys (for example\n`VISUAL_CROSSING_API_KEY=...`).\n\nThe value is trimmed. `~` and `~/...` expand to the home directory,\nabsolute paths are used as written and anything else is relative to the\nconfiguration directory. Environment variables and shell syntax are not\nexpanded, and the process working directory is never used.",
           "type": "string",
           "default": ""
         },
-        "defaultLocation": {
+        "default_location": {
           "description": "Default location for weather data when geolocation fails.\nCan be a city name, address, or coordinates.",
           "type": "string",
           "default": ""
@@ -69,12 +69,12 @@
         {
           "description": "Force Visual Crossing (requires an API key file).",
           "type": "string",
-          "const": "visual-crossing"
+          "const": "visual_crossing"
         },
         {
           "description": "Use Open Meteo (free, no API key required).",
           "type": "string",
-          "const": "open-meteo"
+          "const": "open_meteo"
         }
       ]
     }

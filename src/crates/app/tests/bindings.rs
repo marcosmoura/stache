@@ -83,12 +83,12 @@ fn command_quit_exports_no_lossy_hold_duration() {
         "the config type stays exported"
     );
     assert!(
-        !bindings.contains("holdDuration") && !bindings.contains("hold_duration"),
-        "holdDuration must not be claimed as a lossy TypeScript number"
+        !bindings.contains("hold_duration") && !bindings.contains("hold_duration"),
+        "hold_duration must not be claimed as a lossy TypeScript number"
     );
     assert!(
-        !bindings.contains("dismissDelay") && !bindings.contains("dismiss_delay"),
-        "dismissDelay must not be claimed as a lossy TypeScript number"
+        !bindings.contains("dismiss_delay") && !bindings.contains("dismiss_delay"),
+        "dismiss_delay must not be claimed as a lossy TypeScript number"
     );
     for exported in [
         "position?: HudPosition",

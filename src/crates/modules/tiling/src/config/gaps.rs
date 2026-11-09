@@ -47,7 +47,7 @@ impl GapValue {
 
 /// Gaps for a single display or for every display.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Type)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default, rename_all = "snake_case")]
 pub struct GapsConfig {
     /// Gaps between windows.
     pub inner: GapValue,
@@ -57,7 +57,7 @@ pub struct GapsConfig {
 
 /// Gaps for one named display.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Type)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct ScreenGapsConfig {
     /// Display: `main`/`primary`, `secondary` or a display name.
     pub screen: String,

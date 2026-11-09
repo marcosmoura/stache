@@ -12,7 +12,7 @@ injectable adapters in `stache_macos::keep_awake`.
 
 ## Configuration
 
-`keepAwake.jsonc` is the authoritative document (`KeepAwakeConfig`):
+`keepAwake.toml` is the authoritative document (`KeepAwakeConfig`):
 
 | Key       | Values           | Default |
 | --------- | ---------------- | ------- |

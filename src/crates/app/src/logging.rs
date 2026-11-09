@@ -1,7 +1,7 @@
 //! Host logging to standard error.
 //!
 //! The logger is injected into the registry; there is no process-wide logging
-//! facade. The shared [`LogFilter`] is updated by accepted `global.jsonc`
+//! facade. The shared [`LogFilter`] is updated by accepted `global.toml`
 //! reloads, so a level edit takes effect without restarting the host.
 
 use std::io::Write;

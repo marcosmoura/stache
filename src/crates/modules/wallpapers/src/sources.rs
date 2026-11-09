@@ -38,7 +38,7 @@ impl SourceContext {
         Self::new(paths.directory(), environment.home.clone())
     }
 
-    /// The directory containing `wallpapers.jsonc`.
+    /// The directory containing `wallpapers.toml`.
     #[must_use]
     pub fn config_directory(&self) -> &Path { &self.config_directory }
 

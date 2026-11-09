@@ -1,7 +1,7 @@
 //! The Keybindings configuration.
 //!
 //! [`KeybindingsConfig`] is the single authoritative source for
-//! `keybindings.jsonc`, its schema, template and legacy migration. This crate
+//! `keybindings.toml`, its schema, template and legacy migration. This crate
 //! registers the module: registration and construction are inert, and nothing
 //! here depends on Tauri.
 //!

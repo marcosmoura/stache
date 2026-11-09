@@ -1,6 +1,6 @@
 //! The noTunes configuration and blocker runtime.
 //!
-//! [`NoTunesConfig`] is the single authoritative source for `notunes.jsonc`,
+//! [`NoTunesConfig`] is the single authoritative source for `notunes.toml`,
 //! schema, template and migration. [`NoTunesModule`] implements the runtime
 //! over the safe application boundary in `stache-macos`: it observes launches,
 //! blocks exact Apple Music and iTunes instances and can launch the one

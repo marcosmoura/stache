@@ -193,7 +193,7 @@ pub enum ConfigFileState {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigFileView {
-    /// File name, for example `proxyAudio.jsonc`.
+    /// File name, for example `proxyAudio.toml`.
     pub file: String,
     /// Absolute path.
     pub path: String,
@@ -317,8 +317,9 @@ pub fn config_file_view(
 /// Builds the typed command and event collection mounted by the desktop host.
 ///
 /// The config types are exported explicitly; they are the authoritative catalog
-/// types used by `global.jsonc`, `bar.jsonc`, `commandQuit.jsonc`, `keepAwake.jsonc`, `keybindings.jsonc`,
-/// `menuAnywhere.jsonc`, /// `proxyAudio.jsonc`, `notunes.jsonc`, `tiling.jsonc` and `wallpapers.jsonc`. The Keep Awake status envelope and
+/// types used by `global.toml`, `bar.toml`, `commandQuit.toml`, `keepAwake.toml`,
+/// `keybindings.toml`, `menuAnywhere.toml`, `proxyAudio.toml`, `notunes.toml`,
+/// `tiling.toml` and `wallpapers.toml`. The Keep Awake status envelope and
 /// its reachable runtime DTOs are exported from the same collection, so the
 /// generated client cannot mirror them by hand. The Wallpapers request and
 /// operation-outcome DTOs are exported from the same collection so Part 04's

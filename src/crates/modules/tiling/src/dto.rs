@@ -216,7 +216,7 @@ pub struct WorkspaceDto {
     pub name: String,
     /// The name of the screen it is on.
     pub screen_name: String,
-    /// The layout in effect (kebab-case).
+    /// The layout in effect (`snake_case`).
     pub layout: String,
     /// Whether it is visible on its screen.
     pub is_visible: bool,

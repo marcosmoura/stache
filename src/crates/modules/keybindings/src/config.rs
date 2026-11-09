@@ -16,7 +16,7 @@ use stache_sdk::{ConfigError, ModuleConfig, ModuleId, StartupCommands};
 /// later per-entry planning diagnostic, never a rejection of the whole file.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, JsonSchema, Type)]
 // `default` only shapes the schema and generated types; decoding is manual.
-#[serde(default, rename_all = "camelCase")]
+#[serde(default, rename_all = "snake_case")]
 pub struct KeybindingsConfig {
     /// Whether the shortcuts should be active.
     pub enabled: bool,
@@ -28,7 +28,7 @@ pub struct KeybindingsConfig {
 
 /// The wire shape; kept private so only maps decode as the configuration.
 #[derive(Deserialize, Default)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default, rename_all = "snake_case")]
 struct Wire {
     enabled: bool,
     bindings: BTreeMap<String, StartupCommands>,
@@ -152,13 +152,13 @@ mod tests {
             catalog.register::<KeybindingsConfig>(KeybindingsConfig::ID).expect("register");
             catalog
         };
-        let source = std::path::Path::new("keybindings.jsonc");
+        let source = std::path::Path::new("keybindings.toml");
         for (text, path) in [
-            (r#"{ "bindings": { "A": 1 } }"#, "bindings.A"),
-            (r#"{ "bindings": { "A": ["x", 2] } }"#, "bindings.A"),
-            (r#"{ "bindings": { "A": null } }"#, "bindings.A"),
-            (r#"{ "bindings": ["x"] }"#, "bindings"),
-            (r#"{ "enabled": "yes" }"#, "enabled"),
+            ("bindings = { A = 1 }\n", "bindings.A"),
+            ("bindings = { A = [\"x\", 2] }\n", "bindings.A"),
+            ("bindings = { A = true }\n", "bindings.A"),
+            ("bindings = [\"x\"]\n", "bindings"),
+            ("enabled = \"yes\"\n", "enabled"),
         ] {
             let error = catalog
                 .inspect(KeybindingsConfig::ID, source, text)
@@ -221,10 +221,10 @@ mod tests {
             let mut migrated = section.clone();
             assert!(KeybindingsConfig::migrate_legacy_section(&mut migrated).is_empty());
             assert_eq!(migrated, section);
-            let result = catalog.inspect(
-                KeybindingsConfig::ID,
-                std::path::Path::new("keybindings.jsonc"),
-                &migrated.to_string(),
+            let result = stache_sdk::config::loader::deserialize::<KeybindingsConfig>(
+                stache_sdk::config::ConfigFileId::module(KeybindingsConfig::ID),
+                std::path::Path::new("keybindings.toml"),
+                migrated,
             );
             assert!(result.is_err(), "{section} must stay invalid: {result:?}");
         }
@@ -236,14 +236,15 @@ mod tests {
         catalog.register::<KeybindingsConfig>(KeybindingsConfig::ID).expect("register");
         assert_eq!(
             catalog.file_name(KeybindingsConfig::ID).as_deref(),
-            Some("keybindings.jsonc")
+            Some("keybindings.toml")
         );
         assert_eq!(
             catalog.default_value(KeybindingsConfig::ID),
             Some(&json!({ "enabled": false, "bindings": {} }))
         );
         let template = catalog.template(KeybindingsConfig::ID).expect("template");
-        assert!(template.contains("\"enabled\": false"), "{template}");
-        assert!(template.contains("\"bindings\": {}"), "{template}");
+        assert!(template.starts_with("#:schema "), "{template}");
+        assert!(template.contains("\nenabled = false\n"), "{template}");
+        assert!(template.contains("\nbindings = {}\n"), "{template}");
     }
 }

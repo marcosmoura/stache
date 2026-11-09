@@ -23,7 +23,7 @@ const EPOCH: u64 = 7;
 fn config(layout: &str) -> Arc<TilingConfig> {
     Arc::new(
         serde_json::from_value(serde_json::json!({
-            "defaultLayout": layout,
+            "default_layout": layout,
             "gaps": { "inner": 0, "outer": 0 },
         }))
         .expect("config"),

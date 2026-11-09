@@ -341,7 +341,7 @@ pub(crate) fn config_paths(
     ConfigPaths::resolve(config_override(matches), &env.config).map_err(|error| error.to_string())
 }
 
-/// Reads the current `wallpapers.jsonc`.
+/// Reads the current `wallpapers.toml`.
 ///
 /// A missing file means defaults. A present file that cannot be read, parsed
 /// or validated is a failure and never replaced by defaults.

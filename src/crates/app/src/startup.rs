@@ -1,4 +1,4 @@
-//! One-shot `execOnStartup` execution.
+//! One-shot `exec_on_startup` execution.
 //!
 //! The global configuration stores a command string or an ordered list. The
 //! desktop host executes it once after initial setup, sequentially, stopping at

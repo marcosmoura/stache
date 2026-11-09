@@ -1,0 +1,101 @@
+{
+  // Frozen legacy sample with every module section in legacy spellings. It is
+  // migrated by the snake_case conversion test and must decode with zero
+  // unknown-key warnings.
+  "execOnStartup": ["open -a Terminal", "echo camelCase-stays-here"],
+  "logging": { "level": "debug", "debug": true },
+  "widgets": { "calendar": true },
+  "bar": {
+    "enabled": true,
+    "height": 32,
+    "padding": 8,
+    "weather": {
+      "provider": "visual-crossing",
+      "apiKeys": "/Users/me/.keys.env",
+      "defaultLocation": "Lisbon",
+    },
+  },
+  "commandQuit": {
+    "enabled": true,
+    "holdDuration": 900,
+    "dismissDelay": 300,
+    "position": "top",
+    "animation": "slide",
+  },
+  "keepAwake": { "enabled": true },
+  "keybindings": {
+    "CapsLock+a": "stache tiling workspace --layout split-vertical",
+    "§": ["open -a Safari", "echo enabledApps"],
+    "cmd+shift+.": "stache reload",
+    "enabledApps": "echo shortcut-named-like-a-key",
+  },
+  "menuAnywhere": {
+    "enabled": true,
+    "modifiers": ["shift", "option"],
+    "mouseButton": "middleClick",
+  },
+  "notunes": { "enabled": true, "targetApp": "spotify" },
+  "proxyAudio": {
+    "enabled": true,
+    "input": [{ "name": "AirPods Pro" }],
+    "output": [
+      {
+        "name": "External Speakers",
+        "strategy": "startsWith",
+        "dependsOn": { "name": "MiniFuse", "strategy": "contains" },
+      },
+    ],
+  },
+  "wallpapers": {
+    "enabled": true,
+    "path": "/Users/me/Pictures/wall",
+    "mode": "sequential",
+    "interval": 600,
+    "blur": 4,
+    "radius": 12,
+  },
+  "tiling": {
+    "enabled": true,
+    "defaultLayout": "split-vertical",
+    "animations": { "enabled": true, "duration": 250, "easing": "ease-out-expo" },
+    "gaps": [
+      { "screen": "main", "inner": { "top": 2, "right": 4, "bottom": 2, "left": 4 }, "outer": 8 },
+      { "screen": "secondary", "inner": 4, "outer": 6 },
+    ],
+    "master": { "position": "left", "ratio": 60 },
+    "floating": {
+      "defaultPosition": "default",
+      "presets": [
+        { "name": "wide", "width": "80%", "height": 600, "center": true },
+        { "name": "corner", "width": 640, "height": "50%", "x": 20, "y": "10%" },
+      ],
+    },
+    "workspaces": [
+      {
+        "name": "code",
+        "screen": "main",
+        "layout": "split-horizontal",
+        "rules": [{ "appId": "com.apple.dt.Xcode", "title": "Docs" }, { "appName": "Terminal" }],
+        "preset-on-open": "wide",
+      },
+      { "name": "web", "screen": "secondary", "layout": "master" },
+    ],
+    "ignore": [{ "appId": "com.apple.systempreferences" }, { "appName": "Preview" }],
+    "borders": {
+      "enabled": true,
+      "style": "round",
+      "hidpi": true,
+      "focused": { "width": 4, "color": "#b4befe" },
+      "unfocused": { "width": 2, "glow": "#45475a" },
+      "monocle": {
+        "width": 4,
+        "gradient": { "from": "#f38ba8", "to": "#89b4fa", "angle": 45 },
+        "animation": { "duration": 800, "easing": "ease-in-out" },
+      },
+      "floating": false,
+      "splitVertical": { "width": 3, "color": "#a6e3a1" },
+      "splitHorizontal": false,
+      "ignore": [{ "appName": "Calculator" }],
+    },
+  },
+}

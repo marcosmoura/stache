@@ -563,7 +563,7 @@ fn a_changed_config_or_topology_target_creates_a_new_attempt() {
 fn in_flight_attempts_are_bounded() {
     let mut fixture = Fixture::new(
         one_screen(),
-        config(serde_json::json!({ "defaultLayout": "split" })),
+        config(serde_json::json!({ "default_layout": "split" })),
         40,
     );
     let first = writes(&fixture.enable());
@@ -592,8 +592,8 @@ fn floating_layout_writes_nothing() {
         // `center` (the default) centers a newly floating window once; keeping the
         // application frame is what this test isolates.
         config(serde_json::json!({
-            "defaultLayout": "floating",
-            "floating": { "defaultPosition": "default" }
+            "default_layout": "floating",
+            "floating": { "default_position": "default" }
         })),
         2,
     );

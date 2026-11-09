@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use stache_sdk::{ConfigError, ModuleConfig, ModuleId};
 
-/// The accepted `targetApp` forms, appended to every parse failure.
+/// The accepted `target_app` forms, appended to every parse failure.
 const ACCEPTED_FORMS: &str =
     "expected an absolute .app path or a bundle identifier such as com.example.player";
 
@@ -23,7 +23,7 @@ pub enum ReplacementTarget {
 }
 
 impl ReplacementTarget {
-    /// Parses one configured `targetApp` value.
+    /// Parses one configured `target_app` value.
     ///
     /// A value containing a path separator or ending in `.app` is a path and
     /// must be absolute; anything else must be a bundle identifier.
@@ -53,7 +53,7 @@ impl ReplacementTarget {
 
 /// Automatic Apple Music and iTunes blocking.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Type)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default, rename_all = "snake_case")]
 pub struct NoTunesConfig {
     /// Whether the blocker should run.
     pub enabled: bool,
@@ -71,7 +71,7 @@ impl NoTunesConfig {
     /// The configured replacement, or `None` for block-only.
     ///
     /// # Errors
-    /// Returns the parse reason for an invalid `targetApp` value.
+    /// Returns the parse reason for an invalid `target_app` value.
     pub fn target(&self) -> Result<Option<ReplacementTarget>, String> {
         self.target_app.as_deref().map(ReplacementTarget::parse).transpose()
     }
@@ -83,7 +83,7 @@ impl ModuleConfig for NoTunesConfig {
     fn validate(&self) -> Result<(), ConfigError> {
         self.target()
             .map(|_| ())
-            .map_err(|error| ConfigError::new(format!("targetApp is invalid: {error}")))
+            .map_err(|error| ConfigError::new(format!("target_app is invalid: {error}")))
     }
 
     /// Translates the legacy preset spellings that `config migrate` may meet.
@@ -103,7 +103,7 @@ impl ModuleConfig for NoTunesConfig {
                 && object.get("enabled").and_then(serde_json::Value::as_bool) == Some(true);
             return if relied_on_default {
                 vec![
-                    "notunes had no targetApp; the migrated file blocks without launching a replacement"
+                    "notunes had no target_app; the migrated file blocks without launching a replacement"
                         .to_owned(),
                 ]
             } else {
@@ -260,7 +260,7 @@ mod tests {
                 target_app: Some(value.to_owned()),
             };
             let error = config.validate().expect_err("legacy spelling");
-            assert!(error.message().contains("targetApp"), "{error}");
+            assert!(error.message().contains("target_app"), "{error}");
         }
     }
 
@@ -273,7 +273,7 @@ mod tests {
         let encoded = serde_json::to_value(&config).expect("encode");
         assert_eq!(
             encoded,
-            json!({ "enabled": true, "targetApp": "/Applications/My Player.app" })
+            json!({ "enabled": true, "target_app": "/Applications/My Player.app" })
         );
         let decoded: NoTunesConfig = serde_json::from_value(encoded).expect("decode");
         assert_eq!(decoded, config);
@@ -286,8 +286,8 @@ mod tests {
         let warnings = catalog
             .inspect(
                 NoTunesConfig::ID,
-                std::path::Path::new("notunes.jsonc"),
-                r#"{ "enabled": true, "targetApp": "com.example.player", "target": "tidal" }"#,
+                std::path::Path::new("notunes.toml"),
+                "enabled = true\ntarget_app = \"com.example.player\"\ntarget = \"tidal\"\n",
             )
             .expect("the file stays valid");
         assert_eq!(warnings, ["target"]);
@@ -298,8 +298,8 @@ mod tests {
         let mut catalog = ConfigCatalog::new();
         catalog.register::<NoTunesConfig>(NoTunesConfig::ID).expect("register");
         let template = catalog.template(NoTunesConfig::ID).expect("template");
-        assert!(template.contains("\"enabled\": false"), "{template}");
-        assert!(!template.contains("targetApp"), "{template}");
+        assert!(template.contains("\nenabled = false\n"), "{template}");
+        assert!(!template.contains("target_app"), "{template}");
     }
 
     #[test]
@@ -309,11 +309,11 @@ mod tests {
         let diagnostic = catalog
             .inspect(
                 NoTunesConfig::ID,
-                std::path::Path::new("notunes.jsonc"),
-                r#"{ "targetApp": "spotify" }"#,
+                std::path::Path::new("notunes.toml"),
+                "target_app = \"spotify\"\n",
             )
             .expect_err("legacy spelling");
         assert_eq!(diagnostic.kind, stache_sdk::DiagnosticKind::Validation);
-        assert!(diagnostic.message.contains("targetApp"), "{diagnostic}");
+        assert!(diagnostic.message.contains("target_app"), "{diagnostic}");
     }
 }
