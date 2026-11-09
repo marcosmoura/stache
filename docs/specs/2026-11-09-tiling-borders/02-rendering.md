@@ -2,39 +2,46 @@
 status: draft
 ---
 
-# 02 — Rendering styles
+# 02 — Static rendering styles
 
-Read when implementing after part 01 and separate approval. Paths are under `src/crates/`. Still behind `native-borders`; production unchanged.
+Read when implementing after part 01 and separate approval. Paths are under `src/crates/`. Still behind `native-borders`; production unchanged. Animations are [part 03](03-animations.md).
 
 ## Scope
 
-`macos/src/border_overlay/` (layer tree and `BorderAppearance`), and a new pure mapping in `modules/tiling/src/borders/appearance.rs` from `BorderStateConfig` to `BorderAppearance`, reusing `parse_color`, `is_enabled` and `focused_state` from `borders/policy.rs` (moved, not duplicated, so part 06 can delete the JankyBorders argv code alone). Studied for approach (decision 5): JankyBorders `src/border.c` (`border_draw`: outset frame, inner clip path), `src/misc/drawing.h` (stroke, gradient direction, glow). Stache draws with Core Animation layers rather than a Core Graphics bitmap.
+`macos/src/border_overlay/` (layer tree and `BorderAppearance`), and a new pure mapping in `modules/tiling/src/borders/appearance.rs` from `BorderStateConfig` to `BorderAppearance`, reusing `parse_color`, `is_enabled` and `focused_state` from `borders/policy.rs` (moved, not duplicated, so part 08 can delete the JankyBorders argv code alone). Studied for approach (decision 5): JankyBorders `src/border.c` (`border_draw`: outset frame, inner clip path), `src/misc/drawing.h` (stroke, gradient direction, glow). Stache draws with Core Animation layers rather than a Core Graphics bitmap.
 
 ## Requirements
 
-- **Appearance (plain data).** `BorderAppearance { width, style, hidpi, paint, corner_radius }` with `paint` one of `Solid(Rgba)`, `Gradient { from, to, direction, animation }`, `Glow(Rgba)`. A disabled state maps to "no overlay" (the overlay is hidden, not drawn transparent). An unparsable color keeps today's behavior: transparent paint with its width (`policy.rs` `state_settings`), so nothing visible is drawn.
+- **Appearance (plain data).** `BorderAppearance { width, style, hidpi, paint, corner_radius }` with `paint` one of `Solid(Rgba)`, `Gradient { from, to, angle }`, `Glow(Rgba)`; part 03 adds the motion fields. A disabled state maps to "no overlay" (the overlay is hidden, not drawn transparent). An unparsable color keeps today's behavior: transparent paint with its width (`policy.rs` `state_settings`), so nothing visible is drawn.
 - **Colors.** Hex and `rgb()`/`rgba()` parse exactly as `parse_color` today (sRGB, channel values identical to the current `0xAARRGGBB` rounding).
-- **Width.** Per OQ-1 default, every border uses the active state's width (as `focus_command` sends today). Width 0 hides the overlay.
+- **Width (resolved OQ-1).** Every border uses the active (focused) state's width, as `focus_command` sends today; `unfocused.width` and override widths of non-active states are not used. Width 0 hides the overlay.
 - **Style.** `round` strokes a rounded rectangle whose inner edge follows the corner radius from part 01; `square` strokes a plain rectangle. The stroke lies entirely outside the target frame.
 - **Solid.** A `CAShapeLayer` stroke (no fill) of the path.
-- **Gradient.** A `CAGradientLayer` masked by the stroke shape. Direction per OQ-2 default is identical to `gradient_to_janky`: normalize the angle to `[0, 360)`; `[0, 90)` and `[180, 270)` run top-right → bottom-left, the others top-left → bottom-right.
-- **Gradient animation.** When the active state is a gradient with `animation`, the colors ping-pong as today (`PingPong`: leg `duration`, minimum 16 ms, eased per leg, direction flips). It runs as one Core Animation animation on the render server (`colors` animated with autoreverse and infinite repeat), with the easing mapped to a `CAMediaTimingFunction` (linear, ease-in, ease-out, ease-in-out, ease-out-expo as control points; `spring` is linear as in `apply_easing`). No per-frame process wakeup, IPC or timer; the 8 fps cap of part 09 (`ANIMATION_FPS`) does not apply. Only the focused window's border animates (today's behavior); a focus change removes the animation from the old border.
+- **Gradient.** A `CAGradientLayer` (axial, two stops) masked by the stroke shape, drawn in the exact configured direction (below).
 - **Glow.** A stroke of the glow color plus a layer shadow of the same color (offset 0, radius derived from width, opacity 1), clipped to stay outside the target frame. Exact visual parity with JankyBorders glow is not required; the user judges it in the native check.
-- **Updates.** Changing appearance updates layer properties in place (no overlay recreation); recoloring on focus change is a property change only.
+- **Updates.** Changing appearance updates layer properties in place (no overlay recreation); recoloring on focus change is a property change only. Without a configured transition (part 03) every change is instant: implicit actions stay disabled.
+
+### Gradient direction
+
+Resolved OQ-2: any direction, drawn exactly. The field keeps its documented meaning (`config/borders.rs`, `GradientConfig::angle`: "0 is left to right, 90 bottom to top"); no field is added because one angle already expresses every direction.
+
+- **Convention.** Normalize `angle` to `[0, 360)`. The gradient runs along the screen direction `(cos a, sin a)` with x to the right and y **up**: 0° left → right, 90° bottom → top, 180° right → left, 270° top → bottom, 45° bottom-left → top-right, 135° bottom-right → top-left. Angles grow counterclockwise. `from` is drawn at the start, `to` at the end.
+- **Extent.** Measured in points on the overlay's outer rectangle (not the unit square, so a wide window keeps the true angle): `from` is exact at the corner that lies furthest against the direction, `to` at the opposite corner, linear in between, and isolines are perpendicular to the direction (the CSS `linear-gradient` corner rule). A pure function `gradient_points(size, angle) -> (start, end)` returns the `CAGradientLayer` `startPoint`/`endPoint` in its unit space (accounting for the layer's y-up geometry); it is recomputed whenever the overlay size changes.
+- **Visual change from today (document in part 08).** JankyBorders drew two buckets: normalized `[0, 90)` and `[180, 270)` as `from` top-right → `to` bottom-left, the rest as `from` top-left → `to` bottom-right. Exact drawing matches that only at 225° and 315°. Axis angles (0, 90, 180, 270) now draw horizontal or vertical gradients; 45° and 135° are the reverse of today. The default angle 90 changes from a top-left → bottom-right diagonal to a bottom → top gradient. Users wanting the old look set 225 or 315. Existing configurations keep parsing unchanged.
 
 ## Acceptance criteria
 
-- [ ] TB-02-01: Pure mapping tests cover every `BorderStateConfig` variant, disabled and unparsable colors, `rgb()`/`rgba()`, width 0, both styles and every angle boundary (0, 89.99, 90, 180, 270, -90, 360, 720) with results identical to the current `policy.rs` tests.
-- [ ] TB-02-02: Easing to timing-function mapping is total and tested; the gradient animation is a single CA animation description (fake layer records it), installed only on the focused border and removed on focus loss or reconfigure.
-- [ ] TB-02-03: Recolor and width changes mutate the fake layer tree in place without creating a new overlay; disabled states hide the overlay.
+- [ ] TB-02-01: Pure mapping tests cover every `BorderStateConfig` variant, disabled and unparsable colors, `rgb()`/`rgba()`, width 0 and both styles, with color, precedence and width results identical to the current `policy.rs` tests; every border's width is the active state's width.
+- [ ] TB-02-02: `gradient_points` is tested for 0, 45, 90, 135, 180, 225, 270, 315, 359.99, -90, 360 and 720 on a square, a 3:1 and a 1:3 size: the direction in points equals the angle within 0.01°, `from` lands on the documented corner or edge, and 225/315 match today's bucket corners.
+- [ ] TB-02-03: Recolor, angle and width changes mutate the fake layer tree in place without creating a new overlay or an implicit animation; disabled states and width 0 hide the overlay.
 
 ## Tests
 
-Pure tests in `modules/tiling/src/borders/appearance.rs` (port the color, precedence and angle cases from `borders/tests.rs`), fake layer tree tests in `macos/src/border_overlay/tests.rs`. Default tests create no real layer.
+Pure tests in `modules/tiling/src/borders/appearance.rs` (port the color, precedence and width cases from `borders/tests.rs`; the angle bucket cases are replaced by the exact-direction table above), fake layer tree tests in `macos/src/border_overlay/tests.rs`. Default tests create no real layer.
 
 ## Native gate (per-run approval)
 
-Combined with part 01's gate when approved together: render each style (solid, gradient both directions, glow, round, square, hidpi on/off) on an owned test window on a 2× and a 1× display; record CPU and wakeups with an animated gradient running for 60 s against borders off.
+Combined with part 01's gate when approved together: render each style (solid; gradient at 0, 45, 90, 180, 270 and 315 on a wide and a tall window; glow; round; square; hidpi on/off) on an owned test window on a 2× and a 1× display. Pass: the user confirms each gradient runs in the documented direction.
 
 ## Review checklist
 
@@ -43,5 +50,5 @@ Combined with part 01's gate when approved together: render each style (solid, g
 ## Notes
 
 - Rollback: revert to part 01's solid stroke.
-- Unverified: glow look, CA animation cost on the render server, color space match with JankyBorders.
-- Docs: none lasting until part 06; appearance rules are recorded in this spec.
+- Unverified: glow look, color space match with JankyBorders, `CAGradientLayer` unit-space orientation on macOS (covered by the gate).
+- Docs: none lasting until part 08; appearance rules are recorded in this spec.
