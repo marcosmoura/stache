@@ -1,7 +1,7 @@
 # Runtime rewrite roadmap
 
 Read when checking what is finished, awaiting integration, specified or still planned.
-Snapshot: **2026-11-08**. Here, **finished/shipped means merged into `main`**, not a
+Snapshot: **2026-11-10**. Here, **finished/shipped means merged into `main`**, not a
 packaged public release. Only an ad-hoc development bundle exists; no release artifact
 has shipped.
 
@@ -24,6 +24,7 @@ has shipped.
 | Specified, not started     | [Tiling–Bar integration](specs/2026-11-08-tiling-bar/00-overview.md)                 | 1 draft part                        | `feat/tiling-bar`; last runtime rewrite; workspace strip and end-to-end reservation gates.                                                                                              |
 | Specified, not started     | [Release and packaging](specs/2026-11-03-release/00-overview.md)                     | 6 draft parts                       | `feat/release`; independent of runtime rewrite order.                                                                                                                                   |
 | Planned, no dedicated spec | Tray “Reload Stache”                                                                 | Not shipped or separately specified | Release-only follow-up; coordinated restart prerequisite is shipped.                                                                                                                    |
+| Specified, not started     | [GPUI evaluation](specs/2026-11-10-gpui-evaluation/00-overview.md)                   | 3 draft parts                       | `feat/gpui-evaluation`; bottom priority: starts only when the owner selects it and no other workstream has an actionable part; never blocks other work.                                 |
 
 Foundation also includes the owned [module SDK](architecture/sdk.md),
 [typed configuration and reload](architecture/config.md), [socket IPC and standalone CLI](architecture/ipc.md),
@@ -45,6 +46,11 @@ native checks were not run. Bar foundation is recorded on `main` after its appro
 merge (2026-11-08): the generic published-state and screen-reservation contracts Tiling 05 and Bar 03–08
 build on, with no Bar runtime. Specified work has only documentation on its branches: a draft is not
 approval. Implement one authorized part at a time.
+The GPUI evaluation is always bottom priority: a part starts only when the owner explicitly
+selects it and every other workstream, including Release and Tray Reload, is finished or has
+no actionable part (each remaining part is blocked on an external gate such as credentials).
+Selecting another workstream's part pauses it at a part boundary, and nothing may depend on,
+wait for or be reordered by it.
 
 ## Runtime sequence and hard gates
 
