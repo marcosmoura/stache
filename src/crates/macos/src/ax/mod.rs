@@ -46,9 +46,10 @@ pub use observer::{
 };
 pub use window::{
     AxFrame, AxPoint, AxReading, AxSize, BoolAttribute, FrameRead, FrameWriteOutcome,
-    GeometryAttribute, TAB_GROUP_ROLE, TAB_GROUP_SCAN_LIMIT, TabExtraction, TabGroupRead,
-    TabMemberRead, WindowAx, WindowString, WriteStatus, extract_tabs, read_frame, read_tab_group,
-    resizable, write_frame, write_frame_gated,
+    GeometryAttribute, TAB_BAR_MAX_DEPTH, TAB_BAR_NODE_BUDGET, TAB_GROUP_ROLE,
+    TAB_GROUP_SCAN_LIMIT, TabBarShape, TabExtraction, TabGroupRead, TabGroupSearch, TabMemberRead,
+    WindowAx, WindowString, WriteStatus, extract_tabs, find_tab_group, read_frame,
+    read_tab_bar_shape, read_tab_group, resizable, write_frame, write_frame_gated,
 };
 pub use window_id::{WindowIdCapability, WindowIdError, WindowIdResolver};
 

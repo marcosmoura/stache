@@ -109,6 +109,7 @@ const fn event_application(kind: &WindowEventKind) -> Option<ApplicationId> {
         WindowEventKind::Window { window, .. } => Some(window.application()),
         WindowEventKind::Application { application, .. }
         | WindowEventKind::EnumerationComplete { application, .. }
+        | WindowEventKind::EnumerationUnsettled { application, .. }
         | WindowEventKind::EnumerationAborted { application, .. }
         | WindowEventKind::ObserverOverflow { application } => Some(*application),
         WindowEventKind::CapabilityChanged { .. } => None,
@@ -356,7 +357,7 @@ impl Pipeline {
             }
             WindowEventKind::Window {
                 window,
-                change: WindowChange::Destroyed,
+                change: WindowChange::Destroyed | WindowChange::Suspended,
             } => {
                 if self.geometry.remove(*window) {
                     self.stats.geometry_invalidated += 1;

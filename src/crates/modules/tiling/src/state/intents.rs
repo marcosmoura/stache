@@ -90,7 +90,7 @@ fn focusable(state: &TilingState, index: usize) -> Vec<WindowInstance> {
         .iter()
         .filter(|token| {
             state.windows.get(token).is_some_and(|w| {
-                let f = w.flags();
+                let f = state.flags_of(w);
                 !(f.inactive_tab || f.fullscreen || f.minimized || f.hidden)
             })
         })
@@ -379,7 +379,7 @@ fn eligible_index(state: &TilingState, index: usize, token: WindowInstance) -> O
         .iter()
         .filter(|held| {
             state.windows.get(held).is_some_and(|w| {
-                let f = w.flags();
+                let f = state.flags_of(w);
                 !(f.explicit_floating || f.inactive_tab || f.fullscreen || f.minimized || f.hidden)
             })
         })
@@ -471,7 +471,7 @@ fn preset(state: &mut TilingState, name: &str) -> IntentOutcome {
     let token = state.focus.window.filter(|t| workspace.order.contains(t));
     let eligible = token.is_some_and(|t| {
         state.windows.get(&t).is_some_and(|w| {
-            let f = w.flags();
+            let f = state.flags_of(w);
             !(f.inactive_tab || f.fullscreen || f.minimized || f.hidden)
         })
     });

@@ -229,6 +229,14 @@ pub enum ManagementExclusion {
     SystemAppName,
     /// A Picture-in-Picture window.
     PictureInPicture,
+    /// A Finder "Get Info" window (legacy popup exclusion).
+    FinderInfo,
+    /// A sheet, drawer or `AXUnknown` panel: attached or popup-like.
+    NonStandardSubrole,
+    /// An `AXDialog` smaller than 400x300 (alerts, pickers).
+    DialogTooSmall,
+    /// An ordinary window smaller than 200x150 (helper or invisible windows).
+    TooSmall,
     /// A configured global `ignore` rule matched.
     IgnoreRule {
         /// Index of the matching rule.
@@ -263,6 +271,47 @@ pub fn is_system_app_name(name: &str) -> bool {
     !name.is_empty() && SKIP_TILING_APP_NAMES.iter().any(|skip| name.eq_ignore_ascii_case(skip))
 }
 
+/// Smallest ordinary window that is tiled (legacy `MIN_STANDARD_*`).
+pub const MIN_STANDARD_SIZE: (f64, f64) = (200.0, 150.0);
+/// Smallest dialog that is tiled (legacy `MIN_DIALOG_*`).
+pub const MIN_DIALOG_SIZE: (f64, f64) = (400.0, 300.0);
+
+impl ManagementExclusion {
+    /// A short stable label for diagnostics and the status query.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::SelfApplication => "stache itself",
+            Self::SystemBundle => "system component (bundle id)",
+            Self::SystemAppName => "system component (name)",
+            Self::PictureInPicture => "picture-in-picture",
+            Self::FinderInfo => "finder info window",
+            Self::NonStandardSubrole => "sheet, drawer or unknown-subrole panel",
+            Self::DialogTooSmall => "dialog below 400x300",
+            Self::TooSmall => "window below 200x150",
+            Self::IgnoreRule { .. } => "ignore rule",
+        }
+    }
+}
+
+/// The legacy enumeration filter a window must pass to be *adopted*: sheets,
+/// drawers and `AXUnknown` panels are refused, dialogs must be at least
+/// 400x300 and every other window at least 200x150. An unread frame cannot be
+/// judged and does not exclude (it is judged again by its next snapshot). Only
+/// new windows are judged, so a layout that shrinks a tile never untracks it.
+#[must_use]
+pub fn adoption_exclusion(
+    subrole: Option<&str>,
+    size: Option<(f64, f64)>,
+) -> Option<ManagementExclusion> {
+    let below = |minimum: (f64, f64)| size.is_some_and(|(w, h)| w < minimum.0 || h < minimum.1);
+    match subrole {
+        Some("AXSheet" | "AXDrawer" | "AXUnknown") => Some(ManagementExclusion::NonStandardSubrole),
+        Some("AXDialog") => below(MIN_DIALOG_SIZE).then_some(ManagementExclusion::DialogTooSmall),
+        _ => below(MIN_STANDARD_SIZE).then_some(ManagementExclusion::TooSmall),
+    }
+}
+
 /// Returns why a window must never be managed, or `None` if it may be.
 ///
 /// Order: self, system bundle, system name, Picture-in-Picture, then global
@@ -286,6 +335,9 @@ pub fn management_exclusion(
     }
     if is_pip_window(input.subrole) {
         return Some(ManagementExclusion::PictureInPicture);
+    }
+    if bundle.eq_ignore_ascii_case("com.apple.finder") && input.metadata.title.ends_with(" Info") {
+        return Some(ManagementExclusion::FinderInfo);
     }
     ignore
         .first_match(&input.metadata)

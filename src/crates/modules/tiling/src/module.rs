@@ -872,6 +872,7 @@ impl Module for TilingModule {
         options.defer_begin = true;
         options.probe.clone_from(&parts.timing.probe);
         options.borders.clone_from(&parts.borders);
+        options.logger = Some(ctx.logger().clone());
         inner.status.borders_failure(None);
         let status = inner.status.clone();
         let sink: FaultSink = Arc::new(move |fault| {
@@ -1062,6 +1063,11 @@ impl Module for TilingModule {
                 &token,
                 guards,
             ));
+        }
+        // Optional: without these watches new applications, hide/unhide and
+        // Cmd-Tab are not seen, which the run reports but does not refuse.
+        if let Err(reason) = runtime.watch_applications() {
+            ctx.logger().warn(format!("application watches unavailable: {reason}"));
         }
         if runtime.submit_config(pair.revision, Arc::clone(&pair.config)).is_err() {
             return Err(self.rollback(

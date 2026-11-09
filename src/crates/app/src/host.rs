@@ -723,9 +723,11 @@ impl TilingFactory {
     ///   application directory;
     /// - displays come from a system [`stache_macos::DisplayControl`] over the
     ///   same main-thread executor;
-    /// - native tab reads stay off (`AdapterOptions::read_tabs` is false): the
-    ///   read path is implemented and fake-proven but has no native evidence, so
-    ///   status reports tabs as not read and every window is an ordinary tile.
+    /// - the `CGWindowID`-keyed tab member reads stay off
+    ///   (`AdapterOptions::read_tabs` is false): their window id mapping is
+    ///   proven wrong, so status reports tabs as not read. The owner instead
+    ///   reads each window's tab bar identity (`read_tab_bars`), the shared
+    ///   `AXTabGroup` element `AppKit` moves between the windows of a group.
     #[must_use]
     pub fn production(main_thread: Arc<dyn MainThreadExecutor>, self_bundle_id: &str) -> Self {
         let applications = stache_tiling::ControlActionsSource::new(ApplicationControl::system(
@@ -733,7 +735,10 @@ impl TilingFactory {
         ));
         let mut parts = TilingParts::new(
             Arc::new(stache_tiling::LazySystemBackend::new(
-                stache_macos::windows::AdapterOptions::default(),
+                stache_macos::windows::AdapterOptions {
+                    read_tabs: false,
+                    read_tab_bars: true,
+                },
             )),
             Arc::new(NoApplications),
             DisplayProjection::new(crate::display::sdk_display_id),

@@ -92,7 +92,7 @@ impl Built {
     }
 }
 
-fn config() -> Value {
+pub fn config() -> Value {
     json!({"workspaces": [
         {"name": "a", "screen": "main"},
         {"name": "b", "screen": "main"},
@@ -551,6 +551,20 @@ fn apps_come_from_the_catalog_and_skip_system_components() {
         ]),
         "the Dock is a system component and is skipped"
     );
+}
+
+#[test]
+fn the_status_query_answers_the_phase_and_takes_no_filters() {
+    let (rig, ..) = Rig::standard();
+    let status = rig.query(json!({"kind": "status"}));
+    assert!(status["phase"].is_string(), "{status}");
+    assert!(
+        status["failedApps"].is_array() && status["noFrame"].is_array(),
+        "{status}"
+    );
+    assert!(status["trackedWindows"].is_array() && status["excludedWindows"].is_array());
+    let (kind, _) = rig.err("query", json!({"kind": "status", "screen": "main"}));
+    assert_eq!(kind, HandlerErrorKind::InvalidParams);
 }
 
 #[test]

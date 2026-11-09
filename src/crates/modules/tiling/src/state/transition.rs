@@ -10,19 +10,20 @@
 use std::collections::BTreeSet;
 
 use stache_macos::applications::LifecycleKind;
-use stache_macos::ax::AxReading;
+use stache_macos::ax::{AxError, AxReading};
 use stache_macos::windows::{
-    ApplicationChange, Capability, SnapshotOrigin, SnapshotOutcome, TrackOutcome, WindowChange,
-    WindowEvent, WindowEventKind, WindowInstance, WindowSnapshot,
+    ApplicationChange, Capability, DispatchError, FocusOutcome, SnapshotOrigin, SnapshotOutcome,
+    StaleReason, TabBarId, TabBarRead, TrackOutcome, WindowChange, WindowEvent, WindowEventKind,
+    WindowInstance, WindowSnapshot,
 };
 use stache_macos::{ApplicationId, DisplayId, DisplayLayout};
 
 use super::{
     AppInfo, AppRecord, Cause, CompletionResult, DesiredWindow, Effect, FOCUS_HISTORY_CAPACITY,
-    FocusState, Health, HealthFault, Input, MAX_PENDING_TRACKS, MAX_UNCONFIRMED_APPS,
+    FocusState, Health, HealthFault, Input, MAX_TRACK_RETRIES, MAX_UNCONFIRMED_APPS,
     OVERLOAD_THRESHOLD, ObservedWindow, Scan, Scope, ScreenState, Stamp, TOMBSTONE_CAPACITY,
     TRACK_CHUNK, TilingState, WORKSPACE_HISTORY_CAPACITY, WindowState, WorkspaceId, drag, frames,
-    intents, tab_sync,
+    intents, slots, tab_sync,
 };
 use crate::config::TilingConfig;
 use crate::geometry::Rect;
@@ -53,7 +54,28 @@ fn apply(state: &mut TilingState, input: Input, fx: &mut Vec<Effect>) {
         Input::Start(stamp) => start(state, stamp, fx),
         Input::Window(event) => window_event(state, event, fx),
         Input::Lifecycle { kind, info } => lifecycle(state, kind, info, fx),
-        Input::Activated(application) => state.active_application = Some(application),
+        Input::Activated(application) => {
+            state.active_application = Some(application);
+            // An application the user brings forward gets another chance.
+            retry_unsettled(state, application);
+            if state.apps.contains_key(&application) {
+                // Provisional: only a window already on a visible workspace. The
+                // application's real focused window decides a workspace switch.
+                focus_application(state, application);
+                let tracked = state.apps.get(&application).is_some_and(|r| r.tracked);
+                if let (true, Some(stamp)) = (tracked, state.stamp) {
+                    fx.push(Effect::ReadFocus { stamp, application });
+                }
+            } else if state.stamp.is_some() && state.reconcile.probed.insert(application) {
+                // Unknown to the registry (it was not listed: no pid yet, not
+                // regular then, or launched before the watches): list again.
+                if state.reconcile.probed.len() > MAX_PROBED_APPS {
+                    state.reconcile.probed.clear();
+                }
+                request_listing(state, fx);
+            }
+        }
+        Input::Relist => request_listing(state, fx),
         Input::Applications { stamp, apps } => {
             if state.stamp == Some(stamp) {
                 applications(state, apps, fx);
@@ -65,6 +87,8 @@ fn apply(state: &mut TilingState, input: Input, fx: &mut Vec<Effect>) {
         Input::Config { revision, config } => apply_config(state, revision, config, fx),
         Input::Intent(intent) => intents::apply(state, intent, fx),
         Input::Drag(signal) => drag::signal(state, signal, fx),
+        Input::SettleExpired(application) => settle_expired(state, application),
+        Input::RetryTrack(application) => retry_transient(state, application),
         Input::GeometryBatch(tokens) => {
             let Some(stamp) = state.stamp else { return };
             for token in tokens {
@@ -104,6 +128,21 @@ fn start(state: &mut TilingState, stamp: Stamp, fx: &mut Vec<Effect>) {
     fx.push(Effect::ListApplications { stamp });
 }
 
+/// The most unlisted applications remembered as already probed.
+const MAX_PROBED_APPS: usize = 256;
+
+/// Asks for the running-application list, coalescing with one in flight: a list
+/// already running may predate the reason, so exactly one more follows it.
+fn request_listing(state: &mut TilingState, fx: &mut Vec<Effect>) {
+    let Some(stamp) = state.stamp else { return };
+    if state.reconcile.listing {
+        state.reconcile.relist = true;
+    } else {
+        state.reconcile.listing = true;
+        fx.push(Effect::ListApplications { stamp });
+    }
+}
+
 /// Drops everything bound to the previous registry; screens and workspaces stay.
 fn reset_registry(state: &mut TilingState) {
     state.diagnostics.registry_restarts += 1;
@@ -112,6 +151,7 @@ fn reset_registry(state: &mut TilingState) {
     state.cg_index.clear();
     state.apps.clear();
     state.active_application = None;
+    state.pending_focus = super::PendingFocus::default();
     state.focus = FocusState::default();
     state.focus_history.clear();
     state.workspace_history.clear();
@@ -125,6 +165,7 @@ fn reset_registry(state: &mut TilingState) {
     state.drag.gesture = None;
     frames::reset(state);
     state.tabs.reset();
+    state.tab_outbox = super::TabOutbox::default();
     for workspace in &mut state.workspaces {
         workspace.order.clear();
         workspace.focused_window = None;
@@ -139,19 +180,29 @@ fn app_skipped(state: &TilingState, info: &AppInfo) -> bool {
     own || is_system_bundle(&info.bundle_id) || is_system_app_name(&info.name)
 }
 
-fn add_app(state: &mut TilingState, info: AppInfo) {
+/// Adds a running application. `launched` is true only for a launch event: a
+/// failed application is given another attempt then (and on activation), never
+/// merely because a routine list named it again.
+fn add_app(state: &mut TilingState, info: AppInfo, launched: bool) {
+    // macOS reports pid -1 (or 0) for an application that has not finished
+    // launching; tracking it can only fail. It is added when a later listing or
+    // its launch event carries a real pid.
+    if info.pid <= 0 {
+        return;
+    }
     let application = info.application;
     if let Some(record) = state.apps.get_mut(&application) {
         record.info = info;
+        if launched {
+            retry_unsettled(state, application);
+        }
         return;
     }
     let skipped = app_skipped(state, &info);
     if !skipped {
-        if state.startup.pending.len() >= MAX_PENDING_TRACKS {
-            state.startup.failed.insert(application);
-        } else {
-            state.startup.pending.push_back(info.clone());
-        }
+        // Tracking is chunked by `pump_tracks`; the queue holds at most one
+        // entry per running application, so nothing is dropped.
+        state.startup.pending.push_back(info.clone());
     }
     state.apps.insert(application, AppRecord {
         info,
@@ -159,6 +210,85 @@ fn add_app(state: &mut TilingState, info: AppInfo) {
         skipped,
         tracked: false,
     });
+}
+
+/// The user brought `application` forward: provisionally focus its most
+/// recently focused window, else its first one, **among windows on a workspace
+/// that is already visible**. This never switches a workspace: an application
+/// whose windows are all on hidden workspaces keeps the focus as it is until its
+/// real focused window is read (`Effect::ReadFocus`) and reported. An
+/// application without a tracked window leaves the focus alone too; the first
+/// window it adopts takes the focus (see `ingest`).
+pub(super) fn focus_application(state: &mut TilingState, application: ApplicationId) {
+    let visible: BTreeSet<WorkspaceId> =
+        state.workspaces.iter().filter(|ws| ws.visible).map(|ws| ws.id).collect();
+    let usable = |token: &WindowInstance| {
+        state.windows.get(token).is_some_and(|window| {
+            window.application == application
+                && !window.observed.minimized
+                && !window.is_inactive_tab()
+                && !window.suspended
+                && window.desired.workspace.is_some_and(|id| visible.contains(&id))
+        })
+    };
+    let remembered = state.focus_history.iter().rev().find(|token| usable(token)).copied();
+    let chosen = remembered.or_else(|| {
+        state
+            .workspaces
+            .iter()
+            .filter(|workspace| workspace.visible)
+            .flat_map(|workspace| workspace.order.iter())
+            .find(|token| usable(token))
+            .copied()
+    });
+    if let Some(token) = chosen {
+        on_focused(state, token);
+    }
+}
+
+/// Gives a failed or truncated application another attempt, at most
+/// [`MAX_TRACK_RETRIES`] times (triggered by activation or relaunch). Only that
+/// application is affected; every other one keeps being laid out.
+fn retry_unsettled(state: &mut TilingState, application: ApplicationId) {
+    let failed = state.startup.failed.contains(&application);
+    let truncated = state.startup.truncated.contains(&application);
+    if !(failed || truncated) {
+        return;
+    }
+    let spent = state.startup.retries.entry(application).or_insert(0);
+    if *spent >= MAX_TRACK_RETRIES {
+        return;
+    }
+    *spent += 1;
+    requeue(state, application);
+}
+
+/// The time-based retry of a transient track failure. Bounded by the actor's
+/// backoff schedule, so it does not spend [`MAX_TRACK_RETRIES`].
+fn retry_transient(state: &mut TilingState, application: ApplicationId) {
+    if !state.startup.transient.remove(&application) || !state.startup.failed.contains(&application)
+    {
+        return;
+    }
+    requeue(state, application);
+}
+
+/// Queues the tracking (or the refresh, once tracked) of a failed application.
+fn requeue(state: &mut TilingState, application: ApplicationId) {
+    let Some(record) = state.apps.get(&application) else {
+        return;
+    };
+    if record.skipped {
+        return;
+    }
+    if record.tracked {
+        state.reconcile.unconfirmed.insert(application);
+    } else if !state.startup.awaiting.contains(&application)
+        && !state.startup.pending.iter().any(|info| info.application == application)
+    {
+        let info = record.info.clone();
+        state.startup.pending.push_back(info);
+    }
 }
 
 /// Adopts the authoritative list: new applications are added, vanished ones
@@ -174,7 +304,7 @@ fn applications(state: &mut TilingState, apps: Vec<AppInfo>, fx: &mut Vec<Effect
         terminate_app(state, application, fx);
     }
     for info in apps {
-        add_app(state, info);
+        add_app(state, info, false);
     }
     if let (true, Some(stamp)) = (relist, state.stamp) {
         state.reconcile.listing = true;
@@ -185,21 +315,14 @@ fn applications(state: &mut TilingState, apps: Vec<AppInfo>, fx: &mut Vec<Effect
 fn lifecycle(state: &mut TilingState, kind: LifecycleKind, info: AppInfo, fx: &mut Vec<Effect>) {
     let application = info.application;
     match kind {
-        LifecycleKind::Launched => add_app(state, info),
+        LifecycleKind::Launched => add_app(state, info, true),
         LifecycleKind::Terminated => terminate_app(state, application, fx),
         LifecycleKind::TerminatedUnresolved => {
             // The termination named no known instance: the application list is
             // authoritative, so list it again instead of keeping a dead app.
-            if let Some(stamp) = state.stamp {
-                if state.reconcile.listing {
-                    // The in-flight list may predate this termination: list
-                    // once more after it, however many arrive meanwhile.
-                    state.reconcile.relist = true;
-                } else {
-                    state.reconcile.listing = true;
-                    fx.push(Effect::ListApplications { stamp });
-                }
-            }
+            // The in-flight list may predate this termination: list once more
+            // after it, however many arrive meanwhile.
+            request_listing(state, fx);
         }
         LifecycleKind::Hidden => set_app_hidden(state, application, true),
         LifecycleKind::Unhidden => set_app_hidden(state, application, false),
@@ -229,6 +352,8 @@ fn terminate_app(state: &mut TilingState, application: ApplicationId, fx: &mut V
     }
     state.excluded.retain(|token, _| token.application() != application);
     state.tabs.forget_app(application);
+    state.tab_outbox.settle.remove(&application);
+    state.reconcile.unsettled.remove(&application);
     let tracked = state.apps.remove(&application).is_some_and(|record| record.tracked);
     if let (true, Some(stamp)) = (tracked, state.stamp) {
         fx.push(Effect::Untrack { stamp, application });
@@ -236,6 +361,9 @@ fn terminate_app(state: &mut TilingState, application: ApplicationId, fx: &mut V
     state.startup.pending.retain(|info| info.application != application);
     state.startup.awaiting.remove(&application);
     state.startup.failed.remove(&application);
+    state.startup.transient.remove(&application);
+    state.startup.failure_reasons.remove(&application);
+    state.startup.retries.remove(&application);
     state.startup.truncated.remove(&application);
     state.reconcile.unconfirmed.remove(&application);
     state.reconcile.inflight.remove(&application);
@@ -260,21 +388,46 @@ fn window_event(state: &mut TilingState, event: WindowEvent, fx: &mut Vec<Effect
     match event.kind {
         WindowEventKind::Snapshot { snapshot, origin } => {
             ingest(state, &snapshot, Some(origin), Some(event.sequence));
+            if origin == SnapshotOrigin::Created {
+                request_settle(state, snapshot.window.application());
+            }
         }
         WindowEventKind::Window { window, change } => window_change(state, window, change, fx),
         WindowEventKind::Application { application, change } => match change {
             ApplicationChange::Hidden => set_app_hidden(state, application, true),
             ApplicationChange::Shown => set_app_hidden(state, application, false),
-            // The window-level focus/main events carry the token; these carry none.
-            ApplicationChange::FocusedWindowChanged | ApplicationChange::MainWindowChanged => {}
+            // The window-level focus/main events carry the token; these carry
+            // none, so the frontmost application's window is chosen from what
+            // is known (a background application's own focus is not the user's).
+            ApplicationChange::FocusedWindowChanged | ApplicationChange::MainWindowChanged => {
+                request_settle(state, application);
+                if state.active_application == Some(application) {
+                    focus_application(state, application);
+                    // The real focused window may be one not adopted yet: read it.
+                    state.pending_focus.reads.insert(application);
+                }
+            }
         },
         WindowEventKind::EnumerationComplete { application, truncated, .. } => {
             finish_scan(state, application, truncated);
         }
-        WindowEventKind::EnumerationAborted { application, .. } => {
+        WindowEventKind::EnumerationUnsettled { application, .. } => {
+            // Listed windows were still in transition: nothing is decided about
+            // held-back windows until another listing, after a settle delay.
+            state.reconcile.unsettled.insert(application);
+            state.tab_outbox.settle.insert(application, true);
+        }
+        WindowEventKind::EnumerationAborted { application, reason } => {
             state.reconcile.inflight.remove(&application);
             state.reconcile.scans.remove(&application);
+            state.reconcile.unsettled.remove(&application);
+            slots::resolve_returns(state, application);
+            close_departing(state, application, None);
             state.startup.failed.insert(application);
+            state
+                .startup
+                .failure_reasons
+                .insert(application, format!("enumeration aborted: {reason:?}"));
             state.diagnostics.enumeration_failures += 1;
         }
         WindowEventKind::ObserverOverflow { application } => {
@@ -318,14 +471,24 @@ fn window_change(
     fx: &mut Vec<Effect>,
 ) {
     let Some(stamp) = state.stamp else { return };
+    if matches!(change, WindowChange::Focused | WindowChange::Main) {
+        request_settle(state, token.application());
+    }
     match change {
-        WindowChange::Destroyed => destroy(state, token),
+        WindowChange::Destroyed => destroy_or_depart(state, token),
+        WindowChange::Suspended => slots::suspend(state, token),
         WindowChange::Miniaturized | WindowChange::Deminiaturized => {
             let minimized = change == WindowChange::Miniaturized;
             if let Some(window) = state.windows.get_mut(&token) {
                 window.observed.minimized = minimized;
             }
         }
+        // A suspended window is not on screen: it takes no focus and no reads.
+        WindowChange::Focused
+        | WindowChange::TitleChanged
+        | WindowChange::Moved
+        | WindowChange::Resized
+            if state.windows.get(&token).is_some_and(|window| window.suspended) => {}
         WindowChange::Focused => {
             if state.windows.contains_key(&token) {
                 on_focused(state, token);
@@ -333,6 +496,7 @@ fn window_change(
             } else if !state.excluded.contains_key(&token) && !state.tombstones.contains(&token) {
                 // A focus for a window never seen: adopt it by reading it.
                 state.diagnostics.unknown_focus += 1;
+                buffer_focus(state, token);
                 fx.push(Effect::Snapshot { stamp, window: token });
             }
         }
@@ -405,6 +569,10 @@ fn exclusion_for(
 
 /// Applies a snapshot. One path for startup, reconciliation and live events,
 /// so exclusions behave identically everywhere.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one linear path: known window, exclusion, tab continuity, new window"
+)]
 fn ingest(
     state: &mut TilingState,
     snapshot: &WindowSnapshot,
@@ -438,6 +606,10 @@ fn ingest(
         observed.frame = state.windows.get(&token).and_then(|w| w.observed.frame);
     }
     let exclusion = exclusion_for(state, application, &observed);
+    // A window adopted by a creation or a read, or by a listing once startup is
+    // over (a creation held back as unsettled is adopted by the next listing),
+    // may be the one that just took the focus.
+    let live = origin != Some(SnapshotOrigin::Enumeration) || state.completed_once;
 
     if let Some(window) = state.windows.get_mut(&token) {
         let keep_title = matches!(snapshot.title, AxReading::Value(_));
@@ -447,6 +619,7 @@ fn ingest(
             window.observed.title = title;
         }
         window.cg_window_id = snapshot.cg_window_id.or(window.cg_window_id);
+        window.tab_bar = merged_tab_bar(window.tab_bar, snapshot.tab_bar);
         if let Some(why) = exclusion {
             untrack(state, token);
             state.excluded.insert(token, why);
@@ -454,8 +627,21 @@ fn ingest(
             return;
         }
         tab_sync::observe(state, snapshot, false);
+        // A suspended window listed again gets its slot back: at once for a
+        // single read, after the whole listing otherwise (the window it replaces
+        // may be reported unlisted later in the same listing).
+        slots::mark_returning(state, token);
+        if origin != Some(SnapshotOrigin::Enumeration) {
+            slots::resolve_return(state, token, true);
+        }
         return;
     }
+    let exclusion = exclusion.or_else(|| {
+        crate::rules::adoption_exclusion(
+            observed.subrole.as_deref(),
+            observed.frame.map(|frame| (frame.width, frame.height)),
+        )
+    });
     if let Some(why) = exclusion {
         if state.excluded.insert(token, why).is_none() {
             state.diagnostics.excluded_windows += 1;
@@ -463,6 +649,19 @@ fn ingest(
         return;
     }
     state.excluded.remove(&token);
+    // A window carrying the tab bar of a tracked window of the same
+    // application is that window's tab group seen through another window:
+    // AppKit swaps the window that represents the group on a new tab, a tab
+    // switch and a tab close. It takes the slot over instead of being a new tile.
+    if let TabBarRead::Bar(bar) = snapshot.tab_bar
+        && let Some(old) = tab_predecessor(state, application, bar.id, token)
+    {
+        hand_over(state, old, snapshot, observed, adopted_seq);
+        if live {
+            adopted_focus(state, token);
+        }
+        return;
+    }
     if let Some(cg) = snapshot.cg_window_id {
         // A numeric CGWindowID is metadata: a different token owning it is stale.
         if let Some(old) = state.cg_index.insert(cg, token)
@@ -480,8 +679,34 @@ fn ingest(
         observed,
         adopted_seq,
         inactive_tab: false,
+        tab_bar: merged_tab_bar(None, snapshot.tab_bar),
+        departing: None,
+        suspended: false,
+        slot_held: false,
+        tab_group: None,
+        arrival: matches!(snapshot.tab_bar, TabBarRead::Bar(bar) if bar.count >= 2),
+        returning: false,
     });
     assign(state, token);
+    // A new tabbed window that replaces the one window of the application that
+    // just left `AXWindows` alive takes that window's slot.
+    if state.windows.get(&token).is_some_and(|window| window.arrival)
+        && slots::pair(state, application)
+    {
+        tab_sync::observe(state, snapshot, false);
+        if live {
+            adopted_focus(state, token);
+        }
+        return;
+    }
+    // The application that was frontmost before any window was known takes the
+    // focus with its first window (startup has no focus notification).
+    if state.focus.window.is_none() && state.active_application == Some(application) {
+        on_focused(state, token);
+    }
+    if live {
+        adopted_focus(state, token);
+    }
     tab_sync::observe(state, snapshot, true);
     // Only a genuinely new window is a new-window event; adoption of an
     // existing one never positions anything.
@@ -491,6 +716,250 @@ fn ingest(
         FloatingTrigger::InitialAdoption
     };
     intents::position_new_floating(state, token, trigger);
+}
+
+// ------------------------------------------------------------ pending focus
+
+/// Remembers a focus notification for a window that is not tracked yet, so the
+/// exact window takes the focus when it is adopted. One per application, latest
+/// wins, bounded and short-lived.
+fn buffer_focus(state: &mut TilingState, token: WindowInstance) {
+    if state.pending_focus.buffered.len() >= super::MAX_PENDING_FOCUS {
+        state.pending_focus.buffered.clear();
+    }
+    state
+        .pending_focus
+        .buffered
+        .insert(token.application(), (token, state.sequence));
+}
+
+/// A window was adopted (or took over a slot): it takes the focus when its
+/// notification was buffered, else the frontmost application's real focused
+/// window is read. Identity only; a guess never switches a workspace.
+fn adopted_focus(state: &mut TilingState, token: WindowInstance) {
+    let application = token.application();
+    let buffered = state.pending_focus.buffered.remove(&application);
+    let fresh = buffered.is_some_and(|(held, at)| {
+        held == token && state.sequence.saturating_sub(at) <= super::PENDING_FOCUS_LIFE
+    });
+    if fresh {
+        on_focused(state, token);
+    } else if state.active_application == Some(application) {
+        state.pending_focus.reads.insert(application);
+    }
+}
+
+/// Emits the focus reads requested during this transition.
+fn issue_focus_reads(state: &mut TilingState, fx: &mut Vec<Effect>) {
+    let reads = std::mem::take(&mut state.pending_focus.reads);
+    let Some(stamp) = state.stamp else { return };
+    for application in reads {
+        if state.apps.get(&application).is_some_and(|record| record.tracked) {
+            fx.push(Effect::ReadFocus { stamp, application });
+        }
+    }
+}
+
+// ---------------------------------------------------------------- tab groups
+
+/// The tab bar a window carries after a snapshot: a bar read replaces it, "no
+/// bar" clears it, anything unknown (not read, unreadable) keeps what was known.
+const fn merged_tab_bar(
+    known: Option<stache_macos::windows::TabBar>,
+    read: TabBarRead,
+) -> Option<stache_macos::windows::TabBar> {
+    match read {
+        TabBarRead::Bar(bar) => Some(bar),
+        TabBarRead::None => None,
+        TabBarRead::NotRead | TabBarRead::Unreadable => known,
+    }
+}
+
+/// The one tracked window of `application` that carries tab bar `id`, when
+/// there is exactly one: nothing else (frame, title, `CGWindowID`) is compared,
+/// and an ambiguous match is no match.
+fn tab_predecessor(
+    state: &TilingState,
+    application: ApplicationId,
+    id: TabBarId,
+    token: WindowInstance,
+) -> Option<WindowInstance> {
+    let mut carriers = state.windows.values().filter(|window| {
+        window.application == application
+            && window.token != token
+            && window.holds_slot()
+            && window.tab_bar.is_some_and(|bar| bar.id == id)
+    });
+    let found = carriers.next()?.token;
+    carriers.next().is_none().then_some(found)
+}
+
+/// Asks the shell for one settled listing of an application with a native tab
+/// group: `AppKit` swaps the window that represents the group without telling.
+fn request_settle(state: &mut TilingState, application: ApplicationId) {
+    let tabbed = state
+        .windows
+        .values()
+        .any(|window| window.application == application && window.tab_bar.is_some());
+    if tabbed {
+        state.tab_outbox.settle.entry(application).or_insert(false);
+    }
+}
+
+/// Destroys a window, unless it belongs to a tab group with other tabs: then its
+/// slot is held until the listing settles and either another window takes the
+/// tab bar over (a close of one tab) or no window does (the last tab closed).
+fn destroy_or_depart(state: &mut TilingState, token: WindowInstance) {
+    let sequence = state.last_event_sequence;
+    let Some(window) = state.windows.get(&token) else {
+        destroy(state, token);
+        return;
+    };
+    if window.departing.is_some() {
+        return;
+    }
+    // A suspended member without the tile closes silently: it held nothing.
+    let silent = window.suspended && !window.slot_held;
+    // A slot with suspended members hands its tile to the member that is listed
+    // next, so the closing active member is held back like a tab of a bar.
+    let mates = window.tab_group.is_some_and(|group| {
+        state.windows.values().any(|member| {
+            member.token != token && member.tab_group == Some(group) && member.suspended
+        })
+    });
+    let tabbed = window.tab_bar.is_some_and(|bar| bar.count >= 2);
+    if !silent && (mates || tabbed) {
+        if let Some(window) = state.windows.get_mut(&token) {
+            window.departing = Some(sequence);
+        }
+        state.diagnostics.tab_departures_held += 1;
+        state.tab_outbox.settle.entry(token.application()).or_insert(false);
+    } else {
+        destroy(state, token);
+    }
+}
+
+/// Closes held-back windows of `application` for real. With a `floor`, only the
+/// ones held back at or before it (a listing requested later cannot have seen a
+/// successor of a window that left after it was requested).
+fn close_departing(state: &mut TilingState, application: ApplicationId, floor: Option<u64>) {
+    let closing: Vec<WindowInstance> = state
+        .windows
+        .values()
+        .filter(|window| {
+            window.application == application
+                && window.departing.is_some_and(|held| floor.is_none_or(|floor| held <= floor))
+        })
+        .map(|window| window.token)
+        .collect();
+    for token in closing {
+        destroy(state, token);
+        state.diagnostics.tab_departures_closed += 1;
+    }
+}
+
+fn settle_expired(state: &mut TilingState, application: ApplicationId) {
+    state.reconcile.unsettled.remove(&application);
+    slots::resolve_returns(state, application);
+    close_departing(state, application, None);
+    slots::settle(state, application);
+}
+
+/// `new` carries the tab bar of the tracked window `old`: it takes over the
+/// group's slot. Same workspace, same position in the workspace order, same
+/// floating and positioned flags, same focus and focus-history entries and the
+/// same frame record (so nothing is written unless the new window is off its
+/// target).
+///
+/// `old` is dead when its destroy was held back: it is tombstoned and never
+/// authorizes again. Otherwise it merely left `AXWindows` (another tab of the
+/// group is selected now): it stays tracked as a suspended member of the slot,
+/// so selecting it again finds it by element identity.
+fn hand_over(
+    state: &mut TilingState,
+    old: WindowInstance,
+    snapshot: &WindowSnapshot,
+    observed: ObservedWindow,
+    adopted_seq: Option<u64>,
+) {
+    let new = snapshot.window;
+    let Some(previous) = state.windows.get(&old) else {
+        return;
+    };
+    let dead = previous.departing.is_some();
+    let group = match previous.tab_group {
+        Some(group) => Some(group),
+        None if dead => None,
+        None => Some(slots::mint_group(state)),
+    };
+    let Some(previous) = state.windows.get(&old).cloned() else {
+        return;
+    };
+    state.windows.insert(new, WindowState {
+        token: new,
+        application: previous.application,
+        cg_window_id: snapshot.cg_window_id,
+        desired: previous.desired,
+        observed,
+        adopted_seq,
+        inactive_tab: false,
+        tab_bar: merged_tab_bar(previous.tab_bar, snapshot.tab_bar),
+        departing: None,
+        suspended: false,
+        slot_held: false,
+        tab_group: group,
+        arrival: false,
+        returning: false,
+    });
+    for workspace in &mut state.workspaces {
+        for held in &mut workspace.order {
+            if *held == old {
+                *held = new;
+            }
+        }
+        if workspace.focused_window == Some(old) {
+            workspace.focused_window = Some(new);
+        }
+    }
+    if state.focus.window == Some(old) {
+        state.focus.window = Some(new);
+    }
+    for held in &mut state.focus_history {
+        if *held == old {
+            *held = new;
+        }
+    }
+    // The history keeps one entry per window: the replacement can already be
+    // there only if it was focused before it was seen, which cannot happen for a
+    // fresh token, but keep the invariant cheap.
+    let mut seen = BTreeSet::new();
+    state.focus_history.retain(|held| seen.insert(*held));
+    frames::transfer(state, old, new);
+    if dead {
+        state.windows.remove(&old);
+        state.cg_index.retain(|_, held| *held != old);
+        for scan in state.reconcile.scans.values_mut() {
+            scan.seen.remove(&old);
+        }
+        tab_sync::forget_window(state, old, previous.cg_window_id);
+        state.excluded.remove(&old);
+        tombstone(state, old);
+    } else if let Some(window) = state.windows.get_mut(&old) {
+        window.desired = DesiredWindow::default();
+        window.suspended = true;
+        window.slot_held = false;
+        window.returning = false;
+        window.arrival = false;
+        window.tab_group = group;
+    }
+    if let Some(cg) = snapshot.cg_window_id {
+        state.cg_index.insert(cg, new);
+    }
+    state.diagnostics.tab_handovers += 1;
+    if state.tab_outbox.handovers.len() < super::MAX_PENDING_HANDOVERS {
+        state.tab_outbox.handovers.push((old, new));
+    }
+    tab_sync::observe(state, snapshot, false);
 }
 
 // -------------------------------------------------------------- assignment
@@ -543,7 +1012,7 @@ fn choose_workspace(state: &TilingState, token: WindowInstance) -> Option<Worksp
         .or_else(|| state.workspaces.first().map(|ws| ws.id))
 }
 
-fn assign(state: &mut TilingState, token: WindowInstance) {
+pub(super) fn assign(state: &mut TilingState, token: WindowInstance) {
     let Some(id) = choose_workspace(state, token) else {
         return;
     };
@@ -563,7 +1032,7 @@ fn assign_unassigned(state: &mut TilingState) {
     let tokens: Vec<WindowInstance> = state
         .windows
         .values()
-        .filter(|w| w.desired.workspace.is_none())
+        .filter(|w| w.desired.workspace.is_none() && !w.suspended)
         .map(|w| w.token)
         .collect();
     for token in tokens {
@@ -585,7 +1054,7 @@ fn tombstone(state: &mut TilingState, token: WindowInstance) {
 }
 
 /// Removes a token from every cache, order and history; the token is then dead.
-fn destroy(state: &mut TilingState, token: WindowInstance) {
+pub(super) fn destroy(state: &mut TilingState, token: WindowInstance) {
     untrack(state, token);
     state.excluded.remove(&token);
     tombstone(state, token);
@@ -593,7 +1062,7 @@ fn destroy(state: &mut TilingState, token: WindowInstance) {
 
 /// Removes a tracked window from the state (tokens may later reappear only via
 /// a fresh snapshot, e.g. after a title rule stops excluding it).
-fn untrack(state: &mut TilingState, token: WindowInstance) {
+pub(super) fn untrack(state: &mut TilingState, token: WindowInstance) {
     let Some(window) = state.windows.remove(&token) else {
         return;
     };
@@ -677,10 +1146,16 @@ pub(super) fn on_focused(state: &mut TilingState, token: WindowInstance) {
 fn finish_scan(state: &mut TilingState, application: ApplicationId, truncated: bool) {
     state.reconcile.inflight.remove(&application);
     state.startup.failed.remove(&application);
+    state.startup.transient.remove(&application);
+    state.startup.failure_reasons.remove(&application);
+    let unsettled = state.reconcile.unsettled.remove(&application);
+    // Windows listed again take their slots before held-back windows close.
+    slots::resolve_returns(state, application);
     if truncated {
         state.startup.truncated.insert(application);
         state.diagnostics.enumeration_failures += 1;
     } else {
+        state.startup.retries.remove(&application);
         state.startup.truncated.remove(&application);
         // The initial tab scan of an application is its first complete
         // enumeration; later changes reconcile through single-window reads.
@@ -689,6 +1164,12 @@ fn finish_scan(state: &mut TilingState, application: ApplicationId, truncated: b
     if let Some(scan) = state.reconcile.scans.remove(&application)
         && !truncated
     {
+        // A listing that skipped windows in transition proves nothing about the
+        // windows held back: another listing follows after a settle delay.
+        if !unsettled {
+            close_departing(state, application, Some(scan.floor));
+            slots::settle(state, application);
+        }
         // A window adopted before the scan began and absent from it is gone: its
         // destroy was missed. Windows adopted after the floor are kept.
         let missing: Vec<WindowInstance> = state
@@ -696,14 +1177,18 @@ fn finish_scan(state: &mut TilingState, application: ApplicationId, truncated: b
             .values()
             .filter(|w| {
                 w.application == application
+                    && w.departing.is_none()
+                    && !w.suspended
                     && w.adopted_seq.is_some_and(|seq| seq <= scan.floor)
                     && !scan.seen.contains(&w.token)
             })
             .map(|w| w.token)
             .collect();
         for token in missing {
-            destroy(state, token);
-            state.diagnostics.missed_destroys_repaired += 1;
+            destroy_or_depart(state, token);
+            if !state.windows.contains_key(&token) {
+                state.diagnostics.missed_destroys_repaired += 1;
+            }
         }
     }
     state.diagnostics.reconciliations_completed += 1;
@@ -794,6 +1279,7 @@ fn pump_tracks(state: &mut TilingState, fx: &mut Vec<Effect>) {
 }
 
 fn settle(state: &mut TilingState, fx: &mut Vec<Effect>) {
+    issue_focus_reads(state, fx);
     pump_tracks(state, fx);
     schedule_reconcile(state, fx);
     state.diagnostics.overloaded = state.reconcile.consecutive_overflows >= OVERLOAD_THRESHOLD;
@@ -805,11 +1291,29 @@ fn settle(state: &mut TilingState, fx: &mut Vec<Effect>) {
 
 // -------------------------------------------------------------- completions
 
+/// A failure an application may recover from by itself: its accessibility
+/// interface is not ready yet (just launched), busy, or did not answer in time.
+/// Missing permission, a missing owner or a wrong epoch never are.
+const fn is_transient(outcome: TrackOutcome) -> bool {
+    matches!(
+        outcome,
+        TrackOutcome::Failed(AxError::CannotComplete | AxError::Other(_))
+            | TrackOutcome::Unacknowledged
+            | TrackOutcome::Dispatch(DispatchError::Full)
+    )
+}
+
 fn track_failed(state: &mut TilingState, application: ApplicationId, outcome: TrackOutcome) {
     state.startup.awaiting.remove(&application);
     state.reconcile.inflight.remove(&application);
     state.reconcile.scans.remove(&application);
     state.startup.failed.insert(application);
+    if is_transient(outcome) {
+        state.startup.transient.insert(application);
+    } else {
+        state.startup.transient.remove(&application);
+    }
+    state.startup.failure_reasons.insert(application, format!("{outcome:?}"));
     state.diagnostics.enumeration_failures += 1;
     match outcome {
         TrackOutcome::PermissionDenied => state.accessibility = false,
@@ -846,6 +1350,22 @@ fn completion(state: &mut TilingState, result: CompletionResult) {
                 track_failed(state, application, outcome);
             }
         }
+        // The application's real focused window is the only thing that may
+        // switch a workspace on activation. Ignored once another application is
+        // frontmost, or when the answer is unknown (never a guess).
+        CompletionResult::Focus(application, outcome) => {
+            if let FocusOutcome::Resolved(token) = outcome
+                && state.active_application == Some(application)
+                && state.windows.get(&token).is_some_and(|w| {
+                    w.application == application
+                        && !w.observed.minimized
+                        && !w.is_inactive_tab()
+                        && !w.suspended
+                })
+            {
+                on_focused(state, token);
+            }
+        }
         CompletionResult::Snapshot(token, outcome) => {
             match outcome {
                 SnapshotOutcome::Snapshot(snapshot) => {
@@ -854,7 +1374,13 @@ fn completion(state: &mut TilingState, result: CompletionResult) {
                     let sequence = state.last_event_sequence;
                     ingest(state, &snapshot, None, Some(sequence));
                 }
-                SnapshotOutcome::Stale(_) => destroy(state, token),
+                // Alive but unlisted: the owner reports the suspension itself.
+                SnapshotOutcome::Stale(StaleReason::Suspended) => {}
+                SnapshotOutcome::Stale(_) => {
+                    if !state.windows.get(&token).is_some_and(|window| window.suspended) {
+                        destroy_or_depart(state, token);
+                    }
+                }
                 _ => state.diagnostics.snapshot_refusals += 1,
             }
             // A drag waits for one fresh read per captured window, whatever it said.
@@ -895,6 +1421,7 @@ fn rejected(state: &mut TilingState, effect: &Effect) {
                 crate::outcome::NotAttemptedReason::QueueFull,
             );
         }
+        Effect::ReadFocus { .. } => state.diagnostics.snapshot_refusals += 1,
         Effect::Snapshot { window, .. } => {
             state.diagnostics.snapshot_refusals += 1;
             // The read will never come: the gesture decides with what it knows.

@@ -335,6 +335,7 @@ struct FakeApplication {
     pid: i32,
     alive: bool,
     hidden: bool,
+    regular: bool,
 }
 
 impl FakeApplicationBackend {
@@ -358,8 +359,17 @@ impl FakeApplicationBackend {
             pid,
             alive: true,
             hidden: false,
+            regular: true,
         });
         key
+    }
+
+    /// Marks an application as an accessory or background (agent) one, as an
+    /// `NSApplicationActivationPolicy` other than regular.
+    pub fn set_regular(&self, key: FakeAppKey, regular: bool) {
+        if let Some(application) = lock(&self.state.applications).get_mut(&key.0) {
+            application.regular = regular;
+        }
     }
 
     /// Marks an application as exited.
@@ -1420,6 +1430,7 @@ impl ApplicationBackend for FakeApplicationBackend {
                 name: application.name.clone(),
                 is_current_process: current == Some(key),
                 pid: Some(application.pid),
+                regular: application.regular,
             });
         }
         Ok(details)
@@ -1454,6 +1465,7 @@ impl ApplicationBackend for FakeApplicationBackend {
                     name: application.name.clone(),
                     is_current_process: current == Some(key),
                     pid: Some(application.pid),
+                    regular: application.regular,
                 })
             })
         };

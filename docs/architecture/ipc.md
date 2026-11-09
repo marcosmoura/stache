@@ -214,14 +214,16 @@ tray and test window without a restart.
 `pause`, `resume`, `query`, `window` and `workspace`. Every request type denies
 unknown fields and is decoded once; every `Response::Ok.data` is encoded once.
 
-- `query` takes `{"kind":"screens|workspaces|windows|apps"}` with optional
+- `query` takes `{"kind":"screens|workspaces|windows|apps|status"}` with optional
   `screen`, `workspace`, `focusedScreen`, `focusedWorkspace` filters (conflicting
   filters are `InvalidParams`) and answers a bare array of rows in actor snapshot
   order, never filtered by name sort. Row fields are fixed and camelCase:
   screens `id,name,isMain,isBuiltin,scaleFactor,frame,visibleFrame`, workspaces
   `id` (string)`,name,screenName,layout,isVisible,isFocused,windowCount`, windows
   `id,pid,appId,appName,title,workspace,frame,isMinimized,isFullscreen,isFloating,isFocused`
-  and apps `pid,name,bundleId,isHidden`. That declaration order is the frozen JSON
+  and apps `pid,name,bundleId,isHidden`. `status` takes no filter and answers one object
+  (`phase,healthy,faults,layoutActive,configRevision,planSequence,apps,trackedApps,windows,failedApps,truncatedApps,unconfirmedApps,inflightApps,noFrame,hiddenApps,lastIntent,trackedWindows,excludedWindows,frameAttempts,enumerationFailures`),
+  also while the runtime is initializing. That declaration order is the frozen JSON
   key order the CLI renders. A disabled, paused, pending-cleanup or not yet
   initialized module answers a typed error, never an empty list.
 - `window` takes `{focus?, swap?, toggleFloating?, preset?, resize?: [{dimension,
@@ -434,7 +436,7 @@ Grammar (see [tiling.md](../features/tiling.md#cli) for examples):
 
 ```text
 stache tiling pause|resume
-stache tiling query [-j|--json] [-d|--detailed] [screens|apps]
+stache tiling query [-j|--json] [-d|--detailed] [screens|apps|status]
 stache tiling query [-j|--json] [-d|--detailed] workspaces [--focused-screen|--screen NAME]
 stache tiling query [-j|--json] [-d|--detailed] windows [--focused-screen|--focused-workspace|--screen NAME] [--workspace NAME]
 stache tiling window [--focus DIRECTION|WINDOW_ID] [--swap DIRECTION] [--toggle-floating] [--preset NAME] [--resize DIMENSION AMOUNT]... [--send-to-screen NAME] [--send-to-workspace NAME]

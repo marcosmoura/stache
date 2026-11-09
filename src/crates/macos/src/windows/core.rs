@@ -26,13 +26,13 @@ use std::time::{Duration, Instant};
 use stache_sdk::CancellationToken;
 
 use super::commands::{
-    ActionRequest, CleanupReport, CloseOutcome, Command, HiddenOperation, HiddenOutcome,
-    HiddenRequest, InstallError, InstallRequest, Reply, SnapshotOutcome, StopOutcome, TrackOutcome,
-    TrackRequest, WindowAction,
+    ActionRequest, CleanupReport, CloseOutcome, Command, FocusOutcome, HiddenOperation,
+    HiddenOutcome, HiddenRequest, InstallError, InstallRequest, Reply, SnapshotOutcome,
+    StopOutcome, TrackOutcome, TrackRequest, WindowAction,
 };
 use super::events::{
-    ApplicationChange, Capability, EnumerationAbort, EventQueue, SnapshotOrigin, TabInfo,
-    TabMember, WindowChange, WindowEvent, WindowEventKind, WindowSnapshot,
+    ApplicationChange, Capability, EnumerationAbort, EventQueue, SnapshotOrigin, TabBar, TabBarId,
+    TabBarRead, TabInfo, TabMember, WindowChange, WindowEvent, WindowEventKind, WindowSnapshot,
 };
 use super::identity::{AdapterId, RuntimeEpoch, WindowInstance};
 use super::issuance::{
@@ -43,8 +43,9 @@ use super::system::{WindowClock, WindowObserver, WindowSystem};
 use crate::applications::ApplicationId;
 use crate::ax::{
     AxApi, AxError, AxEvent, AxNotification, AxReading, BoolAttribute, ELEMENT_TIMEOUT, ElementKey,
-    FrameWriteOutcome, PRESS_TIMEOUT, TabGroupRead, WindowAx, WindowString, WriteStatus,
-    read_frame, read_tab_group, resizable, write_frame_gated,
+    FrameWriteOutcome, PRESS_TIMEOUT, TabGroupRead, TabGroupSearch, WindowAx, WindowIdCapability,
+    WindowString, WriteStatus, find_tab_group, read_frame, read_tab_bar_shape, read_tab_group,
+    resizable, write_frame_gated,
 };
 
 /// Elements an enumeration chunk may issue before it yields.
@@ -57,6 +58,120 @@ pub const MAX_WINDOWS_PER_APPLICATION: usize = 256;
 pub const MAX_COMMANDS_PER_TURN: usize = 16;
 /// The most tabs counted per window.
 const TAB_LIMIT: usize = 32;
+/// Distinct tab bars one application may hold at once.
+const MAX_TAB_BARS: usize = 16;
+/// The most suspended (alive, unlisted) windows one application keeps; beyond
+/// it the oldest are retired.
+pub const MAX_SUSPENDED_PER_APPLICATION: usize = 32;
+/// Settled scans a tab bar no tracked window carries survives, so the window
+/// that takes the bar over after a close can still be recognized.
+const ORPHAN_SCANS: u8 = 3;
+
+/// Which optional reads the owner performs.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Reads {
+    /// The legacy tab member read (`CGWindowID` keyed; off in production).
+    pub tabs: bool,
+    /// The tab bar identity read.
+    pub tab_bars: bool,
+}
+
+/// One retained `AXTabGroup` element and the opaque id minted for it.
+struct BarEntry<E> {
+    id: TabBarId,
+    group: E,
+    /// Settled scans in a row that no tracked window carried this bar.
+    orphaned: u8,
+}
+
+/// The tab bars of one application, owner-confined like every element here.
+///
+/// Two windows get the same [`TabBarId`] exactly when their tab group elements
+/// are `CFEqual`; nothing else (frame, title, `CGWindowID`) is ever compared.
+/// Bounded by [`MAX_TAB_BARS`]; released with the application.
+struct TabBars<E> {
+    entries: Vec<BarEntry<E>>,
+    next: u64,
+}
+
+impl<E> Default for TabBars<E> {
+    fn default() -> Self { Self { entries: Vec::new(), next: 1 } }
+}
+
+impl<E> TabBars<E> {
+    /// The id for `group`: the existing one when an equal element is held, else
+    /// a freshly minted one. `None` when the table is full of referenced bars.
+    fn id_for(
+        &mut self,
+        same: impl Fn(&E, &E) -> bool,
+        group: E,
+        referenced: &HashSet<TabBarId>,
+    ) -> Option<TabBarId> {
+        if let Some(position) = self.entries.iter().position(|held| same(&held.group, &group)) {
+            let mut entry = self.entries.remove(position);
+            entry.orphaned = 0;
+            let id = entry.id;
+            self.entries.push(entry);
+            return Some(id);
+        }
+        if self.entries.len() >= MAX_TAB_BARS {
+            let victim = self.entries.iter().position(|held| !referenced.contains(&held.id))?;
+            self.entries.remove(victim);
+        }
+        let id = TabBarId::new(self.next);
+        self.next += 1;
+        self.entries.push(BarEntry { id, group, orphaned: 0 });
+        Some(id)
+    }
+
+    /// Ages the bars no tracked window carries and drops the old ones.
+    fn prune(&mut self, referenced: &HashSet<TabBarId>) {
+        for entry in &mut self.entries {
+            if referenced.contains(&entry.id) {
+                entry.orphaned = 0;
+            } else {
+                entry.orphaned = entry.orphaned.saturating_add(1);
+            }
+        }
+        self.entries.retain(|entry| entry.orphaned < ORPHAN_SCANS);
+    }
+}
+
+/// Reads a window's tab bar identity on the owner: a bounded search for its
+/// `AXTabGroup`, the bar's shape, and the id of the retained group element.
+fn probe_tab_bar<A: WindowAx>(
+    ax: &A,
+    bars: &mut TabBars<A::Element>,
+    referenced: &HashSet<TabBarId>,
+    window: &A::Element,
+) -> TabBarRead {
+    match find_tab_group(ax, window) {
+        TabGroupSearch::Absent => TabBarRead::None,
+        TabGroupSearch::Unknown(_) => TabBarRead::Unreadable,
+        TabGroupSearch::Found(group) => {
+            let Ok(shape) = read_tab_bar_shape(ax, &group, TAB_LIMIT) else {
+                return TabBarRead::Unreadable;
+            };
+            bars.id_for(|a, b| ax.same_element(a, b), group, referenced).map_or(
+                TabBarRead::Unreadable,
+                |id| {
+                    TabBarRead::Bar(TabBar {
+                        id,
+                        count: shape.count,
+                        selected: shape.selected,
+                    })
+                },
+            )
+        }
+    }
+}
+
+const fn bar_id(read: TabBarRead) -> Option<TabBarId> {
+    match read {
+        TabBarRead::Bar(bar) => Some(bar.id),
+        _ => None,
+    }
+}
 
 /// Notifications registered on each window element.
 pub(super) const WINDOW_NOTIFICATIONS: [AxNotification; 6] = [
@@ -86,6 +201,11 @@ struct Tracked<E> {
     cg: Option<u32>,
     /// Whether every per-window notification registered when it was adopted.
     observed: bool,
+    /// The last tab bar identity read (cached: geometry reads reuse it).
+    tab: TabBarRead,
+    /// Set while the window is absent from `AXWindows` yet its element is
+    /// alive (an inactive native tab); the value orders suspensions.
+    suspended: Option<u64>,
 }
 
 struct AppState<S: WindowSystem> {
@@ -101,6 +221,17 @@ struct AppState<S: WindowSystem> {
     /// Focus/main notifications naming a window that was not tracked when they
     /// were processed; resolved after the backlog (a creation may follow).
     focus: Vec<(ElementKey, AxNotification)>,
+    /// The retained tab group elements and their opaque ids.
+    tab_bars: TabBars<Element<S>>,
+    /// Orders the suspensions of this application.
+    suspensions: u64,
+}
+
+impl<S: WindowSystem> AppState<S> {
+    /// The tab bars some tracked window currently carries.
+    fn referenced_bars(&self) -> HashSet<TabBarId> {
+        self.windows.iter().filter_map(|held| bar_id(held.tab)).collect()
+    }
 }
 
 struct Enumeration<E> {
@@ -115,6 +246,8 @@ struct Enumeration<E> {
     seen: HashSet<u64>,
     /// The retirement stage once the pages ended; spread across chunks.
     retire: Option<Retire<E>>,
+    /// Listed windows skipped because their id or tab bar was unreadable.
+    transient: usize,
 }
 
 /// Tracked windows the pages missed, checked against one fresh full listing a
@@ -202,7 +335,7 @@ pub(super) struct Core<S: WindowSystem> {
     system: S,
     adapter: AdapterId,
     clock: Arc<dyn WindowClock>,
-    read_tabs: bool,
+    reads: Reads,
     next_epoch: u64,
     runtime: Option<Runtime<S>>,
     quarantine: Vec<Quarantined<S>>,
@@ -285,6 +418,7 @@ fn read_snapshot<A: WindowAx>(
     window: WindowInstance,
     observed: bool,
     read_tabs: bool,
+    tab_bar: TabBarRead,
 ) -> WindowSnapshot {
     let _ = ax.set_messaging_timeout(element, ELEMENT_TIMEOUT);
     let (tabs, tab_members) = if read_tabs {
@@ -317,17 +451,24 @@ fn read_snapshot<A: WindowAx>(
         resizable: resizable(ax, element),
         tabs,
         tab_members,
+        tab_bar,
         observed,
     }
 }
 
 enum Adopted {
-    /// Already tracked: the index into the application's windows.
-    Existing(usize),
+    /// Already tracked: the index into the application's windows, and whether
+    /// it was suspended and is listed again.
+    Existing {
+        index: usize,
+        returned: bool,
+    },
     New(Box<WindowSnapshot>),
     Gone,
     Capped,
     NotObservable,
+    /// Listed, but its id and tab bar could not be read yet: not adopted.
+    Transient,
 }
 
 impl<S: WindowSystem> Core<S> {
@@ -341,13 +482,22 @@ impl<S: WindowSystem> Core<S> {
             system,
             adapter,
             clock,
-            read_tabs,
+            reads: Reads {
+                tabs: read_tabs,
+                tab_bars: false,
+            },
             next_epoch: 0,
             runtime: None,
             quarantine: Vec::new(),
             poisoned: false,
             finished: false,
         }
+    }
+
+    /// Turns the tab bar identity reads on or off.
+    pub(super) const fn with_tab_bars(mut self, on: bool) -> Self {
+        self.reads.tab_bars = on;
+        self
     }
 
     pub(super) fn quarantined_registrations(&self) -> usize {
@@ -437,6 +587,9 @@ impl<S: WindowSystem> Core<S> {
                 reply,
             } => {
                 answer(reply, self.refresh(epoch, application, cancel, deadline));
+            }
+            Command::FocusedWindow { epoch, application, reply } => {
+                answer(reply, self.focused_window(epoch, application));
             }
             Command::Act { request, reply } => answer(reply, self.act(&request)),
             Command::Hidden { request, reply } => answer(reply, self.application_hidden(&request)),
@@ -591,6 +744,8 @@ impl<S: WindowSystem> Core<S> {
             windows: Vec::new(),
             release: Vec::new(),
             focus: Vec::new(),
+            tab_bars: TabBars::default(),
+            suspensions: 0,
         };
         // Observation is installed BEFORE the first enumeration read.
         for notification in APPLICATION_NOTIFICATIONS {
@@ -620,6 +775,7 @@ impl<S: WindowSystem> Core<S> {
             deadline: request.deadline,
             seen: HashSet::new(),
             retire: None,
+            transient: 0,
         });
         rt.apps.insert(request.application, app);
         TrackOutcome::Tracking
@@ -649,8 +805,27 @@ impl<S: WindowSystem> Core<S> {
             deadline,
             seen: HashSet::new(),
             retire: None,
+            transient: 0,
         });
         TrackOutcome::Tracking
+    }
+
+    fn focused_window(&mut self, epoch: RuntimeEpoch, application: ApplicationId) -> FocusOutcome {
+        let adapter = self.adapter;
+        let Some(rt) = self.runtime.as_mut().filter(|rt| rt.epoch == epoch) else {
+            return FocusOutcome::WrongEpoch;
+        };
+        let Some(app) = rt.apps.get(&application) else {
+            return FocusOutcome::WrongEpoch;
+        };
+        match focused_token(&self.system, adapter, epoch, app) {
+            Ok(Some(window)) => FocusOutcome::Resolved(window),
+            Ok(None) => FocusOutcome::Unresolved,
+            Err(error) => {
+                rt.note_error(error);
+                FocusOutcome::Failed(error)
+            }
+        }
     }
 
     fn untrack(&mut self, epoch: RuntimeEpoch, application: ApplicationId) -> StopOutcome {
@@ -687,7 +862,7 @@ impl<S: WindowSystem> Core<S> {
         let Self {
             adapter,
             runtime,
-            read_tabs,
+            reads,
             system,
             clock,
             ..
@@ -717,7 +892,7 @@ impl<S: WindowSystem> Core<S> {
                 budget.heavy += 1;
             }
             rt.backlog.pop_front();
-            let kinds = ax_event(system, *adapter, *read_tabs, rt, id, event);
+            let kinds = ax_event(system, *adapter, *reads, rt, id, event);
             for kind in kinds {
                 rt.emit(kind);
             }
@@ -741,7 +916,7 @@ impl<S: WindowSystem> Core<S> {
         let Self {
             adapter,
             runtime,
-            read_tabs,
+            reads,
             system,
             clock,
             ..
@@ -780,7 +955,7 @@ impl<S: WindowSystem> Core<S> {
             }
             if en.pending.is_empty() && en.retire.is_some() {
                 processed += 1;
-                if retire_step(system, *adapter, *read_tabs, rt, &mut en) {
+                if retire_step(system, *adapter, *reads, rt, &mut en) {
                     return;
                 }
                 continue;
@@ -788,16 +963,14 @@ impl<S: WindowSystem> Core<S> {
             if en.pending.is_empty() {
                 let Some(app) = rt.apps.get(&en.app) else { return };
                 if en.index >= MAX_WINDOWS_PER_APPLICATION {
-                    let kind = WindowEventKind::EnumerationComplete {
-                        application: en.app,
-                        windows: en.adopted,
-                        truncated: true,
-                    };
-                    rt.emit(kind);
+                    finish_enumeration(rt, &en, true);
                     return;
                 }
                 let want = (ENUMERATION_CHUNK_ELEMENTS - processed)
                     .min(MAX_WINDOWS_PER_APPLICATION - en.index);
+                // An empty page retires live windows, so a zero-size request
+                // must never be mistaken for the end of the list.
+                debug_assert!(want > 0, "paging with an empty limit");
                 let page = ax
                     .set_messaging_timeout(&app.element, ELEMENT_TIMEOUT)
                     .and_then(|()| ax.windows(&app.element, en.index, want));
@@ -832,7 +1005,7 @@ impl<S: WindowSystem> Core<S> {
                 &mut rt.next_serial,
                 app,
                 element,
-                *read_tabs,
+                *reads,
             );
             match adopted {
                 Adopted::New(snapshot) => {
@@ -843,10 +1016,10 @@ impl<S: WindowSystem> Core<S> {
                         origin: SnapshotOrigin::Enumeration,
                     });
                 }
-                Adopted::Existing(index) => {
+                Adopted::Existing { index, .. } => {
                     // A listed, already tracked window is still reported: the
                     // consumer treats an enumeration as the set of live windows.
-                    let snapshot = reread::<S>(system, *adapter, rt.epoch, app, index, *read_tabs);
+                    let snapshot = reread::<S>(system, *adapter, rt.epoch, app, index, *reads);
                     en.adopted += 1;
                     en.seen.insert(snapshot.window.serial());
                     rt.emit(WindowEventKind::Snapshot {
@@ -854,6 +1027,7 @@ impl<S: WindowSystem> Core<S> {
                         origin: SnapshotOrigin::Enumeration,
                     });
                 }
+                Adopted::Transient => en.transient += 1,
                 Adopted::Gone | Adopted::Capped | Adopted::NotObservable => {}
             }
         }
@@ -904,16 +1078,18 @@ impl<S: WindowSystem> Core<S> {
         if list.len() >= MAX_WINDOWS_PER_APPLICATION {
             return Err(Invalid::Unverified(AxError::CannotComplete));
         }
-        // Not a member any more: retire the token and tell the consumer.
-        let gone = app.windows.remove(index);
-        app.observer.forget_destroyed(gone.key);
-        app.regs.retain(|(key, _)| *key != gone.key);
-        let token = rt.token(window.adapter(), window.application(), gone.serial);
-        rt.emit(WindowEventKind::Window {
-            window: token,
-            change: WindowChange::Destroyed,
-        });
-        Err(Invalid::Stale(StaleReason::NotMember))
+        // Not a member any more: suspend it while its element lives, retire the
+        // token otherwise, and tell the consumer.
+        let kinds = depart::<S>(system, window.adapter(), window.epoch(), app, index);
+        let suspended = app.windows.iter().any(|held| held.serial == window.serial());
+        for kind in kinds {
+            rt.emit(kind);
+        }
+        Err(Invalid::Stale(if suspended {
+            StaleReason::Suspended
+        } else {
+            StaleReason::NotMember
+        }))
     }
 
     fn snapshot(&mut self, window: WindowInstance) -> SnapshotOutcome {
@@ -932,7 +1108,8 @@ impl<S: WindowSystem> Core<S> {
                     &held.element,
                     window,
                     true,
-                    self.read_tabs,
+                    self.reads.tabs,
+                    held.tab,
                 )))
             }
         }
@@ -1157,13 +1334,14 @@ fn adopt<S: WindowSystem>(
     next_serial: &mut u64,
     app: &mut AppState<S>,
     element: Element<S>,
-    read_tabs: bool,
+    reads: Reads,
 ) -> Adopted {
     let ax = system.ax();
     if let Some(index) =
         app.windows.iter().position(|held| ax.same_element(&held.element, &element))
     {
-        return Adopted::Existing(index);
+        let returned = app.windows[index].suspended.take().is_some();
+        return Adopted::Existing { index, returned };
     }
     if app.windows.len() >= MAX_WINDOWS_PER_APPLICATION {
         return Adopted::Capped;
@@ -1197,15 +1375,34 @@ fn adopt<S: WindowSystem>(
     }
     let Some(key) = key else { return Adopted::NotObservable };
     let serial = *next_serial;
-    *next_serial += 1;
     let window = WindowInstance::new(adapter, epoch, app.id, serial);
-    let snapshot = read_snapshot(ax, &element, window, observed, read_tabs);
+    let tab = if reads.tab_bars {
+        let referenced = app.referenced_bars();
+        probe_tab_bar(ax, &mut app.tab_bars, &referenced, &element)
+    } else {
+        TabBarRead::NotRead
+    };
+    let snapshot = read_snapshot(ax, &element, window, observed, reads.tabs, tab);
+    // A window in transition (a tab group switching or closing) answers with
+    // no id and no readable tab bar. It is not adopted: no token is minted and
+    // its registrations are removed, so a later listing adopts it once it
+    // settles.
+    if tab == TabBarRead::Unreadable
+        && ax.window_id_capability() == WindowIdCapability::Available
+        && snapshot.cg_window_id.is_none()
+    {
+        unregister(app, key);
+        return Adopted::Transient;
+    }
+    *next_serial += 1;
     app.windows.push(Tracked {
         serial,
         element,
         key,
         cg: snapshot.cg_window_id,
         observed,
+        tab,
+        suspended: None,
     });
     Adopted::New(Box::new(snapshot))
 }
@@ -1218,14 +1415,54 @@ fn reread<S: WindowSystem>(
     epoch: RuntimeEpoch,
     app: &mut AppState<S>,
     index: usize,
-    read_tabs: bool,
+    reads: Reads,
 ) -> WindowSnapshot {
+    let ax = system.ax();
+    let cached = app.windows[index].tab;
+    // A window known to carry no tab bar is not searched again (the search is
+    // the costly read); one with a bar, or not yet read, is refreshed. A read
+    // that fails keeps the last known bar.
+    let tab = if reads.tab_bars && cached != TabBarRead::None {
+        let referenced = app.referenced_bars();
+        let _ = ax.set_messaging_timeout(&app.windows[index].element, ELEMENT_TIMEOUT);
+        match probe_tab_bar(ax, &mut app.tab_bars, &referenced, &app.windows[index].element) {
+            TabBarRead::Unreadable => cached,
+            fresh => fresh,
+        }
+    } else {
+        cached
+    };
     let held = &app.windows[index];
     let window = WindowInstance::new(adapter, epoch, app.id, held.serial);
-    let snapshot = read_snapshot(system.ax(), &held.element, window, held.observed, read_tabs);
+    let snapshot = read_snapshot(ax, &held.element, window, held.observed, reads.tabs, tab);
     let held = &mut app.windows[index];
     held.cg = snapshot.cg_window_id.or(held.cg);
+    held.tab = tab;
     snapshot
+}
+
+/// Ends an enumeration. A listing that skipped transient windows says so first,
+/// so the consumer lists again after a settle delay instead of trusting it. A
+/// settled, untruncated listing ages the tab bars no window carries.
+fn finish_enumeration<S: WindowSystem>(
+    rt: &mut Runtime<S>,
+    en: &Enumeration<Element<S>>,
+    truncated: bool,
+) {
+    if en.transient > 0 {
+        rt.emit(WindowEventKind::EnumerationUnsettled {
+            application: en.app,
+            windows: en.transient,
+        });
+    } else if !truncated && let Some(app) = rt.apps.get_mut(&en.app) {
+        let referenced = app.referenced_bars();
+        app.tab_bars.prune(&referenced);
+    }
+    rt.emit(WindowEventKind::EnumerationComplete {
+        application: en.app,
+        windows: en.adopted,
+        truncated,
+    });
 }
 
 /// Removes a tracked window's observer registrations. Each is removed with
@@ -1283,11 +1520,7 @@ fn begin_retirement<S: WindowSystem>(
         .filter(|serial| !en.seen.contains(serial))
         .collect();
     if unseen.is_empty() {
-        rt.emit(WindowEventKind::EnumerationComplete {
-            application: en.app,
-            windows: en.adopted,
-            truncated: false,
-        });
+        finish_enumeration(rt, en, false);
         return true;
     }
     let fresh = ax
@@ -1303,11 +1536,7 @@ fn begin_retirement<S: WindowSystem>(
             true
         }
         Ok(list) if list.len() >= MAX_WINDOWS_PER_APPLICATION => {
-            rt.emit(WindowEventKind::EnumerationComplete {
-                application: en.app,
-                windows: en.adopted,
-                truncated: true,
-            });
+            finish_enumeration(rt, en, true);
             true
         }
         Ok(list) => {
@@ -1322,7 +1551,7 @@ fn begin_retirement<S: WindowSystem>(
 fn retire_step<S: WindowSystem>(
     system: &S,
     adapter: AdapterId,
-    read_tabs: bool,
+    reads: Reads,
     rt: &mut Runtime<S>,
     en: &mut Enumeration<Element<S>>,
 ) -> bool {
@@ -1333,11 +1562,7 @@ fn retire_step<S: WindowSystem>(
         return true;
     };
     let Some(serial) = retire.unseen.pop_front() else {
-        rt.emit(WindowEventKind::EnumerationComplete {
-            application: en.app,
-            windows: en.adopted,
-            truncated: false,
-        });
+        finish_enumeration(rt, en, false);
         return true;
     };
     let Some(index) = app.windows.iter().position(|held| held.serial == serial) else {
@@ -1348,22 +1573,146 @@ fn retire_step<S: WindowSystem>(
         .iter()
         .any(|candidate| ax.same_element(candidate, &app.windows[index].element));
     if present {
-        // Created while the pages were read: report it.
-        let snapshot = reread::<S>(system, adapter, epoch, app, index, read_tabs);
+        // Created while the pages were read, or listed again: report it.
+        app.windows[index].suspended = None;
+        let snapshot = reread::<S>(system, adapter, epoch, app, index, reads);
         en.adopted += 1;
         rt.emit(WindowEventKind::Snapshot {
             snapshot,
             origin: SnapshotOrigin::Enumeration,
         });
     } else {
-        let gone = app.windows.remove(index);
-        unregister(app, gone.key);
-        rt.emit(WindowEventKind::Window {
-            window: WindowInstance::new(adapter, epoch, en.app, gone.serial),
-            change: WindowChange::Destroyed,
-        });
+        for kind in depart::<S>(system, adapter, epoch, app, index) {
+            rt.emit(kind);
+        }
     }
     false
+}
+
+/// Whether a tracked window's element is still alive: a bounded read of its
+/// role succeeds and its `CGWindowID` is still the one it had.
+fn element_alive<S: WindowSystem>(system: &S, held: &Tracked<Element<S>>) -> bool {
+    let ax = system.ax();
+    if ax.set_messaging_timeout(&held.element, ELEMENT_TIMEOUT).is_err() {
+        return false;
+    }
+    if ax.window_string(&held.element, WindowString::Role).is_err() {
+        return false;
+    }
+    held.cg.is_none_or(|cg| ax.window_id(&held.element) == Ok(cg))
+}
+
+/// What a tracked window absent from `AXWindows` becomes.
+///
+/// A live element means the window is merely unlisted (an inactive native tab):
+/// it is **suspended**, its element and registrations stay retained and no
+/// destroy is reported. A dead element is retired and reported `Destroyed`. At
+/// most [`MAX_SUSPENDED_PER_APPLICATION`] windows stay suspended; the oldest
+/// beyond that is retired.
+fn depart<S: WindowSystem>(
+    system: &S,
+    adapter: AdapterId,
+    epoch: RuntimeEpoch,
+    app: &mut AppState<S>,
+    index: usize,
+) -> Vec<WindowEventKind> {
+    let id = app.id;
+    let token = |serial: u64| WindowInstance::new(adapter, epoch, id, serial);
+    if element_alive::<S>(system, &app.windows[index]) {
+        if app.windows[index].suspended.is_some() {
+            return Vec::new();
+        }
+        app.suspensions += 1;
+        app.windows[index].suspended = Some(app.suspensions);
+        let mut kinds = vec![WindowEventKind::Window {
+            window: token(app.windows[index].serial),
+            change: WindowChange::Suspended,
+        }];
+        let held = app.windows.iter().filter(|window| window.suspended.is_some()).count();
+        if held > MAX_SUSPENDED_PER_APPLICATION
+            && let Some(oldest) = app
+                .windows
+                .iter()
+                .enumerate()
+                .filter_map(|(position, window)| window.suspended.map(|order| (order, position)))
+                .min()
+                .map(|(_, position)| position)
+        {
+            let gone = app.windows.remove(oldest);
+            unregister(app, gone.key);
+            kinds.push(WindowEventKind::Window {
+                window: token(gone.serial),
+                change: WindowChange::Destroyed,
+            });
+        }
+        kinds
+    } else {
+        let gone = app.windows.remove(index);
+        unregister(app, gone.key);
+        vec![WindowEventKind::Window {
+            window: token(gone.serial),
+            change: WindowChange::Destroyed,
+        }]
+    }
+}
+
+/// Suspends the tracked windows a complete, fresh `AXWindows` listing no longer
+/// holds while their elements are alive. Windows with dead elements are left
+/// for their destroy notification or the next listing. A listing at the cap is
+/// no proof of absence and suspends nothing.
+fn suspend_unlisted<S: WindowSystem>(
+    system: &S,
+    adapter: AdapterId,
+    epoch: RuntimeEpoch,
+    app: &mut AppState<S>,
+    list: &[Element<S>],
+) -> Vec<WindowEventKind> {
+    if list.len() >= MAX_WINDOWS_PER_APPLICATION {
+        return Vec::new();
+    }
+    let ax = system.ax();
+    let mut kinds = Vec::new();
+    let absent: Vec<u64> = app
+        .windows
+        .iter()
+        .filter(|held| {
+            held.suspended.is_none()
+                && !list.iter().any(|candidate| ax.same_element(candidate, &held.element))
+        })
+        .map(|held| held.serial)
+        .collect();
+    for serial in absent {
+        let Some(index) = app.windows.iter().position(|held| held.serial == serial) else {
+            continue;
+        };
+        if element_alive::<S>(system, &app.windows[index]) {
+            kinds.extend(depart::<S>(system, adapter, epoch, app, index));
+        }
+    }
+    kinds
+}
+
+/// The tracked window that is the application's real `AXFocusedWindow`, read
+/// on the owner within the element timeout. `Ok(None)` when it has none or it is
+/// not tracked.
+fn focused_token<S: WindowSystem>(
+    system: &S,
+    adapter: AdapterId,
+    epoch: RuntimeEpoch,
+    app: &AppState<S>,
+) -> Result<Option<WindowInstance>, AxError> {
+    let ax = system.ax();
+    ax.set_messaging_timeout(&app.element, ELEMENT_TIMEOUT)?;
+    let focused = match ax.focused_window(&app.element) {
+        Ok(element) => element,
+        Err(error) if error.is_absent() => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    Ok(app
+        .windows
+        .iter()
+        .find(|held| ax.same_element(&held.element, &focused))
+        .map(|held| WindowInstance::new(adapter, epoch, app.id, held.serial)))
 }
 
 /// Resolves what a processed backlog deferred: a focus/main notification that
@@ -1427,7 +1776,7 @@ fn supersede_focus<S: WindowSystem>(app: &mut AppState<S>, notification: AxNotif
 fn ax_event<S: WindowSystem>(
     system: &S,
     adapter: AdapterId,
-    read_tabs: bool,
+    reads: Reads,
     rt: &mut Runtime<S>,
     id: ApplicationId,
     event: AxEvent,
@@ -1470,6 +1819,15 @@ fn ax_event<S: WindowSystem>(
         _ => {
             if let Some(index) = known {
                 if notification == AxNotification::WindowCreated {
+                    // A creation naming a suspended window means it is listed
+                    // again: report it so the consumer gives it its slot back.
+                    if app.windows[index].suspended.take().is_some() {
+                        let snapshot = reread::<S>(system, adapter, epoch, app, index, reads);
+                        return vec![WindowEventKind::Snapshot {
+                            snapshot,
+                            origin: SnapshotOrigin::Created,
+                        }];
+                    }
                     return Vec::new();
                 }
                 supersede_focus(app, notification);
@@ -1481,6 +1839,16 @@ fn ax_event<S: WindowSystem>(
             }
             if app.app_key == Some(key) {
                 supersede_focus(app, notification);
+                if notification == AxNotification::FocusedWindowChanged
+                    && let Ok(Some(window)) = focused_token(system, adapter, epoch, app)
+                {
+                    // The application's real focused window is known: report it
+                    // for its token instead of a change that names none.
+                    return vec![WindowEventKind::Window {
+                        window,
+                        change: WindowChange::Focused,
+                    }];
+                }
                 let change = match notification {
                     AxNotification::FocusedWindowChanged => {
                         Some(ApplicationChange::FocusedWindowChanged)
@@ -1514,13 +1882,12 @@ fn ax_event<S: WindowSystem>(
             };
             // The element must still be a member of the application's windows.
             let ax = system.ax();
-            let member = ax
+            let listed = ax
                 .set_messaging_timeout(&app.element, ELEMENT_TIMEOUT)
-                .and_then(|()| ax.windows(&app.element, 0, MAX_WINDOWS_PER_APPLICATION))
-                .map(|list| list.iter().any(|held| ax.same_element(held, &element)));
-            match member {
-                Ok(true) => {}
-                Ok(false) => {
+                .and_then(|()| ax.windows(&app.element, 0, MAX_WINDOWS_PER_APPLICATION));
+            let list = match listed {
+                Ok(list) if list.iter().any(|held| ax.same_element(held, &element)) => list,
+                Ok(_) => {
                     app.release.push(key);
                     return Vec::new();
                 }
@@ -1529,24 +1896,21 @@ fn ax_event<S: WindowSystem>(
                     app.release.push(key);
                     return vec![WindowEventKind::ObserverOverflow { application: id }];
                 }
-            }
-            let adopted = adopt::<S>(
-                system,
-                adapter,
-                epoch,
-                &mut rt.next_serial,
-                app,
-                element,
-                read_tabs,
-            );
+            };
+            // Windows this listing no longer holds but whose elements live are
+            // suspended first, so a consumer sees the departure of a tab group's
+            // previous window before the window that replaces it.
+            let mut kinds = suspend_unlisted::<S>(system, adapter, epoch, app, &list);
+            let adopted =
+                adopt::<S>(system, adapter, epoch, &mut rt.next_serial, app, element, reads);
+            app.release.push(key);
             match adopted {
                 Adopted::New(snapshot) => {
-                    app.release.push(key);
                     let window = snapshot.window;
-                    let mut kinds = vec![WindowEventKind::Snapshot {
+                    kinds.push(WindowEventKind::Snapshot {
                         snapshot: *snapshot,
                         origin: SnapshotOrigin::Created,
-                    }];
+                    });
                     // Focus/main changes deferred for this very window are
                     // reported right after its creation, at their original
                     // position relative to later notifications.
@@ -1558,13 +1922,29 @@ fn ax_event<S: WindowSystem>(
                             kinds.push(WindowEventKind::Window { window, change });
                         }
                     }
-                    kinds
                 }
-                Adopted::Existing(_) | Adopted::Gone | Adopted::Capped | Adopted::NotObservable => {
-                    app.release.push(key);
-                    Vec::new()
+                Adopted::Transient => {
+                    // Not adopted and not lost: the consumer lists the
+                    // application again once the window settles.
+                    kinds.push(WindowEventKind::EnumerationUnsettled {
+                        application: id,
+                        windows: 1,
+                    });
                 }
+                Adopted::Existing { index, returned } => {
+                    if returned {
+                        // A suspended window is listed again: report it so the
+                        // consumer can give it its slot back.
+                        let snapshot = reread::<S>(system, adapter, epoch, app, index, reads);
+                        kinds.push(WindowEventKind::Snapshot {
+                            snapshot,
+                            origin: SnapshotOrigin::Created,
+                        });
+                    }
+                }
+                Adopted::Gone | Adopted::Capped | Adopted::NotObservable => {}
             }
+            kinds
         }
     }
 }

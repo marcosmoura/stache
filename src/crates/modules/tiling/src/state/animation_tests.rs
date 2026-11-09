@@ -94,6 +94,18 @@ fn reconfigure(f: &mut Fixture, revision: u64, outer: u32) -> Vec<Effect> {
 
 fn window(f: &Fixture) -> WindowInstance { f.windows[0] }
 
+/// Animations on, the startup plan written directly (a revealed workspace never
+/// animates) and settled at [`T0`]. Later layout changes animate.
+fn settled() -> Fixture {
+    let mut f = fixture(true);
+    let w = window(&f);
+    let startup = writes(&f.enable()).remove(0);
+    assert!(!startup.animate, "the first plan reveals the workspace: direct");
+    assert_eq!(startup.target, T0);
+    f.ack(w, startup.plan, applied_at(T0));
+    f
+}
+
 #[test]
 fn animation_is_off_by_default_so_a_plan_is_one_direct_write() {
     let mut f = fixture(false);
@@ -105,12 +117,24 @@ fn animation_is_off_by_default_so_a_plan_is_one_direct_write() {
 
 #[test]
 fn an_enabled_large_move_animates_from_the_actual_frame_at_the_display_rate() {
+    let mut f = settled();
+    let planned = writes(&reconfigure(&mut f, 2, 40));
+    assert_eq!(planned.len(), 1);
+    assert!(planned[0].animate);
+    assert_eq!(planned[0].from, T0);
+    assert_eq!(planned[0].refresh_hz, Some(60.0));
+}
+
+#[test]
+fn a_just_revealed_workspace_is_written_directly_even_with_animations_on() {
     let mut f = fixture(true);
     let planned = writes(&f.enable());
     assert_eq!(planned.len(), 1);
-    assert!(planned[0].animate);
+    assert!(
+        !planned[0].animate,
+        "startup and workspace switches never animate"
+    );
     assert_eq!(planned[0].from, Rect::new(10.0, 10.0, 800.0, 600.0));
-    assert_eq!(planned[0].refresh_hz, Some(60.0));
 }
 
 #[test]
@@ -127,15 +151,15 @@ fn a_move_within_the_write_tolerance_plans_nothing() {
 
 #[test]
 fn a_b_a_rewrites_the_window_back_and_an_old_ack_never_settles_the_successor() {
-    let mut f = fixture(true);
+    let mut f = settled();
     let w = window(&f);
-    let a = writes(&f.enable()).remove(0);
+    let a = writes(&reconfigure(&mut f, 2, 40)).remove(0);
     assert!(a.animate);
 
     // B: while A is mid-flight (the window sits at an intermediate position).
     let moving = Rect::new(300.0, 100.0, 1200.0, 800.0);
     f.observe(w, moving);
-    let b_effects = reconfigure(&mut f, 2, 40);
+    let b_effects = reconfigure(&mut f, 3, 0);
     let b = writes(&b_effects).remove(0);
     assert!(b.plan > a.plan);
     assert!(
@@ -147,10 +171,10 @@ fn a_b_a_rewrites_the_window_back_and_an_old_ack_never_settles_the_successor() {
 
     // A again: the observed frame happens to equal the destination of the first
     // plan, yet the window is in motion toward B, so it is written again.
-    f.observe(w, T0);
-    let a2 = writes(&reconfigure(&mut f, 3, 0)).remove(0);
+    f.observe(w, a.target);
+    let a2 = writes(&reconfigure(&mut f, 4, 40)).remove(0);
     assert!(a2.plan > b.plan, "a third distinct plan sequence");
-    assert_eq!(a2.target, T0);
+    assert_eq!(a2.target, a.target);
     assert!(
         !a2.components.is_empty(),
         "an animated window in motion is never assumed arrived"
@@ -167,7 +191,7 @@ fn a_b_a_rewrites_the_window_back_and_an_old_ack_never_settles_the_successor() {
                 window: w,
                 plan_sequence: plan,
                 revision,
-                outcome: applied_at(T0),
+                outcome: applied_at(a.target),
             },
         });
     }
@@ -182,10 +206,11 @@ fn a_b_a_rewrites_the_window_back_and_an_old_ack_never_settles_the_successor() {
 
 #[test]
 fn own_settling_echoes_are_ignored_a_bounded_number_of_times() {
-    let mut f = fixture(true);
+    let mut f = settled();
     let w = window(&f);
-    let planned = writes(&f.enable()).remove(0);
-    f.ack(w, planned.plan, applied_at(T0));
+    let planned = writes(&reconfigure(&mut f, 2, 40)).remove(0);
+    assert!(planned.animate);
+    f.ack(w, planned.plan, applied_at(planned.target));
     assert_eq!(f.state.frames.records[&w].settle_echoes, MAX_SETTLE_ECHOES);
     let moving = Rect::new(900.0, 400.0, 1000.0, 600.0);
     for echo in 1..=MAX_SETTLE_ECHOES {
@@ -193,7 +218,7 @@ fn own_settling_echoes_are_ignored_a_bounded_number_of_times() {
         assert!(writes(&effects).is_empty(), "no write fights our own echo");
         assert_eq!(
             f.state.windows[&w].observed.frame,
-            Some(T0),
+            Some(planned.target),
             "the confirmed frame is kept"
         );
         assert_eq!(f.state.diagnostics.animation_echoes_ignored, u64::from(echo));
@@ -229,9 +254,9 @@ fn down() -> Input {
 
 #[test]
 fn a_drag_gesture_cancels_a_running_animation_and_blocks_new_ones() {
-    let mut f = fixture(true);
+    let mut f = settled();
     let w = window(&f);
-    let planned = writes(&f.enable()).remove(0);
+    let planned = writes(&reconfigure(&mut f, 2, 40)).remove(0);
     assert!(planned.animate);
     let effects = f.apply(down());
     assert!(f.state.drag.suppresses(), "a gesture is in progress");
@@ -242,6 +267,6 @@ fn a_drag_gesture_cancels_a_running_animation_and_blocks_new_ones() {
         "the running animation is cancelled at the gesture start"
     );
     // While the gesture lasts, a replan writes nothing, animated or not.
-    let replanned = reconfigure(&mut f, 2, 40);
+    let replanned = reconfigure(&mut f, 3, 80);
     assert!(writes(&replanned).is_empty(), "no animation during a gesture");
 }

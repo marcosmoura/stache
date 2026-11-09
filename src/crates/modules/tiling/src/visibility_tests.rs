@@ -59,8 +59,22 @@ fn requirement(entries: Vec<AppVisibility>) -> VisibilityRequirement {
 
 fn live(_: ApplicationId) -> bool { true }
 
+/// The start of the test clock.
+fn base() -> std::time::Instant {
+    static BASE: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    *BASE.get_or_init(std::time::Instant::now)
+}
+
 fn plan(ledger: &mut Ledger, entries: Vec<AppVisibility>) -> Vec<Planned> {
-    ledger.plan(&requirement(entries), &live, true)
+    plan_at(ledger, entries, base())
+}
+
+fn plan_at(
+    ledger: &mut Ledger,
+    entries: Vec<AppVisibility>,
+    now: std::time::Instant,
+) -> Vec<Planned> {
+    ledger.plan(&requirement(entries), &live, true, now)
 }
 
 #[test]
@@ -193,7 +207,7 @@ fn a_show_while_a_hide_may_have_landed_is_ambiguous_and_never_a_restore_candidat
     assert_eq!(ledger.ownership(a), Some(Ownership::Ambiguous));
     assert!(ledger.restore_candidates().is_empty());
     assert!(
-        plan(&mut ledger, vec![entry(a, true, false)]).is_empty(),
+        plan(&mut ledger, vec![entry(a, true, true)]).is_empty(),
         "never auto-unhidden"
     );
     assert!(ledger.owned()[0].reason.is_some());
@@ -203,6 +217,85 @@ fn a_show_while_a_hide_may_have_landed_is_ambiguous_and_never_a_restore_candidat
     ledger.observe(b, Observation::Shown);
     ledger.apply(Report::Hide(b, HideEvidence::Sent));
     assert_eq!(ledger.ownership(b), Some(Ownership::Ambiguous));
+}
+
+#[test]
+fn an_ambiguous_record_of_a_visible_application_is_dropped_and_not_hidden_until_needed() {
+    let (mut ledger, a) = (Ledger::default(), app(1));
+    let _ = plan(&mut ledger, vec![entry(a, false, false)]);
+    ledger.apply(Report::Hide(a, HideEvidence::Sent));
+    ledger.observe(a, Observation::Shown);
+    assert_eq!(ledger.ownership(a), Some(Ownership::Ambiguous));
+    // The application is observed visible: nothing is held, so nothing is owed.
+    // The show may have been the user's, so it is not hidden against them.
+    assert!(plan(&mut ledger, vec![entry(a, false, false)]).is_empty());
+    assert!(ledger.owned().is_empty());
+    assert!(ledger.is_suppressed(a));
+    assert!(plan(&mut ledger, vec![entry(a, false, false)]).is_empty());
+    // Needed again, then not needed: it can be hidden again.
+    assert!(plan(&mut ledger, vec![entry(a, true, false)]).is_empty());
+    assert!(!ledger.is_suppressed(a));
+    assert_eq!(plan(&mut ledger, vec![entry(a, false, false)]), vec![
+        Planned::Hide(a)
+    ]);
+}
+
+#[test]
+fn an_unconfirmed_unhide_never_blocks_a_later_hide() {
+    let (mut ledger, a) = (Ledger::default(), app(1));
+    let _ = plan(&mut ledger, vec![entry(a, false, false)]);
+    ledger.apply(Report::Hide(a, HideEvidence::Sent));
+    ledger.observe(a, Observation::Hidden);
+    assert_eq!(plan(&mut ledger, vec![entry(a, true, true)]), vec![
+        Planned::Unhide(a)
+    ]);
+    ledger.apply(Report::Unhide(a, UnhideEvidence::Sent));
+    // No shown observation ever comes; the application is observed visible.
+    assert_eq!(plan(&mut ledger, vec![entry(a, false, false)]), vec![
+        Planned::Hide(a)
+    ]);
+}
+
+#[test]
+fn an_unhide_whose_shown_never_arrives_is_retried_then_bounded_and_a_hide_still_follows() {
+    let (mut ledger, a) = (Ledger::default(), app(1));
+    let _ = plan(&mut ledger, vec![entry(a, false, false)]);
+    ledger.apply(Report::Hide(a, HideEvidence::Sent));
+    ledger.observe(a, Observation::Hidden);
+    assert_eq!(plan(&mut ledger, vec![entry(a, true, true)]), vec![
+        Planned::Unhide(a)
+    ]);
+    ledger.apply(Report::Unhide(a, UnhideEvidence::Sent));
+    // It still reads hidden and no notification arrives: wait, then try again.
+    // Nothing waits in turns: the wait is the confirmation timeout.
+    assert!(plan(&mut ledger, vec![entry(a, true, true)]).is_empty());
+    let due = base() + crate::visibility::CONFIRMATION_TIMEOUT;
+    assert_eq!(ledger.next_deadline(base()), Some(due), "the actor wakes for it");
+    let again = plan_at(&mut ledger, vec![entry(a, true, true)], due);
+    assert_eq!(again, vec![Planned::Unhide(a)]);
+    ledger.apply(Report::Unhide(a, UnhideEvidence::Failed("x".to_owned())));
+    // Not needed any more: the failure streak does not stand in the way.
+    assert!(
+        plan(&mut ledger, vec![entry(a, false, true)]).is_empty(),
+        "still hidden: nothing to do"
+    );
+}
+
+#[test]
+fn a_hide_that_never_landed_is_re_sent_a_bounded_number_of_times() {
+    let (mut ledger, a) = (Ledger::default(), app(1));
+    let _ = plan(&mut ledger, vec![entry(a, false, false)]);
+    ledger.apply(Report::Hide(a, HideEvidence::Sent));
+    let mut sent = 0;
+    for step in 0..80_u32 {
+        let now = base() + std::time::Duration::from_millis(100) * step;
+        let planned = plan_at(&mut ledger, vec![entry(a, false, false)], now);
+        if !planned.is_empty() {
+            sent += 1;
+            ledger.apply(Report::Hide(a, HideEvidence::Sent));
+        }
+    }
+    assert_eq!(sent, usize::from(crate::visibility::MAX_HIDE_ATTEMPTS));
 }
 
 #[test]
@@ -216,7 +309,7 @@ fn a_terminal_gone_clears_the_record_and_the_suppression() {
     let b = app(2);
     let _ = plan(&mut ledger, vec![entry(b, false, false)]);
     ledger.apply(Report::Hide(b, HideEvidence::Confirmed));
-    let _ = ledger.plan(&requirement(Vec::new()), &|_| false, true);
+    let _ = ledger.plan(&requirement(Vec::new()), &|_| false, true, base());
     assert!(ledger.owned().is_empty());
 }
 
@@ -393,7 +486,7 @@ impl Fixture {
     }
 
     fn plan(&self, entries: Vec<AppVisibility>) -> Vec<Planned> {
-        self.vis.plan(&requirement(entries), &live, true)
+        self.vis.plan(&requirement(entries), &live, true, base())
     }
 
     /// Plans and runs the hide of application `n`.

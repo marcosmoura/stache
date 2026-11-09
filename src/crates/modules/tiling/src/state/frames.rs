@@ -15,12 +15,12 @@
 //! attempt already recorded, so they create nothing. There is no retry loop and
 //! no fighting an application that refuses to resize.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use stache_macos::windows::{WindowActionOutcome, WindowInstance};
 use stache_macos::{DisplayId, DisplayLayout};
 
-use super::{Effect, Phase, ScreenState, TilingState};
+use super::{Effect, ScreenState, TilingState, WorkspaceId};
 use crate::config::TilingConfig;
 use crate::geometry::{GeometryError, Insets, Rect, usable_area};
 use crate::layout::{
@@ -154,6 +154,15 @@ pub struct FrameBook {
     /// centering). A pin lives only until its attempt settles, so a floating
     /// window the user later moves is never pulled back.
     pub pinned: BTreeMap<WindowInstance, Rect>,
+    /// The visible workspaces as of the last plan. A workspace that is visible
+    /// now and was not then has just been revealed (switch, display return,
+    /// startup).
+    pub last_visible: BTreeSet<WorkspaceId>,
+    /// Windows of a just-revealed workspace that have not had their first
+    /// settled write yet. Their writes are direct, never animated: animation is
+    /// only for layout changes inside an already visible workspace. A window
+    /// leaves the set when it is written or found already at its target.
+    pub revealed: BTreeSet<WindowInstance>,
 }
 
 impl FrameBook {
@@ -317,7 +326,7 @@ fn desired_frames(state: &mut TilingState) -> BTreeMap<WindowInstance, Rect> {
             .order
             .iter()
             .filter_map(|token| state.windows.get(token))
-            .map(|window| WindowEntry::with_flags(window.token, window.flags()))
+            .map(|window| WindowEntry::with_flags(window.token, state.flags_of(window)))
             .collect();
         let tiled = tiled_count(workspace.layout, &entries);
         let request = LayoutRequest {
@@ -455,6 +464,32 @@ fn decide(record: &FrameRecord, target: &Rect, actual: &Rect, revision: u64) -> 
     }
 }
 
+/// Marks the windows of workspaces that became visible since the last plan as
+/// just revealed, and forgets windows that are no longer on a visible workspace.
+fn note_revealed(state: &mut TilingState) {
+    let visible: BTreeSet<WorkspaceId> = state
+        .workspaces
+        .iter()
+        .filter(|workspace| workspace.visible)
+        .map(|workspace| workspace.id)
+        .collect();
+    for workspace in state
+        .workspaces
+        .iter()
+        .filter(|workspace| workspace.visible && !state.frames.last_visible.contains(&workspace.id))
+    {
+        state.frames.revealed.extend(workspace.order.iter().copied());
+    }
+    let on_visible: BTreeSet<WindowInstance> = state
+        .workspaces
+        .iter()
+        .filter(|workspace| workspace.visible)
+        .flat_map(|workspace| workspace.order.iter().copied())
+        .collect();
+    state.frames.revealed.retain(|token| on_visible.contains(token));
+    state.frames.last_visible = visible;
+}
+
 /// Plans the visible workspaces and issues the changed, eligible frames.
 #[allow(clippy::too_many_lines)] // one linear planning pass over the desired frames
 pub(super) fn plan_and_issue(state: &mut TilingState, fx: &mut Vec<Effect>) {
@@ -464,13 +499,14 @@ pub(super) fn plan_and_issue(state: &mut TilingState, fx: &mut Vec<Effect>) {
         return;
     }
     let Some(stamp) = state.stamp else { return };
-    if state.config.is_none()
-        || !state.screens_known
-        || state.no_screens
-        || state.phase() != Phase::Complete
+    if state.config.is_none() || !state.screens_known || state.no_screens || !state.planning_ready()
     {
         return;
     }
+    // Windows whose own application is unconfirmed (failed, truncated, being
+    // tracked or reconciled) are laid out around but never written.
+    let unsettled = state.unsettled_apps();
+    note_revealed(state);
     let desired = desired_frames(state);
     let forced = state.frames.records.values().any(|record| record.forced);
     if desired != state.frames.desired || forced {
@@ -503,6 +539,24 @@ pub(super) fn plan_and_issue(state: &mut TilingState, fx: &mut Vec<Effect>) {
         if state.frames.in_flight() >= MAX_IN_FLIGHT_FRAMES {
             break;
         }
+        if unsettled.as_ref().is_none_or(|apps| apps.contains(&token.application())) {
+            continue;
+        }
+        // The layout keeps the slot of a window whose application Stache hid
+        // (it is being shown again), but nothing can be written to it until it
+        // reads visible. Its siblings are already planned around its slot.
+        if state.windows.get(token).is_some_and(|window| window.observed.hidden) {
+            continue;
+        }
+        // A window whose destroy is held back (its native tab group is
+        // settling) keeps its slot but is gone: its token can never be written.
+        if state
+            .windows
+            .get(token)
+            .is_some_and(|window| window.departing.is_some() || window.suspended)
+        {
+            continue;
+        }
         let Some(actual) = state.windows.get(token).and_then(|window| window.observed.frame) else {
             continue;
         };
@@ -521,6 +575,7 @@ pub(super) fn plan_and_issue(state: &mut TilingState, fx: &mut Vec<Effect>) {
             wanted.size |= attempt.wanted.size;
         }
         if wanted.is_empty() {
+            state.frames.revealed.remove(token);
             if let Some(record) = state.frames.records.get_mut(token) {
                 record.forced = false;
             }
@@ -561,9 +616,11 @@ pub(super) fn plan_and_issue(state: &mut TilingState, fx: &mut Vec<Effect>) {
             animated: false,
             status: AttemptStatus::InFlight,
         });
-        let animate = animations
-            .as_ref()
-            .is_some_and(|config| crate::animation::wants_animation(config, &actual, target));
+        // A just-revealed window is written directly, whatever the config says.
+        let animate = !state.frames.revealed.remove(token)
+            && animations
+                .as_ref()
+                .is_some_and(|config| crate::animation::wants_animation(config, &actual, target));
         let refresh_hz = animate
             .then(|| {
                 let display = state.display_of(*token)?;
@@ -618,6 +675,8 @@ pub(super) fn set_enabled(state: &mut TilingState, enabled: bool, fx: &mut Vec<E
         state.frames.records.clear();
         state.frames.desired.clear();
         state.frames.no_frame.clear();
+        state.frames.revealed.clear();
+        state.frames.last_visible.clear();
     }
 }
 
@@ -668,8 +727,32 @@ pub(super) fn reset_externals(state: &mut TilingState, tokens: &[WindowInstance]
 /// Forgets a window.
 pub(super) fn forget(state: &mut TilingState, token: WindowInstance) {
     state.frames.records.remove(&token);
+    state.frames.revealed.remove(&token);
     state.frames.desired.remove(&token);
     state.frames.pinned.remove(&token);
+}
+
+/// Moves the frame knowledge of `old` to `new`, the window that took its tab
+/// group slot over: the learned minimum, the one-shot frame and the revealed
+/// mark. An attempt still in flight stays with the dead token (its
+/// acknowledgement is dropped as stale), so `new` is judged only by where it
+/// actually is: nothing is written when it already sits on its target.
+pub(super) fn transfer(state: &mut TilingState, old: WindowInstance, new: WindowInstance) {
+    if let Some(mut record) = state.frames.records.remove(&old) {
+        if record.attempt.as_ref().is_some_and(FrameAttempt::in_flight) {
+            record.attempt = None;
+        }
+        state.frames.records.insert(new, record);
+    }
+    if let Some(pin) = state.frames.pinned.remove(&old) {
+        state.frames.pinned.insert(new, pin);
+    }
+    if state.frames.revealed.remove(&old) {
+        state.frames.revealed.insert(new);
+    }
+    if let Some(target) = state.frames.desired.remove(&old) {
+        state.frames.desired.insert(new, target);
+    }
 }
 
 /// Balance: the given windows may be attempted again and forget inferred
@@ -688,6 +771,8 @@ pub(super) fn relayout_windows(state: &mut TilingState, tokens: &[WindowInstance
 pub(super) fn reset(state: &mut TilingState) {
     state.frames.records.clear();
     state.frames.pinned.clear();
+    state.frames.revealed.clear();
+    state.frames.last_visible.clear();
     state.frames.desired.clear();
     state.frames.no_frame.clear();
 }

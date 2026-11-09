@@ -5,8 +5,8 @@ use std::sync::Mutex;
 use stache_macos::applications::DisplayRect;
 use stache_macos::ax::{AxPoint, AxReading, AxSize, FrameRead};
 use stache_macos::windows::{
-    AdapterId, RuntimeEpoch, SnapshotOrigin, TabInfo, WindowChange, WindowEvent, WindowEventKind,
-    WindowInstance, WindowSnapshot,
+    AdapterId, RuntimeEpoch, SnapshotOrigin, TabBarRead, TabInfo, WindowChange, WindowEvent,
+    WindowEventKind, WindowInstance, WindowSnapshot,
 };
 use stache_macos::{ApplicationId, DisplayId, DisplayInfo, DisplayLayout};
 
@@ -40,6 +40,7 @@ pub fn snapshot(token: WindowInstance, title: &str, cg: u32) -> WindowSnapshot {
         resizable: AxReading::Value(true),
         tabs: TabInfo::None,
         tab_members: Vec::new(),
+        tab_bar: TabBarRead::NotRead,
         observed: true,
     }
 }

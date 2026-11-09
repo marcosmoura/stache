@@ -8,7 +8,7 @@
 //! results come back as tagged completions. Frame writes are the one mutation:
 //! [`FrameControl`] gates and tracks them.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
@@ -21,8 +21,10 @@ use stache_macos::windows::{ApplicationChange, EventQueue, WindowChange, WindowE
 use stache_macos::{ApplicationId, DisplayId};
 use stache_sdk::CancellationToken;
 
+mod diag;
 mod frames;
 
+pub use diag::Diag;
 pub use frames::{DRAIN_QUANTUM, DrainOutcome, FRAME_PLAN_DEADLINE, FrameControl, FrameJob};
 
 use crate::animation::{AnimationControl, AnimationJob, AnimationSettings};
@@ -31,8 +33,8 @@ use crate::borders::{BordersControl, FocusInput};
 use crate::drag::{DragSignal, GESTURE_TIMEOUT, LostCause};
 use crate::events::{Ingress, RETIME_EPSILON, Wake, flush_period};
 use crate::state::{
-    AppInfo, CompletionResult, Effect, Health, HealthFault, Input, Phase, Stamp, TilingSnapshot,
-    TilingState, transition,
+    AppInfo, Cause, CompletionResult, Effect, Health, HealthFault, Input, Phase, Scope, Stamp,
+    TabOutbox, TilingSnapshot, TilingState, transition,
 };
 use crate::visibility::{ApplicationActions, Exec, Observation, Planned, VisibilityControl};
 use crate::workspaces::visibility_requirement;
@@ -43,6 +45,21 @@ pub const MAX_INPUTS_PER_TURN: usize = 256;
 pub const RUNNER_CAPACITY: usize = 64;
 /// Wait budget for one backend hop.
 pub const BACKEND_BUDGET: Duration = Duration::from_secs(5);
+/// How long after a native tab group event the application is listed again, so
+/// `AppKit`'s transient window states have passed.
+pub const TAB_SETTLE_DELAY: Duration = Duration::from_millis(150);
+/// Settle listings repeated for windows that were still in transition.
+pub const MAX_TAB_SETTLE_RETRIES: u8 = 4;
+/// The waits before each time-based retry of a transient track failure (an
+/// application that has not finished launching). After the last one the
+/// application is left to the activation and relaunch retries.
+pub const TRACK_RETRY_BACKOFF: [Duration; 5] = [
+    Duration::from_millis(100),
+    Duration::from_millis(250),
+    Duration::from_millis(500),
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+];
 /// The actor thread name.
 pub const ACTOR_THREAD_NAME: &str = "stache-tiling-actor";
 
@@ -179,6 +196,26 @@ impl EffectEnv {
         let _ = self.ingress.submit(Input::Completion { stamp, result });
     }
 
+    fn refresh(&self, stamp: Stamp, application: ApplicationId) {
+        let outcome = self.backend.refresh(
+            stamp.epoch,
+            application,
+            self.cancel.clone(),
+            Some(Self::deadline()),
+        );
+        self.complete(stamp, CompletionResult::Refresh(application, outcome));
+    }
+
+    fn read_focus(&self, stamp: Stamp, application: ApplicationId) {
+        let outcome = self.backend.focused_window(
+            stamp.epoch,
+            application,
+            &self.cancel,
+            Some(Self::deadline()),
+        );
+        self.complete(stamp, CompletionResult::Focus(application, outcome));
+    }
+
     /// Runs one effect. Reads (`track`, `refresh`, `untrack`, `snapshot`, the
     /// application listing) and the gated frame write; the write is the only
     /// path that can move a window.
@@ -194,15 +231,8 @@ impl EffectEnv {
                 );
                 self.complete(stamp, CompletionResult::Track(application, outcome));
             }
-            Effect::Refresh { stamp, application } => {
-                let outcome = self.backend.refresh(
-                    stamp.epoch,
-                    application,
-                    self.cancel.clone(),
-                    Some(Self::deadline()),
-                );
-                self.complete(stamp, CompletionResult::Refresh(application, outcome));
-            }
+            Effect::Refresh { stamp, application } => self.refresh(stamp, application),
+            Effect::ReadFocus { stamp, application } => self.read_focus(stamp, application),
             Effect::Snapshot { stamp, window } => {
                 let outcome = self.backend.snapshot(window, &self.cancel, Some(Self::deadline()));
                 self.complete(stamp, CompletionResult::Snapshot(window, outcome));
@@ -458,6 +488,33 @@ pub struct Engine {
     last_admission: crate::events::AdmissionStats,
     /// The drag gesture being timed and when it is abandoned.
     gesture_watch: Option<(u64, Instant)>,
+    /// Applications that were ours to unhide and still read hidden.
+    released_hidden: BTreeSet<ApplicationId>,
+    /// Native tab group settle listings: when each application is listed and
+    /// how many times a listing already had to be repeated.
+    settle: BTreeMap<ApplicationId, SettleEntry>,
+    /// Backoff of transient track failures.
+    track_retry: BTreeMap<ApplicationId, TrackRetry>,
+    diag: Diag,
+}
+
+/// One application's time-based track retry.
+#[derive(Clone, Copy, Debug, Default)]
+struct TrackRetry {
+    due: Option<Instant>,
+    /// Retries issued so far.
+    attempts: u8,
+    /// A retry was submitted and the state has not consumed it yet.
+    submitted: bool,
+    /// The backoff schedule ran out.
+    gave_up: bool,
+}
+
+/// One application's pending settle listing.
+#[derive(Clone, Copy, Debug, Default)]
+struct SettleEntry {
+    due: Option<Instant>,
+    attempts: u8,
 }
 
 const fn effect_stamp(effect: &Effect) -> Option<Stamp> {
@@ -465,6 +522,7 @@ const fn effect_stamp(effect: &Effect) -> Option<Stamp> {
         Effect::Track { stamp, .. }
         | Effect::Refresh { stamp, .. }
         | Effect::Snapshot { stamp, .. }
+        | Effect::ReadFocus { stamp, .. }
         | Effect::Untrack { stamp, .. }
         | Effect::ListApplications { stamp }
         | Effect::HideApp { stamp, .. }
@@ -501,7 +559,21 @@ impl Engine {
             borders: None,
             last_admission: crate::events::AdmissionStats::default(),
             gesture_watch: None,
+            released_hidden: BTreeSet::new(),
+            settle: BTreeMap::new(),
+            track_retry: BTreeMap::new(),
+            diag: Diag::default(),
         }
+    }
+
+    /// Reports phase changes, failed applications, missing frames, intents and
+    /// visibility requests through the host logger.
+    pub fn set_logger(
+        &mut self,
+        logger: Option<stache_sdk::ScopedLogger>,
+        origin: crate::logclock::LogOrigin,
+    ) {
+        self.diag = Diag::new(logger, origin);
     }
 
     /// Calls `hook` at the start of every turn (tests use it to stall the actor).
@@ -580,18 +652,123 @@ impl Engine {
             }
             processed += 1;
         }
-        self.reconcile_visibility();
+        let visibility_due = self.reconcile_visibility(now);
         self.publish_if_changed(processed);
         let gesture_due = self.watch_gesture(now);
+        let settle_due = self.fire_settles(now);
+        let retry_due = self.fire_track_retries(now);
         let geometry = self.ingress.with(|pipeline| pipeline.geometry().next_deadline());
         Turn {
             processed,
-            next_deadline: match (geometry, gesture_due) {
-                (Some(a), Some(b)) => Some(a.min(b)),
-                (a, b) => a.or(b),
-            },
+            next_deadline: [geometry, gesture_due, visibility_due, settle_due, retry_due]
+                .into_iter()
+                .flatten()
+                .min(),
             halted: false,
         }
+    }
+
+    /// Takes what the transition asked of the clock: log the tab group
+    /// handovers and schedule one coalesced settle listing per application.
+    ///
+    /// A fresh trigger arms the timer once (further triggers while it waits are
+    /// coalesced into it). A retry, requested because a listing skipped windows
+    /// that were still in transition, arms it again until the retries run out;
+    /// then the windows still waiting for a successor are closed for real.
+    fn note_tab_outbox(&mut self, state: &TilingState, outbox: TabOutbox, now: Instant) {
+        for (old, new) in outbox.handovers {
+            self.diag.handover(state, old, new);
+        }
+        for note in outbox.notes {
+            self.diag.slot_note(state, note);
+        }
+        for (application, retry) in outbox.settle {
+            let entry = self.settle.entry(application).or_default();
+            if retry {
+                entry.attempts = entry.attempts.saturating_add(1);
+                let expired = entry.attempts > MAX_TAB_SETTLE_RETRIES;
+                self.diag.settle_retry(state, application, entry.attempts, expired);
+                if expired {
+                    self.settle.remove(&application);
+                    let _ = self.ingress.submit(Input::SettleExpired(application));
+                    continue;
+                }
+            } else if entry.due.is_none() {
+                entry.attempts = 0;
+            }
+            entry.due.get_or_insert(now + TAB_SETTLE_DELAY);
+        }
+    }
+
+    /// Lists the applications whose settle delay passed (as a tab-settle
+    /// unconfirmed marking, so the one reconcile path issues the refresh) and
+    /// returns when the next one is due.
+    fn fire_settles(&mut self, now: Instant) -> Option<Instant> {
+        let due: Vec<ApplicationId> = self
+            .settle
+            .iter()
+            .filter(|(_, entry)| entry.due.is_some_and(|due| due <= now))
+            .map(|(application, _)| *application)
+            .collect();
+        for application in due {
+            if let Some(entry) = self.settle.get_mut(&application) {
+                entry.due = None;
+                if entry.attempts == 0 {
+                    self.settle.remove(&application);
+                }
+            }
+            let _ = self
+                .ingress
+                .submit(Input::Unconfirmed(Scope::App(application), Cause::TabSettle));
+        }
+        self.settle.values().filter_map(|entry| entry.due).min()
+    }
+
+    /// Retries the applications whose track failed for a plausibly transient
+    /// reason (typically one that is still launching), on the
+    /// [`TRACK_RETRY_BACKOFF`] schedule, and returns when the next retry is due.
+    /// The backoff is bounded; later attempts remain the activation and
+    /// relaunch retries of the state.
+    fn fire_track_retries(&mut self, now: Instant) -> Option<Instant> {
+        let state = self.state.as_ref()?;
+        self.track_retry.retain(|application, entry| {
+            let live = state.startup.failed.contains(application)
+                || state.startup.awaiting.contains(application)
+                || state.startup.transient.contains(application);
+            live && (entry.gave_up || state.apps.contains_key(application))
+        });
+        for application in &state.startup.transient {
+            let entry = self.track_retry.entry(*application).or_default();
+            if entry.submitted || entry.due.is_some() || entry.gave_up {
+                continue;
+            }
+            let Some(delay) = TRACK_RETRY_BACKOFF.get(usize::from(entry.attempts)).copied() else {
+                entry.gave_up = true;
+                self.diag.track_gave_up(state, *application, entry.attempts);
+                continue;
+            };
+            entry.due = Some(now + delay);
+            self.diag.track_retry_armed(state, *application, entry.attempts + 1, delay);
+        }
+        // A submitted retry is consumed once the state no longer lists the failure.
+        for (application, entry) in &mut self.track_retry {
+            if entry.submitted && !state.startup.transient.contains(application) {
+                entry.submitted = false;
+            }
+        }
+        let mut next: Option<Instant> = None;
+        for (application, entry) in &mut self.track_retry {
+            let Some(due) = entry.due else { continue };
+            if due <= now {
+                entry.due = None;
+                entry.attempts += 1;
+                entry.submitted = true;
+                let _ = self.ingress.submit(Input::RetryTrack(*application));
+            } else {
+                next = Some(next.map_or(due, |other| other.min(due)));
+            }
+        }
+        next
     }
 
     /// Times the drag gesture in progress. One that outlives
@@ -622,12 +799,43 @@ impl Engine {
     fn apply(&mut self, input: Input, now: Instant) -> bool {
         let retime = matches!(input, Input::Displays(_));
         self.observe_visibility(&input);
-        let Some(state) = self.state.take() else { return false };
-        let Ok((state, effects)) = catch_unwind(AssertUnwindSafe(|| transition(state, input)))
+        if let Some(state) = &self.state {
+            self.diag.input(state, &input);
+        }
+        // Hiding the frontmost application makes the system activate another
+        // one. When that one is being hidden by us too (its hide is in flight or
+        // its hidden notice is still due), the activation is our own doing, not
+        // the user's: acting on it would switch back and fight the switch.
+        if let (Input::Activated(application), Some(visibility)) = (&input, &self.visibility)
+            && visibility.hide_unsettled(*application)
+        {
+            return true;
+        }
+        let Some(mut state) = self.state.take() else {
+            return false;
+        };
+        // The runtime-owned hidden applications are an input of the pure
+        // transition: their windows keep their layout slot.
+        if let Some(visibility) = &self.visibility {
+            // Our unhide is done once the ledger releases the record, yet the
+            // application still reads hidden until its shown observation: it
+            // stays ours until then. Anything that reads visible is dropped.
+            self.released_hidden
+                .retain(|application| state.apps.get(application).is_some_and(|app| app.hidden));
+            let mut owned = visibility.hidden_apps();
+            owned.extend(self.released_hidden.iter().copied());
+            self.released_hidden.clone_from(&owned);
+            state.set_owned_hidden(owned);
+        }
+        let Ok((mut state, effects)) = catch_unwind(AssertUnwindSafe(|| transition(state, input)))
         else {
             self.fail_panicked();
             return false;
         };
+        self.diag.observe(&state);
+        self.diag.effects(&state, &effects);
+        let outbox = state.take_tab_outbox();
+        self.note_tab_outbox(&state, outbox, now);
         self.state = Some(state);
         self.dispatch(effects);
         if retime {
@@ -665,16 +873,18 @@ impl Engine {
     /// Plans hides and unhides from the visibility requirement and queues them.
     /// Requirement-driven only: one request per application per turn, so a hide
     /// and an unhide of the same application never share a transition.
-    fn reconcile_visibility(&self) {
+    /// Returns when the actor must wake to resolve a lost notification.
+    fn reconcile_visibility(&self, now: Instant) -> Option<Instant> {
         let (Some(visibility), Some(state)) = (&self.visibility, &self.state) else {
-            return;
+            return None;
         };
         let stamp = state.stamp();
         let enabled = stamp.is_some() && state.frames.enabled;
         let requirement = visibility_requirement(state);
         let live = |application| state.apps.contains_key(&application);
-        let planned = visibility.plan(&requirement, &live, enabled);
-        let Some(stamp) = stamp else { return };
+        let planned = visibility.plan(&requirement, &live, enabled, now);
+        let stamp = stamp?;
+        self.diag.planned(state, &planned);
         for request in planned {
             let effect = match request {
                 Planned::Hide(application) => Effect::HideApp { stamp, application },
@@ -687,6 +897,7 @@ impl Engine {
                 }
             }
         }
+        visibility.next_deadline(now)
     }
 
     fn dispatch(&self, effects: Vec<Effect>) {

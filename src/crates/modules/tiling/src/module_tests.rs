@@ -1120,6 +1120,28 @@ mod visibility {
     }
 
     #[test]
+    fn the_started_module_watches_application_lifecycle_and_activation() {
+        let rig = rig();
+        let keys = rig.source.keys();
+        let ids = rig.source.ids();
+        let runtime = rig.host.runtime.tracking().expect("running");
+        assert!(
+            rig.native
+                .backend
+                .deliver_lifecycle(stache_macos::applications::LifecycleKind::Hidden, keys[0])
+                > 0,
+            "the lifecycle watch is installed by the module"
+        );
+        wait_until("hidden observed", || {
+            runtime.snapshot().apps.iter().any(|a| a.info.application == ids[0] && a.hidden)
+        });
+        assert!(
+            rig.native.backend.activate(keys[1]) > 0,
+            "the activation watch is installed"
+        );
+    }
+
+    #[test]
     fn ti_06_03_stop_restores_owned_hides_after_the_drain_and_before_observer_removal() {
         let rig = rig();
         let a = rig.source.ids()[0];
@@ -1858,6 +1880,16 @@ mod animation {
         host
     }
 
+    /// The animated configuration with an outer gap, so the window has to move.
+    fn animated_with_gap() -> TilingConfig {
+        serde_json::from_value(serde_json::json!({
+            "enabled": true,
+            "gaps": { "inner": 0, "outer": 40 },
+            "animations": { "enabled": true, "duration": 200 },
+        }))
+        .expect("config")
+    }
+
     fn running(host: &Host) -> bool {
         host.runtime.tracking().is_some_and(|rt| rt.animation().is_running())
     }
@@ -1909,34 +1941,71 @@ mod animation {
         assert_eq!(host.status(), ModuleStatus::Disabled);
     }
 
-    #[test]
-    fn an_animated_plan_writes_gated_frames_and_acknowledges_the_exact_plan() {
-        let host = animated_host();
+    /// Feeds the window; its first plan reveals the workspace and is written
+    /// directly, never animated. Returns the window once that write settled.
+    fn feed_and_settle(host: &Host) -> WindowInstance {
         let tracking = host.runtime.tracking().expect("running");
-        assert!(running(&host));
-        let window = feed_window(&host);
-        wait_until("the animation settled", || {
+        let window = feed_window(host);
+        wait_until("the direct write settled", || {
             tracking
                 .snapshot()
                 .frames
                 .iter()
                 .any(|s| s.window == window && s.outcome.is_some())
         });
+        window
+    }
+
+    #[test]
+    fn the_first_plan_of_a_revealed_workspace_is_one_direct_write_even_when_animated() {
+        let host = animated_host();
+        let window = feed_and_settle(&host);
+        wait_until("nothing outstanding", || {
+            host.runtime.tracking().is_some_and(|rt| rt.outstanding_frames() == 0)
+        });
         let frames = host.backend.written_frames();
+        assert_eq!(frames, [(window, TARGET)], "one jump, no intermediate frames");
+        host.disable();
+    }
+
+    #[test]
+    fn an_animated_plan_writes_gated_frames_and_acknowledges_the_exact_plan() {
+        let host = animated_host();
+        let tracking = host.runtime.tracking().expect("running");
+        assert!(running(&host));
+        let window = feed_and_settle(&host);
+        wait_until("nothing outstanding", || tracking.outstanding_frames() == 0);
+        let before = written(&host);
+        // A layout change inside the visible workspace animates.
+        host.reload(animated_with_gap()).expect("reload");
+        wait_until("the animation settled", || {
+            tracking.snapshot().frames.iter().any(|s| {
+                s.window == window
+                    && s.outcome.is_some()
+                    && s.desired.is_some_and(|d| s.actual == Some(d) && d != TARGET)
+            })
+        });
+        let frames = host.backend.written_frames();
+        let animated = &frames[before..];
         assert!(
-            frames.len() >= 4,
+            animated.len() >= 4,
             "intermediate frames, not one jump: {}",
-            frames.len()
+            animated.len()
         );
-        assert!(frames.iter().all(|(w, _)| *w == window));
-        assert_eq!(frames.last().expect("last").1, TARGET, "the exact final frame");
+        assert!(animated.iter().all(|(w, _)| *w == window));
         let snapshot = tracking.snapshot();
         let status = snapshot.frames.iter().find(|s| s.window == window).expect("status");
+        let desired = status.desired.expect("desired");
+        assert_eq!(
+            animated.last().expect("last").1,
+            desired,
+            "the exact final frame"
+        );
         assert!(
             matches!(status.outcome, Some(crate::OperationOutcome::Applied { .. })),
             "{status:?}"
         );
-        assert_eq!(status.actual, Some(TARGET));
+        assert_eq!(status.actual, Some(desired));
         wait_until("nothing outstanding", || tracking.outstanding_frames() == 0);
         // The window's own echoes settle without a second plan.
         let count = written(&host);
@@ -1946,9 +2015,12 @@ mod animation {
         assert_eq!(host.status(), ModuleStatus::Disabled);
     }
 
+    /// Settles the direct first write, then starts an animated layout change.
     fn start_animating(host: &Host) -> WindowInstance {
-        let window = feed_window(host);
-        wait_until("the first frame", || written(host) >= 1);
+        let window = feed_and_settle(host);
+        let before = written(host);
+        host.reload(animated_with_gap()).expect("reload");
+        wait_until("the first animated frame", || written(host) > before);
         window
     }
 
@@ -1983,8 +2055,10 @@ mod animation {
     #[test]
     fn a_worker_stuck_in_a_native_send_quarantines_and_a_retry_drains_before_the_restore() {
         let host = animated_host();
+        // The first plan is a direct write; hold the sends of the animated one.
+        feed_and_settle(&host);
         let hold = host.backend.hold_sends();
-        start_animating(&host);
+        host.reload(animated_with_gap()).expect("reload");
         assert!(
             hold.wait_entered(1, Duration::from_secs(10)),
             "a frame send is held"

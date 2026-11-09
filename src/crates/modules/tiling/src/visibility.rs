@@ -76,6 +76,15 @@ pub const VISIBILITY_DEADLINE: Duration = Duration::from_secs(2);
 /// Failed normal unhides after which the actor stops retrying one application.
 /// Restoration at stop still tries.
 pub const MAX_UNHIDE_FAILURES: u8 = 3;
+/// How long an entry may disagree with the observed visibility (or wait for
+/// the confirmation of its own unhide) before the ledger acts on the observed
+/// state instead of waiting for a notification that may never come. Measured on
+/// the actor clock, so it passes on an idle desktop too: the actor wakes for it
+/// (see [`Ledger::next_deadline`]).
+pub const CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(1);
+/// Hides re-sent for an application observed visible although the ledger holds
+/// it hidden. Reset when a hidden observation arrives or the app is needed.
+pub const MAX_HIDE_ATTEMPTS: u8 = 3;
 /// Diagnostics and focus reports kept.
 pub const LOG_CAPACITY: usize = 32;
 
@@ -148,6 +157,37 @@ impl ApplicationActions {
 }
 
 impl ApplicationActions {
+    /// Installs the lifecycle observers (launch, terminate, hide, unhide) of
+    /// this run's observation.
+    ///
+    /// # Errors
+    ///
+    /// Why the native observers could not be installed.
+    pub fn watch_lifecycle(
+        &self,
+        cancel: &CancellationToken,
+        sink: impl Fn(stache_macos::LifecycleEvent) + Send + Sync + 'static,
+    ) -> Result<(), String> {
+        self.observation
+            .watch_lifecycle(cancel, sink)
+            .map_err(|error| error.to_string())
+    }
+
+    /// Installs the workspace activation watch of this run's observation.
+    ///
+    /// # Errors
+    ///
+    /// Why the watch could not be installed.
+    pub fn watch_frontmost(
+        &self,
+        cancel: &CancellationToken,
+        listener: Arc<dyn stache_macos::FrontmostListener>,
+    ) -> Result<stache_macos::FrontmostWatch, String> {
+        self.observation
+            .watch_frontmost_observed(cancel, listener)
+            .map_err(|error| error.to_string())
+    }
+
     /// Every live running application with metadata, as exact instances of the
     /// observation this run owns. Empty when the query fails.
     #[must_use]
@@ -169,7 +209,12 @@ impl ActionsDirectory {
     #[must_use]
     pub const fn new(actions: std::sync::Arc<ApplicationActions>) -> Self { Self { actions } }
 
+    /// Only regular applications can own tiled windows (legacy
+    /// `get_running_apps`); agents and background helpers are never tracked.
     fn info(application: stache_macos::FrontmostApplication) -> Option<AppInfo> {
+        if !application.regular {
+            return None;
+        }
         Some(AppInfo {
             application: application.id,
             pid: application.pid?,
@@ -266,6 +311,10 @@ struct Entry {
     hidden_seen: bool,
     shown_seen: bool,
     unhide_failures: u8,
+    /// When the entry began waiting on an observation, on the actor clock.
+    wait_since: Option<Instant>,
+    /// Hides re-sent because the application stayed visible.
+    hide_attempts: u8,
     reason: Option<String>,
 }
 
@@ -279,6 +328,8 @@ impl Entry {
             hidden_seen: false,
             shown_seen: false,
             unhide_failures: 0,
+            wait_since: None,
+            hide_attempts: 0,
             reason: None,
         }
     }
@@ -341,6 +392,20 @@ pub enum Planned {
     Unhide(ApplicationId),
 }
 
+/// The optional host logger of a ledger (no `Debug` of its own).
+#[derive(Default)]
+struct LedgerLog(Option<stache_sdk::ScopedLogger>, crate::logclock::LogOrigin);
+
+impl std::fmt::Debug for LedgerLog {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_some() {
+            "LedgerLog(on)"
+        } else {
+            "LedgerLog(off)"
+        })
+    }
+}
+
 /// The ledger: pure, lock-free state. [`VisibilityControl`] guards it.
 #[derive(Debug, Default)]
 pub struct Ledger {
@@ -348,23 +413,47 @@ pub struct Ledger {
     suppressed: BTreeSet<ApplicationId>,
     released: u64,
     log: VecDeque<String>,
+    logger: LedgerLog,
+    /// Diagnostics noted and not yet written to the logger.
+    unlogged: Vec<String>,
 }
 
 impl Ledger {
+    /// Records a diagnostic. The line is logged by the control once its lock is
+    /// released (see `BookGuard`), never from here.
     fn note(&mut self, message: String) {
+        if self.logger.0.is_some() {
+            self.unlogged.push(format!("tiling visibility: {message}"));
+        }
         if self.log.len() == LOG_CAPACITY {
             self.log.pop_front();
         }
         self.log.push_back(message);
     }
 
-    /// Plans hides and unhides from a requirement. With `enabled` false (no
-    /// authority, or sealed) it only clears applications that are gone.
+    /// When the earliest waiting entry times out after `now`, so the actor
+    /// wakes for it. A deadline already reached was acted on (or is inert) by
+    /// the plan that ran at `now`, so it never asks for another wake.
+    #[must_use]
+    pub fn next_deadline(&self, now: Instant) -> Option<Instant> {
+        self.entries
+            .values()
+            .filter(|entry| !entry.hide_inflight && !entry.unhide_inflight)
+            .filter_map(|entry| entry.wait_since)
+            .map(|since| since + CONFIRMATION_TIMEOUT)
+            .filter(|due| *due > now)
+            .min()
+    }
+
+    /// Plans hides and unhides from a requirement at actor time `now`. With
+    /// `enabled` false (no authority, or sealed) it only clears applications
+    /// that are gone.
     pub fn plan(
         &mut self,
         requirement: &VisibilityRequirement,
         live: &dyn Fn(ApplicationId) -> bool,
         enabled: bool,
+        now: Instant,
     ) -> Vec<Planned> {
         let gone: Vec<ApplicationId> =
             self.entries.keys().copied().filter(|application| !live(*application)).collect();
@@ -380,6 +469,41 @@ impl Ledger {
             let needed = !app.needed_by.is_empty();
             if needed {
                 self.suppressed.remove(&app.application);
+            }
+            // A record that proves wrong against the observed visibility is
+            // resolved here, so no state can hold an application forever.
+            if let Some(entry) = self.entries.get_mut(&app.application)
+                && !entry.hide_inflight
+                && !entry.unhide_inflight
+            {
+                if entry.unhide_sent {
+                    if app.externally_hidden {
+                        let since = *entry.wait_since.get_or_insert(now);
+                        if now.saturating_duration_since(since) >= CONFIRMATION_TIMEOUT {
+                            // The shown observation never came: allow another try.
+                            entry.unhide_sent = false;
+                            entry.wait_since = None;
+                            entry.unhide_failures = entry.unhide_failures.saturating_add(1);
+                            entry.reason = Some("unhide was not confirmed".to_owned());
+                        }
+                    } else {
+                        // Our unhide is done (or was never needed): released.
+                        self.entries.remove(&app.application);
+                        self.released += 1;
+                    }
+                } else if entry.ownership == Ownership::Ambiguous && !app.externally_hidden {
+                    // Visible: nothing is held hidden, so nothing is owned. The
+                    // show may have been the user's, so do not fight it: no hide
+                    // until the application is needed again.
+                    self.entries.remove(&app.application);
+                    self.suppressed.insert(app.application);
+                    let message = format!(
+                        "{:?}: ambiguous record dropped, the application is visible; not hidden \
+                         again until needed",
+                        app.application
+                    );
+                    self.note(message);
+                }
             }
             match self.entries.get_mut(&app.application) {
                 None => {
@@ -401,9 +525,32 @@ impl Ledger {
                             | Ownership::PendingIssued
                             | Ownership::PendingPossible
                     );
-                    if needed && owned && entry.unhide_failures < MAX_UNHIDE_FAILURES {
-                        entry.unhide_inflight = true;
-                        planned.push(Planned::Unhide(app.application));
+                    if needed {
+                        entry.hide_attempts = 0;
+                        entry.wait_since = None;
+                        if owned && entry.unhide_failures < MAX_UNHIDE_FAILURES {
+                            entry.unhide_inflight = true;
+                            planned.push(Planned::Unhide(app.application));
+                        }
+                        continue;
+                    }
+                    // Not needed: a failed-unhide streak must not block the next switch.
+                    entry.unhide_failures = 0;
+                    if owned && app.hide_wanted && !app.externally_hidden {
+                        // We hold it hidden, yet it is observed visible: the
+                        // hide did not land or its notification was lost.
+                        let since = *entry.wait_since.get_or_insert(now);
+                        if now.saturating_duration_since(since) >= CONFIRMATION_TIMEOUT
+                            && entry.hide_attempts < MAX_HIDE_ATTEMPTS
+                            && !self.suppressed.contains(&app.application)
+                        {
+                            entry.wait_since = None;
+                            entry.hide_attempts += 1;
+                            entry.hide_inflight = true;
+                            planned.push(Planned::Hide(app.application));
+                        }
+                    } else {
+                        entry.wait_since = None;
                     }
                 }
             }
@@ -442,6 +589,21 @@ impl Ledger {
         }
         entry.unhide_inflight = true;
         true
+    }
+
+    /// Whether our hide of `application` has not settled: it is in flight, or
+    /// sent with no hidden notice seen yet (and we are not unhiding it). An
+    /// activation of such an application is a side effect of our own hide.
+    #[must_use]
+    pub fn hide_unsettled(&self, application: ApplicationId) -> bool {
+        self.entries.get(&application).is_some_and(|entry| {
+            !entry.ours_unhiding()
+                && (entry.hide_inflight
+                    || matches!(
+                        entry.ownership,
+                        Ownership::PendingIssued | Ownership::PendingPossible
+                    ))
+        })
     }
 
     /// Folds one worker result.
@@ -528,6 +690,8 @@ impl Ledger {
                         entry.ownership = Ownership::Confirmed;
                         entry.reason = None;
                     }
+                    entry.hide_attempts = 0;
+                    entry.wait_since = None;
                 }
             }
             Observation::Shown => self.observe_shown(application),
@@ -550,6 +714,9 @@ impl Ledger {
                 if !ours {
                     // The user showed it: do not hide it again until needed.
                     self.suppressed.insert(application);
+                    self.note(format!(
+                        "{application:?}: shown outside Stache; not hidden again until needed"
+                    ));
                 }
             }
             Ownership::PendingIssued | Ownership::PendingPossible => {
@@ -694,6 +861,42 @@ struct Shared {
     idle: Condvar,
 }
 
+/// The locked [`Book`]. Dropping it releases the lock first and only then
+/// writes the diagnostics the ledger noted meanwhile, so the logger is never
+/// called with the `book` mutex held.
+struct BookGuard<'a> {
+    guard: Option<MutexGuard<'a, Book>>,
+}
+
+impl std::ops::Deref for BookGuard<'_> {
+    type Target = Book;
+
+    fn deref(&self) -> &Book { self.guard.as_ref().expect("held until drop") }
+}
+
+impl std::ops::DerefMut for BookGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Book { self.guard.as_mut().expect("held until drop") }
+}
+
+impl Drop for BookGuard<'_> {
+    fn drop(&mut self) {
+        let Some(mut guard) = self.guard.take() else { return };
+        let lines = std::mem::take(&mut guard.ledger.unlogged);
+        let origin = guard.ledger.logger.1;
+        let logger = if lines.is_empty() {
+            None
+        } else {
+            guard.ledger.logger.0.clone()
+        };
+        drop(guard);
+        if let Some(logger) = logger {
+            for line in lines {
+                logger.debug(format!("{} {line}", origin.stamp()));
+            }
+        }
+    }
+}
+
 /// The native capabilities one execution needs.
 pub struct Exec<'a> {
     /// Hide, unhide and activation. `None` when the observation could not be
@@ -769,8 +972,19 @@ impl VisibilityControl {
         }
     }
 
-    fn book(&self) -> MutexGuard<'_, Book> {
-        self.shared.book.lock().unwrap_or_else(PoisonError::into_inner)
+    fn book(&self) -> BookGuard<'_> {
+        BookGuard {
+            guard: Some(self.shared.book.lock().unwrap_or_else(PoisonError::into_inner)),
+        }
+    }
+
+    /// Reports hide and unhide results and ledger decisions through `logger`.
+    pub fn set_logger(
+        &self,
+        logger: Option<stache_sdk::ScopedLogger>,
+        origin: crate::logclock::LogOrigin,
+    ) {
+        self.book().ledger.logger = LedgerLog(logger, origin);
     }
 
     /// Seals: no new normal hide or unhide, and every armed one-shot
@@ -800,13 +1014,30 @@ impl VisibilityControl {
         requirement: &VisibilityRequirement,
         live: &dyn Fn(ApplicationId) -> bool,
         enabled: bool,
+        now: Instant,
     ) -> Vec<Planned> {
         let mut book = self.book();
         book.fold();
         let enabled = enabled && !book.sealed;
-        let planned = book.ledger.plan(requirement, live, enabled);
+        let planned = book.ledger.plan(requirement, live, enabled, now);
         book.outstanding += planned.len();
         planned
+    }
+
+    /// Whether our hide of `application` has not settled: see
+    /// [`Ledger::hide_unsettled`].
+    #[must_use]
+    pub fn hide_unsettled(&self, application: ApplicationId) -> bool {
+        let mut book = self.book();
+        book.fold();
+        book.ledger.hide_unsettled(application)
+    }
+
+    /// When the actor must wake to resolve a lost notification: see
+    /// [`Ledger::next_deadline`].
+    #[must_use]
+    pub fn next_deadline(&self, now: Instant) -> Option<Instant> {
+        self.book().ledger.next_deadline(now)
     }
 
     /// A planned effect never reached the worker.
@@ -842,6 +1073,18 @@ impl VisibilityControl {
         let mut book = self.book();
         book.fold();
         book.ledger.owned()
+    }
+
+    /// The applications Stache holds hidden or is unhiding: every record whose
+    /// hide is ours (`Confirmed`, `PendingIssued`, `PendingPossible`). An
+    /// `Ambiguous` record is not claimed.
+    #[must_use]
+    pub fn hidden_apps(&self) -> std::collections::BTreeSet<ApplicationId> {
+        self.owned()
+            .into_iter()
+            .filter(|app| app.ownership != Ownership::Ambiguous)
+            .map(|app| app.application)
+            .collect()
     }
 
     /// Test seed: see [`Ledger::seed`].
@@ -888,7 +1131,7 @@ impl VisibilityControl {
             let _held = shared.book.lock().unwrap_or_else(PoisonError::into_inner);
             shared.idle.notify_all();
         }));
-        let mut book = self.book();
+        let mut book = self.shared.book.lock().unwrap_or_else(PoisonError::into_inner);
         loop {
             if book.outstanding == 0 {
                 return DrainOutcome::Drained;
@@ -927,6 +1170,33 @@ impl VisibilityControl {
     fn disarm(&self, id: u64) { self.book().armed.remove(&id); }
 
     fn report(&self, report: Report) {
+        // Log before taking the lock the logger must never be called under.
+        let (logger, origin) = {
+            let book = self.book();
+            (book.ledger.logger.0.clone(), book.ledger.logger.1)
+        };
+        if let Some(logger) = logger {
+            let (level_warn, text) = match &report {
+                Report::Hide(app, HideEvidence::NotSent(why)) => {
+                    (true, format!("hide of {app:?} not sent: {why}"))
+                }
+                Report::Hide(app, HideEvidence::Possible(why)) => {
+                    (true, format!("hide of {app:?} uncertain: {why}"))
+                }
+                Report::Hide(app, evidence) => (false, format!("hide of {app:?}: {evidence:?}")),
+                Report::Unhide(app, UnhideEvidence::Failed(why)) => {
+                    (true, format!("unhide of {app:?} failed: {why}"))
+                }
+                Report::Unhide(app, evidence) => {
+                    (false, format!("unhide of {app:?}: {evidence:?}"))
+                }
+            };
+            if level_warn {
+                logger.warn(format!("tiling visibility: {text}"));
+            } else {
+                logger.debug(format!("{} tiling visibility: {text}", origin.stamp()));
+            }
+        }
         let mut book = self.book();
         book.inbox.push_back(report);
         book.outstanding = book.outstanding.saturating_sub(1);

@@ -525,7 +525,132 @@ pub fn read_tab_group<A: WindowAx>(api: &A, window: &A::Element, limit: usize) -
     }
 }
 
+/// The deepest level (window children are level 1) searched for a tab group.
+pub const TAB_BAR_MAX_DEPTH: usize = 7;
+
+/// The most elements whose role is read while searching for a tab group.
+pub const TAB_BAR_NODE_BUDGET: usize = 96;
+
+/// The result of searching a window's subtree for its `AXTabGroup`.
+#[derive(Debug)]
+pub enum TabGroupSearch<E> {
+    /// The tab group element (a retained, owner-confined handle).
+    Found(E),
+    /// The bounded search finished without a tab group.
+    Absent,
+    /// The window's own children could not be read: unknown, not "no tab
+    /// group". This is what a window in transition answers.
+    Unknown(AxError),
+}
+
+/// Searches the subtree of `window` breadth first for an `AXTabGroup`.
+///
+/// Bounded by [`TAB_BAR_MAX_DEPTH`] levels, [`TAB_GROUP_SCAN_LIMIT`] children per
+/// element and [`TAB_BAR_NODE_BUDGET`] role reads; every element read is bounded
+/// by [`ELEMENT_TIMEOUT`]. A failing read below the window only prunes that
+/// branch; a failing read of the window's own children is
+/// [`TabGroupSearch::Unknown`].
+pub fn find_tab_group<A: WindowAx>(api: &A, window: &A::Element) -> TabGroupSearch<A::Element> {
+    let mut frontier = match api.children(window, TAB_GROUP_SCAN_LIMIT) {
+        Ok(children) => children,
+        Err(error) if error.is_absent() => return TabGroupSearch::Absent,
+        Err(error) => return TabGroupSearch::Unknown(error),
+    };
+    let mut visited = 0;
+    for depth in 1..=TAB_BAR_MAX_DEPTH {
+        let mut next = Vec::new();
+        for child in frontier {
+            if visited >= TAB_BAR_NODE_BUDGET {
+                return TabGroupSearch::Absent;
+            }
+            visited += 1;
+            let _ = api.set_messaging_timeout(&child, ELEMENT_TIMEOUT);
+            if api
+                .string(&child, StringAttribute::Role)
+                .is_ok_and(|role| role == TAB_GROUP_ROLE)
+            {
+                return TabGroupSearch::Found(child);
+            }
+            if depth < TAB_BAR_MAX_DEPTH
+                && let Ok(children) = api.children(&child, TAB_GROUP_SCAN_LIMIT)
+            {
+                next.extend(children);
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        frontier = next;
+    }
+    TabGroupSearch::Absent
+}
+
+/// How many tab buttons a tab group has and which one is selected.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TabBarShape {
+    /// `AXTabs` elements read (at most the limit).
+    pub count: usize,
+    /// The index of the first button whose `AXValue` is non-zero.
+    pub selected: Option<usize>,
+}
+
+/// Reads the shape of a tab group.
+///
+/// # Errors
+///
+/// A failure other than an absent `AXTabs` (which is an empty bar).
+pub fn read_tab_bar_shape<A: WindowAx>(
+    api: &A,
+    group: &A::Element,
+    limit: usize,
+) -> Result<TabBarShape, AxError> {
+    let _ = api.set_messaging_timeout(group, ELEMENT_TIMEOUT);
+    let tabs = match api.tab_elements(group, limit) {
+        Ok(tabs) => tabs,
+        Err(error) if error.is_absent() => Vec::new(),
+        Err(error) => return Err(error),
+    };
+    let selected = tabs.iter().position(|tab| {
+        let _ = api.set_messaging_timeout(tab, ELEMENT_TIMEOUT);
+        api.tab_selected(tab).unwrap_or(false)
+    });
+    Ok(TabBarShape { count: tabs.len(), selected })
+}
+
+/// `kAXErrorIllegalArgument`.
+const ILLEGAL_ARGUMENT: i32 = -25201;
+
+/// The `(index, max)` AX range for one page of a list holding `count` values,
+/// or `None` when the page is empty: `limit` is zero or `index` is at or past
+/// the end. The page is clamped to the values that exist.
+fn page_bounds(count: usize, index: usize, limit: usize) -> Option<(isize, isize)> {
+    if index >= count || limit == 0 {
+        return None;
+    }
+    let max = isize::try_from(limit.min(count - index)).ok()?;
+    Some((isize::try_from(index).ok()?, max))
+}
+
+/// Whether a re-read `count` shows `index` is now at or past the end.
+const fn index_now_past_end(count: usize, index: usize) -> bool { index >= count }
+
 impl SystemAx {
+    fn value_count(element: &AxElement, attribute: &CFString) -> Result<usize, AxError> {
+        let mut count: isize = 0;
+        // SAFETY: live element and attribute; valid out pointer; no ownership.
+        let code = unsafe {
+            AXUIElementGetAttributeValueCount(
+                element.as_ref(),
+                attribute.as_concrete_TypeRef(),
+                &raw mut count,
+            )
+        };
+        if code != 0 {
+            return Err(AxError::from_code(code));
+        }
+        usize::try_from(count).map_err(|_| AxError::WrongType)
+    }
+
     fn copy_elements(
         &self,
         element: &AxElement,
@@ -533,8 +658,14 @@ impl SystemAx {
         index: usize,
         limit: usize,
     ) -> Result<Vec<AxElement>, AxError> {
-        let index = isize::try_from(index).map_err(|_| AxError::WrongType)?;
-        let max = isize::try_from(limit).map_err(|_| AxError::WrongType)?;
+        // `AXUIElementCopyAttributeValues` answers kAXErrorIllegalArgument (not
+        // an empty array) when `index` is at or past the end, so a paged reader
+        // would see "no more values" as a failure. Read the live count first
+        // and answer an empty page past the end; clamp the page to it.
+        let count = Self::value_count(element, attribute)?;
+        let Some((first, max)) = page_bounds(count, index, limit) else {
+            return Ok(Vec::new());
+        };
         let mut array: CFTypeRef = std::ptr::null();
         // SAFETY: live element and attribute; valid out pointer. On success the
         // callee returns a +1 CFArray (Copy rule) wrapped below exactly once.
@@ -542,12 +673,21 @@ impl SystemAx {
             AXUIElementCopyAttributeValues(
                 element.as_ref(),
                 attribute.as_concrete_TypeRef(),
-                index,
+                first,
                 max,
                 &raw mut array,
             )
         };
         if code != 0 {
+            // The list can shrink between the count read and the copy, which
+            // answers illegal argument. Re-read the count: when `index` is now
+            // at or past the end it is the end of the list, not a failure.
+            if code == ILLEGAL_ARGUMENT
+                && Self::value_count(element, attribute)
+                    .is_ok_and(|now| index_now_past_end(now, index))
+            {
+                return Ok(Vec::new());
+            }
             return Err(AxError::from_code(code));
         }
         if array.is_null() {
@@ -735,5 +875,28 @@ impl WindowAx for SystemAx {
         } else {
             Err(AxError::from_code(code))
         }
+    }
+}
+
+#[cfg(test)]
+mod page_tests {
+    use super::{index_now_past_end, page_bounds};
+
+    #[test]
+    fn page_bounds_table() {
+        assert_eq!(page_bounds(0, 0, 8), None, "empty list");
+        assert_eq!(page_bounds(3, 3, 8), None, "index == count");
+        assert_eq!(page_bounds(3, 9, 8), None, "index > count");
+        assert_eq!(page_bounds(3, 0, 0), None, "limit 0");
+        assert_eq!(page_bounds(10, 0, 4), Some((0, 4)), "full page");
+        assert_eq!(page_bounds(10, 8, 4), Some((8, 2)), "partial last page");
+        assert_eq!(page_bounds(10, 9, 4), Some((9, 1)));
+    }
+
+    #[test]
+    fn a_shrunk_list_is_the_end_of_the_list() {
+        assert!(index_now_past_end(2, 2));
+        assert!(index_now_past_end(0, 1));
+        assert!(!index_now_past_end(5, 2));
     }
 }

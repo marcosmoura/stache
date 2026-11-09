@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use stache_macos::ApplicationId;
+use stache_macos::applications::LifecycleKind;
+use stache_macos::ax::AxError;
 use stache_macos::windows::{
     ActionRequest, AdapterId, CleanupReport, CloseOutcome, DispatchError, EventQueue,
     GenerationCell, InstallError, RuntimeEpoch, SnapshotOrigin, SnapshotOutcome, StopOutcome,
@@ -157,6 +159,117 @@ impl Rig {
     }
 
     fn calls(&self) -> Vec<FakeBackendCall> { self.backend.calls() }
+
+    fn script_denied(&self, application: ApplicationId) {
+        self.backend.script_track_for(application, TrackOutcome::PermissionDenied);
+    }
+}
+
+/// Advances the actor clock and lets the retry it wakes for run to completion.
+fn elapse(rig: &mut Rig, by: Duration) {
+    rig.clock.advance(by);
+    // The first turn submits the due retry, the next ones apply it.
+    rig.engine.turn();
+    rig.pump();
+}
+
+fn tracks_of(rig: &Rig, application: ApplicationId) -> usize {
+    rig.calls()
+        .iter()
+        .filter(|call| matches!(call, FakeBackendCall::Track(app, _) if *app == application))
+        .count()
+}
+
+#[test]
+fn a_launch_whose_first_tracks_fail_transiently_is_tracked_on_the_backoff() {
+    let mut rig = Rig::new("", vec![info(1, "com.a", "A")], 64, 64);
+    rig.start();
+    rig.complete(app(1));
+    rig.pump();
+    let launched = app(2);
+    rig.backend
+        .script_track_for(launched, TrackOutcome::Failed(AxError::CannotComplete));
+    rig.backend
+        .script_track_for(launched, TrackOutcome::Failed(AxError::CannotComplete));
+    rig.ingress
+        .submit(Input::Lifecycle {
+            kind: LifecycleKind::Launched,
+            info: info(2, "com.b", "B"),
+        })
+        .expect("launch");
+    rig.pump();
+    assert_eq!(tracks_of(&rig, launched), 1);
+    assert_eq!(rig.snap().failed_apps.len(), 1);
+    // The actor asks to be woken for the first retry.
+    let due = rig.engine.turn().next_deadline.expect("a wake for the retry");
+    let now = crate::actor::Clock::now(&*rig.clock);
+    assert!(due > now && due <= now + Duration::from_millis(100), "{due:?}");
+    // Time alone does nothing early.
+    elapse(&mut rig, Duration::from_millis(99));
+    assert_eq!(tracks_of(&rig, launched), 1);
+    elapse(&mut rig, Duration::from_millis(1));
+    assert_eq!(tracks_of(&rig, launched), 2, "first retry at 100 ms");
+    elapse(&mut rig, Duration::from_millis(250));
+    assert_eq!(tracks_of(&rig, launched), 3, "second retry at 250 ms later");
+    // The third track succeeded: its window appears with no activation.
+    let window = rig.token(2, 1);
+    rig.push(WindowEventKind::Snapshot {
+        snapshot: snapshot(window, "w", 9),
+        origin: SnapshotOrigin::Enumeration,
+    });
+    rig.complete(launched);
+    rig.pump();
+    let snap = rig.snap();
+    assert!(snap.failed_apps.is_empty(), "{:?}", snap.failed_apps);
+    assert!(
+        snap.windows.iter().any(|w| w.token == window),
+        "the window is tracked"
+    );
+    // Nothing more is scheduled.
+    elapse(&mut rig, Duration::from_secs(10));
+    assert_eq!(tracks_of(&rig, launched), 3);
+}
+
+#[test]
+fn a_permanently_failing_launch_stops_retrying_after_the_bound() {
+    let mut rig = Rig::new("", vec![info(1, "com.a", "A")], 64, 64);
+    rig.start();
+    rig.complete(app(1));
+    rig.pump();
+    let launched = app(2);
+    for _ in 0..20 {
+        rig.backend
+            .script_track_for(launched, TrackOutcome::Failed(AxError::CannotComplete));
+    }
+    rig.ingress
+        .submit(Input::Lifecycle {
+            kind: LifecycleKind::Launched,
+            info: info(2, "com.b", "B"),
+        })
+        .expect("launch");
+    rig.pump();
+    for _ in 0..12 {
+        elapse(&mut rig, Duration::from_secs(5));
+    }
+    assert_eq!(
+        tracks_of(&rig, launched),
+        1 + crate::actor::TRACK_RETRY_BACKOFF.len(),
+        "bounded by the backoff schedule"
+    );
+    assert!(
+        rig.engine.turn().next_deadline.is_none(),
+        "no wake once given up"
+    );
+    assert_eq!(rig.snap().failed_apps.len(), 1);
+}
+
+#[test]
+fn a_permission_failure_is_not_retried_on_a_timer() {
+    let mut rig = Rig::new("", vec![info(1, "com.a", "A")], 64, 64);
+    rig.script_denied(app(1));
+    rig.start();
+    elapse(&mut rig, Duration::from_secs(30));
+    assert_eq!(tracks_of(&rig, app(1)), 1);
 }
 
 fn assert_no_native_mutation(calls: &[FakeBackendCall]) {
@@ -398,7 +511,10 @@ fn a_full_semantic_queue_never_acts_on_stale_identity_and_reconciles_once() {
         snap.window(kept[0]).is_some(),
         "the lost destroy has not been applied..."
     );
-    assert!(!snap.actions_allowed, "...so no action authority exists");
+    assert!(
+        snap.all_unconfirmed || snap.unconfirmed_apps + snap.inflight_apps > 0,
+        "...so the reconciliation is owed"
+    );
     assert_ne!(snap.phase, Phase::Complete);
     let refreshes = rig.calls().iter().filter(|c| matches!(c, FakeBackendCall::Refresh(_))).count();
     assert_eq!(refreshes, 1, "exactly one bounded reconciliation");
@@ -691,6 +807,16 @@ impl WindowBackend for GateBackend {
         self.inner.track(epoch, application, pid, cancel, deadline)
     }
 
+    fn focused_window(
+        &self,
+        epoch: RuntimeEpoch,
+        application: ApplicationId,
+        cancel: &CancellationToken,
+        deadline: Option<Instant>,
+    ) -> stache_macos::windows::FocusOutcome {
+        self.inner.focused_window(epoch, application, cancel, deadline)
+    }
+
     fn refresh(
         &self,
         epoch: RuntimeEpoch,
@@ -909,9 +1035,9 @@ fn mailbox_saturation_is_a_visible_failure_not_success() {
     // One track is parked in the worker, two are queued; the rest are refused.
     wait_until("refusals recorded", || {
         let snap = runtime.snapshot();
-        snap.phase == Phase::Incomplete && snap.diagnostics.enumeration_failures >= 20
+        snap.failed_apps.len() >= 20 && snap.diagnostics.enumeration_failures >= 20
     });
-    assert_ne!(runtime.snapshot().phase, Phase::Complete);
+    assert_ne!(runtime.snapshot().phase, Phase::Incomplete);
     assert!(backend.entered.load(Ordering::SeqCst) <= 3);
     runtime.shutdown();
 }
@@ -1170,6 +1296,7 @@ mod real_core {
         // A window closes without a destroy notification; a refresh finds it.
         let kept = vec![nodes[0], nodes[1], fresh];
         ax.edit(app_el, |node| node.windows = Ok(kept.clone()));
+        ax.kill(nodes[2]);
         runtime
             .ingress()
             .submit(Input::Unconfirmed(Scope::App(app(1)), Cause::SinkOverflow))
@@ -1187,6 +1314,150 @@ mod real_core {
             "the owner reported the destroy; Tiling's repair was not needed"
         );
         assert_eq!(snap.health, Health::Healthy);
+        runtime.shutdown();
+    }
+
+    fn tab_group(ax: &FakeWindowAx, tabs: usize) -> NodeId {
+        let buttons: Vec<NodeId> = (0..tabs)
+            .map(|index| {
+                ax.add_node(FakeNode {
+                    selected: Ok(index == 0),
+                    ..FakeNode::default()
+                })
+            })
+            .collect();
+        let group = ax.add_node(FakeNode {
+            children: Ok(vec![]),
+            tabs: Ok(buttons),
+            ..FakeNode::default()
+        });
+        ax.edit(group, |n| {
+            n.strings.insert(WindowString::Role, Ok("AXTabGroup".to_owned()));
+        });
+        group
+    }
+
+    fn by_cg(runtime: &TrackingRuntime, cg: u32) -> Option<WindowInstance> {
+        runtime
+            .snapshot()
+            .windows
+            .iter()
+            .find(|w| w.cg_window_id == Some(cg))
+            .map(|w| w.token)
+    }
+
+    fn order(runtime: &TrackingRuntime) -> Vec<WindowInstance> {
+        runtime.snapshot().workspaces.iter().flat_map(|ws| ws.order.clone()).collect()
+    }
+
+    /// Finder-like native tabs over the real owner `Core`: `AppKit` lists a
+    /// different window for the group after a tab switch and a tab close. The
+    /// group keeps one tile and one slot; a window in transition decides nothing.
+    #[test]
+    fn the_real_core_hands_a_tab_group_over_on_a_switch_and_a_close() {
+        let ax = FakeWindowAx::new();
+        let group = tab_group(&ax, 3);
+        let f1 = window_node(&ax, 100);
+        ax.edit(f1, |n| n.children = Ok(vec![group]));
+        let plain = window_node(&ax, 200);
+        let finder_el = ax.add_node(FakeNode {
+            windows: Ok(vec![f1]),
+            ..FakeNode::default()
+        });
+        let other_el = ax.add_node(FakeNode {
+            windows: Ok(vec![plain]),
+            ..FakeNode::default()
+        });
+        let finder = info(1, "com.apple.finder", "Finder");
+        let other = info(2, "com.b", "B");
+        ax.set_application(finder.pid, finder_el);
+        ax.set_application(other.pid, other_el);
+        let (system, obs) = FakeWindowSystem::new(ax.clone());
+        let adapter = WindowAdapter::spawn(
+            &format!(
+                "stache-test-tiling-real-tab-bars-{}",
+                NAMES.fetch_add(1, Ordering::SeqCst)
+            ),
+            &AdapterOptions {
+                read_tabs: false,
+                read_tab_bars: true,
+            },
+            Arc::new(SystemWindowClock),
+            move || system,
+            RunLoopDriver::new,
+        )
+        .expect("spawn");
+        let backend = Arc::new(SystemWindowBackend::from_adapter(adapter, false));
+        let directory = Arc::new(FakeAppDirectory::default());
+        *directory.apps.lock().expect("apps") = vec![finder.clone(), other];
+        let runtime = TrackingRuntime::start(
+            backend as Arc<dyn WindowBackend>,
+            directory as Arc<dyn crate::actor::AppDirectory>,
+            &TrackingOptions::new(""),
+        )
+        .expect("start");
+        runtime.submit_displays(None, one_display()).expect("displays");
+        wait_until("initial enumeration", || {
+            let snap = runtime.snapshot();
+            snap.phase == Phase::Complete && snap.windows.len() == 2
+        });
+        let first = by_cg(&runtime, 100).expect("group window");
+        let slot = order(&runtime).iter().position(|t| *t == first).expect("ordered");
+
+        // Switch: the group is listed through another window carrying the same
+        // shared tab bar; the old one just leaves the list.
+        let f2 = window_node(&ax, 101);
+        ax.edit(f1, |n| n.children = Ok(vec![]));
+        ax.edit(f2, |n| n.children = Ok(vec![group]));
+        ax.edit(finder_el, |n| n.windows = Ok(vec![f2]));
+        obs.inject(finder.pid, AxNotification::MainWindowChanged, finder_el);
+        runtime
+            .ingress()
+            .submit(Input::Unconfirmed(Scope::App(app(1)), Cause::TabSettle))
+            .expect("submit");
+        wait_until("handover on a switch", || {
+            runtime.snapshot().diagnostics.tab_handovers == 1
+        });
+        let second = by_cg(&runtime, 101).expect("replacement");
+        assert_ne!(second, first);
+        // The previous window is alive, only unlisted: a suspended member.
+        assert!(runtime.snapshot().window(first).is_some_and(|w| w.suspended));
+        let tiles = |runtime: &TrackingRuntime| {
+            runtime.snapshot().windows.iter().filter(|w| !w.suspended).count()
+        };
+        assert_eq!(tiles(&runtime), 2, "one tile per group");
+        assert_eq!(order(&runtime).iter().position(|t| *t == second), Some(slot));
+
+        // Close: the window is destroyed; the group is listed through a window
+        // that cannot be read yet, then through a settled one.
+        let f3 = window_node(&ax, 102);
+        ax.edit(f3, |n| {
+            n.window_id = Err(stache_macos::ax::WindowIdError::NoWindow);
+            n.children = Err(stache_macos::ax::AxError::CannotComplete);
+        });
+        ax.edit(finder_el, |n| n.windows = Ok(vec![f3]));
+        obs.inject(finder.pid, AxNotification::ElementDestroyed, f2);
+        runtime
+            .ingress()
+            .submit(Input::Unconfirmed(Scope::App(app(1)), Cause::TabSettle))
+            .expect("submit");
+        wait_until("the destroy is held back", || {
+            runtime.snapshot().window(second).is_some_and(|w| w.departing.is_some())
+        });
+        assert_eq!(order(&runtime).iter().position(|t| *t == second), Some(slot));
+        assert_eq!(by_cg(&runtime, 102), None, "the transient window is not a tile");
+        ax.edit(f3, |n| {
+            n.window_id = Ok(102);
+            n.children = Ok(vec![group]);
+        });
+        wait_until("handover on a close", || {
+            runtime.snapshot().diagnostics.tab_handovers == 2
+        });
+        let third = by_cg(&runtime, 102).expect("settled window");
+        assert_eq!(order(&runtime).iter().position(|t| *t == third), Some(slot));
+        assert_eq!(tiles(&runtime), 2);
+        assert_eq!(runtime.snapshot().diagnostics.tab_departures_closed, 0);
+        assert_eq!(runtime.snapshot().health, Health::Healthy);
         runtime.shutdown();
     }
 
@@ -1230,7 +1501,10 @@ mod real_core {
                 "stache-test-tiling-real-tabs-{}",
                 NAMES.fetch_add(1, Ordering::SeqCst)
             ),
-            &AdapterOptions { read_tabs: true },
+            &AdapterOptions {
+                read_tabs: true,
+                read_tab_bars: false,
+            },
             Arc::new(SystemWindowClock),
             move || system,
             RunLoopDriver::new,
@@ -1267,4 +1541,6 @@ mod real_core {
 
 mod drag;
 mod frames;
+mod scenarios;
+mod tabs;
 mod visibility;

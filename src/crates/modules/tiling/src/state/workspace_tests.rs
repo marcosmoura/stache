@@ -652,6 +652,131 @@ fn swap_exchanges_order_in_all_six_directions_and_keeps_focus() {
     assert_eq!(world.outcome(), IntentOutcome::NoOp(IntentNoOp::NoCandidate));
 }
 
+/// Legacy (`find_window_in_direction`): a spatial swap or focus with no window
+/// in that direction does nothing (never wraps, never picks the other side);
+/// next/previous wrap. Same for every layout, two and three windows.
+#[test]
+fn swap_and_focus_by_direction_at_the_edges_follow_legacy() {
+    for layout in ["dwindle", "grid", "master"] {
+        for count in [2_usize, 3] {
+            let mut world = World::new(
+                Some(serde_json::json!({"workspaces": [{"name": "w", "layout": layout}]})),
+                false,
+            );
+            let xs = [0.0, 900.0, 1800.0];
+            let tokens: Vec<WindowInstance> =
+                (0..count).map(|i| world.add(1, i as u64 + 1, "w", xs[i])).collect();
+            for token in &tokens {
+                world.focus(*token);
+            }
+            let order = world.order("w");
+            assert_eq!(order, tokens, "{layout} {count}");
+            let (first, last) = (tokens[0], tokens[count - 1]);
+            let noop = IntentOutcome::NoOp(IntentNoOp::NoCandidate);
+            // Leftmost: left does nothing, for swap and for focus.
+            world.focus(first);
+            world.intent(Intent::SwapWindow(SwapDirection::Left));
+            assert_eq!(
+                (world.outcome(), world.order("w")),
+                (noop.clone(), order.clone())
+            );
+            world.intent(Intent::FocusWindow(FocusTarget::Direction(FocusDirection::Left)));
+            assert_eq!(
+                (world.outcome(), world.state.focus.window),
+                (noop.clone(), Some(first))
+            );
+            // Rightmost: right does nothing.
+            world.focus(last);
+            world.intent(Intent::SwapWindow(SwapDirection::Right));
+            assert_eq!(
+                (world.outcome(), world.order("w")),
+                (noop.clone(), order.clone())
+            );
+            world.intent(Intent::FocusWindow(FocusTarget::Direction(
+                FocusDirection::Right,
+            )));
+            assert_eq!(
+                (world.outcome(), world.state.focus.window),
+                (noop.clone(), Some(last))
+            );
+            // Up and down: nothing above or below a row.
+            for direction in [SwapDirection::Up, SwapDirection::Down] {
+                world.intent(Intent::SwapWindow(direction));
+                assert_eq!(
+                    (world.outcome(), world.order("w")),
+                    (noop.clone(), order.clone())
+                );
+            }
+            // Focus cycling wraps both ways.
+            world.focus(first);
+            world.intent(Intent::FocusWindow(FocusTarget::Direction(
+                FocusDirection::Previous,
+            )));
+            assert_eq!(world.state.focus.window, Some(last));
+            world.intent(Intent::FocusWindow(FocusTarget::Direction(FocusDirection::Next)));
+            assert_eq!(world.state.focus.window, Some(first));
+            // Next and previous wrap, and swap with the wrapped window.
+            world.focus(last);
+            world.intent(Intent::SwapWindow(SwapDirection::Next));
+            let mut wrapped = order.clone();
+            wrapped.swap(0, count - 1);
+            assert_eq!(world.order("w"), wrapped, "{layout} {count} next wraps");
+            world.intent(Intent::SwapWindow(SwapDirection::Previous));
+            assert_eq!(world.order("w"), order, "{layout} {count} previous wraps back");
+            world.focus(first);
+            world.intent(Intent::SwapWindow(SwapDirection::Previous));
+            let mut wrapped = order.clone();
+            wrapped.swap(0, count - 1);
+            assert_eq!(world.order("w"), wrapped, "{layout} {count} previous wraps");
+        }
+    }
+}
+
+/// A creation held back as unsettled is adopted by the next listing; the window
+/// that took the focus meanwhile still gets it (its focus notification came
+/// first and named an untracked window, then the listing adopted it).
+#[test]
+fn a_window_adopted_by_a_later_listing_takes_the_focus_it_was_given() {
+    let mut world = World::new(None, false);
+    world.enable();
+    let a = world.add(1, 1, "a", 0.0);
+    world.focus(a);
+    world.send(Input::Activated(a.application()));
+    // The focus notification names a window not tracked yet.
+    let b = world.feed.token(1, 2);
+    world.focus(b);
+    assert_eq!(world.state.focus.window, Some(a), "never a guess");
+    // The listing that follows adopts it.
+    world.add_with(1, 2, "b", 900.0, SnapshotOrigin::Enumeration);
+    assert_eq!(world.state.focus.window, Some(b));
+}
+
+/// With no notification at all, adopting a window of the frontmost application
+/// asks for its real focused window (identity, bounded to one read per turn).
+#[test]
+fn adopting_a_window_of_the_frontmost_app_reads_its_focused_window() {
+    let mut world = World::new(None, false);
+    world.enable();
+    let a = world.add(1, 1, "a", 0.0);
+    world.focus(a);
+    world.send(Input::Activated(a.application()));
+    let token = world.feed.token(1, 2);
+    let mut snap = snapshot(token, "b", 102);
+    snap.frame = frame_read(910.0, 10.0, 800.0, 600.0);
+    let input = world.feed.input(WindowEventKind::Snapshot {
+        snapshot: snap,
+        origin: SnapshotOrigin::Created,
+    });
+    let effects = world.send(input);
+    let reads = effects.iter().filter(|e| matches!(e, Effect::ReadFocus { .. })).count();
+    assert_eq!(reads, 1, "{effects:?}");
+    assert_eq!(
+        world.state.focus.window,
+        Some(a),
+        "the read decides, not a guess"
+    );
+}
+
 // -------------------------------------------------------- floating / preset
 
 fn presets() -> serde_json::Value {

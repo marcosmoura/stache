@@ -58,19 +58,20 @@ mod tests;
 
 pub use core::{
     ENUMERATION_CHUNK_BUDGET, ENUMERATION_CHUNK_ELEMENTS, MAX_COMMANDS_PER_TURN,
-    MAX_WINDOWS_PER_APPLICATION,
+    MAX_SUSPENDED_PER_APPLICATION, MAX_WINDOWS_PER_APPLICATION,
 };
 
 pub use adapter::{AdapterOptions, OWNER_QUEUE_BOUND, SpawnError, WindowAdapter, hop_wait};
 pub use commands::{
-    ActionRequest, CleanupReport, CloseOutcome, HiddenOperation, HiddenOutcome, HiddenRequest,
-    InstallError, InstallRequest, SnapshotOutcome, StopOutcome, TrackOutcome, TrackRequest,
-    WindowAction,
+    ActionRequest, CleanupReport, CloseOutcome, FocusOutcome, HiddenOperation, HiddenOutcome,
+    HiddenRequest, InstallError, InstallRequest, SnapshotOutcome, StopOutcome, TrackOutcome,
+    TrackRequest, WindowAction,
 };
 pub use driver::{Driver, RunLoopDriver, Waker};
 pub use events::{
     ApplicationChange, Capability, EnumerationAbort, EventBatch, EventQueue, SnapshotOrigin,
-    TabInfo, TabMember, WindowChange, WindowEvent, WindowEventKind, WindowSnapshot,
+    TabBar, TabBarId, TabBarRead, TabInfo, TabMember, WindowChange, WindowEvent, WindowEventKind,
+    WindowSnapshot,
 };
 pub use identity::{AdapterId, RuntimeEpoch, WindowInstance};
 pub use issuance::{

@@ -199,7 +199,14 @@ fn read_response(
         if remaining.is_zero() {
             return Err(ClientError::Timeout);
         }
-        stream.set_read_timeout(Some(remaining)).map_err(ClientError::Io)?;
+        // macOS rejects `SO_RCVTIMEO` with EINVAL once the peer has closed its
+        // end (the host closes right after writing). The timeout installed at
+        // connect time stays in force and the deadline above bounds the total.
+        match stream.set_read_timeout(Some(remaining)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::InvalidInput => {}
+            Err(error) => return Err(ClientError::Io(error)),
+        }
         match stream.read(&mut chunk) {
             Ok(0) => {
                 return Err(ClientError::InvalidResponse(
@@ -340,6 +347,70 @@ mod tests {
             framed_response(&oversized, 4096 + body.len() - 1),
             Err(ClientError::InvalidResponse(_))
         ));
+    }
+
+    #[test]
+    fn a_large_response_followed_by_an_immediate_close_decodes() {
+        // The host writes the whole answer and closes. macOS answers a later
+        // `SO_RCVTIMEO` update on such a socket with EINVAL, which used to fail
+        // every response longer than one 4 KiB read.
+        let root = directory();
+        let socket = root.path().join("large.sock");
+        let listener = UnixListener::bind(&socket).expect("listener");
+        let text = "x".repeat(200 * 1024);
+        let expected = text.len();
+        let mut payload =
+            serde_json::to_vec(&Response::ok(json!({ "text": text }))).expect("encode");
+        payload.push(b'\n');
+        let peer = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut line = String::new();
+            BufReader::new(stream.try_clone().expect("clone"))
+                .read_line(&mut line)
+                .expect("request");
+            stream.write_all(&payload).expect("write");
+            // Dropped here: the peer's end closes right after the last byte.
+        });
+        let response =
+            IpcClient::with_options(&socket, RetryPolicy::single(), Duration::from_secs(5))
+                .request(&Request::without_params("demo", "big"))
+                .expect("decodes");
+        peer.join().expect("peer");
+        match response {
+            Response::Ok { data } => {
+                assert_eq!(data["text"].as_str().map(str::len), Some(expected));
+            }
+            Response::Error { error } => panic!("{error}"),
+        }
+    }
+
+    #[test]
+    fn the_real_server_answers_a_large_response_and_a_slow_reader_gets_all_of_it() {
+        struct Big;
+        impl IpcHandler for Big {
+            fn handle(
+                &self,
+                _method: &str,
+                _params: serde_json::Value,
+            ) -> HandlerResult<serde_json::Value> {
+                Ok(json!({ "rows": vec!["row of text that is repeated"; 20_000] }))
+            }
+        }
+        let root = directory();
+        let paths = paths(root.path());
+        let mut router = Router::new(Arc::new(FakeCore));
+        router.register("big", Arc::new(Big)).expect("register");
+        let server =
+            crate::ipc::server::IpcServer::start(&paths, Arc::new(router)).expect("server");
+        let client = IpcClient::new(paths.socket_path().expect("socket"));
+        let response = client.request(&Request::without_params("big", "rows")).expect("response");
+        match response {
+            Response::Ok { data } => {
+                assert_eq!(data["rows"].as_array().map(Vec::len), Some(20_000));
+            }
+            Response::Error { error } => panic!("{error}"),
+        }
+        drop(server);
     }
 
     #[test]

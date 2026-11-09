@@ -50,6 +50,10 @@ pub enum QueryKind {
     Windows,
     /// Running applications.
     Apps,
+    /// The runtime status: phase, failed applications, why frames are not
+    /// written, hidden applications. Read-only; also answers while the
+    /// runtime is still initializing.
+    Status,
 }
 
 /// Parameters of `tiling.query`.
@@ -264,6 +268,132 @@ pub struct AppDto {
     pub bundle_id: String,
     /// Whether the application is hidden.
     pub is_hidden: bool,
+}
+
+/// One application that could not be tracked or enumerated.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StatusAppDto {
+    /// The process id.
+    pub pid: i32,
+    /// The application name.
+    pub name: String,
+    /// The bundle identifier.
+    pub bundle_id: String,
+    /// Why it is excluded.
+    pub reason: String,
+    /// Retries spent (bounded; a retry happens on activation or relaunch).
+    pub retries: u8,
+}
+
+/// One display that produced no frames.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StatusNoFrameDto {
+    /// The display name.
+    pub screen: String,
+    /// Why nothing is laid out there.
+    pub reason: String,
+}
+
+/// One application the runtime hid or may have hidden.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StatusHiddenDto {
+    /// The application name (empty when unknown).
+    pub name: String,
+    /// The bundle identifier (empty when unknown).
+    pub bundle_id: String,
+    /// `pending`, `pending-possible`, `confirmed` or `ambiguous`.
+    pub ownership: String,
+    /// Why it is uncertain or why its last unhide failed.
+    pub reason: Option<String>,
+}
+
+/// One tracked window with the facts that decided its eligibility.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StatusWindowDto {
+    /// The numeric window id, when known.
+    pub id: Option<u32>,
+    /// The application name.
+    pub app_name: String,
+    /// The bundle identifier.
+    pub bundle_id: String,
+    /// The window title.
+    pub title: String,
+    /// The AX subrole, when read.
+    pub subrole: Option<String>,
+    /// The frame as `WxH@x,y`, when read.
+    pub frame: Option<String>,
+    /// The workspace it was assigned to.
+    pub workspace: Option<String>,
+    /// Whether it floats.
+    pub floating: bool,
+    /// Whether it is the focused window.
+    pub focused: bool,
+}
+
+/// One window that is deliberately not managed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StatusExcludedDto {
+    /// The application name.
+    pub app_name: String,
+    /// The bundle identifier.
+    pub bundle_id: String,
+    /// Why it is not managed.
+    pub reason: String,
+}
+
+/// The `status` result: why the runtime does or does not lay windows out.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StatusDto {
+    /// `initializing`, `reconciling`, `complete` or `incomplete`.
+    pub phase: String,
+    /// Whether the actor is healthy.
+    pub healthy: bool,
+    /// Why the phase is `incomplete`: a global fault (no screens, missing
+    /// Accessibility permission, overload, failed actor), else empty.
+    pub faults: Vec<String>,
+    /// Whether frame planning is running (a global fault or startup blocks it).
+    pub layout_active: bool,
+    /// The accepted configuration revision.
+    pub config_revision: u64,
+    /// The layout plan sequence.
+    pub plan_sequence: u64,
+    /// Known applications (including skipped system ones).
+    pub apps: usize,
+    /// Applications being observed.
+    pub tracked_apps: usize,
+    /// Managed windows (suspended inactive tabs are not counted).
+    pub windows: usize,
+    /// Windows that left `AXWindows` while alive: inactive tabs without a tile.
+    pub suspended_windows: usize,
+    /// Applications whose tracking or enumeration failed; only their windows
+    /// are held back.
+    pub failed_apps: Vec<StatusAppDto>,
+    /// Applications whose enumeration was truncated.
+    pub truncated_apps: Vec<StatusAppDto>,
+    /// Applications waiting for a refresh.
+    pub unconfirmed_apps: usize,
+    /// Applications with an enumeration in flight.
+    pub inflight_apps: usize,
+    /// Displays that produced no frames, with the reason.
+    pub no_frame: Vec<StatusNoFrameDto>,
+    /// Applications the runtime hid or may have hidden.
+    pub hidden_apps: Vec<StatusHiddenDto>,
+    /// The latest intent and its outcome.
+    pub last_intent: Option<String>,
+    /// Tracked windows (at most 200) with their eligibility facts.
+    pub tracked_windows: Vec<StatusWindowDto>,
+    /// Windows that are not managed and why (at most 200).
+    pub excluded_windows: Vec<StatusExcludedDto>,
+    /// Frame writes attempted since start.
+    pub frame_attempts: u64,
+    /// Enumeration or tracking failures since start.
+    pub enumeration_failures: u64,
 }
 
 // ---------------------------------------------------------- operation result

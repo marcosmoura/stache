@@ -20,9 +20,9 @@ use std::time::Instant;
 use stache_macos::ApplicationId;
 use stache_macos::windows::{
     ActionRequest, AdapterId, AdapterOptions, CleanupReport, CloseOutcome, DispatchError,
-    EventQueue, GenerationCell, HiddenOutcome, HiddenRequest, InstallError, InstallRequest,
-    NotIssuedReason, RuntimeEpoch, SnapshotOutcome, SpawnError, StopOutcome, TrackOutcome,
-    TrackRequest, WindowActionOutcome, WindowAdapter, WindowInstance,
+    EventQueue, FocusOutcome, GenerationCell, HiddenOutcome, HiddenRequest, InstallError,
+    InstallRequest, NotIssuedReason, RuntimeEpoch, SnapshotOutcome, SpawnError, StopOutcome,
+    TrackOutcome, TrackRequest, WindowActionOutcome, WindowAdapter, WindowInstance,
 };
 use stache_sdk::CancellationToken;
 
@@ -82,6 +82,16 @@ pub trait WindowBackend: Send + Sync {
         cancel: CancellationToken,
         deadline: Option<Instant>,
     ) -> TrackOutcome;
+
+    /// Reads the application's real focused window, bounded by the AX element
+    /// timeout on the owner thread, and answers which tracked window it is.
+    fn focused_window(
+        &self,
+        epoch: RuntimeEpoch,
+        application: ApplicationId,
+        cancel: &CancellationToken,
+        deadline: Option<Instant>,
+    ) -> FocusOutcome;
 
     /// Stops observing one application.
     fn untrack(
@@ -228,6 +238,16 @@ impl WindowBackend for SystemWindowBackend {
         deadline: Option<Instant>,
     ) -> TrackOutcome {
         self.adapter.refresh_application(epoch, application, cancel, deadline)
+    }
+
+    fn focused_window(
+        &self,
+        epoch: RuntimeEpoch,
+        application: ApplicationId,
+        cancel: &CancellationToken,
+        deadline: Option<Instant>,
+    ) -> FocusOutcome {
+        self.adapter.focused_window(epoch, application, cancel, deadline)
     }
 
     fn untrack(
@@ -413,6 +433,18 @@ impl WindowBackend for LazySystemBackend {
         })
     }
 
+    fn focused_window(
+        &self,
+        epoch: RuntimeEpoch,
+        application: ApplicationId,
+        cancel: &CancellationToken,
+        deadline: Option<Instant>,
+    ) -> FocusOutcome {
+        self.existing().map_or(FocusOutcome::OwnerUnavailable, |b| {
+            b.focused_window(epoch, application, cancel, deadline)
+        })
+    }
+
     fn untrack(
         &self,
         epoch: RuntimeEpoch,
@@ -534,6 +566,8 @@ pub enum FakeBackendCall {
     Refresh(ApplicationId),
     /// `untrack` for an application.
     Untrack(ApplicationId),
+    /// `focused_window` for an application.
+    FocusedWindow(ApplicationId),
     /// `snapshot` of a window.
     Snapshot(WindowInstance),
     /// `resolve_window_id`.
@@ -557,7 +591,7 @@ mod fake {
     use std::time::Duration;
 
     use stache_macos::ax::{AxReading, FrameRead, WriteStatus};
-    use stache_macos::windows::{IssuedKind, NativeStatus, WindowAction};
+    use stache_macos::windows::{FocusOutcome, IssuedKind, NativeStatus, WindowAction};
 
     use super::{
         ActionRequest, AdapterId, ApplicationId, Arc, CancellationToken, CleanupReport,
@@ -573,10 +607,12 @@ mod fake {
         sink: Option<Arc<EventQueue>>,
         epochs: u64,
         track_outcome: Option<TrackOutcome>,
+        track_outcomes: HashMap<ApplicationId, VecDeque<TrackOutcome>>,
         action_outcomes: VecDeque<WindowActionOutcome>,
         hidden_outcomes: VecDeque<HiddenOutcome>,
         dispatch_error: Option<DispatchError>,
         snapshots: HashMap<WindowInstance, SnapshotOutcome>,
+        focused: HashMap<ApplicationId, WindowInstance>,
         resolve: HashMap<u32, WindowInstance>,
         stop_outcome: Option<StopOutcome>,
         retry_reports: VecDeque<Option<CleanupReport>>,
@@ -663,6 +699,12 @@ mod fake {
             self.state().track_outcome = Some(outcome);
         }
 
+        /// Queues a `track` outcome for one application only; once the queue is
+        /// empty that application tracks normally again.
+        pub fn script_track_for(&self, application: ApplicationId, outcome: TrackOutcome) {
+            self.state().track_outcomes.entry(application).or_default().push_back(outcome);
+        }
+
         /// Declares that this backend reads tab groups (default off).
         pub fn script_reads_tabs(&self, reads: bool) { self.state().reads_tabs = reads; }
 
@@ -697,6 +739,16 @@ mod fake {
         /// Scripts a snapshot answer.
         pub fn script_snapshot(&self, window: WindowInstance, outcome: SnapshotOutcome) {
             self.state().snapshots.insert(window, outcome);
+        }
+
+        /// Scripts the window an application reports as its focused one.
+        pub fn script_focused(&self, application: ApplicationId, window: WindowInstance) {
+            self.state().focused.insert(application, window);
+        }
+
+        /// The application reports no focused window any more.
+        pub fn script_unfocused(&self, application: ApplicationId) {
+            self.state().focused.remove(&application);
         }
 
         /// Scripts a `CGWindowID` resolution.
@@ -821,6 +873,11 @@ mod fake {
         ) -> TrackOutcome {
             let mut state = self.state();
             state.calls.push(FakeBackendCall::Track(application, pid));
+            if let Some(outcome) =
+                state.track_outcomes.get_mut(&application).and_then(VecDeque::pop_front)
+            {
+                return outcome;
+            }
             state.track_outcome.take().unwrap_or(TrackOutcome::Tracking)
         }
 
@@ -834,6 +891,22 @@ mod fake {
             let mut state = self.state();
             state.calls.push(FakeBackendCall::Refresh(application));
             state.track_outcome.take().unwrap_or(TrackOutcome::Tracking)
+        }
+
+        fn focused_window(
+            &self,
+            _epoch: RuntimeEpoch,
+            application: ApplicationId,
+            _cancel: &CancellationToken,
+            _deadline: Option<Instant>,
+        ) -> FocusOutcome {
+            let mut state = self.state();
+            state.calls.push(FakeBackendCall::FocusedWindow(application));
+            state
+                .focused
+                .get(&application)
+                .copied()
+                .map_or(FocusOutcome::Unresolved, FocusOutcome::Resolved)
         }
 
         fn untrack(

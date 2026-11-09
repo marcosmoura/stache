@@ -632,6 +632,7 @@ fn classify_preflight_is_a_pure_table() {
         name: None,
         is_current_process: current,
         pid: None,
+        regular: true,
     };
     let _ = a;
     assert_eq!(

@@ -194,6 +194,14 @@ impl FakeWindowAx {
 
     pub fn element(&self, node: NodeId) -> FakeWindowElement { self.make(node) }
 
+    /// Destroys a node: every later read of it fails like a dead AX element.
+    pub fn kill(&self, id: NodeId) {
+        self.edit(id, |node| {
+            node.strings.insert(WindowString::Role, Err(AxError::InvalidElement));
+            node.window_id = Err(WindowIdError::Ax(AxError::InvalidElement));
+        });
+    }
+
     /// Records an observer call in the same ordered log.
     pub fn record(&self, call: Call) { lock(&self.state).calls.push(call); }
 

@@ -16,7 +16,7 @@ use std::fmt::Write as _;
 use serde::Serialize;
 use unicode_width::UnicodeWidthStr;
 
-use crate::dto::{AppDto, FrameDto, ScreenDto, WindowDto, WorkspaceDto};
+use crate::dto::{AppDto, FrameDto, ScreenDto, StatusDto, WindowDto, WorkspaceDto};
 
 const BOLD: &str = "\x1b[1m";
 const DIM: &str = "\x1b[2m";
@@ -370,14 +370,122 @@ pub fn apps(rows: &[AppDto], ansi: bool) -> String {
     )
 }
 
+/// The `status` summary: phase and faults first, then every reason nothing
+/// happens, one line each.
+#[must_use]
+#[allow(clippy::too_many_lines, reason = "one linear table of status lines")]
+pub fn status(status: &StatusDto, ansi: bool) -> String {
+    use std::fmt::Write as _;
+    let mut out = format!("{}\n", heading("Tiling status", ansi));
+    let _ = writeln!(
+        out,
+        "phase: {}   healthy: {}   layout active: {}",
+        status.phase, status.healthy, status.layout_active
+    );
+    let _ = writeln!(
+        out,
+        "config revision: {}   plan: {}   apps: {} ({} tracked)   windows: {}",
+        status.config_revision,
+        status.plan_sequence,
+        status.apps,
+        status.tracked_apps,
+        status.windows
+    );
+    if status.suspended_windows > 0 {
+        let _ = writeln!(
+            out,
+            "suspended: {} inactive tab windows",
+            status.suspended_windows
+        );
+    }
+    let _ = writeln!(
+        out,
+        "waiting: {} unconfirmed, {} enumerating",
+        status.unconfirmed_apps, status.inflight_apps
+    );
+    for fault in &status.faults {
+        let _ = writeln!(out, "fault: {}", printable(fault));
+    }
+    for (label, apps) in [
+        ("failed", &status.failed_apps),
+        ("truncated", &status.truncated_apps),
+    ] {
+        for app in apps {
+            let _ = writeln!(
+                out,
+                "{label} app: {} ({}) pid {}: {} [retries {}]",
+                printable(&app.name),
+                printable(&app.bundle_id),
+                app.pid,
+                printable(&app.reason),
+                app.retries
+            );
+        }
+    }
+    for entry in &status.no_frame {
+        let _ = writeln!(
+            out,
+            "no frames on {}: {}",
+            printable(&entry.screen),
+            printable(&entry.reason)
+        );
+    }
+    for hidden in &status.hidden_apps {
+        let _ = writeln!(
+            out,
+            "hidden by Stache: {} ({}) {}{}",
+            printable(&hidden.name),
+            printable(&hidden.bundle_id),
+            hidden.ownership,
+            hidden
+                .reason
+                .as_ref()
+                .map_or_else(String::new, |reason| format!(": {}", printable(reason)))
+        );
+    }
+    for window in &status.tracked_windows {
+        let _ = writeln!(
+            out,
+            "window {} {} ({}) \"{}\" subrole {} frame {} workspace {}{}{}",
+            window.id.map_or_else(|| "-".to_owned(), |id| id.to_string()),
+            printable(&window.app_name),
+            printable(&window.bundle_id),
+            printable(&window.title),
+            window.subrole.as_deref().map_or_else(|| "-".to_owned(), printable),
+            window.frame.as_deref().unwrap_or("-"),
+            window.workspace.as_deref().map_or_else(|| "-".to_owned(), printable),
+            if window.floating { " floating" } else { "" },
+            if window.focused { " focused" } else { "" },
+        );
+    }
+    for window in &status.excluded_windows {
+        let _ = writeln!(
+            out,
+            "excluded {} ({}): {}",
+            printable(&window.app_name),
+            printable(&window.bundle_id),
+            printable(&window.reason)
+        );
+    }
+    if let Some(intent) = &status.last_intent {
+        let _ = writeln!(out, "last intent: {}", printable(intent));
+    }
+    let _ = writeln!(
+        out,
+        "frame attempts: {}   enumeration failures: {}",
+        status.frame_attempts, status.enumeration_failures
+    );
+    out
+}
+
 /// The whole result array, pretty-printed in the frozen DTO field order, with
 /// a trailing newline. The highlighter is the injected terminal policy.
 ///
 /// # Errors
 ///
 /// The serialization error text when the rows cannot be encoded.
-pub fn json<T: Serialize>(
-    rows: &[T],
+pub fn json<T: Serialize + ?Sized>(
+    rows: &T,
     ansi: bool,
     highlight: &dyn Fn(&str, bool) -> String,
 ) -> Result<String, String> {

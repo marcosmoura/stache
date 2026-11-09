@@ -372,8 +372,8 @@ fn the_destroy_of_a_missed_window_is_repaired_by_reconciliation_only() {
     assert_eq!(refreshes, 1);
     assert_eq!(state.phase(), Phase::Reconciling);
     assert!(
-        !state.snapshot().actions_allowed,
-        "no action authority while unconfirmed"
+        state.unsettled_apps().is_some_and(|apps| apps.contains(&app(1))),
+        "the unconfirmed application's windows are held back"
     );
     // Marking again during the scan does not issue a second concurrent refresh.
     let (state, effects) = step(
@@ -495,7 +495,7 @@ fn observer_overflow_and_sequence_gap_reconcile() {
 }
 
 #[test]
-fn enumeration_failures_are_incomplete_not_complete() {
+fn enumeration_failures_degrade_only_their_application() {
     let (state, mut feed) = fresh_state();
     let (state, _) = step(
         state,
@@ -504,7 +504,12 @@ fn enumeration_failures_are_incomplete_not_complete() {
             reason: EnumerationAbort::DeadlineExceeded,
         }),
     );
-    assert_eq!(state.phase(), Phase::Incomplete);
+    assert_eq!(
+        state.phase(),
+        Phase::Complete,
+        "one failed app never blocks the rest"
+    );
+    assert_eq!(state.snapshot().failed_apps.len(), 1);
     let (state, _) = step(
         state,
         feed.input(WindowEventKind::EnumerationComplete {
@@ -513,7 +518,13 @@ fn enumeration_failures_are_incomplete_not_complete() {
             truncated: true,
         }),
     );
-    assert_eq!(state.phase(), Phase::Incomplete, "truncated is never complete");
+    assert_eq!(state.phase(), Phase::Complete);
+    assert_eq!(
+        state.snapshot().truncated_apps.len(),
+        1,
+        "truncation is per application"
+    );
+    assert!(state.snapshot().failed_apps.is_empty());
 }
 
 #[test]
@@ -572,7 +583,10 @@ fn rejected_effects_are_failures_never_success_and_never_retry_hot() {
         stamp: feed.stamp,
         result: CompletionResult::Rejected(track),
     });
-    assert_eq!(state.phase(), Phase::Incomplete);
+    assert!(
+        state.startup.failed.contains(&app(1)),
+        "a refused request is a visible failure"
+    );
     assert!(
         !effects
             .iter()
@@ -883,4 +897,66 @@ impl TilingState {
             .find(|w| w.name == name)
             .unwrap_or_else(|| panic!("workspace {name}"))
     }
+}
+
+#[test]
+fn a_very_long_application_list_is_queued_not_failed() {
+    let feed = Feed::new(1);
+    let apps: Vec<_> = (1..=6000_u64).map(|n| info(n, "com.example", "App")).collect();
+    let (state, _) = run(TilingState::new(""), vec![
+        Input::Displays(Arc::new(one_display())),
+        Input::Start(feed.stamp),
+        Input::Applications { stamp: feed.stamp, apps },
+    ]);
+    assert!(
+        state.startup.failed.is_empty(),
+        "overflow never fails an application"
+    );
+    assert_eq!(
+        state.startup.pending.len() + state.startup.awaiting.len(),
+        6000,
+        "every application waits its turn"
+    );
+    assert_eq!(state.phase(), Phase::Initializing);
+}
+
+#[test]
+fn a_failed_application_is_retried_on_activation_and_relaunch_up_to_the_bound() {
+    let feed = Feed::new(1);
+    let (mut state, first) = run(TilingState::new(""), vec![
+        Input::Displays(Arc::new(one_display())),
+        Input::Start(feed.stamp),
+        Input::Applications {
+            stamp: feed.stamp,
+            apps: vec![info(1, "com.a", "A")],
+        },
+    ]);
+    let count =
+        |effects: &[Effect]| effects.iter().filter(|e| matches!(e, Effect::Track { .. })).count();
+    let mut tracks = count(&first);
+    for round in 0..8 {
+        let (next, _) = step(state, Input::Completion {
+            stamp: feed.stamp,
+            result: CompletionResult::Track(app(1), TrackOutcome::Unacknowledged),
+        });
+        assert_eq!(
+            next.phase(),
+            Phase::Complete,
+            "round {round}: a failed app never blocks"
+        );
+        let (next, effects) = step(
+            next,
+            if round % 2 == 0 {
+                Input::Activated(app(1))
+            } else {
+                Input::Lifecycle {
+                    kind: LifecycleKind::Launched,
+                    info: info(1, "com.a", "A"),
+                }
+            },
+        );
+        tracks += count(&effects);
+        state = next;
+    }
+    assert_eq!(tracks, 1 + usize::from(MAX_TRACK_RETRIES));
 }

@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 use stache_macos::applications::LifecycleKind;
 use stache_macos::windows::{
-    RuntimeEpoch, SnapshotOutcome, TabInfo, TrackOutcome, WindowActionOutcome, WindowEvent,
-    WindowInstance,
+    FocusOutcome, RuntimeEpoch, SnapshotOutcome, TabBar, TabInfo, TrackOutcome,
+    WindowActionOutcome, WindowEvent, WindowInstance,
 };
 use stache_macos::{ApplicationId, DisplayId, DisplayLayout};
 
@@ -33,6 +33,7 @@ use crate::workspaces::VisibilityRequirement;
 mod drag;
 mod frames;
 mod intents;
+mod slots;
 mod tab_sync;
 mod transition;
 pub use drag::{DragOutcome, DragRecord, DragReport, DragState};
@@ -55,8 +56,8 @@ mod tests;
 #[cfg(test)]
 mod workspace_tests;
 
-/// Maximum applications waiting to be tracked.
-pub const MAX_PENDING_TRACKS: usize = 4096;
+/// Retries a failed or truncated application gets (on activation or relaunch).
+pub const MAX_TRACK_RETRIES: u8 = 3;
 /// Applications handed to the backend before earlier acknowledgements return.
 pub const TRACK_CHUNK: usize = 8;
 /// Unconfirmed applications remembered before the scope widens to everything.
@@ -96,6 +97,31 @@ pub enum Phase {
     /// Something could not be confirmed (failure, truncation, overload, no
     /// screens, missing permission or failed health).
     Incomplete,
+}
+
+impl Phase {
+    /// The lowercase name used by the status query and logs.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Initializing => "initializing",
+            Self::Reconciling => "reconciling",
+            Self::Complete => "complete",
+            Self::Incomplete => "incomplete",
+        }
+    }
+}
+
+/// An application whose tracking or enumeration did not complete. Only its own
+/// windows are held back.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FailedApp {
+    /// The exact application instance.
+    pub application: ApplicationId,
+    /// Why (the backend outcome, or truncation).
+    pub reason: String,
+    /// Retries spent so far.
+    pub retries: u8,
 }
 
 /// Why the actor can no longer be trusted.
@@ -144,6 +170,9 @@ pub enum Cause {
     EffectRejected,
     /// A drag gesture was cancelled because observation was lost.
     DragLost,
+    /// A native tab group changed (a window opened, closed or was swapped); the
+    /// application is listed again once `AppKit` settled.
+    TabSettle,
 }
 
 /// Identity and metadata of a running application.
@@ -168,6 +197,9 @@ pub enum CompletionResult {
     Refresh(ApplicationId, TrackOutcome),
     /// A snapshot read returned.
     Snapshot(WindowInstance, SnapshotOutcome),
+    /// An application's focused-window read returned. A resolved window was
+    /// already reported as a window event; the outcome is diagnostic.
+    Focus(ApplicationId, FocusOutcome),
     /// A frame write was acknowledged. Matched against the exact window, plan
     /// sequence and accepted revision it was issued for.
     Frame {
@@ -203,6 +235,9 @@ pub enum Input {
     },
     /// An application became the frontmost one (informational).
     Activated(ApplicationId),
+    /// List the running applications again: the watches finished installing, so
+    /// anything launched before they did was never reported.
+    Relist,
     /// The authoritative list of running applications.
     Applications {
         /// The registry it answers.
@@ -243,6 +278,12 @@ pub enum Input {
     Intent(Intent),
     /// A passive mouse down, up or lost observation from the drag observer.
     Drag(crate::drag::DragSignal),
+    /// The settle retries of a native tab group ran out: windows still waiting
+    /// for a successor are closed for real.
+    SettleExpired(ApplicationId),
+    /// The actor's backoff for a transient track failure came due: the
+    /// application is tracked again (no activation needed).
+    RetryTrack(ApplicationId),
     /// Test hook: panics inside the transition (unwind builds).
     #[cfg(test)]
     PanicForTest,
@@ -277,6 +318,14 @@ pub enum Effect {
     },
     /// Stop observing a terminated application.
     Untrack {
+        /// Registry.
+        stamp: Stamp,
+        /// Application.
+        application: ApplicationId,
+    },
+    /// Read the application's real focused window. A tracked one is reported
+    /// back as a window `Focused` event.
+    ReadFocus {
         /// Registry.
         stamp: Stamp,
         /// Application.
@@ -434,6 +483,10 @@ pub struct ObservedWindow {
 }
 
 /// A tracked window.
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent slot facts of one window, not a state machine"
+)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct WindowState {
     /// The exact token.
@@ -451,15 +504,53 @@ pub struct WindowState {
     /// An inactive member of a native tab group: tracked, never a tile. Derived
     /// from the tab registry, never set by a user.
     pub inactive_tab: bool,
+    /// The native tab bar the owner last read for this window. Windows of one
+    /// application that carry the same bar are the same tab group.
+    pub tab_bar: Option<TabBar>,
+    /// The backend sequence at which the window's destroy was held back because
+    /// it belonged to a tab group with other tabs: its slot waits for the
+    /// window that takes the tab bar over. `None` for a live window.
+    pub departing: Option<u64>,
+    /// The window is absent from `AXWindows` while its element is alive (an
+    /// inactive native tab of a group whose tab bar is hidden or elsewhere): it
+    /// keeps its token and is never a tile. A suspended window that just lost
+    /// the active role of its slot still [holds](Self::slot_held) the slot until
+    /// the listing settles.
+    pub suspended: bool,
+    /// A suspended window still holding the tile of its slot, waiting for the
+    /// window that takes the slot over (settle pending). Laid out like a tile,
+    /// never written.
+    pub slot_held: bool,
+    /// The slot (tab group) the window belongs to: one active member and any
+    /// number of suspended members, all of one application. `None` for a window
+    /// that never shared a slot.
+    pub tab_group: Option<u64>,
+    /// A new window carrying a tab bar of two or more tabs, not yet matched to
+    /// the suspension it may replace (cleared when the listing settles).
+    pub arrival: bool,
+    /// A suspended window that was listed again and waits for its slot to be
+    /// resolved (cleared when the listing completes).
+    pub returning: bool,
 }
 
 impl WindowState {
+    /// Whether the window is an inactive tab for layout: the registry-derived
+    /// flag, or a suspended member whose slot another window already holds.
+    #[must_use]
+    pub const fn is_inactive_tab(&self) -> bool {
+        self.inactive_tab || (self.suspended && !self.slot_held)
+    }
+
+    /// Whether the window occupies the tile of its slot in the workspace order.
+    #[must_use]
+    pub const fn holds_slot(&self) -> bool { !self.suspended || self.slot_held }
+
     /// Layout eligibility flags.
     #[must_use]
     pub const fn flags(&self) -> WindowFlags {
         WindowFlags {
             explicit_floating: self.desired.floating,
-            inactive_tab: self.inactive_tab,
+            inactive_tab: self.is_inactive_tab(),
             fullscreen: self.observed.fullscreen,
             minimized: self.observed.minimized,
             hidden: self.observed.hidden,
@@ -576,6 +667,22 @@ pub struct Diagnostics {
     pub drag_cancelled: u64,
     /// Lost observations reported (with or without a gesture).
     pub drag_lost_observations: u64,
+    /// Tab groups whose representing window was swapped for another one that
+    /// carries the same tab bar (a new tab, a switch or a close).
+    pub tab_handovers: u64,
+    /// Destroys held back until the tab group settled.
+    pub tab_departures_held: u64,
+    /// Held-back windows closed for real: no window took their tab bar over.
+    pub tab_departures_closed: u64,
+    /// Windows that left `AXWindows` while their element stayed alive.
+    pub tab_suspensions: u64,
+    /// Suspended windows listed again that took their slot back.
+    pub tab_returns: u64,
+    /// Single-tab handovers: a new tabbed window took the slot of the one
+    /// suspended window it replaced.
+    pub tab_single_handovers: u64,
+    /// Suspended windows whose slot nobody took over: the tile was released.
+    pub tab_slots_released: u64,
 }
 
 /// One enumeration or refresh in progress.
@@ -605,7 +712,47 @@ pub struct Reconcile {
     /// An unresolved termination arrived while a list was in flight; that list
     /// may predate it, so exactly one follow-up list runs when it completes.
     pub relist: bool,
+    /// Unlisted applications whose activation already asked for a list, so a
+    /// permanently unlisted one (a non-regular application) asks only once.
+    pub probed: BTreeSet<ApplicationId>,
+    /// Applications whose latest listing skipped windows that were still in
+    /// transition; their held-back windows wait for the next listing.
+    pub unsettled: BTreeSet<ApplicationId>,
 }
+
+/// What the pure transition asks the actor shell to do with its clock: the
+/// shell owns time, the state never reads it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TabOutbox {
+    /// Applications that need one settled listing: `false` for a fresh trigger,
+    /// `true` for a retry after a listing that skipped windows in transition.
+    pub settle: BTreeMap<ApplicationId, bool>,
+    /// Handovers `(old, new)` since the shell last looked, for the debug log.
+    pub handovers: Vec<(WindowInstance, WindowInstance)>,
+    /// Slot events for the debug log (suspensions, returns, releases).
+    pub notes: Vec<TabNote>,
+}
+
+/// One slot event the shell logs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TabNote {
+    /// A window left `AXWindows` while its element is alive.
+    Suspended(WindowInstance),
+    /// A suspended window was listed again and took the slot back from the
+    /// second token (the window that held it, now closed or suspended).
+    Returned(WindowInstance, WindowInstance),
+    /// A suspended window was listed again and holds a slot that was free.
+    Resumed(WindowInstance),
+    /// A new tabbed window took over the slot of the one suspended window
+    /// `(suspended, new)`.
+    SingleHandover(WindowInstance, WindowInstance),
+    /// A suspended window's slot had no active member after the listing
+    /// settled: its tile was released.
+    Released(WindowInstance),
+}
+
+/// The most handovers remembered for the log between two shell turns.
+pub const MAX_PENDING_HANDOVERS: usize = 64;
 
 /// Startup/tracking bookkeeping.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -616,11 +763,35 @@ pub struct Startup {
     pub awaiting: BTreeSet<ApplicationId>,
     /// Applications that failed to track or enumerate.
     pub failed: BTreeSet<ApplicationId>,
+    /// Why each failed application failed (diagnostics).
+    pub failure_reasons: BTreeMap<ApplicationId, String>,
+    /// Failed applications whose failure is plausibly transient (the actor
+    /// retries those on a time backoff).
+    pub transient: BTreeSet<ApplicationId>,
+    /// Retries spent per failed or truncated application.
+    pub retries: BTreeMap<ApplicationId, u8>,
     /// Applications whose enumeration was truncated.
     pub truncated: BTreeSet<ApplicationId>,
     /// The application list was received at least once.
     pub listed: bool,
 }
+
+/// Focus notifications and reads that wait for a window to be adopted. Bounded:
+/// one buffered notification per application, a short life, a small map.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PendingFocus {
+    /// The latest focus notification of an application for a window not yet
+    /// tracked, with the transition sequence it arrived at.
+    pub buffered: BTreeMap<ApplicationId, (WindowInstance, u64)>,
+    /// Frontmost applications whose real focused window is read at the end of
+    /// the transition (after a window was adopted or an app-level focus event).
+    pub reads: BTreeSet<ApplicationId>,
+}
+
+/// Transitions a buffered focus notification stays valid for.
+pub const PENDING_FOCUS_LIFE: u64 = 256;
+/// Upper bound on buffered notifications.
+pub const MAX_PENDING_FOCUS: usize = 64;
 
 /// The whole actor-owned state.
 // Independent facts (screens known, completed once, accessibility), not a state machine.
@@ -649,6 +820,7 @@ pub struct TilingState {
     pub(crate) cg_index: BTreeMap<u32, WindowInstance>,
     pub(crate) apps: BTreeMap<ApplicationId, AppRecord>,
     pub(crate) active_application: Option<ApplicationId>,
+    pub(crate) pending_focus: PendingFocus,
     pub(crate) focus: FocusState,
     pub(crate) focus_history: VecDeque<WindowInstance>,
     pub(crate) workspace_history: VecDeque<WorkspaceId>,
@@ -657,7 +829,15 @@ pub struct TilingState {
     pub(crate) tombstones: BTreeSet<WindowInstance>,
     pub(crate) tombstone_order: VecDeque<WindowInstance>,
     pub(crate) ledger: VisibilityLedger,
+    /// Applications Stache itself holds hidden (or is unhiding). The actor, the
+    /// only writer, copies them from the visibility ledger before each
+    /// transition; their windows keep their layout slot while their workspace
+    /// is visible, unlike an application someone else hid.
+    pub(crate) owned_hidden: BTreeSet<ApplicationId>,
     pub(crate) tabs: TabRegistry,
+    pub(crate) tab_outbox: TabOutbox,
+    /// Mints the ids of slots (tab groups).
+    pub(crate) next_tab_group: u64,
     pub(crate) reconcile: Reconcile,
     pub(crate) startup: Startup,
     pub(crate) accessibility: bool,
@@ -668,6 +848,26 @@ pub struct TilingState {
 }
 
 impl TilingState {
+    /// Replaces the applications the runtime holds hidden. Called by the actor
+    /// before a transition, so the transition itself stays pure.
+    pub fn set_owned_hidden(&mut self, owned: BTreeSet<ApplicationId>) {
+        self.owned_hidden = owned;
+    }
+
+    /// Takes what the last transition asked of the shell's clock.
+    pub fn take_tab_outbox(&mut self) -> TabOutbox { std::mem::take(&mut self.tab_outbox) }
+
+    /// Layout eligibility flags of a window. A window whose application the
+    /// runtime hid is not `hidden` here: it keeps its slot (it is shown again
+    /// as soon as its workspace is visible). Only an application hidden by
+    /// someone else is excluded.
+    #[must_use]
+    pub fn flags_of(&self, window: &WindowState) -> WindowFlags {
+        let mut flags = window.flags();
+        flags.hidden &= !self.owned_hidden.contains(&window.application);
+        flags
+    }
+
     /// An empty state. `self_bundle_id` is Stache's own bundle identifier
     /// (empty disables the self exclusion).
     #[must_use]
@@ -695,6 +895,7 @@ impl TilingState {
             cg_index: BTreeMap::new(),
             apps: BTreeMap::new(),
             active_application: None,
+            pending_focus: PendingFocus::default(),
             focus: FocusState::default(),
             focus_history: VecDeque::new(),
             workspace_history: VecDeque::new(),
@@ -703,7 +904,10 @@ impl TilingState {
             tombstones: BTreeSet::new(),
             tombstone_order: VecDeque::new(),
             ledger: VisibilityLedger::default(),
+            owned_hidden: BTreeSet::new(),
             tabs: TabRegistry::default(),
+            tab_outbox: TabOutbox::default(),
+            next_tab_group: 1,
             reconcile: Reconcile::default(),
             startup: Startup::default(),
             accessibility: true,
@@ -761,13 +965,9 @@ impl TilingState {
     /// The phase derived from the current facts.
     #[must_use]
     pub fn phase(&self) -> Phase {
-        let broken = !self.startup.failed.is_empty()
-            || !self.startup.truncated.is_empty()
-            || self.diagnostics.overloaded
-            || self.no_screens
-            || !self.accessibility
-            || self.health != Health::Healthy;
-        if broken {
+        // Only global faults make the phase `Incomplete`. An application that
+        // failed or was truncated degrades itself alone (see `unsettled_apps`).
+        if self.faulted() {
             return Phase::Incomplete;
         }
         let working = self.stamp.is_none()
@@ -786,6 +986,77 @@ impl TilingState {
         }
     }
 
+    /// A fault that affects every window: overload, no screens, missing
+    /// Accessibility permission or a failed actor.
+    #[must_use]
+    pub fn faulted(&self) -> bool { !self.fault_reasons().is_empty() }
+
+    /// The global faults that currently hold every frame write back.
+    #[must_use]
+    pub fn fault_reasons(&self) -> Vec<String> {
+        let mut reasons = Vec::new();
+        if self.no_screens {
+            reasons.push("no display is attached".to_owned());
+        }
+        if !self.accessibility {
+            reasons.push("Accessibility permission is missing".to_owned());
+        }
+        if self.diagnostics.overloaded {
+            reasons.push("the event stream is overloaded".to_owned());
+        }
+        if let Health::Failed(fault) = self.health {
+            reasons.push(format!("the actor failed: {fault:?}"));
+        }
+        reasons
+    }
+
+    /// Whether the planner may write frames at all: the first reconciliation is
+    /// done and no global fault stands. Applications that failed or are being
+    /// reconciled are excluded individually (see `unsettled_apps`).
+    #[must_use]
+    pub fn planning_ready(&self) -> bool {
+        matches!(self.phase(), Phase::Complete | Phase::Reconciling)
+    }
+
+    /// Applications whose windows must not be written because their own state
+    /// is unconfirmed: failed or truncated enumerations, tracking in progress,
+    /// a refresh in flight or owed. `None` means every application (a global
+    /// reconciliation is owed).
+    #[must_use]
+    pub fn unsettled_apps(&self) -> Option<BTreeSet<ApplicationId>> {
+        if self.reconcile.all {
+            return None;
+        }
+        let mut apps: BTreeSet<ApplicationId> = BTreeSet::new();
+        apps.extend(self.startup.failed.iter().copied());
+        apps.extend(self.startup.truncated.iter().copied());
+        apps.extend(self.startup.awaiting.iter().copied());
+        apps.extend(self.startup.pending.iter().map(|info| info.application));
+        apps.extend(self.reconcile.inflight.iter().copied());
+        apps.extend(self.reconcile.unconfirmed.iter().copied());
+        Some(apps)
+    }
+
+    fn failed_apps(&self, truncated: bool) -> Vec<FailedApp> {
+        let (set, default_reason) = if truncated {
+            (&self.startup.truncated, "enumeration truncated")
+        } else {
+            (&self.startup.failed, "tracking failed")
+        };
+        set.iter()
+            .map(|application| FailedApp {
+                application: *application,
+                reason: self
+                    .startup
+                    .failure_reasons
+                    .get(application)
+                    .cloned()
+                    .unwrap_or_else(|| default_reason.to_owned()),
+                retries: self.startup.retries.get(application).copied().unwrap_or(0),
+            })
+            .collect()
+    }
+
     /// An immutable view for queries.
     #[must_use]
     pub fn snapshot(&self) -> TilingSnapshot {
@@ -794,7 +1065,10 @@ impl TilingState {
             sequence: self.sequence,
             phase,
             health: self.health,
-            actions_allowed: phase == Phase::Complete,
+            actions_allowed: matches!(phase, Phase::Complete | Phase::Reconciling),
+            faults: self.fault_reasons(),
+            failed_apps: self.failed_apps(false),
+            truncated_apps: self.failed_apps(true),
             registry: self.stamp.map(|stamp| stamp.registry),
             epoch: self.stamp.map(|stamp| stamp.epoch.value()),
             config_revision: self.config_revision,
@@ -820,7 +1094,7 @@ impl TilingState {
             hidden_apps: Vec::new(),
             display_layout: self.layout.clone(),
             apps: self.apps.values().cloned().collect(),
-            tabs: self.tabs.status(self.windows.values().filter(|w| w.inactive_tab).count()),
+            tabs: self.tabs.status(self.windows.values().filter(|w| w.is_inactive_tab()).count()),
             drag: drag::report(self),
         }
     }
@@ -871,6 +1145,13 @@ pub struct TilingSnapshot {
     pub health: Health,
     /// Whether later parts may issue native mutations (always read-only now).
     pub actions_allowed: bool,
+    /// Global faults holding every frame write back (empty when none).
+    pub faults: Vec<String>,
+    /// Applications whose tracking or enumeration failed. Only their own
+    /// windows are held back; they are retried a bounded number of times.
+    pub failed_apps: Vec<FailedApp>,
+    /// Applications whose enumeration was truncated.
+    pub truncated_apps: Vec<FailedApp>,
     /// The registry generation.
     pub registry: Option<u64>,
     /// The backend epoch value.

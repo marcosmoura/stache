@@ -98,7 +98,7 @@ overflow, malformed colors, unsupported `style` and a bare `true` border state,
 with field paths; a rejected file leaves the module inactive and never falls back
 to enabled defaults. The grid cap of ten and the applied floating
 `defaultPosition` now apply to the core runtime; animation, drag and
-borders apply to the runtime; tabs are a fake-proven registry with native reads off. See [tiling.md](../features/tiling.md).
+borders apply to the runtime; native tabs follow the shared tab bar (fake-proven, Finder-probed). See [tiling.md](../features/tiling.md).
 
 `menuAnywhere.jsonc` backs the MenuAnywhere runtime: the host registers it
 through `MenuAnywhereFactory`, so the file is bound, watched and reloaded like

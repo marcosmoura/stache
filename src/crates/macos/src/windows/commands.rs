@@ -187,6 +187,27 @@ pub enum SnapshotOutcome {
     OwnerUnavailable,
 }
 
+/// The result of reading an application's real focused window. It is a pure
+/// answer: the consumer decides what to do with it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FocusOutcome {
+    /// The application's focused window, a tracked one.
+    Resolved(WindowInstance),
+    /// The application has no focused window, or it is not one this epoch
+    /// tracks. Nothing was emitted.
+    Unresolved,
+    /// The read failed.
+    Failed(AxError),
+    /// No such running epoch or tracked application.
+    WrongEpoch,
+    /// The command was not queued.
+    Dispatch(DispatchError),
+    /// No acknowledgement within the hop budget.
+    Unacknowledged,
+    /// The owner thread is gone.
+    OwnerUnavailable,
+}
+
 /// The result of stopping an epoch or retrying cleanup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StopOutcome {
@@ -264,6 +285,11 @@ pub(super) enum Command {
         cancel: CancellationToken,
         deadline: Option<Instant>,
         reply: Reply<TrackOutcome>,
+    },
+    FocusedWindow {
+        epoch: RuntimeEpoch,
+        application: ApplicationId,
+        reply: Reply<FocusOutcome>,
     },
     Act {
         request: ActionRequest,

@@ -30,7 +30,7 @@ use crate::intent::{
     FocusDirection, FocusTarget, Intent, ResizeDimension, ScreenTarget, SwapDirection,
 };
 use crate::ipc::{IpcTiming, LifecycleFailure, body};
-use crate::ipc_tests::{Mode, Rig, module, quiet_pause, standard};
+use crate::ipc_tests::{Built, Mode, Rig, config, module, quiet_pause, standard};
 
 struct HostCore {
     directory: PathBuf,
@@ -298,6 +298,37 @@ fn every_query_table_matches_its_golden_through_the_real_socket() {
 }
 
 #[test]
+fn the_status_query_and_a_response_far_over_one_read_chunk_work_through_the_real_socket() {
+    let stage = Stage::standard();
+    let table = stage.run(&["tiling", "query", "status"]);
+    ok(&table);
+    assert!(table.out.contains("phase: "), "{}", table.out);
+    let json = stage.run(&["tiling", "query", "--json", "status"]);
+    ok(&json);
+    let parsed: Value = serde_json::from_str(&json.out).expect("one JSON object");
+    assert!(parsed["phase"].is_string() && parsed["trackedWindows"].is_array());
+    // Sixty windows: well over the 4 KiB the client reads at a time. macOS
+    // refuses to change a socket timeout once the host closed its end, which
+    // used to fail every such answer with `Invalid argument`.
+    let mut built = Built::new(config());
+    for serial in 0..60_u64 {
+        built.add(
+            1,
+            serial + 1,
+            &format!("window number {serial}"),
+            0.0,
+            500 + u32::try_from(serial).unwrap_or(0),
+        );
+    }
+    let stage = Stage::new(Rig::new(built.state));
+    let run = stage.run(&["tiling", "query", "--json", "-d", "windows"]);
+    ok(&run);
+    let rows: Value = serde_json::from_str(&run.out).expect("windows");
+    assert_eq!(rows.as_array().map(Vec::len), Some(60));
+    assert!(run.out.len() > 16 * 1024, "{}", run.out.len());
+}
+
+#[test]
 fn ansi_tables_strip_to_the_plain_golden_and_pipes_never_get_escapes() {
     let stage = Stage::standard();
     for (args, golden) in [
@@ -548,10 +579,10 @@ fn query_without_a_subcommand_prints_its_help_and_a_newline_and_reads_nothing() 
     ok(&run);
     assert_eq!(
         run.out,
-        "Query tiling state (screens, workspaces, windows, apps)\n\nUsage: stache tiling query \
+        "Query tiling state (screens, workspaces, windows, apps, status)\n\nUsage: stache tiling query \
          [OPTIONS] [COMMAND]\n\nCommands:\n  apps        List all running applications\n  help        \
          Print this message or the help of the given subcommand(s)\n  screens     List all \
-         connected screens\n  windows     List managed windows\n  workspaces  List \
+         connected screens\n  status      Show why windows are or are not being laid out\n  windows     List managed windows\n  workspaces  List \
          workspaces\n\nOptions:\n  -d, --detailed  Show detailed information (more \
          columns/fields)\n  -h, --help      Print help\n  -j, --json      Output in JSON format \
          instead of table format\n\n"

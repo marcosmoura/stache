@@ -1037,3 +1037,25 @@ fn ti_09_04_enabling_while_a_previous_runner_is_still_ending_reports_cleanup() {
     control.stop();
     assert!(control.join_within(WAIT));
 }
+
+#[test]
+fn a_focus_change_sends_only_the_settings_that_changed() {
+    let args = |width: &str, color: &str| {
+        vec![
+            format!("width={width}"),
+            format!("active_color={color}"),
+            "inactive_color=0x00000000".to_owned(),
+        ]
+    };
+    let first = args("6", "0xFF89DCEB");
+    assert_eq!(super::runtime::changed_args(None, &first), first);
+    let color_only = args("6", "0xFFF9E2AF");
+    assert_eq!(super::runtime::changed_args(Some(&first), &color_only), vec![
+        "active_color=0xFFF9E2AF".to_owned()
+    ]);
+    let width_and_color = args("4", "0xFF94E2D5");
+    assert_eq!(
+        super::runtime::changed_args(Some(&color_only), &width_and_color),
+        vec!["width=4".to_owned(), "active_color=0xFF94E2D5".to_owned()]
+    );
+}

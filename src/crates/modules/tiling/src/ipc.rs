@@ -38,7 +38,8 @@ use crate::config::LayoutType;
 use crate::dto::{
     ActionEvidence, ActionStatus, AppDto, FrameDto, OperationEvidence, OperationKind,
     OperationResponse, QueryKind, QueryParams, ReasonEvidence, RequestEvidence, ResizeArg,
-    ScreenDto, WindowDto, WindowParams, WorkspaceDto, WorkspaceParams, method,
+    ScreenDto, StatusAppDto, StatusDto, StatusExcludedDto, StatusHiddenDto, StatusNoFrameDto,
+    StatusWindowDto, WindowDto, WindowParams, WorkspaceDto, WorkspaceParams, method,
 };
 use crate::events::IntentSubmitError;
 use crate::intent::{
@@ -48,8 +49,9 @@ use crate::intent::{
 use crate::layout::MAX_GRID_TILES;
 use crate::module::TilingRuntime;
 use crate::rules::{is_system_app_name, is_system_bundle};
-use crate::state::{Health, Phase, ScreenState, TilingSnapshot};
+use crate::state::{FailedApp, Health, Phase, ScreenState, TilingSnapshot};
 use crate::status::{TilingRuntimeState, TilingStatusSource};
+use crate::visibility::Ownership;
 
 /// The finite budget of one request. It stays inside the client's total
 /// `IO_TIMEOUT` (5 s) so a late answer is never discarded by the client.
@@ -466,7 +468,7 @@ impl TilingIpc {
         validate_query(&params)?;
         self.require_running()?;
         let snapshot = self.live_snapshot()?;
-        if snapshot.phase == Phase::Initializing {
+        if snapshot.phase == Phase::Initializing && params.kind != QueryKind::Status {
             return Err(HandlerError::unavailable(body::NOT_INITIALIZED));
         }
         match params.kind {
@@ -474,6 +476,7 @@ impl TilingIpc {
             QueryKind::Workspaces => encode_response(&workspaces(&snapshot, &params)),
             QueryKind::Windows => encode_response(&windows(&snapshot, &params)),
             QueryKind::Apps => encode_response(&apps(&snapshot)),
+            QueryKind::Status => encode_response(&status(&snapshot)),
         }
     }
 
@@ -1026,11 +1029,12 @@ fn validate_query(params: &QueryParams) -> HandlerResult<()> {
                 QueryKind::Workspaces => "workspaces",
                 QueryKind::Windows => "windows",
                 QueryKind::Apps => "apps",
+                QueryKind::Status => "status",
             }
         )))
     };
     match params.kind {
-        QueryKind::Screens | QueryKind::Apps => {
+        QueryKind::Screens | QueryKind::Apps | QueryKind::Status => {
             if params.screen.is_some() {
                 return unsupported("screen");
             }
@@ -1227,6 +1231,10 @@ fn windows(snapshot: &TilingSnapshot, params: &QueryParams) -> Vec<WindowDto> {
             if params.focused_screen && Some(workspace.screen) != focused_screen {
                 return None;
             }
+            // A suspended window (an inactive tab) is never a tile.
+            if window.suspended {
+                return None;
+            }
             // Only a confirmed window with a numeric id and a finite frame is
             // listed; nothing is fabricated for an unread one.
             let id = window.cg_window_id?;
@@ -1261,4 +1269,116 @@ fn apps(snapshot: &TilingSnapshot) -> Vec<AppDto> {
             is_hidden: app.hidden,
         })
         .collect()
+}
+
+/// Rows of each window list in the status answer.
+const STATUS_ROWS: usize = 200;
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "one linear mapping of the snapshot into the status rows"
+)]
+pub(crate) fn status(snapshot: &TilingSnapshot) -> StatusDto {
+    let catalog =
+        |application| snapshot.apps.iter().find(|app| app.info.application == application);
+    let row = |failed: &FailedApp| {
+        let app = catalog(failed.application);
+        StatusAppDto {
+            pid: app.map_or(0, |app| app.info.pid),
+            name: app.map(|app| app.info.name.clone()).unwrap_or_default(),
+            bundle_id: app.map(|app| app.info.bundle_id.clone()).unwrap_or_default(),
+            reason: failed.reason.clone(),
+            retries: failed.retries,
+        }
+    };
+    StatusDto {
+        phase: snapshot.phase.as_str().to_owned(),
+        healthy: snapshot.health == Health::Healthy,
+        faults: snapshot.faults.clone(),
+        layout_active: snapshot.actions_allowed,
+        config_revision: snapshot.config_revision,
+        plan_sequence: snapshot.plan_sequence,
+        apps: snapshot.apps.len(),
+        tracked_apps: snapshot.apps.iter().filter(|app| app.tracked).count(),
+        windows: snapshot.windows.iter().filter(|window| !window.suspended).count(),
+        suspended_windows: snapshot.windows.iter().filter(|window| window.suspended).count(),
+        failed_apps: snapshot.failed_apps.iter().map(row).collect(),
+        truncated_apps: snapshot.truncated_apps.iter().map(row).collect(),
+        unconfirmed_apps: snapshot.unconfirmed_apps,
+        inflight_apps: snapshot.inflight_apps,
+        no_frame: snapshot
+            .no_frame
+            .iter()
+            .map(|(display, reason)| StatusNoFrameDto {
+                screen: snapshot
+                    .screens
+                    .iter()
+                    .find(|screen| screen.id == *display)
+                    .map_or_else(|| format!("screen-{}", display.raw()), screen_name),
+                reason: format!("{reason:?}"),
+            })
+            .collect(),
+        hidden_apps: snapshot
+            .hidden_apps
+            .iter()
+            .map(|owned| {
+                let app = catalog(owned.application);
+                StatusHiddenDto {
+                    name: app.map(|app| app.info.name.clone()).unwrap_or_default(),
+                    bundle_id: app.map(|app| app.info.bundle_id.clone()).unwrap_or_default(),
+                    ownership: match owned.ownership {
+                        Ownership::PendingIssued => "pending",
+                        Ownership::PendingPossible => "pending-possible",
+                        Ownership::Confirmed => "confirmed",
+                        Ownership::Ambiguous => "ambiguous",
+                    }
+                    .to_owned(),
+                    reason: owned.reason.clone(),
+                }
+            })
+            .collect(),
+        last_intent: snapshot
+            .last_intent
+            .as_ref()
+            .map(|record| format!("{:?} -> {:?}", record.intent, record.outcome)),
+        tracked_windows: snapshot
+            .windows
+            .iter()
+            .filter(|window| !window.suspended)
+            .take(STATUS_ROWS)
+            .map(|window| {
+                let app = catalog(window.application);
+                StatusWindowDto {
+                    id: window.cg_window_id,
+                    app_name: app.map(|app| app.info.name.clone()).unwrap_or_default(),
+                    bundle_id: app.map(|app| app.info.bundle_id.clone()).unwrap_or_default(),
+                    title: window.observed.title.clone(),
+                    subrole: window.observed.subrole.clone(),
+                    frame: window.observed.frame.map(|frame| {
+                        format!("{}x{}@{},{}", frame.width, frame.height, frame.x, frame.y)
+                    }),
+                    workspace: window.desired.workspace.and_then(|id| {
+                        snapshot.workspaces.iter().find(|ws| ws.id == id).map(|ws| ws.name.clone())
+                    }),
+                    floating: window.desired.floating,
+                    focused: snapshot.focus.window == Some(window.token),
+                }
+            })
+            .collect(),
+        excluded_windows: snapshot
+            .excluded
+            .iter()
+            .take(STATUS_ROWS)
+            .map(|(token, why)| {
+                let app = catalog(token.application());
+                StatusExcludedDto {
+                    app_name: app.map(|app| app.info.name.clone()).unwrap_or_default(),
+                    bundle_id: app.map(|app| app.info.bundle_id.clone()).unwrap_or_default(),
+                    reason: why.label().to_owned(),
+                }
+            })
+            .collect(),
+        frame_attempts: snapshot.diagnostics.frame_attempts,
+        enumeration_failures: snapshot.diagnostics.enumeration_failures,
+    }
 }

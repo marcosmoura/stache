@@ -392,6 +392,9 @@ pub enum StaleReason {
     ApplicationGone,
     /// The element is no longer a member of the application's `AXWindows`.
     NotMember,
+    /// The window left `AXWindows` but its element is alive (an inactive native
+    /// tab): its token stays valid while it is unlisted, yet it cannot act.
+    Suspended,
 }
 
 /// How an issued action ended.

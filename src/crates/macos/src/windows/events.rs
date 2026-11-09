@@ -30,6 +30,55 @@ pub struct TabMember {
     pub selected: Option<bool>,
 }
 
+/// An opaque identity of one native tab bar, scoped to one application in one
+/// runtime epoch.
+///
+/// The owner mints it: two windows of an application carry the same id exactly
+/// when their `AXTabGroup` elements are the same accessibility object
+/// (`CFEqual`), which is how `AppKit`'s one shared tab bar follows the selected
+/// tab from window to window. It is never derived from a frame, a title or a
+/// `CGWindowID`, and the consumer can only compare it for equality.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct TabBarId(u64);
+
+impl TabBarId {
+    pub(super) const fn new(value: u64) -> Self { Self(value) }
+
+    /// A synthetic id for fakes.
+    #[cfg(any(test, feature = "testing"))]
+    #[must_use]
+    pub const fn for_testing(value: u64) -> Self { Self(value) }
+
+    /// The numeric value, diagnostic only.
+    #[must_use]
+    pub const fn value(self) -> u64 { self.0 }
+}
+
+/// A window's native tab bar as the owner read it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TabBar {
+    /// The owner-scoped identity of the shared tab bar.
+    pub id: TabBarId,
+    /// How many tab buttons the bar has (bounded).
+    pub count: usize,
+    /// The index of the selected tab button, when it could be read.
+    pub selected: Option<usize>,
+}
+
+/// What is known about a window's tab bar identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TabBarRead {
+    /// Not read (tab bar reads are off, or the snapshot predates a read).
+    NotRead,
+    /// The read failed or the bar could not be told apart yet: unknown, never
+    /// "no tab bar".
+    Unreadable,
+    /// The bounded search found no `AXTabGroup`.
+    None,
+    /// The window carries this tab bar.
+    Bar(TabBar),
+}
+
 /// A pure, point-in-time description of one window. Every attribute that could
 /// not be read is explicit, never zero or empty.
 #[derive(Clone, Debug, PartialEq)]
@@ -58,6 +107,8 @@ pub struct WindowSnapshot {
     /// The tab group's members when [`TabInfo::Tabs`], in strip order; empty
     /// otherwise.
     pub tab_members: Vec<TabMember>,
+    /// The window's native tab bar identity.
+    pub tab_bar: TabBarRead,
     /// Whether every per-window notification registered.
     pub observed: bool,
 }
@@ -90,6 +141,12 @@ pub enum WindowChange {
     Main,
     /// The title changed.
     TitleChanged,
+    /// The window left `AXWindows` but its element is alive: the inactive tab
+    /// of a native tab group, or one that was replaced by another window of the
+    /// group. Its token stays valid, its element and observer registrations
+    /// stay retained, and it is reported again (`Snapshot`) when it is listed
+    /// again. It is retired (`Destroyed`) only when its element dies.
+    Suspended,
 }
 
 /// An application-level change.
@@ -127,6 +184,10 @@ pub enum Capability {
 
 /// What happened.
 #[derive(Clone, Debug, PartialEq)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "events move once into a bounded queue; boxing every snapshot costs an allocation per event"
+)]
 pub enum WindowEventKind {
     /// A window snapshot.
     Snapshot {
@@ -157,6 +218,17 @@ pub enum WindowEventKind {
         windows: usize,
         /// Whether the per-application window cap truncated the list.
         truncated: bool,
+    },
+    /// The owner skipped listed windows whose id or tab bar could not be read
+    /// yet (a tab group in transition). They were neither adopted nor
+    /// treated as gone; the consumer should list the application again after a
+    /// short settle delay. Emitted before the matching completion, or alone for
+    /// a creation.
+    EnumerationUnsettled {
+        /// The application.
+        application: ApplicationId,
+        /// Windows skipped.
+        windows: usize,
     },
     /// Enumeration ended early.
     EnumerationAborted {

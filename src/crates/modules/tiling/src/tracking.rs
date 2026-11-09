@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use stache_macos::applications::{LifecycleEvent, LifecycleSink};
+use stache_macos::applications::{LifecycleEvent, LifecycleKind, LifecycleSink};
 use stache_macos::windows::{
     CleanupReport, EventQueue, GenerationCell, InstallError, RuntimeEpoch, StopOutcome,
 };
@@ -80,6 +80,8 @@ pub struct TrackingOptions {
     pub borders: Option<BordersParts>,
     /// Receives the borders delivery fault (`None` clears it).
     pub borders_sink: Option<FaultSink>,
+    /// The host logger, scoped to the module. `None` is silent.
+    pub logger: Option<stache_sdk::ScopedLogger>,
 }
 
 impl std::fmt::Debug for TrackingOptions {
@@ -108,6 +110,7 @@ impl TrackingOptions {
             actions: None,
             borders: None,
             borders_sink: None,
+            logger: None,
         }
     }
 
@@ -164,6 +167,48 @@ pub struct TrackingRuntime {
     actor: std::sync::Mutex<Option<JoinHandle<()>>>,
     last_topology: std::sync::atomic::AtomicU64,
     probe: Option<StageProbe>,
+    /// The activation watch; dropped with the runtime.
+    frontmost: Mutex<Option<stache_macos::FrontmostWatch>>,
+}
+
+/// Resolves metadata for a launch and submits one lifecycle input. Runs on the
+/// main thread, where the directory query is inline.
+fn deliver_lifecycle(ingress: &Ingress, directory: &dyn AppDirectory, event: &LifecycleEvent) {
+    // Only a launch needs metadata (a full application listing on the main
+    // thread); the other kinds are keyed by the exact instance.
+    let described = (event.kind == LifecycleKind::Launched)
+        .then(|| directory.describe(event.application))
+        .flatten();
+    // A launch nobody can describe (an agent or accessory application, or one
+    // that already exited) is not tracked.
+    if described.is_none() && event.kind == LifecycleKind::Launched {
+        return;
+    }
+    let info = described.unwrap_or_else(|| AppInfo {
+        application: event.application,
+        pid: event.pid.unwrap_or(0),
+        bundle_id: String::new(),
+        name: String::new(),
+    });
+    let _ = ingress.submit(Input::Lifecycle { kind: event.kind, info });
+}
+
+/// Feeds the frontmost application to the actor as a pure input.
+struct ActivationFeed {
+    ingress: Arc<Ingress>,
+}
+
+impl stache_macos::FrontmostListener for ActivationFeed {
+    fn invalidated(&self, _epoch: u64) {}
+
+    fn published(&self, snapshot: &stache_macos::FrontmostSnapshot) {
+        if snapshot.is_confirmed()
+            && !snapshot.is_current_process
+            && let Some(application) = snapshot.application
+        {
+            let _ = self.ingress.submit(Input::Activated(application));
+        }
+    }
 }
 
 /// One acknowledgement hop (the finite bound of every cleanup wait).
@@ -230,6 +275,7 @@ impl TrackingRuntime {
             }
         };
         let visibility = Arc::new(VisibilityControl::new());
+        let origin = crate::logclock::LogOrigin::new(Instant::now());
         // Inert: no worker, thread or timer until an enabled configuration.
         let animation = Arc::new(AnimationControl::live(
             Arc::clone(&backend),
@@ -240,7 +286,11 @@ impl TrackingRuntime {
         ));
         // Inert: no thread, port or child until an enabled configuration.
         let borders = Arc::new(BordersControl::new(
-            options.borders.clone(),
+            options.borders.clone().map(|mut parts| {
+                parts.logger.clone_from(&options.logger);
+                parts.origin = origin;
+                parts
+            }),
             Arc::clone(&clock),
             options.borders_sink.clone().unwrap_or_else(|| Arc::new(|_| {})),
         ));
@@ -274,6 +324,8 @@ impl TrackingRuntime {
         );
         engine.set_frame_control(Arc::clone(&frames));
         engine.set_visibility_control(Arc::clone(&visibility));
+        engine.set_logger(options.logger.clone(), origin);
+        visibility.set_logger(options.logger.clone(), origin);
         engine.set_borders_control(Arc::clone(&borders));
         if let Some(hook) = hook {
             engine.set_turn_hook(hook);
@@ -304,6 +356,7 @@ impl TrackingRuntime {
             actor: std::sync::Mutex::new(Some(actor)),
             last_topology: std::sync::atomic::AtomicU64::new(0),
             probe: options.probe.clone(),
+            frontmost: Mutex::new(None),
         };
         if !options.defer_begin {
             let _ = runtime.ingress.submit(Input::Start(stamp));
@@ -323,6 +376,49 @@ impl TrackingRuntime {
             return Err(StartError::Injected(StartStage::Enumeration));
         }
         self.ingress.submit(Input::Start(self.stamp)).map_err(|_| StartError::Closed)
+    }
+
+    /// Starts feeding application lifecycle (launch, terminate, hide, unhide)
+    /// and the frontmost application to the actor. Call after [`Self::begin`]
+    /// so a registry restart cannot discard the first activation. Without
+    /// application actions there is nothing to watch.
+    ///
+    /// # Errors
+    ///
+    /// Which watch could not be installed. The runtime keeps working with the
+    /// window events alone (new applications and Cmd-Tab are then not seen).
+    pub fn watch_applications(&self) -> Result<(), String> {
+        let Some(actions) = &self.actions else {
+            return Ok(());
+        };
+        // Weak: the native observer keeps this sink for as long as the
+        // observation lives, and the directory owns that observation.
+        let ingress = Arc::clone(&self.ingress);
+        let directory = Arc::downgrade(&self.directory);
+        let lifecycle = actions
+            .watch_lifecycle(&self.cancel, move |event| {
+                if let Some(directory) = directory.upgrade() {
+                    deliver_lifecycle(&ingress, &*directory, &event);
+                }
+            })
+            .map_err(|reason| format!("application lifecycle: {reason}"));
+        let feed = Arc::new(ActivationFeed {
+            ingress: Arc::clone(&self.ingress),
+        });
+        let frontmost = actions
+            .watch_frontmost(&self.cancel, feed)
+            .map(|watch| {
+                *self.frontmost.lock().unwrap_or_else(PoisonError::into_inner) = Some(watch);
+            })
+            .map_err(|reason| format!("frontmost application: {reason}"));
+        // Anything launched between `begin` (the first list) and the lifecycle
+        // watch being live was never reported: list once more now.
+        let _ = self.ingress.submit(Input::Relist);
+        match (lifecycle, frontmost) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(a), Ok(())) | (Ok(()), Err(a)) => Err(a),
+            (Err(a), Err(b)) => Err(format!("{a}; {b}")),
+        }
     }
 
     /// The registry stamp events and completions must carry.
@@ -350,15 +446,7 @@ impl TrackingRuntime {
     pub fn lifecycle_sink(&self) -> LifecycleSink {
         let ingress = Arc::clone(&self.ingress);
         let directory = Arc::clone(&self.directory);
-        Arc::new(move |event: LifecycleEvent| {
-            let info = directory.describe(event.application).unwrap_or_else(|| AppInfo {
-                application: event.application,
-                pid: event.pid.unwrap_or(0),
-                bundle_id: String::new(),
-                name: String::new(),
-            });
-            let _ = ingress.submit(Input::Lifecycle { kind: event.kind, info });
-        })
+        Arc::new(move |event: LifecycleEvent| deliver_lifecycle(&ingress, &*directory, &event))
     }
 
     /// Submits a display layout answering a topology hint. A hint older than one

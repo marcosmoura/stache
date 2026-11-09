@@ -79,6 +79,10 @@ pub struct BordersParts {
     pub executor: ExecutorFactory,
     /// The shortest period between animation frames (never below 125 ms).
     pub frame_period: Duration,
+    /// Debug log of every command sent to the service (`None` is silent).
+    pub logger: Option<stache_sdk::ScopedLogger>,
+    /// The runtime-start reference of the timestamps in the debug log.
+    pub origin: crate::logclock::LogOrigin,
 }
 
 impl BordersParts {
@@ -89,6 +93,8 @@ impl BordersParts {
             transport,
             executor,
             frame_period: FRAME_PERIOD,
+            logger: None,
+            origin: crate::logclock::LogOrigin::default(),
         }
     }
 }
@@ -187,6 +193,8 @@ pub struct Core {
     last_frame: Option<Instant>,
     fault: Option<Fault>,
     reap_bound: Duration,
+    logger: Option<stache_sdk::ScopedLogger>,
+    origin: crate::logclock::LogOrigin,
 }
 
 impl Core {
@@ -215,6 +223,8 @@ impl Core {
             last_frame: None,
             fault: None,
             reap_bound: REAP_BOUND,
+            logger: None,
+            origin: crate::logclock::LogOrigin::default(),
         }
     }
 
@@ -267,7 +277,11 @@ impl Core {
             return;
         }
         self.animation = None;
-        if self.deliver(&command.args) {
+        // Send only the settings that changed since the last delivered focus
+        // command: reapplying an unchanged `width` makes JankyBorders rebuild
+        // every border, which reads as a blink.
+        let changed = changed_args(self.last_focus_args.as_deref(), &command.args);
+        if self.deliver(&changed) {
             self.last_focus_args = Some(command.args);
             self.animation = command.animation.map(|plan| self.start_animation(plan, epoch));
         } else {
@@ -340,7 +354,22 @@ impl Core {
 
     /// A base or focus command: lookup, Mach, and the CLI fallback only after a
     /// proven rejection in the same attempt.
+    /// Logs every command sent to the service at debug level.
+    #[must_use]
+    pub fn with_logger(
+        mut self,
+        logger: Option<stache_sdk::ScopedLogger>,
+        origin: crate::logclock::LogOrigin,
+    ) -> Self {
+        self.logger = logger;
+        self.origin = origin;
+        self
+    }
+
     fn deliver(&mut self, args: &[String]) -> bool {
+        if let Some(logger) = &self.logger {
+            logger.debug(format!("{} tiling borders: send {args:?}", self.origin.stamp()));
+        }
         let mut attempt = match ServiceAttempt::begin(&mut *self.transport) {
             Ok(attempt) => attempt,
             Err(missing) => {
@@ -543,6 +572,8 @@ impl BordersWorker {
         let transport = Arc::clone(&parts.transport);
         let executor = Arc::clone(&parts.executor);
         let period = parts.frame_period;
+        let logger = parts.logger.clone();
+        let origin = parts.origin;
         let handle =
             std::thread::Builder::new()
                 .name(BORDERS_THREAD_NAME.to_owned())
@@ -555,7 +586,8 @@ impl BordersWorker {
                         period,
                         sink,
                         Arc::clone(&thread_shared.delivered),
-                    );
+                    )
+                    .with_logger(logger, origin);
                     run(core, &thread_shared);
                 })?;
         Ok(Self {
@@ -864,4 +896,20 @@ impl BordersControl {
     pub fn retained(&self) -> Vec<String> {
         self.slot().retired.iter().flat_map(|worker| worker.retained()).collect()
     }
+}
+
+/// The `key=value` arguments of `next` whose value differs from `previous`
+/// (all of `next` without a previous command). Argument boundaries are kept.
+pub(super) fn changed_args(previous: Option<&[String]>, next: &[String]) -> Vec<String> {
+    let Some(previous) = previous else { return next.to_vec() };
+    next.iter()
+        .filter(|arg| {
+            let key = arg.split_once('=').map_or(arg.as_str(), |(key, _)| key);
+            !previous.iter().any(|old| {
+                old.split_once('=').map_or(old.as_str(), |(old_key, _)| old_key) == key
+                    && *old == **arg
+            })
+        })
+        .cloned()
+        .collect()
 }

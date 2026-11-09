@@ -68,6 +68,9 @@ pub struct FrontmostApplication {
     /// lets a consumer create a native handle (an Accessibility root) for the
     /// exact `id`, which is validated again before and after use.
     pub pid: Option<i32>,
+    /// Whether it is a regular application (`NSApplicationActivationPolicyRegular`).
+    /// Accessory and prohibited (agent, background) applications are not.
+    pub regular: bool,
 }
 
 /// How a frontmost application is treated by an exemption policy.

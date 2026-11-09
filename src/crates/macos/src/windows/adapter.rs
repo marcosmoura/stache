@@ -25,8 +25,9 @@ use std::time::{Duration, Instant};
 use stache_sdk::CancellationToken;
 
 use super::commands::{
-    ActionRequest, CleanupReport, CloseOutcome, Command, HiddenOutcome, HiddenRequest,
-    InstallError, InstallRequest, Reply, SnapshotOutcome, StopOutcome, TrackOutcome, TrackRequest,
+    ActionRequest, CleanupReport, CloseOutcome, Command, FocusOutcome, HiddenOutcome,
+    HiddenRequest, InstallError, InstallRequest, Reply, SnapshotOutcome, StopOutcome, TrackOutcome,
+    TrackRequest,
 };
 use super::core::Core;
 use super::driver::{Driver, RunLoopDriver, Wakeup};
@@ -90,6 +91,10 @@ pub struct AdapterOptions {
     /// snapshots then report [`TabInfo::Unknown`](super::TabInfo::Unknown). A
     /// failed read reports [`TabInfo::Failed`](super::TabInfo::Failed).
     pub read_tabs: bool,
+    /// Read each window's native tab bar identity (a bounded search for its
+    /// `AXTabGroup` on the owner thread). Tiling uses it to keep a tab group's
+    /// slot when `AppKit` swaps the window that represents the group.
+    pub read_tab_bars: bool,
 }
 
 /// The wait one hop may take: the acknowledgement budget capped by the
@@ -188,13 +193,14 @@ impl WindowAdapter {
         let (ready_tx, ready_rx) = mpsc::sync_channel::<Arc<Wakeup>>(1);
         let (done_tx, done_rx) = mpsc::sync_channel::<()>(1);
         let read_tabs = options.read_tabs;
+        let read_tab_bars = options.read_tab_bars;
         let join = thread::Builder::new()
             .name(thread_name.to_owned())
             .spawn(move || {
                 let _guard = guard;
                 let driver = driver();
                 let wakeup = Arc::new(Wakeup::new(driver.waker()));
-                let core = Core::new(system(), id, clock, read_tabs);
+                let core = Core::new(system(), id, clock, read_tabs).with_tab_bars(read_tab_bars);
                 let _ = ready_tx.send(Arc::clone(&wakeup));
                 run_owner(core, &receiver, driver, &wakeup);
                 let _ = done_tx.send(());
@@ -317,6 +323,28 @@ impl WindowAdapter {
             reply,
         });
         track_outcome(outcome)
+    }
+
+    /// Reads the application's real `AXFocusedWindow` on the owner thread
+    /// (bounded by the element timeout) and answers which tracked window it is.
+    #[must_use]
+    pub fn focused_window(
+        &self,
+        epoch: RuntimeEpoch,
+        application: ApplicationId,
+        cancel: &CancellationToken,
+        deadline: Option<Instant>,
+    ) -> FocusOutcome {
+        match self.request(deadline, Some(cancel), |reply| Command::FocusedWindow {
+            epoch,
+            application,
+            reply,
+        }) {
+            Ok(outcome) => outcome,
+            Err(RequestError::Dispatch(error)) => FocusOutcome::Dispatch(error),
+            Err(RequestError::Unacknowledged) => FocusOutcome::Unacknowledged,
+            Err(RequestError::Unavailable) => FocusOutcome::OwnerUnavailable,
+        }
     }
 
     /// Stops observing one application (it terminated or was replaced). The

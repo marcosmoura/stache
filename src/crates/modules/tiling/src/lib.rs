@@ -25,6 +25,7 @@ mod geometry;
 mod intent;
 pub mod ipc;
 mod layout;
+mod logclock;
 mod minimum_size;
 mod module;
 mod outcome;

@@ -99,8 +99,8 @@ use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObjectProtocol, ProtocolObject};
 use objc2_app_kit::{
-    NSApplicationActivationOptions, NSRunningApplication, NSScreen, NSWorkspace,
-    NSWorkspaceApplicationKey, NSWorkspaceDidActivateApplicationNotification,
+    NSApplicationActivationOptions, NSApplicationActivationPolicy, NSRunningApplication, NSScreen,
+    NSWorkspace, NSWorkspaceApplicationKey, NSWorkspaceDidActivateApplicationNotification,
     NSWorkspaceOpenConfiguration, NSWorkspaceWillLaunchApplicationNotification,
 };
 use objc2_foundation::{
@@ -113,6 +113,7 @@ pub mod display;
 pub mod frontmost;
 pub mod graceful;
 pub mod lifecycle;
+mod pid;
 pub mod visibility;
 
 pub use activation::{ActivationAuthorization, ActivationCancel, ActivationOutcome};
@@ -1983,6 +1984,10 @@ struct InstanceStore {
     /// Pruned terminated instances, oldest first, so a `DidTerminate` that runs
     /// after another application's intern still names the original id.
     tombstones: VecDeque<(u64, Retained<NSRunningApplication>)>,
+    /// Pids resolved from the executable for instances macOS reports none for,
+    /// so the process table is scanned once per instance, not on every launch
+    /// or listing. Dropped with the instance when it is pruned.
+    resolved_pids: BTreeMap<u64, i32>,
 }
 
 /// The most pruned terminated instances kept to resolve a late `DidTerminate`.
@@ -2001,6 +2006,7 @@ impl InstanceStore {
             .map(|(token, _)| *token)
             .collect();
         for token in dead {
+            self.resolved_pids.remove(&token);
             if let Some(application) = self.entries.remove(&token) {
                 self.tombstones.push_back((token, application));
                 while self.tombstones.len() > TERMINATED_TOMBSTONES {
@@ -2008,6 +2014,21 @@ impl InstanceStore {
                 }
             }
         }
+    }
+
+    /// The pid to read `application` (interned as `id`) with: see
+    /// [`application_pid`]. A resolved pid is cached per instance.
+    fn pid_of(&mut self, id: ApplicationId, application: &NSRunningApplication) -> Option<i32> {
+        let reported = application.processIdentifier();
+        if reported > 0 {
+            return Some(reported);
+        }
+        if let Some(pid) = self.resolved_pids.get(&id.token) {
+            return Some(*pid);
+        }
+        let pid = application_pid(application)?;
+        self.resolved_pids.insert(id.token, pid);
+        Some(pid)
     }
 
     /// The token of an already interned equal instance, without pruning.
@@ -2118,6 +2139,17 @@ impl SystemApplicationBackend {
 
 fn require_main() -> Result<MainThreadMarker, ApplicationError> {
     MainThreadMarker::new().ok_or(ApplicationError::NotMainThread)
+}
+
+/// The pid of a live application for Accessibility reads: its reported
+/// `processIdentifier`, or (when macOS reports none, as for Xcode's Device Hub)
+/// the single live process running its executable. Never identity.
+fn application_pid(application: &NSRunningApplication) -> Option<i32> {
+    let executable = application
+        .executableURL()
+        .and_then(|url| url.path())
+        .map(|path| path.to_string());
+    pid::resolve(application.processIdentifier(), executable.as_deref())
 }
 
 impl ApplicationBackend for SystemApplicationBackend {
@@ -2504,13 +2536,16 @@ impl ApplicationBackend for SystemApplicationBackend {
                     if application.isTerminated() {
                         continue;
                     }
+                    let id = store.intern(handle, generation, &application);
                     details.push(FrontmostApplication {
-                        id: store.intern(handle, generation, &application),
+                        id,
                         bundle_identifier: application.bundleIdentifier().map(|id| id.to_string()),
                         name: application.localizedName().map(|name| name.to_string()),
                         is_current_process: application
                             .isEqual(Some(AsRef::<AnyObject>::as_ref(&*current))),
-                        pid: Some(application.processIdentifier()),
+                        pid: store.pid_of(id, &application),
+                        regular: application.activationPolicy()
+                            == NSApplicationActivationPolicy::Regular,
                     });
                 }
                 Some(details)
@@ -2536,12 +2571,14 @@ impl ApplicationBackend for SystemApplicationBackend {
         // process's own `NSRunningApplication`, never by executable name.
         let current = NSRunningApplication::currentApplication();
         let is_current_process = application.isEqual(Some(AsRef::<AnyObject>::as_ref(&*current)));
-        let id = INSTANCES
+        let (id, pid) = INSTANCES
             .with(|cell| {
                 let mut stores = cell.borrow_mut();
                 let store = stores.get_mut(&handle)?;
-                (store.generation == generation)
-                    .then(|| store.intern(handle, generation, &application))
+                (store.generation == generation).then(|| {
+                    let id = store.intern(handle, generation, &application);
+                    (id, store.pid_of(id, &application))
+                })
             })
             .ok_or(ApplicationError::NotInstalled)?;
         Ok(Some(FrontmostApplication {
@@ -2549,7 +2586,8 @@ impl ApplicationBackend for SystemApplicationBackend {
             bundle_identifier: application.bundleIdentifier().map(|id| id.to_string()),
             name: application.localizedName().map(|name| name.to_string()),
             is_current_process,
-            pid: Some(application.processIdentifier()),
+            pid,
+            regular: application.activationPolicy() == NSApplicationActivationPolicy::Regular,
         }))
     }
 

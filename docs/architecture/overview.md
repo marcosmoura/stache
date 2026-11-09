@@ -458,7 +458,7 @@ fake-proven only; construction starts nothing and sends no AX message.
   `lib.rs` appends `TilingFactory::production` to the production composition **default disabled**
   (after Wallpapers, Keybindings and Hold-to-Quit); it uses a Tiling-private `ApplicationControl`
   (the repository pattern is one control per consumer), `LazySystemBackend` over default
-  `AdapterOptions` (tab reads off; Tiling's `tabs.rs` registry is wired but inert without them), a system `DisplayControl` and `sdk_display_id`. Construction is
+  `AdapterOptions` (`CGWindowID`-keyed tab member reads off, so Tiling's `tabs.rs` registry is inert; tab bar identity reads on), a system `DisplayControl` and `sdk_display_id`. Construction is
   inert. Start is staged with exact rollback (backend epoch, effect worker, actor, reservation
   watcher, **display feed**, coordinator, enumeration, authority). The display feed registers a
   `DisplayControl::observe_topology` observer whose callback only records a pure hint; the

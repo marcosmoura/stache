@@ -264,7 +264,7 @@ fn json_is_the_whole_pretty_array_in_the_frozen_field_order() {
          \"height\": 944.0\n    }\n  }\n]\n"
     );
     assert_eq!(
-        render::json::<AppDto>(&[], false, &identity).expect("json"),
+        render::json::<[AppDto]>(&[], false, &identity).expect("json"),
         "[]\n"
     );
     let window = render::json(&windows()[..1], false, &identity).expect("json");
@@ -351,4 +351,50 @@ fn query_failures_use_the_legacy_stdout_bodies() {
         render::json_error("say \"hi\"\n\u{1b}"),
         "{\"error\":\"say \\\"hi\\\"\\n\\u001b\"}\n"
     );
+}
+
+#[test]
+fn the_status_table_names_every_reason_nothing_happens() {
+    let status = crate::dto::StatusDto {
+        phase: "incomplete".to_owned(),
+        healthy: true,
+        faults: vec!["Accessibility permission is missing".to_owned()],
+        layout_active: false,
+        config_revision: 3,
+        plan_sequence: 7,
+        apps: 12,
+        tracked_apps: 10,
+        suspended_windows: 0,
+        windows: 4,
+        failed_apps: vec![crate::dto::StatusAppDto {
+            pid: 9,
+            name: "Zoom".to_owned(),
+            bundle_id: "us.zoom.xos".to_owned(),
+            reason: "Unacknowledged".to_owned(),
+            retries: 2,
+        }],
+        truncated_apps: Vec::new(),
+        unconfirmed_apps: 1,
+        inflight_apps: 0,
+        no_frame: vec![crate::dto::StatusNoFrameDto {
+            screen: "Built-in".to_owned(),
+            reason: "UnknownDisplay".to_owned(),
+        }],
+        hidden_apps: Vec::new(),
+        last_intent: Some("FocusWorkspace(\"music\") -> Applied".to_owned()),
+        tracked_windows: Vec::new(),
+        excluded_windows: Vec::new(),
+        frame_attempts: 5,
+        enumeration_failures: 1,
+    };
+    let table = render::status(&status, false);
+    for expected in [
+        "phase: incomplete",
+        "fault: Accessibility permission is missing",
+        "failed app: Zoom (us.zoom.xos) pid 9: Unacknowledged [retries 2]",
+        "no frames on Built-in: UnknownDisplay",
+        "last intent: FocusWorkspace",
+    ] {
+        assert!(table.contains(expected), "{expected}\n{table}");
+    }
 }

@@ -69,11 +69,15 @@ type Slot<T> = Arc<Mutex<Option<T>>>;
 
 impl H {
     fn with_queue(capacity: usize, read_tabs: bool) -> Self {
+        Self::with_options(capacity, read_tabs, false)
+    }
+
+    fn with_options(capacity: usize, read_tabs: bool, tab_bars: bool) -> Self {
         let ax = FakeWindowAx::new();
         let (system, obs) = FakeWindowSystem::new(ax.clone());
         let clock = SteppingClock::new(Duration::ZERO);
         let adapter = AdapterId::allocate();
-        let core = Core::new(system, adapter, clock.clone(), read_tabs);
+        let core = Core::new(system, adapter, clock.clone(), read_tabs).with_tab_bars(tab_bars);
         let (tx, rx) = mpsc::sync_channel(64);
         let gate = Arc::new(GenerationCell::new());
         gate.publish(1, 1);
@@ -715,6 +719,7 @@ fn a_complete_refresh_retires_a_closed_window_and_releases_its_registrations() {
     let mut h = H::new();
     let (node, nodes, tokens) = h.app_with_windows(app(1), 500, 3);
     h.ax.edit(node, |n| n.windows = Ok(vec![nodes[0], nodes[2]]));
+    h.ax.kill(nodes[1]);
     let events = refresh(&mut h, app(1));
     let kinds = kinds(&events);
     assert_eq!(
@@ -741,6 +746,7 @@ fn a_failed_registration_removal_on_retire_is_kept_for_cleanup() {
     let mut h = H::new();
     let (node, nodes, tokens) = h.app_with_windows(app(1), 500, 2);
     h.ax.edit(node, |n| n.windows = Ok(vec![nodes[0]]));
+    h.ax.kill(nodes[1]);
     h.obs.set_remove_error(500, Some(AxError::CannotComplete));
     let events = refresh(&mut h, app(1));
     assert!(kinds(&events).iter().any(|k| matches!(
@@ -1137,8 +1143,11 @@ fn start_mass_retirement(
     deadline: Option<Instant>,
     step: Duration,
 ) {
-    let (node, _, _) = h.app_with_windows(app(1), 500, count);
+    let (node, nodes, _) = h.app_with_windows(app(1), 500, count);
     h.ax.edit(node, |n| n.windows = Ok(Vec::new()));
+    for dead in nodes {
+        h.ax.kill(dead);
+    }
     h.clock.set_step(step);
     let epoch = h.epoch;
     let outcome = h.run(|reply| Command::Refresh {
@@ -1302,8 +1311,9 @@ fn delayed_callbacks_after_destroy_never_revive_or_mint_a_token() {
 #[test]
 fn a_window_that_left_the_window_list_is_stale_before_any_send() {
     let mut h = H::new();
-    let (app_el, _, tokens) = h.app_with_windows(app(1), 500, 2);
+    let (app_el, nodes, tokens) = h.app_with_windows(app(1), 500, 2);
     h.ax.edit(app_el, |n| n.windows = Ok(vec![]));
+    h.ax.kill(nodes[1]);
     h.ax.clear_calls();
     let outcome = h.act(tokens[1], frame(1.0));
     assert_eq!(outcome, WindowActionOutcome::Stale(StaleReason::NotMember));
@@ -1723,6 +1733,11 @@ fn a_snapshot_query_revalidates_and_reads_fresh_values() {
     };
     assert_eq!(shot.frame.complete().map(|f| f.origin.x), Some(99.0));
     h.ax.edit(app_el, |n| n.windows = Ok(vec![]));
+    // Unlisted but alive: suspended, never retired.
+    let outcome = h.run(|reply| Command::Snapshot { window, reply });
+    assert_eq!(outcome, SnapshotOutcome::Stale(StaleReason::Suspended));
+    // Unlisted and dead: retired.
+    h.ax.kill(nodes[0]);
     let outcome = h.run(|reply| Command::Snapshot { window, reply });
     assert_eq!(outcome, SnapshotOutcome::Stale(StaleReason::NotMember));
 }
@@ -2487,3 +2502,6 @@ fn an_axhidden_request_after_the_epoch_ends_is_stale() {
         HiddenOutcome::Stale(StaleReason::WrongEpoch)
     );
 }
+
+mod suspended;
+mod tab_bars;

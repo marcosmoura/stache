@@ -19,7 +19,7 @@
 //!   moved. `partial` and `uncertain` exit 1 with their fixed bodies.
 //! * Query failures print their legacy body on **stdout** and exit 1.
 
-mod render;
+pub(crate) mod render;
 
 #[cfg(test)]
 mod render_tests;
@@ -43,7 +43,7 @@ use stache_sdk::{
 
 use crate::config::LayoutType;
 use crate::dto::{
-    AppDto, OperationResponse, QueryKind, QueryParams, ResizeArg, ScreenDto, WindowDto,
+    AppDto, OperationResponse, QueryKind, QueryParams, ResizeArg, ScreenDto, StatusDto, WindowDto,
     WindowParams, WorkspaceDto, WorkspaceParams, method,
 };
 use crate::ipc::body;
@@ -181,7 +181,7 @@ fn text(name: &'static str, value_name: &'static str, help: &'static str) -> Arg
 
 fn query_command() -> Command {
     Command::new("query")
-        .about("Query tiling state (screens, workspaces, windows, apps)")
+        .about("Query tiling state (screens, workspaces, windows, apps, status)")
         .next_display_order(None)
         .arg(
             Arg::new("json")
@@ -249,6 +249,16 @@ fn query_command() -> Command {
                 .arg(
                     text("workspace", "WORKSPACE", "Filter by workspace name")
                         .conflicts_with_all(["focused-screen", "focused-workspace"]),
+                ),
+        )
+        .subcommand(
+            Command::new("status")
+                .about("Show why windows are or are not being laid out")
+                .after_long_help(
+                    "Shows the runtime phase, global faults, applications that failed to \
+                     track, displays without frames, hidden applications and the latest \
+                     intent. Read-only.\n\nExamples:\n  stache tiling query status          # \
+                     Summary\n  stache tiling query --json status  # Output as JSON",
                 ),
         )
         .subcommand(
@@ -657,6 +667,15 @@ impl TilingCli {
                 let rows: Vec<AppDto> = decode(data)?;
                 present(&rows, json, ansi, highlight, |rows| render::apps(rows, ansi))
             }
+            QueryKind::Status => {
+                let status: StatusDto = decode(data)?;
+                if json {
+                    render::json(&status, ansi, highlight)
+                        .map_err(|_| Failure::Ipc(DECODE_BODY.to_owned()))
+                } else {
+                    Ok(render::status(&status, ansi))
+                }
+            }
         }
     }
 }
@@ -704,6 +723,7 @@ fn query_params(kind: &str, filters: &ArgMatches) -> QueryParams {
         "screens" => QueryKind::Screens,
         "workspaces" => QueryKind::Workspaces,
         "windows" => QueryKind::Windows,
+        "status" => QueryKind::Status,
         _ => QueryKind::Apps,
     };
     QueryParams {
