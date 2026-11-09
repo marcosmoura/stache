@@ -4,13 +4,13 @@ status: draft
 
 # 03 — Hyprland-style border animations
 
-Read when implementing after part 02, separate approval **and the user's approval of the OQ-A schema** ([overview](00-overview.md#open-questions)). Paths are under `src/crates/`. Still behind `native-borders`; production unchanged. The config fields themselves land in [part 08](08-migration-removal.md) so no inert field ships while JankyBorders is production; this part works from a plain motion model.
+Read when implementing after part 02, separate approval (the OQ-A schema was approved 2026-11-09, [overview](00-overview.md#open-questions)). Paths are under `src/crates/`. Still behind `native-borders`; production unchanged. The config fields themselves land in [part 08](08-migration-removal.md) so no inert field ships while JankyBorders is production; this part works from a plain motion model.
 
 ## Scope
 
 `modules/tiling/src/borders/appearance.rs` (motion model, pure timeline evaluation), `macos/src/border_overlay/` (Core Animation descriptions installed on the layer tree; fake layer recording them), `animation/easing.rs` only to share the easing set. Behavioral reference only (decision 8): Hyprland's `border` and `borderangle` animations (<https://wiki.hypr.land/Configuring/Animations/>; `borderangle` supports styles `once` and `loop`). Studied for approach (decision 5): JankyBorders `src/animation.c` (its display-link driven proxy animation, which Stache does not reproduce).
 
-## Proposed configuration (OQ-A, pending approval)
+## Configuration (OQ-A, approved 2026-11-09)
 
 Additive to `tiling.borders` (`config/borders.rs`); recommended defaults from the overview's OQ-A.
 

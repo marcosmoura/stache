@@ -22,7 +22,7 @@ Cited from `fix/tiling-fixes` (worktree `.worktrees/tiling-fixes`), which merges
 ## Non-goals
 
 - No borders on windows Tiling does not manage (ignored applications, system windows, Stache's own windows).
-- No breaking configuration change: every existing `tiling.borders` configuration keeps parsing, validating and resolving with the same precedence (decision 3). The only schema changes are the additive animation fields of [part 03](03-animations.md) (shape pending OQ-A) and the documented meaning of `enabled`.
+- No breaking configuration change: every existing `tiling.borders` configuration keeps parsing, validating and resolving with the same precedence (decision 3). The only schema changes are the additive animation fields of [part 03](03-animations.md) (OQ-A, approved 2026-11-09) and the documented meaning of `enabled`.
 - No GPL code in Stache (decision 5). No Screen Recording permission, no SIP-requiring API, no scripting addition.
 - No managing, launching, stopping or reconfiguring a running JankyBorders after part 08.
 - No change to layouts, CLI or socket contracts beyond additive status diagnostics. No legacy port; `_legacy/` is read-only reference.
@@ -78,7 +78,7 @@ Studied by the spec writer on 2026-11-09 for approach only (decision 5). JankyBo
 
 ## Sequencing
 
-Starts only after `fix/tiling-fixes` merges into `main`; rebase and re-check the cited lines first. Order: 01 → 02 → 03 → 04 → 05 → 06 → 07 → 08. Part 03 starts only after the user approves the OQ-A schema. Parts 01–07 build the engine behind the compile-time feature `native-borders` on `stache-tiling` and `stache-app` (off by default; used by tests and approved native checks), so production keeps JankyBorders. Part 08 adds the approved config fields (no inert field ships earlier), flips production and removes part 09 code.
+Starts only after `fix/tiling-fixes` merges into `main`; rebase and re-check the cited lines first. Order: 01 → 02 → 03 → 04 → 05 → 06 → 07 → 08. Parts 01–07 build the engine behind the compile-time feature `native-borders` on `stache-tiling` and `stache-app` (off by default; used by tests and approved native checks), so production keeps JankyBorders. Part 08 adds the approved config fields (no inert field ships earlier), flips production and removes part 09 code.
 
 Coordinate with the [animation spec](../2026-11-09-tiling-animation/00-overview.md): borders consume the same frame events. Part 04 defines a `BorderFrames` seam fed from the frame write path that exists when it lands (synchronous `AnimationSink::write` today; animation part 02's per-tick batches later); whichever spec lands second adapts the seam. Part 06 and animation part 03 share one display-link adapter (`macos/src/display_link.rs`): whichever lands first owns it.
 
@@ -86,7 +86,7 @@ The [merge gate](../../workflow.md#merge-gate) blocks merging while any part is 
 
 ## Open questions
 
-- **OQ-A animation schema (blocks part 03).** Needs the user's approval before part 03 is implemented. Recommended shape (additive; every existing configuration keeps its meaning):
+- **OQ-A animation schema — approved 2026-11-09** as proposed, with the recommended defaults (a)–(e). The gradient angle keeps its documented convention (0 = left→right, 90 = bottom→top) drawn exactly; the visual change for 45/90/135 is accepted. Approved shape (additive; every existing configuration keeps its meaning):
 
   ```jsonc
   "borders": {
