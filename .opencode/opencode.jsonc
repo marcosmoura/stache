@@ -8,76 +8,51 @@
   "agents": {
     "plan": {
       "disabled": true,
-      "model": "openai/gpt-6.1-sol#medium",
+      "model": "claude-agent/opus#medium",
     },
     "explore": {
       "disabled": true,
-      "model": "opencode-go/deepseek-v4.1-flash#low",
+      "model": "claude-agent/haiku#low",
     },
     "general": {
       "disabled": true,
-      "model": "opencode-go/deepseek-v4.1-flash#high",
-    },
-    "scout": {
-      "disabled": true,
-      "model": "opencode-go/deepseek-v4.1-flash#low",
-    },
-    "shipper": {
-      "disabled": true,
-      "model": "opencode-go/deepseek-v4.1-flash#low",
+      "model": "claude-agent/sonnet#medium",
     },
 
     "orchestrator": {
       "mode": "primary",
-      "model": "openai/gpt-6.1-sol#medium",
+      "model": "claude-agent/opus#medium",
       "color": "#cba6f7",
       "permissions": [
         { "action": "subagent", "resource": "*", "effect": "deny" },
-        { "action": "subagent", "resource": "explorer", "effect": "allow" },
-        { "action": "subagent", "resource": "spec-writer", "effect": "allow" },
         { "action": "subagent", "resource": "worker", "effect": "allow" },
         { "action": "subagent", "resource": "reviewer", "effect": "allow" },
       ],
     },
 
-    "explorer": {
-      "mode": "subagent",
-      "model": "opencode-go/deepseek-v4.1-flash#low",
-      "permissions": [
-        { "action": "edit", "resource": "*", "effect": "deny" },
-        { "action": "subagent", "resource": "*", "effect": "deny" },
-      ],
-    },
-
-    "spec-writer": {
-      "mode": "subagent",
-      "model": "openai/gpt-6.1-sol#medium",
-      "permissions": [{ "action": "subagent", "resource": "*", "effect": "deny" }],
-    },
-
     "worker": {
       "mode": "subagent",
-      "model": "opencode-go/deepseek-v4.1-flash#high",
+      "model": "claude-agent/opus#low",
       "permissions": [{ "action": "subagent", "resource": "*", "effect": "deny" }],
     },
 
     "reviewer": {
       "mode": "subagent",
-      "model": "openai/gpt-6.1-sol#high",
+      "model": "claude-agent/opus#medium",
       "permissions": [
         { "action": "edit", "resource": "*", "effect": "deny" },
         { "action": "subagent", "resource": "*", "effect": "deny" },
       ],
     },
     "title": {
-      "model": "opencode-go/deepseek-v4.1-flash#low",
+      "model": "claude-agent/haiku#low",
     },
     "build": {
-      "model": "opencode-go/deepseek-v4.1-flash#high",
+      "model": "claude-agent/sonnet#medium",
     },
     "compaction": {
-      "model": "openai/gpt-6.1-sol#high",
+      "model": "claude-agent/opus#medium",
     },
   },
-  "model": "openai/gpt-6.1-sol",
+  "model": "claude-agent/sonnet",
 }

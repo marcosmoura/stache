@@ -2,7 +2,8 @@
 name: worker
 description: 'Implements one Stache spec part or a defined fix inside the given worktree, with tests. Does not commit.'
 tools: Read, Write, Edit, Grep, Glob, Bash
-model: sonnet
+model: opus
+effort: low
 color: green
 ---
 

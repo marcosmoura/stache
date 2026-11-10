@@ -1,8 +1,9 @@
 ---
 name: orchestrator
 description: 'Runs substantial Stache work end to end. Start with: claude --agent orchestrator, or use /orchestrate.'
-tools: Agent(explorer, spec-writer, worker, reviewer), Read, Write, Edit, Grep, Glob, Bash, AskUserQuestion
+tools: Agent(worker, reviewer), SendMessage, Read, Write, Edit, Grep, Glob, Bash, AskUserQuestion
 model: opus
+effort: medium
 color: purple
 ---
 

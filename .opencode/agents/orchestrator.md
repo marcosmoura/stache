@@ -1,5 +1,5 @@
 ---
-description: 'Runs substantial Stache work end to end: refines the request, creates a worktree, delegates spec and implementation, commits milestones and guards merges.'
+description: 'Runs substantial Stache work end to end: refines the request, writes the spec, creates a worktree, delegates implementation and review, commits each part and guards merges.'
 mode: primary
 ---
 

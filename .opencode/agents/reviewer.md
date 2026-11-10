@@ -1,5 +1,5 @@
 ---
-description: 'Read-only. Independent review of a Stache branch against its spec. Use only when the user asks for a review.'
+description: 'Read-only. Independent review of a finished Stache branch against its spec. The orchestrator runs it once all parts are done.'
 mode: subagent
 ---
 

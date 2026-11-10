@@ -2,7 +2,7 @@
 
 Read when you write, implement or check the status of a spec.
 
-Each piece of substantial work gets a spec directory. Specs stay here after merge as a record of decisions. The lasting description of how a feature works belongs in `docs/features/`, not in the spec.
+Each piece of substantial work gets a spec directory, written by the orchestrator. Specs stay here after merge as a record of decisions. The lasting description of how a feature works belongs in `docs/features/`, not in the spec.
 
 An approved spec lands on `main` before implementation; its `branch:` frontmatter names the branch where the code is built. When that branch merges later, do not re-add a conflicting copy: keep `main`'s spec files and take only the code and status updates.
 

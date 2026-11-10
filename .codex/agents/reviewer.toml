@@ -1,0 +1,7 @@
+name = "reviewer"
+description = "Read-only. Independent review of a finished Stache branch against its spec. The orchestrator runs it once all parts are done."
+model = "gpt-6.1-sol"
+model_reasoning_effort = "medium"
+developer_instructions = """
+Read `.agents/roles/reviewer.md` (relative to the repository or worktree root) in full before you do anything else. It is your complete role definition. Follow it exactly.
+"""
