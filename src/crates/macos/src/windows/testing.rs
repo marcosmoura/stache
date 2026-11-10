@@ -11,10 +11,12 @@
 )]
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use super::driver::{Driver, Waker};
+use super::lease::VoiceOverProbe;
 use super::system::{WindowClock, WindowObserver, WindowSystem};
 use crate::ax::testing::{Call, FakeWindowAx, FakeWindowElement, NodeId};
 use crate::ax::{AxDrain, AxError, AxEvent, AxNotification, ElementKey};
@@ -239,6 +241,23 @@ impl FakeWindowSystem {
     }
 }
 
+impl FakeWindowSystem {
+    /// A factory for adapters that build one system per shard thread: every
+    /// system shares `ax` and one observer script, so assertions see all
+    /// shards at once.
+    pub fn factory(ax: FakeWindowAx) -> (impl Fn() -> Self + Send + Sync + 'static, FakeObservers) {
+        let observers = FakeObservers::default();
+        let shared = observers.clone();
+        (
+            move || Self {
+                ax: ax.clone(),
+                observers: shared.clone(),
+            },
+            observers,
+        )
+    }
+}
+
 impl WindowSystem for FakeWindowSystem {
     type Ax = FakeWindowAx;
     type Observer = FakeObserver;
@@ -335,4 +354,18 @@ impl Driver for ScriptedDriver {
             self.steps.remove(0)();
         }
     }
+}
+
+/// A `VoiceOver` probe whose answer a test sets.
+#[derive(Debug, Default)]
+pub struct FakeVoiceOver {
+    running: AtomicBool,
+}
+
+impl FakeVoiceOver {
+    pub fn set(&self, running: bool) { self.running.store(running, Ordering::SeqCst); }
+}
+
+impl VoiceOverProbe for FakeVoiceOver {
+    fn running(&self) -> bool { self.running.load(Ordering::SeqCst) }
 }

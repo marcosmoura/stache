@@ -81,6 +81,13 @@ impl Diag {
                     self.origin.stamp()
                 ));
             }
+            Input::Window(event) => {
+                if let stache_macos::windows::WindowEventKind::EnhancedUi { application, note } =
+                    &event.kind
+                {
+                    self.enhanced_ui(state, *application, *note);
+                }
+            }
             Input::Activated(application) => {
                 logger.debug(format!(
                     "{} tiling: activated {}",
@@ -92,6 +99,29 @@ impl Diag {
                 logger.debug(format!("tiling: display layout {layout:?}"));
             }
             _ => {}
+        }
+    }
+
+    /// Logs one lease transition. Failures, re-enables and `VoiceOver` skips are
+    /// warnings; plain leases and restores are debug. The shard emits these
+    /// only on a transition, never per frame.
+    fn enhanced_ui(
+        &self,
+        state: &TilingState,
+        application: ApplicationId,
+        note: stache_macos::windows::EnhancedUiNote,
+    ) {
+        use stache_macos::windows::EnhancedUiNote;
+        let Some(logger) = &self.logger else { return };
+        let line = format!(
+            "{} tiling: enhanced ui of {}: {note:?}",
+            self.origin.stamp(),
+            label(state, application)
+        );
+        if matches!(note, EnhancedUiNote::Leased | EnhancedUiNote::Restored) {
+            logger.debug(line);
+        } else {
+            logger.warn(line);
         }
     }
 

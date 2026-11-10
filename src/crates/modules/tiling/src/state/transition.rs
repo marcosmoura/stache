@@ -355,6 +355,7 @@ fn terminate_app(state: &mut TilingState, application: ApplicationId, fx: &mut V
     state.tab_outbox.settle.remove(&application);
     state.reconcile.unsettled.remove(&application);
     let tracked = state.apps.remove(&application).is_some_and(|record| record.tracked);
+    state.enhanced_ui.remove(&application);
     if let (true, Some(stamp)) = (tracked, state.stamp) {
         fx.push(Effect::Untrack { stamp, application });
     }
@@ -438,6 +439,9 @@ fn window_event(state: &mut TilingState, event: WindowEvent, fx: &mut Vec<Effect
             available,
         } => {
             set_accessibility(state, available);
+        }
+        WindowEventKind::EnhancedUi { application, note } => {
+            state.enhanced_ui.entry(application).or_default().record(note);
         }
     }
 }

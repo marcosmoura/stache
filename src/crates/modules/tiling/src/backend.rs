@@ -1,8 +1,9 @@
 //! The safe window backend seam for the Tiling runtime (parts 04 and 05).
 //!
-//! Nothing here starts a thread or touches AX until a runtime installs an epoch:
-//! the host composes [`LazySystemBackend`], which spawns the owner thread on
-//! first use. The trait exposes pure values
+//! Nothing here starts a thread or touches AX until a runtime installs an epoch
+//! and tracks an application: the host composes [`LazySystemBackend`], which
+//! creates the adapter on first use, and the adapter starts one AX shard thread
+//! per tracked application. The trait exposes pure values
 //! only: opaque `Copy` window tokens, snapshots, events delivered through a
 //! bounded sink and typed outcomes. No AX element, pointer or run-loop object
 //! crosses it, and this crate keeps `forbid(unsafe_code)`.
@@ -20,15 +21,19 @@ use std::time::Instant;
 use stache_macos::ApplicationId;
 use stache_macos::windows::{
     ActionRequest, AdapterId, AdapterOptions, CleanupReport, CloseOutcome, DispatchError,
-    EventQueue, FocusOutcome, GenerationCell, HiddenOutcome, HiddenRequest, InstallError,
-    InstallRequest, NotIssuedReason, RuntimeEpoch, SnapshotOutcome, SpawnError, StopOutcome,
-    TrackOutcome, TrackRequest, WindowActionOutcome, WindowAdapter, WindowInstance,
+    EventQueue, FocusOutcome, FrameReplyFn, FrameRequest, GenerationCell, HiddenOutcome,
+    HiddenRequest, InstallError, InstallRequest, LeaseRestoreOutcome, NotIssuedReason,
+    RuntimeEpoch, SnapshotOutcome, SpawnError, StopOutcome, TrackOutcome, TrackRequest,
+    WindowActionOutcome, WindowAdapter, WindowInstance,
 };
 use stache_sdk::CancellationToken;
 
-/// The Tiling AX owner thread name. `MenuAnywhere` keeps `stache-ax-owner`;
-/// the adapter rejects that name, so the two never share a serialized AX thread.
-pub const TILING_AX_OWNER_THREAD_NAME: &str = "stache-tiling-ax-owner";
+/// The prefix of the Tiling AX shard thread names.
+///
+/// Shards are `stache-tiling-ax-<n>` and `stache-tiling-ax-overflow`.
+/// `MenuAnywhere` keeps `stache-ax-owner`; the adapter rejects that name, so
+/// the two never share a serialized AX thread.
+pub const TILING_AX_THREAD_PREFIX: &str = "stache-tiling-ax";
 
 /// Why a backend could not be created.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -133,6 +138,32 @@ pub trait WindowBackend: Send + Sync {
     /// Queues an action and waits (blocking).
     fn act(&self, request: ActionRequest, cancel: &CancellationToken) -> WindowActionOutcome;
 
+    /// Queues a batch of frame writes for one application's latest-frame-wins
+    /// mailbox without waiting. Every frame's reply runs exactly once, on the
+    /// backend's own thread or inline on the caller for an unrouted
+    /// application, so no lock may be held across this call.
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError`]: nothing was queued and no reply will run.
+    fn submit_frames(
+        &self,
+        application: ApplicationId,
+        batch: Vec<(FrameRequest, FrameReplyFn)>,
+    ) -> Result<(), DispatchError>;
+
+    /// Queues a fresh snapshot of a live window without waiting. The reply
+    /// runs once, on the backend's thread or inline; it never runs on `Err`.
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError`]: nothing was queued and the reply will not run.
+    fn submit_snapshot(
+        &self,
+        window: WindowInstance,
+        reply: Box<dyn FnOnce(SnapshotOutcome) + Send>,
+    ) -> Result<(), DispatchError>;
+
     /// Reads or writes the `AXHidden` of one tracked application on the owner
     /// thread: the fallback when the public hide or unhide returned `false`.
     /// A write is authorized by the request's own one-shot issuance, not the
@@ -152,6 +183,17 @@ pub trait WindowBackend: Send + Sync {
         deadline: Option<Instant>,
     ) -> StopOutcome;
 
+    /// Restores every open `AXEnhancedUserInterface` lease now, ignoring the
+    /// idle grace. Owned cleanup: it is allowed after the seal, and it runs
+    /// after the frame drain. A backend without leases owes nothing.
+    fn restore_enhanced_ui(&self, _deadline: Option<Instant>) -> LeaseRestoreOutcome {
+        LeaseRestoreOutcome::Clean { restored: 0 }
+    }
+
+    /// Whether `application` shares the overflow AX thread instead of having
+    /// its own. A backend without shards has none.
+    fn is_overflow(&self, _application: ApplicationId) -> bool { false }
+
     /// Retries quarantined removals exactly once each.
     fn retry_cleanup(
         &self,
@@ -163,21 +205,22 @@ pub trait WindowBackend: Send + Sync {
     fn close(&self) -> CloseOutcome;
 }
 
-/// The production backend: a dedicated `stache-tiling-ax-owner` thread.
+/// The production backend: one `stache-tiling-ax-<n>` AX shard thread per
+/// tracked application (plus `stache-tiling-ax-overflow` past the cap).
 pub struct SystemWindowBackend {
     adapter: WindowAdapter,
     read_tabs: bool,
 }
 
 impl SystemWindowBackend {
-    /// Starts the owner thread. Nothing calls this yet; no AX message is sent
+    /// Creates the shard router. It starts no thread; no AX message is sent
     /// until a runtime installs an epoch and tracks an application.
     ///
     /// # Errors
     ///
     /// [`BackendError::Spawn`] when the thread cannot start.
     pub fn new(options: &AdapterOptions) -> Result<Self, BackendError> {
-        WindowAdapter::system(TILING_AX_OWNER_THREAD_NAME, options)
+        WindowAdapter::system(TILING_AX_THREAD_PREFIX, options)
             .map(|adapter| Self {
                 adapter,
                 read_tabs: options.read_tabs,
@@ -290,6 +333,22 @@ impl WindowBackend for SystemWindowBackend {
         self.adapter.act(request, cancel)
     }
 
+    fn submit_frames(
+        &self,
+        application: ApplicationId,
+        batch: Vec<(FrameRequest, FrameReplyFn)>,
+    ) -> Result<(), DispatchError> {
+        self.adapter.submit_frames(application, batch)
+    }
+
+    fn submit_snapshot(
+        &self,
+        window: WindowInstance,
+        reply: Box<dyn FnOnce(SnapshotOutcome) + Send>,
+    ) -> Result<(), DispatchError> {
+        self.adapter.submit_snapshot(window, reply)
+    }
+
     fn application_hidden(
         &self,
         request: HiddenRequest,
@@ -308,6 +367,14 @@ impl WindowBackend for SystemWindowBackend {
         self.adapter.stop(epoch, gate, deadline)
     }
 
+    fn restore_enhanced_ui(&self, deadline: Option<Instant>) -> LeaseRestoreOutcome {
+        self.adapter.restore_enhanced_ui(deadline)
+    }
+
+    fn is_overflow(&self, application: ApplicationId) -> bool {
+        self.adapter.is_overflow(application)
+    }
+
     fn retry_cleanup(
         &self,
         cancel: &CancellationToken,
@@ -322,8 +389,9 @@ impl WindowBackend for SystemWindowBackend {
 /// The production backend, started on first use.
 ///
 /// Constructing it spawns nothing, so a host that registers a disabled Tiling
-/// keeps no `stache-tiling-ax-owner` thread. The owner thread starts the first
-/// time a runtime installs an epoch; every later call reaches the same
+/// keeps no `stache-tiling-ax-*` thread. The adapter is created the first time
+/// a runtime installs an epoch and still owns no thread until the first
+/// application is tracked; every later call reaches the same
 /// [`SystemWindowBackend`]. A refused thread is reported as an unavailable
 /// owner, the same truth a dead owner reports.
 pub struct LazySystemBackend {
@@ -339,7 +407,7 @@ enum LazyState {
 }
 
 impl LazySystemBackend {
-    /// An inert backend that starts its owner thread on first use.
+    /// An inert backend that creates its adapter on first use.
     #[must_use]
     pub const fn new(options: AdapterOptions) -> Self {
         Self {
@@ -352,7 +420,7 @@ impl LazySystemBackend {
         self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Whether the owner thread was started (and not yet closed).
+    /// Whether the adapter was created (and not yet closed).
     #[must_use]
     pub fn started(&self) -> bool { matches!(*self.lock(), LazyState::Started(_)) }
 
@@ -493,6 +561,25 @@ impl WindowBackend for LazySystemBackend {
         )
     }
 
+    fn submit_frames(
+        &self,
+        application: ApplicationId,
+        batch: Vec<(FrameRequest, FrameReplyFn)>,
+    ) -> Result<(), DispatchError> {
+        self.existing().map_or(Err(DispatchError::Closed), |b| {
+            b.submit_frames(application, batch)
+        })
+    }
+
+    fn submit_snapshot(
+        &self,
+        window: WindowInstance,
+        reply: Box<dyn FnOnce(SnapshotOutcome) + Send>,
+    ) -> Result<(), DispatchError> {
+        self.existing()
+            .map_or(Err(DispatchError::Closed), |b| b.submit_snapshot(window, reply))
+    }
+
     fn application_hidden(
         &self,
         request: HiddenRequest,
@@ -514,6 +601,16 @@ impl WindowBackend for LazySystemBackend {
         gate.seal();
         self.existing()
             .map_or(StopOutcome::NotCurrent, |b| b.stop(epoch, gate, deadline))
+    }
+
+    fn restore_enhanced_ui(&self, deadline: Option<Instant>) -> LeaseRestoreOutcome {
+        self.existing().map_or(LeaseRestoreOutcome::Clean { restored: 0 }, |b| {
+            b.restore_enhanced_ui(deadline)
+        })
+    }
+
+    fn is_overflow(&self, application: ApplicationId) -> bool {
+        self.existing().is_some_and(|b| b.is_overflow(application))
     }
 
     fn retry_cleanup(
@@ -578,6 +675,8 @@ pub enum FakeBackendCall {
     Hidden(ApplicationId, stache_macos::windows::HiddenOperation),
     /// `stop`.
     Stop(RuntimeEpoch),
+    /// `restore_enhanced_ui`.
+    RestoreLeases,
     /// `retry_cleanup`.
     Retry,
     /// `close`.
@@ -587,19 +686,69 @@ pub enum FakeBackendCall {
 #[cfg(any(test, feature = "testing"))]
 mod fake {
     use std::collections::{HashMap, VecDeque};
-    use std::sync::{Condvar, Mutex};
+    use std::sync::{Condvar, Mutex, Weak};
     use std::time::Duration;
 
-    use stache_macos::ax::{AxReading, FrameRead, WriteStatus};
-    use stache_macos::windows::{FocusOutcome, IssuedKind, NativeStatus, WindowAction};
+    use stache_macos::ax::{AxPoint, AxReading, AxSize, FrameRead, WriteStatus};
+    use stache_macos::windows::{
+        FocusOutcome, FrameAck, FrameReply, FrameStage, IssuedKind, NativeStatus, TabBarRead,
+        TabInfo, WindowAction, WindowSnapshot,
+    };
 
     use super::{
         ActionRequest, AdapterId, ApplicationId, Arc, CancellationToken, CleanupReport,
-        CloseOutcome, DispatchError, EventQueue, FakeBackendCall, GenerationCell, HiddenOutcome,
-        HiddenRequest, InstallError, Instant, RuntimeEpoch, SnapshotOutcome, StopOutcome,
-        TrackOutcome, WindowActionOutcome, WindowBackend, WindowInstance,
+        CloseOutcome, DispatchError, EventQueue, FakeBackendCall, FrameReplyFn, FrameRequest,
+        GenerationCell, HiddenOutcome, HiddenRequest, InstallError, Instant, LeaseRestoreOutcome,
+        NotIssuedReason, RuntimeEpoch, SnapshotOutcome, StopOutcome, TrackOutcome,
+        WindowActionOutcome, WindowBackend, WindowInstance,
     };
     use crate::geometry::Rect;
+
+    /// One frame the fake shard actually sent (after mailbox replacement).
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub struct SentFrame {
+        /// The application the frame was sent to.
+        pub application: ApplicationId,
+        /// The exact window.
+        pub window: WindowInstance,
+        /// The plan sequence the frame carried.
+        pub plan_sequence: u64,
+        /// How much the shard would verify and read.
+        pub stage: FrameStage,
+        /// The requested frame, when both halves were requested.
+        pub frame: Option<Rect>,
+        /// The requested position, when requested.
+        pub position: Option<AxPoint>,
+        /// The requested size, when requested.
+        pub size: Option<AxSize>,
+    }
+
+    /// One batch submitted to an application's fake mailbox.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct FrameBatchRecord {
+        /// The application the batch was submitted for.
+        pub application: ApplicationId,
+        /// Its frames in submission order: window, plan sequence, stage.
+        pub frames: Vec<(WindowInstance, u64, FrameStage)>,
+    }
+
+    type DeferredSnapshot = (SnapshotOutcome, Box<dyn FnOnce(SnapshotOutcome) + Send>);
+
+    struct Parked {
+        reply: FrameReplyFn,
+        outcome: WindowActionOutcome,
+        sent_at: Instant,
+    }
+
+    #[derive(Default)]
+    struct ShardModel {
+        pending: HashMap<WindowInstance, (FrameRequest, FrameReplyFn)>,
+        order: VecDeque<WindowInstance>,
+        /// The send the shard is blocked inside (a held write).
+        parked: Option<Parked>,
+        /// Snapshot answers queued behind the blocked send.
+        deferred: Vec<DeferredSnapshot>,
+    }
 
     #[derive(Default)]
     struct State {
@@ -616,12 +765,23 @@ mod fake {
         resolve: HashMap<u32, WindowInstance>,
         stop_outcome: Option<StopOutcome>,
         retry_reports: VecDeque<Option<CleanupReport>>,
+        lease_restores: VecDeque<LeaseRestoreOutcome>,
         install_error: Option<InstallError>,
         gate: Option<Arc<GenerationCell>>,
         hold: Option<Arc<SendHold>>,
         reads_tabs: bool,
+        overflow: std::collections::HashSet<ApplicationId>,
         echo_frames: bool,
         written: Vec<(WindowInstance, Rect)>,
+        shards: HashMap<ApplicationId, ShardModel>,
+        app_holds: HashMap<ApplicationId, Arc<SendHold>>,
+        app_dispatch_errors: HashMap<ApplicationId, VecDeque<DispatchError>>,
+        app_frame_outcomes: HashMap<ApplicationId, VecDeque<WindowActionOutcome>>,
+        batches: Vec<FrameBatchRecord>,
+        sent: Vec<SentFrame>,
+        dropped: usize,
+        /// The last frame each window was echoed at.
+        echoed: HashMap<WindowInstance, Rect>,
     }
 
     #[derive(Default)]
@@ -630,12 +790,16 @@ mod fake {
         released: bool,
     }
 
+    type Waker = Box<dyn Fn() + Send + Sync>;
+
     /// Holds fake native sends until a test releases them, like a stalled
     /// owner. Logical invalidation (`GenerationCell::seal`) never waits on it.
     #[derive(Default)]
     pub struct SendHold {
         state: Mutex<HoldState>,
         changed: Condvar,
+        /// Resumes the fake shards parked behind this hold.
+        waker: Mutex<Option<Waker>>,
     }
 
     // The guard is deliberately held across the condvar wait; this is test-only.
@@ -669,10 +833,50 @@ mod fake {
             reached
         }
 
-        /// Lets every held and future send return.
+        /// Lets every held and future send return. Held frames are answered on
+        /// the calling thread.
         pub fn release(&self) {
             self.guard().released = true;
             self.changed.notify_all();
+            let waker = self.waker.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(waker) = waker.as_ref() {
+                waker();
+            }
+        }
+
+        fn enter(&self) {
+            self.guard().entered += 1;
+            self.changed.notify_all();
+        }
+
+        fn is_released(&self) -> bool { self.guard().released }
+
+        fn set_waker(&self, waker: Waker) {
+            *self.waker.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(waker);
+        }
+    }
+
+    fn echo_snapshot(window: WindowInstance, frame: Rect) -> WindowSnapshot {
+        WindowSnapshot {
+            window,
+            cg_window_id: None,
+            title: AxReading::Value(String::new()),
+            role: AxReading::Value("AXWindow".to_owned()),
+            subrole: AxReading::Value("AXStandardWindow".to_owned()),
+            frame: FrameRead {
+                position: AxReading::Value(AxPoint { x: frame.x, y: frame.y }),
+                size: AxReading::Value(AxSize {
+                    width: frame.width,
+                    height: frame.height,
+                }),
+            },
+            minimized: AxReading::Value(false),
+            fullscreen: AxReading::Value(false),
+            resizable: AxReading::Value(true),
+            tabs: TabInfo::None,
+            tab_members: Vec::new(),
+            tab_bar: TabBarRead::NotRead,
+            observed: true,
         }
     }
 
@@ -680,18 +884,246 @@ mod fake {
     /// native code; actions complete inline with scripted outcomes.
     pub struct FakeWindowBackend {
         adapter: AdapterId,
-        state: Mutex<State>,
+        state: Arc<Mutex<State>>,
     }
 
+    fn lock(state: &Mutex<State>) -> std::sync::MutexGuard<'_, State> {
+        state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Work to run once the state lock is released.
+    type Deferred = Box<dyn FnOnce() + Send>;
+
     impl FakeWindowBackend {
-        fn state(&self) -> std::sync::MutexGuard<'_, State> {
-            self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        fn state(&self) -> std::sync::MutexGuard<'_, State> { lock(&self.state) }
+
+        fn hold_waker(&self) -> Waker {
+            let weak: Weak<Mutex<State>> = Arc::downgrade(&self.state);
+            Box::new(move || {
+                if let Some(state) = weak.upgrade() {
+                    let applications: Vec<ApplicationId> =
+                        lock(&state).shards.keys().copied().collect();
+                    for application in applications {
+                        Self::drive(&state, application);
+                    }
+                }
+            })
+        }
+
+        /// Runs one application's fake shard: sends pending frames in arrival
+        /// order until it blocks inside a held send or the mailbox is empty.
+        /// Replies run after the lock is released.
+        #[allow(clippy::significant_drop_tightening)] // the lock spans the whole turn
+        fn drive(state: &Arc<Mutex<State>>, application: ApplicationId) {
+            let mut run: Vec<Deferred> = Vec::new();
+            {
+                let mut st = lock(state);
+                loop {
+                    let hold = st.app_holds.get(&application).cloned().or_else(|| st.hold.clone());
+                    let blocked = hold.as_ref().is_some_and(|h| !h.is_released());
+                    let shard = st.shards.entry(application).or_default();
+                    if shard.parked.is_some() {
+                        if blocked {
+                            break;
+                        }
+                        let parked = shard.parked.take().expect("parked");
+                        let ack = FrameAck {
+                            sent_at: Some(parked.sent_at),
+                            outcome: parked.outcome,
+                        };
+                        run.push(Box::new(move || (parked.reply)(FrameReply::Done(ack))));
+                        continue;
+                    }
+                    let Some(window) = shard.order.pop_front() else {
+                        for (outcome, reply) in std::mem::take(&mut shard.deferred) {
+                            run.push(Box::new(move || reply(outcome)));
+                        }
+                        break;
+                    };
+                    let Some((request, reply)) = shard.pending.remove(&window) else {
+                        continue;
+                    };
+                    // The gate is checked at the send, like the shard does; a
+                    // refused frame never reaches the native call.
+                    let (outcome, sent) = Self::refuse(&st, request.issuance.generation())
+                        .map_or_else(
+                            || {
+                                st.calls.push(FakeBackendCall::Action(window));
+                                Self::send_outcome(&mut st, application, &request)
+                            },
+                            |refusal| (refusal, None),
+                        );
+                    if let Some(sent) = sent {
+                        st.sent.push(sent);
+                    }
+                    let now = Instant::now();
+                    if blocked {
+                        if let Some(hold) = hold {
+                            hold.enter();
+                        }
+                        st.shards.entry(application).or_default().parked =
+                            Some(Parked { reply, outcome, sent_at: now });
+                        continue;
+                    }
+                    let issued = matches!(outcome, WindowActionOutcome::Issued { .. });
+                    let ack = FrameAck {
+                        outcome,
+                        sent_at: issued.then_some(now),
+                    };
+                    run.push(Box::new(move || reply(FrameReply::Done(ack))));
+                }
+            }
+            for work in run {
+                work();
+            }
+        }
+
+        /// The scripted outcome or the echo for one frame the shard sends.
+        fn send_outcome(
+            st: &mut State,
+            application: ApplicationId,
+            request: &FrameRequest,
+        ) -> (WindowActionOutcome, Option<SentFrame>) {
+            let window = request.issuance.window();
+            let frame = match (request.position, request.size) {
+                (Some(p), Some(z)) => Some(Rect::new(p.x, p.y, z.width, z.height)),
+                _ => None,
+            };
+            let sent = SentFrame {
+                application,
+                window,
+                plan_sequence: request.issuance.plan_sequence(),
+                stage: request.stage,
+                frame,
+                position: request.position,
+                size: request.size,
+            };
+            let scripted = st
+                .app_frame_outcomes
+                .get_mut(&application)
+                .and_then(VecDeque::pop_front)
+                .or_else(|| st.action_outcomes.pop_front());
+            if let Some(outcome) = scripted {
+                return (outcome, Some(sent));
+            }
+            if !st.echo_frames || (request.position.is_none() && request.size.is_none()) {
+                return (
+                    WindowActionOutcome::Stale(stache_macos::windows::StaleReason::UnknownWindow),
+                    None,
+                );
+            }
+            // A half that was not requested keeps the window's last echoed value.
+            let base = st.echoed.get(&window).copied().unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0));
+            let frame = Rect::new(
+                request.position.map_or(base.x, |p| p.x),
+                request.position.map_or(base.y, |p| p.y),
+                request.size.map_or(base.width, |z| z.width),
+                request.size.map_or(base.height, |z| z.height),
+            );
+            st.written.push((window, frame));
+            st.echoed.insert(window, frame);
+            let observed = (request.stage == FrameStage::Direct).then_some(FrameRead {
+                position: AxReading::Value(AxPoint { x: frame.x, y: frame.y }),
+                size: AxReading::Value(AxSize {
+                    width: frame.width,
+                    height: frame.height,
+                }),
+            });
+            let status = |requested: bool| {
+                if requested {
+                    WriteStatus::Written
+                } else {
+                    WriteStatus::NotRequested
+                }
+            };
+            (
+                WindowActionOutcome::Issued {
+                    kind: IssuedKind::Applied,
+                    native: NativeStatus::Frame {
+                        position: status(request.position.is_some()),
+                        size: status(request.size.is_some()),
+                    },
+                    observed,
+                },
+                Some(sent),
+            )
+        }
+
+        fn refuse(st: &State, generation: u64) -> Option<WindowActionOutcome> {
+            let gate = st.gate.as_ref()?;
+            if gate.is_sealed() {
+                return Some(WindowActionOutcome::NotIssued(NotIssuedReason::Sealed));
+            }
+            let live = gate.live_generation();
+            (live == 0 || live != generation).then_some(WindowActionOutcome::NotIssued(
+                NotIssuedReason::GenerationInvalid,
+            ))
+        }
+
+        /// Holds the sends of one application only, like its shard stalled in a
+        /// native call. Later frames for it wait in its mailbox and replace each
+        /// other; other applications are unaffected.
+        #[must_use]
+        pub fn hold_application(&self, application: ApplicationId) -> Arc<SendHold> {
+            let hold = Arc::new(SendHold::default());
+            hold.set_waker(self.hold_waker());
+            self.state().app_holds.insert(application, Arc::clone(&hold));
+            hold
+        }
+
+        /// Queues a frame outcome for one application only, ahead of the global
+        /// scripted actions and the echo.
+        pub fn script_frame_for(&self, application: ApplicationId, outcome: WindowActionOutcome) {
+            self.state()
+                .app_frame_outcomes
+                .entry(application)
+                .or_default()
+                .push_back(outcome);
+        }
+
+        /// Makes the next frame batch for one application be refused whole.
+        pub fn script_dispatch_error_for(&self, application: ApplicationId, error: DispatchError) {
+            self.state()
+                .app_dispatch_errors
+                .entry(application)
+                .or_default()
+                .push_back(error);
+        }
+
+        /// Every frame batch submitted, in order.
+        #[must_use]
+        pub fn frame_batches(&self) -> Vec<FrameBatchRecord> { self.state().batches.clone() }
+
+        /// Every frame a fake shard sent, in order (replaced frames are absent).
+        #[must_use]
+        pub fn sent_frames(&self) -> Vec<SentFrame> { self.state().sent.clone() }
+
+        /// How many pending frames a newer frame of the same plan replaced.
+        #[must_use]
+        pub fn replaced_frames(&self) -> usize { self.state().dropped }
+
+        /// The frames waiting in one application's mailbox, not yet sent.
+        #[must_use]
+        pub fn pending_frames(&self, application: ApplicationId) -> usize {
+            self.state().shards.get(&application).map_or(0, |s| s.pending.len())
+        }
+
+        /// How many snapshot reads were requested for a window.
+        #[must_use]
+        pub fn snapshot_reads(&self, window: WindowInstance) -> usize {
+            self.state()
+                .calls
+                .iter()
+                .filter(|call| **call == FakeBackendCall::Snapshot(window))
+                .count()
         }
 
         /// Every call so far, in order.
+        #[must_use]
         pub fn calls(&self) -> Vec<FakeBackendCall> { self.state().calls.clone() }
 
         /// The sink the last install registered.
+        #[must_use]
         pub fn sink(&self) -> Option<Arc<EventQueue>> { self.state().sink.clone() }
 
         /// Scripts the next `track` outcome (default `Tracking`).
@@ -723,7 +1155,15 @@ mod fake {
         /// are `Stale`). Writing both halves is assumed.
         pub fn script_echo_frames(&self, echo: bool) { self.state().echo_frames = echo; }
 
-        /// Every frame written so far (position and size both requested), in order.
+        /// Sets where the fake window is, so a frame that writes only one half
+        /// keeps the other.
+        pub fn seed_window_frame(&self, window: WindowInstance, frame: Rect) {
+            self.state().echoed.insert(window, frame);
+        }
+
+        /// Every frame written so far (a half not requested keeps its last
+        /// echoed value), in order.
+        #[must_use]
         pub fn written_frames(&self) -> Vec<(WindowInstance, Rect)> { self.state().written.clone() }
 
         /// Queues an `AXHidden` outcome (default: not tracked).
@@ -758,13 +1198,16 @@ mod fake {
 
         /// Holds every later `act`/`submit_action` after its gate check and
         /// outcome selection, until the returned hold is released.
+        #[must_use]
         pub fn hold_sends(&self) -> Arc<SendHold> {
             let hold = Arc::new(SendHold::default());
+            hold.set_waker(self.hold_waker());
             self.state().hold = Some(Arc::clone(&hold));
             hold
         }
 
         /// How many action requests were recorded.
+        #[must_use]
         pub fn action_count(&self) -> usize {
             self.state()
                 .calls
@@ -821,6 +1264,16 @@ mod fake {
             )
         }
 
+        /// Marks `application` as hosted on the overflow shard.
+        pub fn set_overflow(&self, application: ApplicationId) {
+            self.state().overflow.insert(application);
+        }
+
+        /// Queues the next `restore_enhanced_ui` answer (default: clean).
+        pub fn script_lease_restore(&self, outcome: LeaseRestoreOutcome) {
+            self.state().lease_restores.push_back(outcome);
+        }
+
         /// Queues the next `retry_cleanup` answer (default: nothing remains).
         pub fn script_retry(&self, report: Option<CleanupReport>) {
             self.state().retry_reports.push_back(report);
@@ -836,7 +1289,7 @@ mod fake {
         fn default() -> Self {
             Self {
                 adapter: AdapterId::for_testing(),
-                state: Mutex::new(State::default()),
+                state: Arc::new(Mutex::new(State::default())),
             }
         }
     }
@@ -985,6 +1438,99 @@ mod fake {
             outcome
         }
 
+        #[allow(clippy::significant_drop_tightening)] // one lock covers the whole insert
+        fn submit_frames(
+            &self,
+            application: ApplicationId,
+            batch: Vec<(FrameRequest, FrameReplyFn)>,
+        ) -> Result<(), DispatchError> {
+            let mut displaced: Vec<Deferred> = Vec::new();
+            {
+                let mut st = self.state();
+                if let Some(error) =
+                    st.app_dispatch_errors.get_mut(&application).and_then(VecDeque::pop_front)
+                {
+                    return Err(error);
+                }
+                if let Some(error) = st.dispatch_error.take() {
+                    return Err(error);
+                }
+                st.batches.push(FrameBatchRecord {
+                    application,
+                    frames: batch
+                        .iter()
+                        .map(|(r, _)| (r.issuance.window(), r.issuance.plan_sequence(), r.stage))
+                        .collect(),
+                });
+                for (request, reply) in batch {
+                    let window = request.issuance.window();
+                    let shard = st.shards.entry(application).or_default();
+                    let new = request.issuance.plan_sequence();
+                    let Some(held) = shard.pending.get_mut(&window) else {
+                        shard.order.push_back(window);
+                        shard.pending.insert(window, (request, reply));
+                        continue;
+                    };
+                    let old = held.0.issuance.plan_sequence();
+                    let superseded = FrameReply::Done(FrameAck {
+                        outcome: WindowActionOutcome::NotIssued(NotIssuedReason::Superseded),
+                        sent_at: None,
+                    });
+                    if new < old {
+                        displaced.push(Box::new(move || reply(superseded)));
+                        continue;
+                    }
+                    let (_, previous) = std::mem::replace(held, (request, reply));
+                    if new == old {
+                        st.dropped += 1;
+                        displaced.push(Box::new(move || previous(FrameReply::Replaced)));
+                    } else {
+                        displaced.push(Box::new(move || previous(superseded)));
+                    }
+                }
+            }
+            for work in displaced {
+                work();
+            }
+            Self::drive(&self.state, application);
+            Ok(())
+        }
+
+        #[allow(clippy::significant_drop_tightening)] // one lock covers the lookup
+        fn submit_snapshot(
+            &self,
+            window: WindowInstance,
+            reply: Box<dyn FnOnce(SnapshotOutcome) + Send>,
+        ) -> Result<(), DispatchError> {
+            let outcome = {
+                let mut st = self.state();
+                st.calls.push(FakeBackendCall::Snapshot(window));
+                if let Some(error) = st.dispatch_error.take() {
+                    return Err(error);
+                }
+                let outcome = st.snapshots.get(&window).cloned().or_else(|| {
+                    if !st.echo_frames {
+                        return None;
+                    }
+                    let frame = st.echoed.get(&window)?;
+                    Some(SnapshotOutcome::Snapshot(Box::new(echo_snapshot(
+                        window, *frame,
+                    ))))
+                });
+                let outcome = outcome.unwrap_or(SnapshotOutcome::Stale(
+                    stache_macos::windows::StaleReason::UnknownWindow,
+                ));
+                let shard = st.shards.entry(window.application()).or_default();
+                if shard.parked.is_some() {
+                    shard.deferred.push((outcome, reply));
+                    return Ok(());
+                }
+                outcome
+            };
+            reply(outcome);
+            Ok(())
+        }
+
         fn application_hidden(
             &self,
             request: HiddenRequest,
@@ -1026,6 +1572,19 @@ mod fake {
             state.stop_outcome.take().unwrap_or(StopOutcome::Clean { applications: 0 })
         }
 
+        fn is_overflow(&self, application: ApplicationId) -> bool {
+            self.state().overflow.contains(&application)
+        }
+
+        fn restore_enhanced_ui(&self, _deadline: Option<Instant>) -> LeaseRestoreOutcome {
+            let mut state = self.state();
+            state.calls.push(FakeBackendCall::RestoreLeases);
+            state
+                .lease_restores
+                .pop_front()
+                .unwrap_or(LeaseRestoreOutcome::Clean { restored: 0 })
+        }
+
         fn retry_cleanup(
             &self,
             _cancel: &CancellationToken,
@@ -1048,7 +1607,7 @@ mod fake {
 }
 
 #[cfg(any(test, feature = "testing"))]
-pub use fake::{FakeWindowBackend, SendHold};
+pub use fake::{FakeWindowBackend, FrameBatchRecord, SendHold, SentFrame};
 
 #[cfg(test)]
 mod tests {
@@ -1069,8 +1628,8 @@ mod tests {
 
     #[test]
     fn the_tiling_owner_name_is_distinct_from_menu_anywheres() {
-        assert_eq!(TILING_AX_OWNER_THREAD_NAME, "stache-tiling-ax-owner");
-        assert_ne!(TILING_AX_OWNER_THREAD_NAME, "stache-ax-owner");
+        assert_eq!(TILING_AX_THREAD_PREFIX, "stache-tiling-ax");
+        assert_ne!(TILING_AX_THREAD_PREFIX, "stache-ax-owner");
     }
 
     #[test]

@@ -205,6 +205,42 @@ fn a_b_a_rewrites_the_window_back_and_an_old_ack_never_settles_the_successor() {
 }
 
 #[test]
+fn an_application_in_instant_fallback_gets_one_direct_write_per_plan_a_b_a() {
+    let mut f = settled();
+    let w = window(&f);
+    f.state.set_animation_fallback([w.application()].into());
+    let a = writes(&reconfigure(&mut f, 2, 40));
+    assert_eq!(a.len(), 1, "one write per plan");
+    assert!(!a[0].animate, "direct, not animated");
+    assert_eq!(a[0].from, T0);
+    f.ack(w, a[0].plan, applied_at(a[0].target));
+    let b = writes(&reconfigure(&mut f, 3, 0));
+    assert_eq!(b.len(), 1);
+    assert!(!b[0].animate);
+    f.ack(w, b[0].plan, applied_at(b[0].target));
+    let a2 = writes(&reconfigure(&mut f, 4, 40));
+    assert_eq!(a2.len(), 1);
+    assert!(!a2[0].animate, "A, B, A stays direct");
+    assert_eq!(a2[0].target, a[0].target);
+}
+
+#[test]
+fn the_fallback_of_another_application_changes_nothing_and_a_relaunch_animates_again() {
+    let mut f = settled();
+    let w = window(&f);
+    // Another instance (a relaunch of the same application has a new id).
+    f.state
+        .set_animation_fallback([stache_macos::ApplicationId::for_testing(900)].into());
+    let planned = writes(&reconfigure(&mut f, 2, 40));
+    assert!(planned[0].animate, "unaffected");
+    f.ack(w, planned[0].plan, applied_at(planned[0].target));
+    // The set is emptied (the application terminated): animated again.
+    f.state.set_animation_fallback(std::collections::BTreeSet::new());
+    let again = writes(&reconfigure(&mut f, 3, 0));
+    assert!(again[0].animate);
+}
+
+#[test]
 fn own_settling_echoes_are_ignored_a_bounded_number_of_times() {
     let mut f = settled();
     let w = window(&f);

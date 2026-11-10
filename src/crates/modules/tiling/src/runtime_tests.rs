@@ -75,11 +75,13 @@ impl Rig {
             Arc::clone(&clock) as Arc<dyn crate::actor::Clock>,
         ));
         let cancel = CancellationToken::new();
+        let clocks = stache_macos::FakeFrameClockFactory::failing("timer");
         let animation = Arc::new(crate::AnimationControl::live(
             Arc::clone(&backend) as Arc<dyn WindowBackend>,
             Arc::clone(&ingress),
             Arc::clone(&frames),
             Arc::clone(&clock) as Arc<dyn crate::actor::Clock>,
+            Arc::new(clocks) as Arc<dyn stache_macos::FrameClockFactory>,
             cancel.clone(),
         ));
         let env = EffectEnv {
@@ -872,6 +874,25 @@ impl WindowBackend for GateBackend {
         self.inner.act(request, cancel)
     }
 
+    fn submit_frames(
+        &self,
+        application: ApplicationId,
+        batch: Vec<(
+            stache_macos::windows::FrameRequest,
+            stache_macos::windows::FrameReplyFn,
+        )>,
+    ) -> Result<(), DispatchError> {
+        self.inner.submit_frames(application, batch)
+    }
+
+    fn submit_snapshot(
+        &self,
+        window: WindowInstance,
+        reply: Box<dyn FnOnce(SnapshotOutcome) + Send>,
+    ) -> Result<(), DispatchError> {
+        self.inner.submit_snapshot(window, reply)
+    }
+
     fn application_hidden(
         &self,
         request: stache_macos::windows::HiddenRequest,
@@ -1240,7 +1261,7 @@ mod real_core {
         });
         let listed = info(1, "com.a", "A");
         ax.set_application(listed.pid, app_el);
-        let (system, obs) = FakeWindowSystem::new(ax.clone());
+        let (system, obs) = FakeWindowSystem::factory(ax.clone());
         let adapter = WindowAdapter::spawn(
             &format!(
                 "stache-test-tiling-real-core-{}",
@@ -1248,7 +1269,7 @@ mod real_core {
             ),
             &AdapterOptions::default(),
             Arc::new(SystemWindowClock),
-            move || system,
+            system,
             RunLoopDriver::new,
         )
         .expect("spawn");
@@ -1372,7 +1393,7 @@ mod real_core {
         let other = info(2, "com.b", "B");
         ax.set_application(finder.pid, finder_el);
         ax.set_application(other.pid, other_el);
-        let (system, obs) = FakeWindowSystem::new(ax.clone());
+        let (system, obs) = FakeWindowSystem::factory(ax.clone());
         let adapter = WindowAdapter::spawn(
             &format!(
                 "stache-test-tiling-real-tab-bars-{}",
@@ -1381,9 +1402,10 @@ mod real_core {
             &AdapterOptions {
                 read_tabs: false,
                 read_tab_bars: true,
+                ..AdapterOptions::default()
             },
             Arc::new(SystemWindowClock),
-            move || system,
+            system,
             RunLoopDriver::new,
         )
         .expect("spawn");
@@ -1495,7 +1517,7 @@ mod real_core {
         });
         let listed = info(1, "com.a", "A");
         ax.set_application(listed.pid, app_el);
-        let (system, _obs) = FakeWindowSystem::new(ax);
+        let (system, _obs) = FakeWindowSystem::factory(ax);
         let adapter = WindowAdapter::spawn(
             &format!(
                 "stache-test-tiling-real-tabs-{}",
@@ -1504,9 +1526,10 @@ mod real_core {
             &AdapterOptions {
                 read_tabs: true,
                 read_tab_bars: false,
+                ..AdapterOptions::default()
             },
             Arc::new(SystemWindowClock),
-            move || system,
+            system,
             RunLoopDriver::new,
         )
         .expect("spawn");
@@ -1539,6 +1562,7 @@ mod real_core {
     }
 }
 
+mod animation;
 mod drag;
 mod frames;
 mod scenarios;

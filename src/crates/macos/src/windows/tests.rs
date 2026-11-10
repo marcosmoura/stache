@@ -1936,13 +1936,13 @@ fn live(windows: u32) -> Live {
     let ax = FakeWindowAx::new();
     let nodes: Vec<NodeId> = (0..windows).map(|n| window_node(&ax, 300 + n)).collect();
     app_node(&ax, 900, nodes);
-    let (system, obs) = FakeWindowSystem::new(ax.clone());
+    let (system, obs) = FakeWindowSystem::factory(ax.clone());
     let adapter = Arc::new(
         WindowAdapter::spawn(
             &unique_name(),
             &AdapterOptions::default(),
             Arc::new(SystemWindowClock),
-            move || system,
+            system,
             RunLoopDriver::new,
         )
         .expect("spawn"),
@@ -2296,9 +2296,11 @@ fn a_dropped_handle_stops_the_owner_and_releases_elements() {
 
 // ---- cancellable requests ---------------------------------------------------------
 
-/// A driver whose first park stalls the owner, so no reply arrives meanwhile.
+/// A driver whose first park after `armed` is set stalls the owner, so no
+/// reply arrives meanwhile.
 struct StalledDriver {
     waker: Arc<CountingWaker>,
+    armed: Arc<AtomicBool>,
     stalled: bool,
 }
 
@@ -2308,7 +2310,7 @@ impl Driver for StalledDriver {
     fn waker(&self) -> Arc<dyn Waker> { self.waker.clone() }
 
     fn park(&mut self, _timeout: Option<Duration>) {
-        if !self.stalled {
+        if !self.stalled && self.armed.load(Ordering::SeqCst) {
             self.stalled = true;
             thread::sleep(Duration::from_millis(1500));
         }
@@ -2318,27 +2320,56 @@ impl Driver for StalledDriver {
 #[test]
 fn a_blocking_request_observes_cancellation_within_the_quantum_not_the_hop() {
     let ax = FakeWindowAx::new();
-    let (system, _obs) = FakeWindowSystem::new(ax);
+    app_node(&ax, 900, Vec::new());
+    let (system, _obs) = FakeWindowSystem::factory(ax);
+    let armed = Arc::new(AtomicBool::new(false));
+    let shared = Arc::clone(&armed);
     let adapter = Arc::new(
         WindowAdapter::spawn(
             &unique_name(),
             &AdapterOptions::default(),
             Arc::new(SystemWindowClock),
-            move || system,
-            || StalledDriver {
+            system,
+            move || StalledDriver {
                 waker: Arc::new(CountingWaker::default()),
+                armed: Arc::clone(&shared),
                 stalled: false,
             },
         )
         .expect("spawn"),
     );
+    let gate = Arc::new(GenerationCell::new());
+    gate.publish(1, 1);
+    let epoch = adapter
+        .install(
+            InstallRequest {
+                queue: EventQueue::new(16),
+                gate,
+            },
+            None,
+        )
+        .expect("install");
+    let tracked = adapter.track_application(
+        epoch,
+        TrackRequest {
+            application: app(1),
+            pid: 900,
+            cancel: CancellationToken::new(),
+            deadline: None,
+        },
+        None,
+    );
+    assert_eq!(tracked, TrackOutcome::Tracking);
+    armed.store(true, Ordering::SeqCst);
+    // The idle owner spins through `park`, so the stall begins at once.
+    thread::sleep(Duration::from_millis(100));
     let cancel = CancellationToken::new();
     let canceller = cancel.clone();
     let trigger = thread::spawn(move || {
         thread::sleep(Duration::from_millis(50));
         canceller.cancel();
     });
-    let window = WindowInstance::for_testing(adapter.id(), RuntimeEpoch::new(1), app(1), 1);
+    let window = WindowInstance::for_testing(adapter.id(), epoch, app(1), 1);
     let started = Instant::now();
     let outcome = adapter.snapshot(window, &cancel, None);
     let waited = started.elapsed();
@@ -2503,5 +2534,8 @@ fn an_axhidden_request_after_the_epoch_ends_is_stale() {
     );
 }
 
+mod frames;
+mod lease;
+mod shards;
 mod suspended;
 mod tab_bars;

@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use stache_sdk::CancellationToken;
 
+use super::core::EpochCounters;
 use super::events::{EventQueue, WindowSnapshot};
 use super::identity::{RuntimeEpoch, WindowInstance};
 use super::issuance::{
@@ -105,6 +106,59 @@ pub struct ActionRequest {
     pub issuance: WindowIssuance,
     /// What to do.
     pub action: WindowAction,
+}
+
+/// Where one frame sits in an animated move. It decides how much the shard
+/// verifies and reads, nothing else.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrameStage {
+    /// The first write of an animation: membership is re-listed, no readback.
+    First,
+    /// A write between the first and the final one: the retained element and
+    /// the issuance gate only (no `AXWindows` listing), no readback.
+    Intermediate,
+    /// The exact target of an animation: membership is re-listed, no readback
+    /// (the settle readback is a separate snapshot).
+    Final,
+    /// A non-animated write: membership is re-listed and the frame is read
+    /// back once, exactly like [`WindowAction::SetFrame`].
+    Direct,
+}
+
+/// One gated frame write for the per-shard latest-frame-wins mailbox.
+#[derive(Clone, Debug)]
+pub struct FrameRequest {
+    /// The gate and the exact window token. Its plan sequence orders frames.
+    pub issuance: WindowIssuance,
+    /// The new position, when requested.
+    pub position: Option<AxPoint>,
+    /// The new size, when requested.
+    pub size: Option<AxSize>,
+    /// How much the shard verifies and reads.
+    pub stage: FrameStage,
+}
+
+/// The callback one frame is answered through, exactly once.
+pub type FrameReplyFn = Box<dyn FnOnce(FrameReply) + Send>;
+
+/// What the shard knows about one frame it answered.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FrameAck {
+    /// The truth about the write.
+    pub outcome: WindowActionOutcome,
+    /// The shard clock just before the native send; `None` when nothing was
+    /// sent.
+    pub sent_at: Option<Instant>,
+}
+
+/// The one answer a frame gets, exactly once.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FrameReply {
+    /// The shard decided the frame.
+    Done(FrameAck),
+    /// A newer frame of the same plan sequence replaced this pending one: a
+    /// dropped frame that was never written.
+    Replaced,
 }
 
 /// What an application-level `AXHidden` request does.
@@ -263,10 +317,60 @@ pub enum CloseOutcome {
     AlreadyClosed,
 }
 
+/// What one shard knows about a `CGWindowID`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Resolution {
+    /// No tracked window claims the id.
+    NoMatch,
+    /// Several tracked windows of this shard claim the id.
+    Ambiguous,
+    /// Exactly one claims it; `Some` when it is still a live window.
+    Single(Option<WindowInstance>),
+}
+
+/// What one shard found when it restored its open leases.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LeaseReport {
+    /// Leases closed: written back to on, or closed without a write because a
+    /// third party had already turned it on or the application is gone.
+    pub restored: usize,
+    /// Applications whose lease could not be restored and is still owed.
+    pub owed: Vec<ApplicationId>,
+}
+
+/// The result of restoring every open `AXEnhancedUserInterface` lease.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LeaseRestoreOutcome {
+    /// Every lease is closed.
+    Clean {
+        /// Leases closed by this call.
+        restored: usize,
+    },
+    /// Some leases failed and stay owed (retried by the stop and by
+    /// `retry_cleanup`).
+    Owed {
+        /// The applications that still owe the attribute.
+        applications: Vec<ApplicationId>,
+    },
+    /// A shard did not acknowledge in time: assume leases may still be open.
+    Unacknowledged,
+}
+
 /// The owner command protocol. Pure data plus `Send` reply callbacks.
 pub(super) enum Command {
+    /// A standalone install that mints its own epoch (core tests only; the
+    /// router installs with [`Command::InstallShard`]).
+    #[cfg(test)]
     Install {
         request: InstallRequest,
+        reply: Reply<Result<RuntimeEpoch, InstallError>>,
+    },
+    /// Installs an epoch the shard router minted, with counters shared by
+    /// every shard of the adapter.
+    InstallShard {
+        request: InstallRequest,
+        epoch: RuntimeEpoch,
+        counters: EpochCounters,
         reply: Reply<Result<RuntimeEpoch, InstallError>>,
     },
     Track {
@@ -303,9 +407,16 @@ pub(super) enum Command {
         window: WindowInstance,
         reply: Reply<SnapshotOutcome>,
     },
+    #[cfg(test)]
     Resolve {
         cg_window_id: u32,
         reply: Reply<Option<WindowInstance>>,
+    },
+    /// Like `Resolve`, but reports how many windows claimed the id so the
+    /// router can detect an id claimed on two shards.
+    ResolveRaw {
+        cg_window_id: u32,
+        reply: Reply<Resolution>,
     },
     Stop {
         epoch: RuntimeEpoch,
@@ -313,6 +424,9 @@ pub(super) enum Command {
     },
     Retry {
         reply: Reply<CleanupReport>,
+    },
+    RestoreLeases {
+        reply: Reply<LeaseReport>,
     },
     Terminate {
         reply: Reply<CloseOutcome>,

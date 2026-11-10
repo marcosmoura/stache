@@ -14,6 +14,7 @@ pub mod borders;
 pub mod caps_remap;
 pub mod desktop;
 pub mod display;
+pub mod display_link;
 pub mod displays;
 pub mod hold_hud;
 pub mod hotkeys;
@@ -64,6 +65,12 @@ pub use desktop::{
     SystemDesktopClock,
 };
 pub use display::is_screen_mirroring_active;
+#[cfg(any(test, feature = "testing"))]
+pub use display_link::testing::{FakeFrameClockFactory, HeldCallback};
+pub use display_link::{
+    ClockCore, FrameClock, FrameClockError, FrameClockFactory, StuckClock, SystemFrameClockFactory,
+    WakeFn,
+};
 #[cfg(any(test, feature = "testing"))]
 pub use displays::testing::FakeDisplayBackend;
 pub use displays::{

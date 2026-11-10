@@ -10,8 +10,14 @@
 //!    enumeration budget per turn and the rest waits (in order) for the next
 //!    turn. Command revalidation checks live `AXWindows` membership regardless,
 //!    so a destroy still waiting in the backlog never lets a stale token act.
-//! 2. Run at most [`MAX_COMMANDS_PER_TURN`] queued commands.
-//! 3. Drain observers again, then run **one** enumeration chunk.
+//! 2. Take the pending frames (latest-frame-wins mailbox) and write at most
+//!    `MAX_FRAMES_PER_TURN` of them, **before** the commands: a command such
+//!    as a retarget `Snapshot` then reads the window after the old plan's
+//!    pending frame was written. The bound keeps a burst of frames from
+//!    starving commands. A stop, untrack or terminate still answers every
+//!    frame left pending exactly once, and a sealed gate makes frames inert.
+//! 3. Run at most [`MAX_COMMANDS_PER_TURN`] queued commands.
+//! 4. Settle leases, drain observers again, then run **one** enumeration chunk.
 //!
 //! A turn that leaves work (more commands or enumeration) reports
 //! `active`, and the driver parks with a zero timeout instead of blocking:
@@ -19,33 +25,38 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use stache_sdk::CancellationToken;
 
 use super::commands::{
-    ActionRequest, CleanupReport, CloseOutcome, Command, FocusOutcome, HiddenOperation,
-    HiddenOutcome, HiddenRequest, InstallError, InstallRequest, Reply, SnapshotOutcome,
-    StopOutcome, TrackOutcome, TrackRequest, WindowAction,
+    ActionRequest, CleanupReport, CloseOutcome, Command, FocusOutcome, FrameAck, FrameReply,
+    FrameRequest, FrameStage, HiddenOperation, HiddenOutcome, HiddenRequest, InstallError,
+    InstallRequest, LeaseReport, Reply, Resolution, SnapshotOutcome, StopOutcome, TrackOutcome,
+    TrackRequest, WindowAction,
 };
 use super::events::{
-    ApplicationChange, Capability, EnumerationAbort, EventQueue, SnapshotOrigin, TabBar, TabBarId,
-    TabBarRead, TabInfo, TabMember, WindowChange, WindowEvent, WindowEventKind, WindowSnapshot,
+    ApplicationChange, Capability, EnhancedUiNote, EnumerationAbort, EventQueue, SnapshotOrigin,
+    TabBar, TabBarId, TabBarRead, TabInfo, TabMember, WindowChange, WindowEvent, WindowEventKind,
+    WindowSnapshot,
 };
+use super::frames::{FrameMailbox, MAX_FRAMES_PER_TURN, OwnedMailbox, PendingFrame, done};
 use super::identity::{AdapterId, RuntimeEpoch, WindowInstance};
 use super::issuance::{
     CommitRefusal, GenerationCell, IssuedKind, NativeStatus, NotIssuedReason, StaleReason,
     WindowActionOutcome,
 };
+use super::lease::{Context as LeaseContext, Eui, NoVoiceOver, Settled, VoiceOverProbe};
 use super::system::{WindowClock, WindowObserver, WindowSystem};
 use crate::applications::ApplicationId;
 use crate::ax::{
     AxApi, AxError, AxEvent, AxNotification, AxReading, BoolAttribute, ELEMENT_TIMEOUT, ElementKey,
-    FrameWriteOutcome, PRESS_TIMEOUT, TabGroupRead, TabGroupSearch, WindowAx, WindowIdCapability,
-    WindowString, WriteStatus, find_tab_group, read_frame, read_tab_bar_shape, read_tab_group,
-    resizable, write_frame_gated,
+    FrameRead, FrameWriteOutcome, PRESS_TIMEOUT, TabGroupRead, TabGroupSearch, WindowAx,
+    WindowIdCapability, WindowString, WriteStatus, find_tab_group, read_frame, read_tab_bar_shape,
+    read_tab_group, resizable, write_frame_gated,
 };
 
 /// Elements an enumeration chunk may issue before it yields.
@@ -225,6 +236,8 @@ struct AppState<S: WindowSystem> {
     tab_bars: TabBars<Element<S>>,
     /// Orders the suspensions of this application.
     suspensions: u64,
+    /// The `AXEnhancedUserInterface` lease state.
+    eui: Eui,
 }
 
 impl<S: WindowSystem> AppState<S> {
@@ -263,12 +276,30 @@ struct EventBudget {
     started: Option<Instant>,
 }
 
+/// The per-epoch counters every shard of one adapter shares: serials stay
+/// unique and event sequences stay monotonic across shards.
+#[derive(Clone, Debug)]
+pub(super) struct EpochCounters {
+    /// The next window serial to hand out.
+    serial: Arc<AtomicU64>,
+    /// The last event sequence handed out.
+    sequence: Arc<AtomicU64>,
+}
+
+impl EpochCounters {
+    pub(super) fn new() -> Self {
+        Self {
+            serial: Arc::new(AtomicU64::new(1)),
+            sequence: Arc::new(AtomicU64::new(0)),
+        }
+    }
+}
+
 struct Runtime<S: WindowSystem> {
     epoch: RuntimeEpoch,
     gate: Arc<GenerationCell>,
     queue: Arc<EventQueue>,
-    sequence: u64,
-    next_serial: u64,
+    counters: EpochCounters,
     apps: HashMap<ApplicationId, AppState<S>>,
     enumerations: VecDeque<Enumeration<Element<S>>>,
     /// Drained, not yet processed observer events in arrival order.
@@ -277,13 +308,19 @@ struct Runtime<S: WindowSystem> {
 }
 
 impl<S: WindowSystem> Runtime<S> {
-    fn emit(&mut self, kind: WindowEventKind) {
-        self.sequence += 1;
+    fn emit(&self, kind: WindowEventKind) {
+        let sequence = self.counters.sequence.fetch_add(1, Ordering::SeqCst) + 1;
         let _ = self.queue.push(WindowEvent {
             epoch: self.epoch,
-            sequence: self.sequence,
+            sequence,
             kind,
         });
+    }
+
+    fn emit_notes(&self, application: ApplicationId, notes: Vec<EnhancedUiNote>) {
+        for note in notes {
+            self.emit(WindowEventKind::EnhancedUi { application, note });
+        }
     }
 
     fn note_error(&mut self, error: AxError) {
@@ -322,6 +359,26 @@ pub(super) struct Turn {
     pub active: bool,
     /// The owner loop must end.
     pub finished: bool,
+    /// The next instant an open lease needs the shard (its idle grace ends or
+    /// a failed restore is retried); `None` parks without a timeout.
+    pub deadline: Option<Instant>,
+}
+
+/// What settling the open leases of a shard found.
+#[derive(Debug, Default)]
+struct LeaseSummary {
+    /// Leases closed in this step.
+    restored: usize,
+    /// Applications whose lease could not be restored.
+    owed: Vec<ApplicationId>,
+    /// The next instant a lease needs the shard.
+    deadline: Option<Instant>,
+}
+
+impl LeaseSummary {
+    fn wake_at(&mut self, at: Instant) {
+        self.deadline = Some(self.deadline.map_or(at, |held| held.min(at)));
+    }
 }
 
 /// Why a token failed revalidation.
@@ -330,18 +387,41 @@ enum Invalid {
     Unverified(AxError),
 }
 
+impl Invalid {
+    /// The action outcome of a failed revalidation: nothing was sent.
+    const fn outcome(&self) -> WindowActionOutcome {
+        match *self {
+            Self::Stale(reason) => WindowActionOutcome::Stale(reason),
+            Self::Unverified(AxError::ApiDisabled) => {
+                WindowActionOutcome::NotIssued(NotIssuedReason::PermissionDenied)
+            }
+            Self::Unverified(error) => {
+                WindowActionOutcome::NotIssued(NotIssuedReason::MembershipUnverified(error))
+            }
+        }
+    }
+}
+
 /// The owner state machine.
 pub(super) struct Core<S: WindowSystem> {
     system: S,
     adapter: AdapterId,
     clock: Arc<dyn WindowClock>,
     reads: Reads,
+    #[cfg(test)]
     next_epoch: u64,
     runtime: Option<Runtime<S>>,
+    /// The last stopped epoch and its gate, so late frames of it answer why.
+    stopped: Option<(RuntimeEpoch, Arc<GenerationCell>)>,
     quarantine: Vec<Quarantined<S>>,
     poisoned: bool,
     finished: bool,
+    frames: OwnedMailbox,
+    voice_over: Arc<dyn VoiceOverProbe>,
 }
+
+const UNAVAILABLE: WindowActionOutcome =
+    WindowActionOutcome::NotIssued(NotIssuedReason::OwnerUnavailable);
 
 fn answer<T>(reply: Reply<T>, value: T) { let _ = catch_unwind(AssertUnwindSafe(|| reply(value))); }
 
@@ -377,6 +457,31 @@ fn teardown<S: WindowSystem>(mut app: AppState<S>) -> Result<(), AppState<S>> {
         app.regs = remaining;
         Err(app)
     }
+}
+
+/// Restores an open enhanced user interface lease now (the grace does not
+/// apply), then removes every registration. A lease that cannot be restored
+/// keeps the application: it is returned for the quarantine with its observer
+/// detached, and a retry restores it before removing the registrations. A
+/// terminated application drops its lease with no write.
+#[allow(
+    clippy::result_large_err,
+    reason = "the error hands the whole application to the quarantine unchanged"
+)]
+fn release_app<S: WindowSystem>(
+    ax: &S::Ax,
+    now: Instant,
+    mut app: AppState<S>,
+    notes: &mut Vec<EnhancedUiNote>,
+) -> Result<(), AppState<S>> {
+    if matches!(
+        app.eui.settle(ax, &app.element, now, false, true, notes),
+        Settled::Owed(_)
+    ) {
+        app.observer.detach();
+        return Err(app);
+    }
+    teardown(app)
 }
 
 /// Classifies an issued frame write.
@@ -486,13 +591,36 @@ impl<S: WindowSystem> Core<S> {
                 tabs: read_tabs,
                 tab_bars: false,
             },
+            #[cfg(test)]
             next_epoch: 0,
             runtime: None,
+            stopped: None,
             quarantine: Vec::new(),
             poisoned: false,
             finished: false,
+            frames: OwnedMailbox::new(),
+            voice_over: Arc::new(NoVoiceOver),
         }
     }
+
+    /// The shard clock's current reading.
+    pub(super) fn now(&self) -> Instant { self.clock.now() }
+
+    /// Uses `probe` to decide whether `VoiceOver` is running.
+    pub(super) fn with_voice_over(mut self, probe: Arc<dyn VoiceOverProbe>) -> Self {
+        self.voice_over = probe;
+        self
+    }
+
+    /// Serves the router's shared frame mailbox instead of a private one.
+    pub(super) fn with_frames(mut self, shared: Arc<Mutex<FrameMailbox>>) -> Self {
+        self.frames = OwnedMailbox::from_shared(shared);
+        self
+    }
+
+    /// The mailbox handle the router submits frames to.
+    #[cfg(test)]
+    pub(super) fn frame_mailbox(&self) -> Arc<Mutex<FrameMailbox>> { self.frames.shared() }
 
     /// Turns the tab bar identity reads on or off.
     pub(super) const fn with_tab_bars(mut self, on: bool) -> Self {
@@ -519,10 +647,17 @@ impl<S: WindowSystem> Core<S> {
 
     pub(super) fn turn(&mut self, commands: &Receiver<Command>) -> Turn {
         if self.finished {
-            return Turn { active: false, finished: true };
+            return Turn {
+                active: false,
+                finished: true,
+                deadline: None,
+            };
         }
         let mut budget = EventBudget { heavy: 0, started: None };
         self.pump(&mut budget);
+        // Frames first: a retarget `Snapshot` queued behind an old plan's
+        // pending frame must observe that frame as written.
+        let more_frames = self.run_frames();
         let mut more = false;
         for index in 0..MAX_COMMANDS_PER_TURN {
             match commands.try_recv() {
@@ -531,7 +666,13 @@ impl<S: WindowSystem> Core<S> {
                 Err(TryRecvError::Disconnected) => {
                     self.stop_everything();
                     self.finished = true;
-                    return Turn { active: false, finished: true };
+                    let gate = self.gate();
+                    self.answer_frames(self.frames.close(), gate.as_deref(), UNAVAILABLE);
+                    return Turn {
+                        active: false,
+                        finished: true,
+                        deadline: None,
+                    };
                 }
             }
             if index + 1 == MAX_COMMANDS_PER_TURN {
@@ -539,19 +680,32 @@ impl<S: WindowSystem> Core<S> {
             }
         }
         if self.finished {
-            return Turn { active: false, finished: true };
+            let gate = self.gate();
+            self.answer_frames(self.frames.close(), gate.as_deref(), UNAVAILABLE);
+            return Turn {
+                active: false,
+                finished: true,
+                deadline: None,
+            };
         }
+        let leases = if self.poisoned {
+            LeaseSummary::default()
+        } else {
+            self.settle_leases(false)
+        };
         self.pump(&mut budget);
         if !self.poisoned {
             let _ = catch_unwind(AssertUnwindSafe(|| self.step_enumeration()));
         }
         Turn {
             active: more
+                || more_frames
                 || self
                     .runtime
                     .as_ref()
                     .is_some_and(|rt| !rt.enumerations.is_empty() || !rt.backlog.is_empty()),
             finished: self.finished,
+            deadline: leases.deadline,
         }
     }
 
@@ -567,17 +721,32 @@ impl<S: WindowSystem> Core<S> {
             if let Some(rt) = &self.runtime {
                 rt.gate.seal();
             }
+            self.restore_after_panic();
         }
     }
 
     fn handle(&mut self, command: Command) {
         match command {
+            #[cfg(test)]
             Command::Install { request, reply } => answer(reply, self.install(request)),
+            Command::InstallShard {
+                request,
+                epoch,
+                counters,
+                reply,
+            } => {
+                answer(reply, self.install_shared(request, epoch, counters));
+            }
             Command::Track { epoch, request, reply } => {
                 answer(reply, self.track(epoch, request));
             }
             Command::Untrack { epoch, application, reply } => {
-                answer(reply, self.untrack(epoch, application));
+                let gate = self.gate();
+                let outcome = self.untrack(epoch, application);
+                let pending = self.frames.drain_application(application);
+                let gone = WindowActionOutcome::Stale(StaleReason::ApplicationGone);
+                self.answer_frames(pending, gate.as_deref(), gone);
+                answer(reply, outcome);
             }
             Command::Refresh {
                 epoch,
@@ -594,18 +763,55 @@ impl<S: WindowSystem> Core<S> {
             Command::Act { request, reply } => answer(reply, self.act(&request)),
             Command::Hidden { request, reply } => answer(reply, self.application_hidden(&request)),
             Command::Snapshot { window, reply } => answer(reply, self.snapshot(window)),
+            #[cfg(test)]
             Command::Resolve { cg_window_id, reply } => {
                 answer(reply, self.resolve(cg_window_id));
             }
-            Command::Stop { epoch, reply } => answer(reply, self.stop(epoch)),
+            Command::ResolveRaw { cg_window_id, reply } => {
+                answer(reply, self.resolve_raw(cg_window_id));
+            }
+            Command::Stop { epoch, reply } => {
+                let gate = self.gate();
+                let outcome = self.stop(epoch);
+                if outcome != StopOutcome::NotCurrent {
+                    self.answer_frames(self.frames.drain_all(), gate.as_deref(), UNAVAILABLE);
+                }
+                answer(reply, outcome);
+            }
             Command::Retry { reply } => answer(reply, self.retry_cleanup()),
-            Command::Terminate { reply } => answer(reply, self.terminate()),
+            Command::RestoreLeases { reply } => {
+                let summary = self.settle_leases(true);
+                answer(reply, LeaseReport {
+                    restored: summary.restored,
+                    owed: summary.owed,
+                });
+            }
+            Command::Terminate { reply } => {
+                let gate = self.gate();
+                let outcome = self.terminate();
+                self.answer_frames(self.frames.drain_all(), gate.as_deref(), UNAVAILABLE);
+                answer(reply, outcome);
+            }
         }
     }
 
     // ---- lifecycle -----------------------------------------------------
 
+    #[cfg(test)]
     fn install(&mut self, request: InstallRequest) -> Result<RuntimeEpoch, InstallError> {
+        self.next_epoch += 1;
+        let epoch = RuntimeEpoch::new(self.next_epoch);
+        self.install_shared(request, epoch, EpochCounters::new())
+    }
+
+    /// Installs an epoch minted elsewhere (the shard router) with counters its
+    /// sibling shards share.
+    fn install_shared(
+        &mut self,
+        request: InstallRequest,
+        epoch: RuntimeEpoch,
+        counters: EpochCounters,
+    ) -> Result<RuntimeEpoch, InstallError> {
         if let Some(rt) = &self.runtime {
             return Err(InstallError::AlreadyInstalled(rt.epoch));
         }
@@ -615,14 +821,12 @@ impl<S: WindowSystem> Core<S> {
                 registrations: self.quarantined_registrations(),
             });
         }
-        self.next_epoch += 1;
-        let epoch = RuntimeEpoch::new(self.next_epoch);
+        self.stopped = None;
         self.runtime = Some(Runtime {
             epoch,
             gate: request.gate,
             queue: request.queue,
-            sequence: 0,
-            next_serial: 1,
+            counters,
             apps: HashMap::new(),
             enumerations: VecDeque::new(),
             backlog: VecDeque::new(),
@@ -653,15 +857,18 @@ impl<S: WindowSystem> Core<S> {
     /// Seals, cancels enumeration and tears the running epoch down. Returns
     /// the number of applications released cleanly.
     fn stop_everything(&mut self) -> usize {
-        let Some(rt) = self.runtime.take() else { return 0 };
+        let Some(mut rt) = self.runtime.take() else { return 0 };
         rt.gate.seal();
-        let Runtime { apps, enumerations, .. } = rt;
-        drop(enumerations);
-        let mut ordered: Vec<_> = apps.into_iter().collect();
+        self.stopped = Some((rt.epoch, Arc::clone(&rt.gate)));
+        drop(std::mem::take(&mut rt.enumerations));
+        let mut ordered: Vec<_> = std::mem::take(&mut rt.apps).into_iter().collect();
         ordered.sort_by_key(|(id, _)| *id);
         let mut cleaned = 0;
-        for (_, app) in ordered {
-            match teardown(app) {
+        for (id, app) in ordered {
+            let mut notes = Vec::new();
+            let released = release_app(self.system.ax(), self.clock.now(), app, &mut notes);
+            rt.emit_notes(id, notes);
+            match released {
                 Ok(()) => cleaned += 1,
                 Err(app) => self.quarantine.push(Quarantined { app }),
             }
@@ -673,7 +880,8 @@ impl<S: WindowSystem> Core<S> {
         let held = std::mem::take(&mut self.quarantine);
         let mut cleaned = 0;
         for entry in held {
-            match teardown(entry.app) {
+            // The epoch is over: a restore here has no sink for its notes.
+            match release_app(self.system.ax(), self.clock.now(), entry.app, &mut Vec::new()) {
                 Ok(()) => cleaned += 1,
                 Err(app) => self.quarantine.push(Quarantined { app }),
             }
@@ -686,7 +894,11 @@ impl<S: WindowSystem> Core<S> {
     }
 
     fn terminate(&mut self) -> CloseOutcome {
-        if let Some(epoch) = self.runtime.as_ref().map(|rt| rt.epoch) {
+        // A shard with no application left ends without sealing: its gate is
+        // shared with the shards that are still running.
+        if self.runtime.as_ref().is_some_and(|rt| rt.apps.is_empty()) {
+            self.runtime = None;
+        } else if let Some(epoch) = self.runtime.as_ref().map(|rt| rt.epoch) {
             let _ = self.stop(epoch);
         }
         if self.quarantine.is_empty() {
@@ -746,6 +958,7 @@ impl<S: WindowSystem> Core<S> {
             focus: Vec::new(),
             tab_bars: TabBars::default(),
             suspensions: 0,
+            eui: Eui::default(),
         };
         // Observation is installed BEFORE the first enumeration read.
         for notification in APPLICATION_NOTIFICATIONS {
@@ -841,7 +1054,10 @@ impl<S: WindowSystem> Core<S> {
             for key in std::mem::take(&mut app.release) {
                 app.observer.release(key);
             }
-            match teardown(app) {
+            let mut notes = Vec::new();
+            let released = release_app(self.system.ax(), self.clock.now(), app, &mut notes);
+            rt.emit_notes(application, notes);
+            match released {
                 Ok(()) => cleaned = 1,
                 Err(app) => self.quarantine.push(Quarantined { app }),
             }
@@ -1002,7 +1218,7 @@ impl<S: WindowSystem> Core<S> {
                 system,
                 *adapter,
                 rt.epoch,
-                &mut rt.next_serial,
+                &rt.counters.serial,
                 app,
                 element,
                 *reads,
@@ -1045,7 +1261,7 @@ impl<S: WindowSystem> Core<S> {
         let Some(rt) = runtime.as_mut().filter(|rt| rt.epoch == window.epoch()) else {
             return Err(Invalid::Stale(StaleReason::WrongEpoch));
         };
-        let next_serial = rt.next_serial;
+        let next_serial = rt.counters.serial.load(Ordering::SeqCst);
         let Some(app) = rt.apps.get_mut(&window.application()) else {
             return Err(Invalid::Stale(StaleReason::ApplicationGone));
         };
@@ -1115,22 +1331,34 @@ impl<S: WindowSystem> Core<S> {
         }
     }
 
+    #[cfg(test)]
     fn resolve(&mut self, cg_window_id: u32) -> Option<WindowInstance> {
+        match self.resolve_raw(cg_window_id) {
+            Resolution::Single(token) => token,
+            Resolution::NoMatch | Resolution::Ambiguous => None,
+        }
+    }
+
+    fn resolve_raw(&mut self, cg_window_id: u32) -> Resolution {
         let adapter = self.adapter;
-        let rt = self.runtime.as_ref()?;
+        let Some(rt) = self.runtime.as_ref() else {
+            return Resolution::NoMatch;
+        };
         let mut matches = rt.apps.values().flat_map(|app| {
             app.windows
                 .iter()
                 .filter(move |held| held.cg == Some(cg_window_id))
                 .map(move |held| rt.token(adapter, app.id, held.serial))
         });
-        let first = matches.next()?;
+        let Some(first) = matches.next() else {
+            return Resolution::NoMatch;
+        };
         // A duplicate claim is ambiguous: resolve nothing rather than guess.
         if matches.next().is_some() {
-            return None;
+            return Resolution::Ambiguous;
         }
         drop(matches);
-        self.validate(first).ok().map(|_| first)
+        Resolution::Single(self.validate(first).ok().map(|_| first))
     }
 
     // ---- actions -------------------------------------------------------
@@ -1223,15 +1451,7 @@ impl<S: WindowSystem> Core<S> {
         }
         let index = match self.validate(window) {
             Ok(index) => index,
-            Err(Invalid::Stale(reason)) => return WindowActionOutcome::Stale(reason),
-            Err(Invalid::Unverified(AxError::ApiDisabled)) => {
-                return WindowActionOutcome::NotIssued(NotIssuedReason::PermissionDenied);
-            }
-            Err(Invalid::Unverified(error)) => {
-                return WindowActionOutcome::NotIssued(NotIssuedReason::MembershipUnverified(
-                    error,
-                ));
-            }
+            Err(invalid) => return invalid.outcome(),
         };
         let Self { runtime, system, clock, .. } = self;
         let Some(rt) = runtime.as_mut() else {
@@ -1287,31 +1507,311 @@ impl<S: WindowSystem> Core<S> {
                 }
             },
         };
-        match outcome {
-            None => match refusal {
-                Some(CommitRefusal::Expired) => WindowActionOutcome::ExpiredBeforeSend,
-                Some(CommitRefusal::NotIssued(reason)) => WindowActionOutcome::NotIssued(reason),
-                None => WindowActionOutcome::NotIssued(NotIssuedReason::Cancelled),
-            },
-            Some(Err(reason)) => {
-                if reason == NotIssuedReason::PermissionDenied {
-                    rt.note_error(AxError::ApiDisabled);
+        settle_write(rt, refusal, outcome)
+    }
+
+    // ---- enhanced user interface leases --------------------------------
+
+    /// Restores every open lease whose application is idle (all of them when
+    /// `force`d, which ignores the grace and any pending frames). Allowed after
+    /// the seal: it is owned cleanup, never a frame write.
+    fn settle_leases(&mut self, force: bool) -> LeaseSummary {
+        let Self {
+            runtime,
+            system,
+            clock,
+            frames,
+            quarantine,
+            ..
+        } = self;
+        let mut summary = LeaseSummary::default();
+        let ax = system.ax();
+        if let Some(rt) = runtime.as_mut() {
+            let mut open: Vec<ApplicationId> =
+                rt.apps.iter().filter(|(_, app)| app.eui.is_open()).map(|(id, _)| *id).collect();
+            open.sort();
+            for id in open {
+                let now = clock.now();
+                let pending = frames.has_pending(id);
+                let mut notes = Vec::new();
+                let Some(app) = rt.apps.get_mut(&id) else { continue };
+                let settled = app.eui.settle(ax, &app.element, now, pending, force, &mut notes);
+                rt.emit_notes(id, notes);
+                match settled {
+                    Settled::Wait(at) => summary.wake_at(at),
+                    Settled::Closed => summary.restored += 1,
+                    Settled::Owed(retry) => {
+                        summary.owed.push(id);
+                        if let Some(at) = retry.filter(|_| !force) {
+                            summary.wake_at(at);
+                        }
+                    }
+                    Settled::None | Settled::Open => {}
                 }
-                WindowActionOutcome::NotIssued(reason)
             }
-            Some(Ok((kind, native, observed))) => {
-                let denied = matches!(native, NativeStatus::Action(Err(AxError::ApiDisabled)))
-                    || matches!(
-                        native,
-                        NativeStatus::Frame { position, size }
-                            if matches!(position, WriteStatus::Failed(AxError::ApiDisabled))
-                                || matches!(size, WriteStatus::Failed(AxError::ApiDisabled))
-                    );
-                if denied {
-                    rt.note_error(AxError::ApiDisabled);
+        }
+        // A quarantined application still owes its lease after the epoch ended;
+        // the epoch is over, so its notes have no sink.
+        if force {
+            for held in quarantine.iter_mut().filter(|held| held.app.eui.is_open()) {
+                let app = &mut held.app;
+                match app.eui.settle(ax, &app.element, clock.now(), false, true, &mut Vec::new()) {
+                    Settled::Closed => summary.restored += 1,
+                    Settled::Owed(_) => summary.owed.push(app.id),
+                    Settled::None | Settled::Open | Settled::Wait(_) => {}
                 }
-                WindowActionOutcome::Issued { kind, native, observed }
             }
+        }
+        summary
+    }
+
+    /// After a panic the shard will not run another command: restore its open
+    /// leases before it ends. A second panic here is contained.
+    fn restore_after_panic(&mut self) {
+        let _ = catch_unwind(AssertUnwindSafe(|| self.settle_leases(true)));
+    }
+
+    // ---- frames --------------------------------------------------------
+
+    fn gate(&self) -> Option<Arc<GenerationCell>> {
+        self.runtime.as_ref().map(|rt| Arc::clone(&rt.gate))
+    }
+
+    /// Answers frames the shard will not write: sealed when the gate is
+    /// sealed, `otherwise` if not. Runs outside the mailbox lock.
+    #[allow(clippy::unused_self, reason = "kept with the other frame helpers")]
+    fn answer_frames(
+        &self,
+        pending: Vec<PendingFrame>,
+        gate: Option<&GenerationCell>,
+        otherwise: WindowActionOutcome,
+    ) {
+        let outcome = if gate.is_some_and(GenerationCell::is_sealed) {
+            WindowActionOutcome::NotIssued(NotIssuedReason::Sealed)
+        } else {
+            otherwise
+        };
+        for frame in pending {
+            frame.reply.answer(done(outcome));
+        }
+    }
+
+    /// Writes the pending frames (at most [`MAX_FRAMES_PER_TURN`]). `true`
+    /// when more remain.
+    fn run_frames(&mut self) -> bool {
+        if self.poisoned {
+            // Dropping each pending frame answers `OwnerUnavailable`.
+            drop(self.frames.drain_all());
+            return false;
+        }
+        let (batch, more) = self.frames.take(MAX_FRAMES_PER_TURN);
+        let mut batch = batch.into_iter();
+        for pending in batch.by_ref() {
+            let PendingFrame { request, reply } = pending;
+            if let Ok(ack) = catch_unwind(AssertUnwindSafe(|| self.frame(&request))) {
+                reply.answer(FrameReply::Done(ack));
+            } else {
+                // Effective in unwind-enabled builds only; release aborts.
+                self.poisoned = true;
+                if let Some(rt) = &self.runtime {
+                    rt.gate.seal();
+                }
+                self.restore_after_panic();
+                drop(reply);
+            }
+            if self.poisoned {
+                break;
+            }
+        }
+        // Whatever a panic left unwritten answers `OwnerUnavailable` on drop.
+        drop(batch);
+        more
+    }
+
+    /// Re-checks a token against the adapter, the epoch, the exact
+    /// application and the retained element, **without** listing `AXWindows`.
+    fn validate_light(&self, window: WindowInstance) -> Result<usize, Invalid> {
+        if window.adapter() != self.adapter {
+            return Err(Invalid::Stale(StaleReason::WrongAdapter));
+        }
+        let Some(rt) = self.runtime.as_ref().filter(|rt| rt.epoch == window.epoch()) else {
+            return Err(Invalid::Stale(StaleReason::WrongEpoch));
+        };
+        let next_serial = rt.counters.serial.load(Ordering::SeqCst);
+        let Some(app) = rt.apps.get(&window.application()) else {
+            return Err(Invalid::Stale(StaleReason::ApplicationGone));
+        };
+        let Some(index) = app.windows.iter().position(|held| held.serial == window.serial()) else {
+            return Err(Invalid::Stale(if window.serial() < next_serial {
+                StaleReason::Destroyed
+            } else {
+                StaleReason::UnknownWindow
+            }));
+        };
+        if app.windows[index].suspended.is_some() {
+            return Err(Invalid::Stale(StaleReason::Suspended));
+        }
+        Ok(index)
+    }
+
+    /// What a frame of `window` answers when no epoch runs: sealed when it
+    /// belongs to the epoch that was just stopped, otherwise a wrong epoch.
+    fn no_runtime_outcome(&self, window: WindowInstance) -> WindowActionOutcome {
+        let sealed = self
+            .stopped
+            .as_ref()
+            .is_some_and(|(epoch, gate)| *epoch == window.epoch() && gate.is_sealed());
+        if sealed {
+            WindowActionOutcome::NotIssued(NotIssuedReason::Sealed)
+        } else {
+            WindowActionOutcome::Stale(StaleReason::WrongEpoch)
+        }
+    }
+
+    /// One mailbox frame: the checks of [`Self::act`], then a gated write.
+    /// Only [`FrameStage::Direct`] reads the frame back, and only
+    /// [`FrameStage::Intermediate`] skips the `AXWindows` membership listing.
+    fn frame(&mut self, request: &FrameRequest) -> FrameAck {
+        let issuance = &request.issuance;
+        let window = issuance.window();
+        let unsent = |outcome| FrameAck { outcome, sent_at: None };
+        let Some(gate) = self.gate() else {
+            return unsent(self.no_runtime_outcome(window));
+        };
+        if let Err(reason) = gate.admit(issuance) {
+            return unsent(WindowActionOutcome::NotIssued(reason));
+        }
+        if request.position.is_none() && request.size.is_none() {
+            return unsent(WindowActionOutcome::NotIssued(NotIssuedReason::EmptyRequest));
+        }
+        if self.clock.now() >= issuance.deadline() {
+            return unsent(WindowActionOutcome::ExpiredBeforeSend);
+        }
+        let checked = if request.stage == FrameStage::Intermediate {
+            self.validate_light(window)
+        } else {
+            self.validate(window)
+        };
+        let index = match checked {
+            Ok(index) => index,
+            Err(invalid) => return unsent(invalid.outcome()),
+        };
+        let Self {
+            runtime,
+            system,
+            clock,
+            voice_over,
+            ..
+        } = self;
+        let Some(rt) = runtime.as_mut() else {
+            return unsent(WindowActionOutcome::Stale(StaleReason::WrongEpoch));
+        };
+        let ax = system.ax();
+        // The seal may have landed since `admit`: never touch the attribute
+        // after it.
+        if gate.is_sealed() {
+            return unsent(WindowActionOutcome::NotIssued(NotIssuedReason::Sealed));
+        }
+        // The lease wraps every frame write: take it before the first write of
+        // a burst when the application has the attribute on.
+        let mut notes = Vec::new();
+        if let Some(app) = rt.apps.get_mut(&window.application()) {
+            let context = LeaseContext {
+                now: clock.now(),
+                voice_over: &**voice_over,
+            };
+            app.eui.before_write(ax, &app.element, &context, &mut notes);
+        }
+        rt.emit_notes(window.application(), std::mem::take(&mut notes));
+        let Some(app) = rt.apps.get(&window.application()) else {
+            return unsent(WindowActionOutcome::Stale(StaleReason::ApplicationGone));
+        };
+        let element = &app.windows[index].element;
+        let mut refusal: Option<CommitRefusal> = None;
+        let mut sent_at: Option<Instant> = None;
+        let commit = || match issuance.commit(&gate, clock.now()) {
+            Ok(()) => {
+                sent_at = Some(clock.now());
+                true
+            }
+            Err(why) => {
+                refusal = Some(why);
+                false
+            }
+        };
+        let written = write_frame_gated(ax, element, request.position, request.size, commit);
+        let outcome = match written {
+            None => None,
+            Some(FrameWriteOutcome::NotSent(error)) => Some(Err(timeout_refusal(error))),
+            Some(FrameWriteOutcome::Attempted { position, size }) => {
+                if request.stage == FrameStage::Intermediate
+                    && (position == WriteStatus::Failed(AxError::InvalidElement)
+                        || size == WriteStatus::Failed(AxError::InvalidElement))
+                {
+                    return FrameAck {
+                        outcome: WindowActionOutcome::Stale(StaleReason::Destroyed),
+                        sent_at,
+                    };
+                }
+                let observed = (request.stage == FrameStage::Direct
+                    && !matches!(
+                        (position, size),
+                        (WriteStatus::Failed(AxError::ApiDisabled), _)
+                            | (_, WriteStatus::Failed(AxError::ApiDisabled))
+                    ))
+                .then(|| read_frame(ax, element));
+                Some(Ok((
+                    classify_frame_write(position, size),
+                    NativeStatus::Frame { position, size },
+                    observed,
+                )))
+            }
+        };
+        let sent = sent_at.is_some();
+        let outcome = settle_write(rt, refusal, outcome);
+        if sent && let Some(app) = rt.apps.get_mut(&window.application()) {
+            let ends_batch = matches!(request.stage, FrameStage::Final | FrameStage::Direct);
+            app.eui.after_write(ax, &app.element, clock.now(), ends_batch, &mut notes);
+        }
+        rt.emit_notes(window.application(), notes);
+        FrameAck { outcome, sent_at }
+    }
+}
+
+/// What a gated write attempt produced before it is reported: nothing sent, a
+/// refusal before the send, or the issued result.
+type WriteAttempt = Option<Result<(IssuedKind, NativeStatus, Option<FrameRead>), NotIssuedReason>>;
+
+/// Turns a write attempt into the outcome, noting a permission loss.
+fn settle_write<S: WindowSystem>(
+    rt: &mut Runtime<S>,
+    refusal: Option<CommitRefusal>,
+    outcome: WriteAttempt,
+) -> WindowActionOutcome {
+    match outcome {
+        None => match refusal {
+            Some(CommitRefusal::Expired) => WindowActionOutcome::ExpiredBeforeSend,
+            Some(CommitRefusal::NotIssued(reason)) => WindowActionOutcome::NotIssued(reason),
+            None => WindowActionOutcome::NotIssued(NotIssuedReason::Cancelled),
+        },
+        Some(Err(reason)) => {
+            if reason == NotIssuedReason::PermissionDenied {
+                rt.note_error(AxError::ApiDisabled);
+            }
+            WindowActionOutcome::NotIssued(reason)
+        }
+        Some(Ok((kind, native, observed))) => {
+            let denied = matches!(native, NativeStatus::Action(Err(AxError::ApiDisabled)))
+                || matches!(
+                    native,
+                    NativeStatus::Frame { position, size }
+                        if matches!(position, WriteStatus::Failed(AxError::ApiDisabled))
+                            || matches!(size, WriteStatus::Failed(AxError::ApiDisabled))
+                );
+            if denied {
+                rt.note_error(AxError::ApiDisabled);
+            }
+            WindowActionOutcome::Issued { kind, native, observed }
         }
     }
 }
@@ -1331,7 +1831,7 @@ fn adopt<S: WindowSystem>(
     system: &S,
     adapter: AdapterId,
     epoch: RuntimeEpoch,
-    next_serial: &mut u64,
+    next_serial: &AtomicU64,
     app: &mut AppState<S>,
     element: Element<S>,
     reads: Reads,
@@ -1374,7 +1874,9 @@ fn adopt<S: WindowSystem>(
         }
     }
     let Some(key) = key else { return Adopted::NotObservable };
-    let serial = *next_serial;
+    // Serials are unique across shards; a refusal below gives this one back
+    // when it is still the newest, so a lone shard stays gapless.
+    let serial = next_serial.fetch_add(1, Ordering::SeqCst);
     let window = WindowInstance::new(adapter, epoch, app.id, serial);
     let tab = if reads.tab_bars {
         let referenced = app.referenced_bars();
@@ -1392,9 +1894,10 @@ fn adopt<S: WindowSystem>(
         && snapshot.cg_window_id.is_none()
     {
         unregister(app, key);
+        let _ =
+            next_serial.compare_exchange(serial + 1, serial, Ordering::SeqCst, Ordering::SeqCst);
         return Adopted::Transient;
     }
-    *next_serial += 1;
     app.windows.push(Tracked {
         serial,
         element,
@@ -1902,7 +2405,7 @@ fn ax_event<S: WindowSystem>(
             // previous window before the window that replaces it.
             let mut kinds = suspend_unlisted::<S>(system, adapter, epoch, app, &list);
             let adopted =
-                adopt::<S>(system, adapter, epoch, &mut rt.next_serial, app, element, reads);
+                adopt::<S>(system, adapter, epoch, &rt.counters.serial, app, element, reads);
             app.release.push(key);
             match adopted {
                 Adopted::New(snapshot) => {

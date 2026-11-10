@@ -137,7 +137,7 @@ impl SnapshotCell {
         Arc::clone(&self.current.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
-    fn publish(&self, snapshot: TilingSnapshot) {
+    pub(crate) fn publish(&self, snapshot: TilingSnapshot) {
         *self.current.lock().unwrap_or_else(PoisonError::into_inner) = Arc::new(snapshot);
     }
 }
@@ -219,6 +219,7 @@ impl EffectEnv {
     /// Runs one effect. Reads (`track`, `refresh`, `untrack`, `snapshot`, the
     /// application listing) and the gated frame write; the write is the only
     /// path that can move a window.
+    #[allow(clippy::too_many_lines)] // one linear dispatch over every effect
     pub fn run(&self, effect: &Effect) {
         match *effect {
             Effect::Track { stamp, application, pid } => {
@@ -259,6 +260,8 @@ impl EffectEnv {
                 from,
                 animate,
                 refresh_hz,
+                display,
+                cross_display,
             } => {
                 if animate {
                     let job = AnimationJob {
@@ -270,6 +273,8 @@ impl EffectEnv {
                         target,
                         components,
                         period: flush_period(refresh_hz),
+                        display,
+                        cross_display,
                         settings: AnimationSettings::default(),
                     };
                     // Accepted: the worker acknowledges and finishes it. Refused
@@ -278,21 +283,32 @@ impl EffectEnv {
                         return;
                     }
                 }
-                let outcome = self.frames.execute(&*self.backend, &self.cancel, &FrameJob {
+                // Asynchronous: the reply posts the completion and finishes the
+                // write from the shard thread (or inline when the write is inert),
+                // so this runner never waits on a native frame write.
+                let ingress = Arc::clone(&self.ingress);
+                let frames = Arc::clone(&self.frames);
+                let job = FrameJob {
                     generation: stamp.registry,
                     revision,
                     plan_sequence,
                     window,
                     target,
                     components,
+                };
+                self.frames.submit_direct(&*self.backend, &self.cancel, &job, move |outcome| {
+                    // A closed mailbox means the actor is gone; nobody waits.
+                    let _ = ingress.submit(Input::Completion {
+                        stamp,
+                        result: CompletionResult::Frame {
+                            window,
+                            plan_sequence,
+                            revision,
+                            outcome,
+                        },
+                    });
+                    frames.finish(window, plan_sequence);
                 });
-                self.complete(stamp, CompletionResult::Frame {
-                    window,
-                    plan_sequence,
-                    revision,
-                    outcome,
-                });
-                self.frames.finish(window, plan_sequence);
             }
             Effect::CancelFrame { window } => self.frames.cancel(window),
             Effect::HideApp { stamp, application } => {
@@ -485,6 +501,7 @@ pub struct Engine {
     frames: Option<Arc<FrameControl>>,
     visibility: Option<Arc<VisibilityControl>>,
     borders: Option<Arc<BordersControl>>,
+    animation: Option<Arc<AnimationControl>>,
     last_admission: crate::events::AdmissionStats,
     /// The drag gesture being timed and when it is abandoned.
     gesture_watch: Option<(u64, Instant)>,
@@ -557,6 +574,7 @@ impl Engine {
             frames: None,
             visibility: None,
             borders: None,
+            animation: None,
             last_admission: crate::events::AdmissionStats::default(),
             gesture_watch: None,
             released_hidden: BTreeSet::new(),
@@ -578,6 +596,13 @@ impl Engine {
 
     /// Calls `hook` at the start of every turn (tests use it to stall the actor).
     pub fn set_turn_hook(&mut self, hook: Arc<dyn Fn() + Send + Sync>) { self.hook = Some(hook); }
+
+    /// Shares the animation control: the engine copies its instant-fallback
+    /// applications into the state before each transition and reports lease
+    /// problems and terminations to it.
+    pub fn set_animation_control(&mut self, animation: Arc<AnimationControl>) {
+        self.animation = Some(animation);
+    }
 
     /// Shares the frame issuance control with the runner's environment.
     pub fn set_frame_control(&mut self, frames: Arc<FrameControl>) { self.frames = Some(frames); }
@@ -827,11 +852,30 @@ impl Engine {
             self.released_hidden.clone_from(&owned);
             state.set_owned_hidden(owned);
         }
+        // The same for the instant-fallback applications.
+        if let Some(animation) = &self.animation {
+            state.set_animation_fallback(animation.fallback_apps());
+        }
+        let lease = match &input {
+            Input::Window(event) => match &event.kind {
+                WindowEventKind::EnhancedUi { application, note } => Some((*application, *note)),
+                _ => None,
+            },
+            _ => None,
+        };
+        let terminated = match &input {
+            Input::Lifecycle {
+                kind: LifecycleKind::Terminated,
+                info,
+            } => Some(info.application),
+            _ => None,
+        };
         let Ok((mut state, effects)) = catch_unwind(AssertUnwindSafe(|| transition(state, input)))
         else {
             self.fail_panicked();
             return false;
         };
+        self.note_animation(&state, lease, terminated);
         self.diag.observe(&state);
         self.diag.effects(&state, &effects);
         let outbox = state.take_tab_outbox();
@@ -842,6 +886,39 @@ impl Engine {
             self.retime(now);
         }
         true
+    }
+
+    /// Tells the animation control what this turn changed for it: a
+    /// terminated application is forgotten, and an application whose
+    /// `AXEnhancedUserInterface` lease cannot be kept moves without animation
+    /// (it turns the attribute back on in two consecutive batches, or it could
+    /// not be turned off).
+    fn note_animation(
+        &self,
+        state: &TilingState,
+        lease: Option<(ApplicationId, stache_macos::windows::EnhancedUiNote)>,
+        terminated: Option<ApplicationId>,
+    ) {
+        use stache_macos::windows::EnhancedUiNote;
+
+        use crate::animation::FallbackReason;
+        let Some(animation) = &self.animation else { return };
+        if let Some(application) = terminated {
+            animation.forget_application(application);
+        }
+        let Some((application, note)) = lease else { return };
+        let Some(lease_stats) = state.enhanced_ui(application) else {
+            return;
+        };
+        match note {
+            EnhancedUiNote::ReEnabled { .. } if lease_stats.cannot_keep_up() => {
+                animation.enter_fallback(application, FallbackReason::ReEnablesEnhancedUi);
+            }
+            EnhancedUiNote::SetFailed(_) if lease_stats.set_failed() => {
+                animation.enter_fallback(application, FallbackReason::EnhancedUiStuck);
+            }
+            _ => {}
+        }
     }
 
     /// Feeds the ledger what the actor just learned about an application's

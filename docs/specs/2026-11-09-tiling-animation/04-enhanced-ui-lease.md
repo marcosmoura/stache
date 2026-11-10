@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 04 — Enhanced UI suppression lease
@@ -26,10 +26,10 @@ Nothing in the tree reads or clears `AXEnhancedUserInterface` today. Application
 
 ## Acceptance criteria
 
-- [ ] TA-04-01: With a fake AX, every frame write path (animated, direct, fallback) of an application whose attribute is on runs inside one lease that turns it off before the first write and restores it after the last write plus the idle grace; applications already off are never written.
-- [ ] TA-04-02: Re-enable by a third party is detected once per batch, counted and not fought; read/set failures proceed without a lease with a diagnostic.
-- [ ] TA-04-03: Stop, disable, panic and application termination restore or drop every open lease in the specified order; a failed restore is quarantined and retried exactly.
-- [ ] TA-04-04: VoiceOver and hard-kill behavior follow OQ-2 (no lease under VoiceOver) and OQ-3 (documented limit, no journal) and are documented.
+- [x] TA-04-01: With a fake AX, every frame write path (animated, direct, fallback) of an application whose attribute is on runs inside one lease that turns it off before the first write and restores it after the last write plus the idle grace; applications already off are never written.
+- [x] TA-04-02: Re-enable by a third party is detected once per batch, counted and not fought; read/set failures proceed without a lease with a diagnostic.
+- [x] TA-04-03: Stop, disable, panic and application termination restore or drop every open lease in the specified order; a failed restore is quarantined and retried exactly.
+- [x] TA-04-04: VoiceOver and hard-kill behavior follow OQ-2 (no lease under VoiceOver) and OQ-3 (documented limit, no journal) and are documented.
 
 ## Tests
 

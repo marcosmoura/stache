@@ -1,8 +1,8 @@
 ---
-status: draft
+status: done
 ---
 
-# 03 — Display pacing, position-only frames and the size envelope
+# 03 — Display pacing and size animation
 
 Read when implementing after part 02 and separate approval. Paths are under `src/crates/`.
 
@@ -18,21 +18,21 @@ Today pacing is a `Condvar` timeout of `flush_period(refresh_hz)` (`modules/tili
 - **Stop safety.** Stopping a clock must guarantee no callback runs afterwards before its context is freed (stop, then a bounded wait for an in-flight callback, never a detached owner). A clock that fails to stop keeps its context and is reported owed in quarantine.
 - **Fallback pacing.** If a display has no clock (creation fails, unknown display), the coordinator paces that display with today's deadline timer at `clamp_refresh_hz` and records the reason in status diagnostics. Smoothness of that path is judged by part 06's metrics, not assumed.
 - **Batching across windows.** Frames for all windows of one display are computed for the same tick timestamp and dispatched in that tick (one batch per application, part 02).
-- **Position-only interactive frames.** Intermediate frames write position only.
-- **Size envelope.** When a move changes size, the window's size is written at most twice: on the first frame, size becomes the per-axis maximum of the start and target sizes (the envelope), and on the final frame the exact target size. A component already equal to the envelope is not written. Effects: pure growth resizes once at the start, pure shrink once at the end, mixed changes never show the window smaller than either endpoint. Rationale: content relayout happens at most twice per animation, and the window never uncovers the desktop mid-move; a short overlap with neighbors is accepted.
-- **Cross-display moves.** When the start and target are on different displays, the envelope rule is not used: size is written once on the first frame as the target size, and the move is paced by the target display's clock.
+- **Position-only interactive frames.** _Superseded 2026-11-10 by the size animation decision (see the overview's Resolved questions): intermediate frames carry the interpolated size while the size changes; a move that keeps the size writes position only until the final frame._
+- **Size envelope.** _Superseded 2026-11-10: replaced by per-frame size interpolation; the final frame always writes the exact target, with no already-written skip._ Original text: When a move changes size, the window's size is written at most twice: on the first frame, size becomes the per-axis maximum of the start and target sizes (the envelope), and on the final frame the exact target size. A component already equal to the envelope is not written. Effects: pure growth resizes once at the start, pure shrink once at the end, mixed changes never show the window smaller than either endpoint. Rationale: content relayout happens at most twice per animation, and the window never uncovers the desktop mid-move; a short overlap with neighbors is accepted.
+- **Cross-display moves.** _Superseded 2026-11-10: cross-display moves interpolate the size like any other move; they remain paced by the target display's clock._ Original text: When the start and target are on different displays, the envelope rule is not used: size is written once on the first frame as the target size, and the move is paced by the target display's clock.
 - **Final frame.** Always writes the exact target position and, if the plan wanted size, the exact target size, through the gated path. Unresizable or refused size ends the animation as today.
 - Authority, mailboxes, acknowledgements and stop ordering are part 02's, unchanged.
 
 ## Acceptance criteria
 
-- [ ] TA-03-01: A fake frame clock drives ticks per display; the coordinator issues one batch per application per tick, and idle/disabled owns no clock; clock creation failure uses the timer fallback with a diagnostic.
-- [ ] TA-03-02: Clock stop guarantees no callback after release in fakes (held callback barrier), and a clock that cannot stop is quarantined, not leaked or detached.
-- [ ] TA-03-03: Intermediate frames carry position only; size is written per the envelope rule (growth at start, shrink at end, mixed envelope then exact), cross-display moves write target size once, and the final frame is exact.
+- [x] TA-03-01: A fake frame clock drives ticks per display; the coordinator issues one batch per application per tick, and idle/disabled owns no clock; clock creation failure uses the timer fallback with a diagnostic.
+- [x] TA-03-02: Clock stop guarantees no callback after release in fakes (held callback barrier), and a clock that cannot stop is quarantined, not leaked or detached.
+- [x] TA-03-03: While the size changes, first and intermediate frames carry the interpolated size with the interpolated position (monotonic from start to target, several writes); a move that keeps the size writes position only until the final frame; cross-display moves follow the same rule; the final frame always writes the exact target. (Rewritten 2026-11-10; the original envelope rule is superseded.)
 
 ## Tests
 
-Pure tests for the envelope rule (growth, shrink, mixed axes, equal sizes, cross-display, unresizable final). Coordinator tests with a fake clock per display: two displays at different rates, clock missing for one display, tick coalescing when the coordinator is late (latest tick wins, no burst catch-up), stop with a held callback. Default tests never create a real display link.
+Pure tests for the size rule (growth, shrink, mixed axes, equal sizes, cross-display, unresizable final). Coordinator tests with a fake clock per display: two displays at different rates, clock missing for one display, tick coalescing when the coordinator is late (latest tick wins, no burst catch-up), stop with a held callback. Default tests never create a real display link.
 
 ## Notes
 

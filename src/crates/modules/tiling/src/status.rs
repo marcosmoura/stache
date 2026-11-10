@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
+use stache_macos::ApplicationId;
 
 use crate::actor::SnapshotCell;
 use crate::outcome::OperationOutcome;
@@ -81,6 +82,53 @@ struct Shared {
     borders: Mutex<Option<String>>,
     /// Ambiguous records retained past a stop.
     retained: Mutex<Vec<String>>,
+    /// Which displays animate on the timer instead of a frame clock, read live.
+    pacing: Mutex<Option<PacingSource>>,
+    /// The live instant-fallback set and animation metrics.
+    animation: Mutex<Option<AnimationSource>>,
+}
+
+/// Where the live animation pacing notes come from.
+pub type PacingSource = Box<dyn Fn() -> Vec<String> + Send + Sync>;
+
+/// Where the live instant-fallback set and animation metrics come from.
+pub type AnimationSource = Box<dyn Fn() -> crate::animation::AnimationReport + Send + Sync>;
+
+/// The application label of a diagnostic line: `<name> (<bundle id>)`.
+fn who_is(snapshot: &crate::state::TilingSnapshot, application: ApplicationId) -> String {
+    snapshot
+        .apps
+        .iter()
+        .find(|record| record.info.application == application)
+        .map_or_else(
+            || "an unidentified application".to_owned(),
+            |record| format!("{} ({})", record.info.name, record.info.bundle_id),
+        )
+}
+
+/// The animation diagnostics of one published snapshot: one line per
+/// application that moves without animation,
+/// `animation: <name> (<bundle id>) moves without animation: <reason>`, then one
+/// metrics summary line per application with data.
+#[must_use]
+pub fn animation_diagnostics(
+    snapshot: &crate::state::TilingSnapshot,
+    report: &crate::animation::AnimationReport,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for (application, reason) in &report.fallbacks {
+        out.push(format!(
+            "animation: {} moves without animation: {reason}",
+            who_is(snapshot, *application)
+        ));
+    }
+    for (application, summary) in &report.metrics {
+        out.push(crate::animation::describe_metrics(
+            &who_is(snapshot, *application),
+            summary,
+        ));
+    }
+    out
 }
 
 /// The optional features `config` requests that this runtime keeps off.
@@ -116,6 +164,62 @@ pub fn tab_diagnostics(tabs: &crate::tabs::TabsStatus) -> Vec<String> {
     out
 }
 
+/// How a lease problem reads in a diagnostic line.
+fn describe_enhanced_ui(note: stache_macos::windows::EnhancedUiNote) -> Option<String> {
+    use stache_macos::windows::EnhancedUiNote;
+    Some(match note {
+        EnhancedUiNote::Leased | EnhancedUiNote::Restored => return None,
+        EnhancedUiNote::ReadFailed(error) => format!(
+            "AXEnhancedUserInterface could not be read ({error:?}); frames are written without \
+             suppressing it"
+        ),
+        EnhancedUiNote::SetFailed(error) => format!(
+            "AXEnhancedUserInterface could not be turned off ({error:?}); frames are written \
+             without suppressing it"
+        ),
+        EnhancedUiNote::ReEnabled { consecutive } => format!(
+            "AXEnhancedUserInterface was turned back on during animation ({consecutive} in a \
+             row); it is not fought"
+        ),
+        EnhancedUiNote::RestoreFailed(error) => format!(
+            "AXEnhancedUserInterface could not be restored ({error:?}); the restore is retried"
+        ),
+        EnhancedUiNote::VoiceOverSkipped => {
+            "VoiceOver is running; AXEnhancedUserInterface is left untouched".to_owned()
+        }
+    })
+}
+
+/// The `AXEnhancedUserInterface` lease diagnostics for one published snapshot:
+/// failures, re-enables and `VoiceOver` skips, one line each as
+/// `enhanced ui: <name> (<bundle id>): <note>`. Plain leases and restores only
+/// update counters and never appear here.
+#[must_use]
+pub fn enhanced_ui_diagnostics(snapshot: &crate::state::TilingSnapshot) -> Vec<String> {
+    use stache_macos::windows::EnhancedUiNote;
+    let mut out = Vec::new();
+    for (application, stats) in &snapshot.enhanced_ui {
+        let who = snapshot
+            .apps
+            .iter()
+            .find(|record| record.info.application == *application)
+            .map_or_else(
+                || "an unidentified application".to_owned(),
+                |record| format!("{} ({})", record.info.name, record.info.bundle_id),
+            );
+        let notes = stats
+            .latest_problem
+            .into_iter()
+            .chain(stats.voice_over_skipped.then_some(EnhancedUiNote::VoiceOverSkipped));
+        for note in notes {
+            if let Some(text) = describe_enhanced_ui(note) {
+                out.push(format!("enhanced ui: {who}: {text}"));
+            }
+        }
+    }
+    out
+}
+
 /// The clonable, read-only source and its module-side writer.
 #[derive(Clone, Default)]
 pub struct TilingStatusSource {
@@ -147,6 +251,11 @@ impl TilingStatusSource {
             status
                 .diagnostics
                 .extend(self.shared.borders.lock().unwrap_or_else(PoisonError::into_inner).clone());
+            if let Some(source) =
+                self.shared.pacing.lock().unwrap_or_else(PoisonError::into_inner).as_ref()
+            {
+                status.diagnostics.extend(source());
+            }
         }
         if status.state == TilingRuntimeState::Running
             && let Some(cell) = cell
@@ -191,6 +300,12 @@ impl TilingStatusSource {
             status.visibility_conflicts =
                 u32::try_from(snapshot.visibility.conflicts.len()).unwrap_or(u32::MAX);
             status.diagnostics.extend(tab_diagnostics(&snapshot.tabs));
+            status.diagnostics.extend(enhanced_ui_diagnostics(&snapshot));
+            if let Some(source) =
+                self.shared.animation.lock().unwrap_or_else(PoisonError::into_inner).as_ref()
+            {
+                status.diagnostics.extend(animation_diagnostics(&snapshot, &source()));
+            }
             status.config_revision = snapshot.config_revision.to_string();
             status.plan_sequence = snapshot.plan_sequence.to_string();
             status.healthy = matches!(snapshot.health, Health::Healthy);
@@ -204,6 +319,16 @@ impl TilingStatusSource {
     /// Records the unsupported optional features of the adopted configuration.
     pub(crate) fn set_features(&self, features: Vec<String>) {
         *self.shared.features.lock().unwrap_or_else(PoisonError::into_inner) = features;
+    }
+
+    /// Sets (or clears) the live source of fallback and metrics diagnostics.
+    pub(crate) fn set_animation_source(&self, source: Option<AnimationSource>) {
+        *self.shared.animation.lock().unwrap_or_else(PoisonError::into_inner) = source;
+    }
+
+    /// Sets (or clears) the live source of animation pacing diagnostics.
+    pub(crate) fn set_pacing_source(&self, source: Option<PacingSource>) {
+        *self.shared.pacing.lock().unwrap_or_else(PoisonError::into_inner) = source;
     }
 
     /// Records (or clears) the latest display feed problem.
@@ -373,5 +498,229 @@ mod label_tests {
         let lines = source.read().ambiguous_visibility;
         assert_eq!(lines, vec![expected.to_owned()]);
         assert!(!lines[0].contains("ApplicationId") && !lines[0].contains("token"));
+    }
+}
+
+#[cfg(test)]
+mod enhanced_ui_tests {
+    use stache_macos::ax::AxError;
+    use stache_macos::windows::EnhancedUiNote;
+
+    use super::*;
+    use crate::state::{AppRecord, TilingState};
+    use crate::test_support::{app, info};
+
+    fn state_with_safari() -> TilingState {
+        let mut state = TilingState::new("");
+        let safari = info(1, "com.apple.Safari", "Safari");
+        state.apps.insert(safari.application, AppRecord {
+            info: safari,
+            hidden: false,
+            skipped: false,
+            tracked: true,
+        });
+        state
+    }
+
+    fn record(state: &mut TilingState, notes: &[EnhancedUiNote]) {
+        let counters = state.enhanced_ui.entry(app(1)).or_default();
+        for note in notes {
+            counters.record(*note);
+        }
+    }
+
+    #[test]
+    fn plain_leases_and_restores_only_update_counters() {
+        let mut state = state_with_safari();
+        record(&mut state, &[EnhancedUiNote::Leased, EnhancedUiNote::Restored]);
+        let snapshot = state.snapshot();
+        assert!(enhanced_ui_diagnostics(&snapshot).is_empty());
+        let counters = snapshot.enhanced_ui_of(app(1)).expect("stats");
+        assert_eq!((counters.leases, counters.restores), (1, 1));
+        assert!(!counters.cannot_keep_up() && !counters.set_failed());
+    }
+
+    #[test]
+    fn failures_re_enables_and_voiceover_show_the_application_and_the_note() {
+        let mut state = state_with_safari();
+        record(&mut state, &[
+            EnhancedUiNote::SetFailed(AxError::CannotComplete),
+            EnhancedUiNote::VoiceOverSkipped,
+        ]);
+        assert_eq!(enhanced_ui_diagnostics(&state.snapshot()), [
+            "enhanced ui: Safari (com.apple.Safari): AXEnhancedUserInterface could not be turned \
+             off (CannotComplete); frames are written without suppressing it",
+            "enhanced ui: Safari (com.apple.Safari): VoiceOver is running; \
+             AXEnhancedUserInterface is left untouched",
+        ]);
+        record(&mut state, &[EnhancedUiNote::ReEnabled { consecutive: 1 }]);
+        record(&mut state, &[EnhancedUiNote::ReEnabled { consecutive: 2 }]);
+        let snapshot = state.snapshot();
+        assert_eq!(
+            enhanced_ui_diagnostics(&snapshot)[0],
+            "enhanced ui: Safari \
+                    (com.apple.Safari): AXEnhancedUserInterface was turned back on during \
+                    animation (2 in a row); it is not fought"
+        );
+        let counters = snapshot.enhanced_ui_of(app(1)).expect("stats");
+        assert!(
+            counters.cannot_keep_up(),
+            "part 06 reads two consecutive re-enables"
+        );
+        assert!(counters.set_failed(), "part 06 reads a failed set");
+        assert_eq!((counters.re_enables, counters.set_failures), (2, 1));
+    }
+
+    #[test]
+    fn a_restore_clears_a_restore_failure_and_a_clean_lease_resets_the_streak() {
+        let mut state = state_with_safari();
+        record(&mut state, &[
+            EnhancedUiNote::ReEnabled { consecutive: 1 },
+            EnhancedUiNote::RestoreFailed(AxError::CannotComplete),
+        ]);
+        assert!(enhanced_ui_diagnostics(&state.snapshot())[0].contains("could not be restored"));
+        record(&mut state, &[EnhancedUiNote::Restored]);
+        let snapshot = state.snapshot();
+        assert!(enhanced_ui_diagnostics(&snapshot).is_empty());
+        assert_eq!(
+            snapshot.enhanced_ui_of(app(1)).expect("stats").consecutive_re_enables,
+            0
+        );
+    }
+
+    #[test]
+    fn the_status_source_shows_the_lines_while_running() {
+        let mut state = state_with_safari();
+        record(&mut state, &[EnhancedUiNote::ReadFailed(
+            AxError::CannotComplete,
+        )]);
+        let cell = Arc::new(SnapshotCell::default());
+        cell.publish(state.snapshot());
+        let source = TilingStatusSource::default();
+        source.running(cell);
+        let diagnostics = source.read().diagnostics;
+        assert!(
+            diagnostics.iter().any(|line| line
+                .starts_with("enhanced ui: Safari (com.apple.Safari): ")
+                && line.contains("could not be read")),
+            "{diagnostics:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod animation_diagnostics_tests {
+    use std::time::Duration;
+
+    use super::*;
+    use crate::animation::{AnimationReport, FallbackReason, MetricsSummary};
+    use crate::state::{AppRecord, TilingState};
+    use crate::test_support::{app, info};
+
+    fn state_with_safari() -> TilingState {
+        let mut state = TilingState::new("");
+        let safari = info(1, "com.apple.Safari", "Safari");
+        state.apps.insert(safari.application, AppRecord {
+            info: safari,
+            hidden: false,
+            skipped: false,
+            tracked: true,
+        });
+        state
+    }
+
+    fn summary() -> MetricsSummary {
+        MetricsSummary {
+            animations: 8,
+            rate_p50_hz: 58.93,
+            dropped: 3,
+            write_p95: Duration::from_micros(4100),
+            end_lag_p95: Duration::from_micros(6000),
+        }
+    }
+
+    #[test]
+    fn the_fallback_line_is_exact_for_every_reason() {
+        let snapshot = state_with_safari().snapshot();
+        for (reason, text) in [
+            (
+                FallbackReason::BelowMinimumRate,
+                "writes fewer than 15 frames per second in 2 of its last 3 layout changes",
+            ),
+            (
+                FallbackReason::LateEnd,
+                "ends more than 250 ms late in 2 of its last 3 layout changes",
+            ),
+            (FallbackReason::ReEnablesEnhancedUi, "turns Enhanced UI back on"),
+            (
+                FallbackReason::EnhancedUiStuck,
+                "Enhanced UI could not be turned off",
+            ),
+            (
+                FallbackReason::Overflow,
+                "shares the overflow AX thread and cannot keep up",
+            ),
+            (
+                FallbackReason::NoFrameClock,
+                "its display has no frame clock and it cannot keep up",
+            ),
+        ] {
+            let report = AnimationReport {
+                fallbacks: vec![(app(1), reason)],
+                metrics: Vec::new(),
+            };
+            assert_eq!(animation_diagnostics(&snapshot, &report), [format!(
+                "animation: Safari (com.apple.Safari) moves without animation: {text}"
+            )]);
+        }
+    }
+
+    #[test]
+    fn the_metrics_line_has_a_stable_format() {
+        let snapshot = state_with_safari().snapshot();
+        let report = AnimationReport {
+            fallbacks: Vec::new(),
+            metrics: vec![(app(1), summary())],
+        };
+        assert_eq!(animation_diagnostics(&snapshot, &report), [
+            "animation metrics: Safari (com.apple.Safari): 8 animations, rate p50 58.9 Hz, \
+             dropped 3, write p95 4.1 ms, end lag p95 6.0 ms"
+        ]);
+        let one = MetricsSummary { animations: 1, ..summary() };
+        assert!(
+            crate::animation::describe_metrics("Safari (com.apple.Safari)", &one)
+                .contains(": 1 animation, rate")
+        );
+        assert!(animation_diagnostics(&snapshot, &AnimationReport::default()).is_empty());
+    }
+
+    #[test]
+    fn an_unknown_application_is_named_without_internals() {
+        let snapshot = state_with_safari().snapshot();
+        let report = AnimationReport {
+            fallbacks: vec![(app(7), FallbackReason::LateEnd)],
+            metrics: Vec::new(),
+        };
+        let lines = animation_diagnostics(&snapshot, &report);
+        assert!(lines[0].starts_with("animation: an unidentified application moves"));
+        assert!(!lines[0].contains("ApplicationId"));
+    }
+
+    #[test]
+    fn the_status_source_lists_fallbacks_then_metrics_while_running() {
+        let cell = Arc::new(SnapshotCell::default());
+        cell.publish(state_with_safari().snapshot());
+        let source = TilingStatusSource::default();
+        source.running(cell);
+        source.set_animation_source(Some(Box::new(|| AnimationReport {
+            fallbacks: vec![(app(1), FallbackReason::Overflow)],
+            metrics: vec![(app(1), summary())],
+        })));
+        let diagnostics = source.read().diagnostics;
+        let position = |prefix: &str| diagnostics.iter().position(|line| line.starts_with(prefix));
+        let fallback = position("animation: Safari (com.apple.Safari) moves without animation: ");
+        let metrics = position("animation metrics: Safari (com.apple.Safari): ");
+        assert!(fallback.is_some() && metrics.is_some(), "{diagnostics:?}");
+        assert!(fallback < metrics);
     }
 }

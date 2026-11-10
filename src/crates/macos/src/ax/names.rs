@@ -23,6 +23,7 @@ pub(super) struct Names {
     pub(super) minimized: CFString,
     pub(super) full_screen: CFString,
     pub(super) hidden: CFString,
+    pub(super) enhanced_ui: CFString,
     pub(super) main: CFString,
     pub(super) raise_action: CFString,
 }
@@ -43,6 +44,7 @@ impl Names {
             minimized: CFString::from_static_string("AXMinimized"),
             full_screen: CFString::from_static_string("AXFullScreen"),
             hidden: CFString::from_static_string("AXHidden"),
+            enhanced_ui: CFString::from_static_string("AXEnhancedUserInterface"),
             main: CFString::from_static_string("AXMain"),
             raise_action: CFString::from_static_string("AXRaise"),
         }

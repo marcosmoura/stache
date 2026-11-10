@@ -54,8 +54,8 @@ Read when changing the shipped foundation boundaries.
   hide, unhide as pure `LifecycleEvent`s with the exact `ApplicationId`, deferred to a later main
   turn; a terminate that cannot be resolved to an id after pruning is delivered as the synthesized
   `TerminatedUnresolved`, never dropped). Part 06 slice B adds the `AXHidden` fallback beside them,
-  on the Tiling AX owner thread (`stache-tiling-ax-owner`, never main and never `MenuAnywhere`'s
-  `stache-ax-owner`): `WindowAx::set_hidden` plus the `windows` command `application_hidden`
+  on the tracked application's Tiling AX shard (`stache-tiling-ax-<n>`, never main and never
+  `MenuAnywhere`'s `stache-ax-owner`): `WindowAx::set_hidden` plus the `windows` command `application_hidden`
   (`HiddenRequest`/`HiddenOutcome`) read or write `AXHidden` on one tracked exact `ApplicationId`
   only. It is used solely when the public `hide_exact`/`unhide_exact` returned `false`; a write is
   authorized by its own one-shot `ApplicationIssuance` (not the frame `GenerationCell`, which stop
@@ -389,12 +389,25 @@ comparative measurements and manual hardware checks remain open.
 Consumed by the shipped Tiling runtime (part 05 onward); native behavior unverified. Compile- and
 fake-proven only; construction starts nothing and sends no AX message.
 
-| Thread                                                                    | Owns                                                                                                                                                                              |
-| ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Main                                                                      | `AppKit` applications and `NSScreen` only. Never runs an AX query, enumeration chunk or action.                                                                                   |
-| Tiling AX owner (`stache-tiling-ax-owner`, name supplied by the consumer) | The AX API (created in-thread from a `Send` factory), one `AxObserver` per tracked application, the `CFRunLoop` that delivers their callbacks, and every retained window element. |
-| MenuAnywhere AX owner (`stache-ax-owner`)                                 | Its own state. Never shared: the adapter rejects that name and any name already used by a live adapter.                                                                           |
+| Thread                                                                                                  | Owns                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Main                                                                                                    | `AppKit` applications and `NSScreen` only. Never runs an AX query, enumeration chunk or action.                                                                                                                                                                                                                                                                                 |
+| Tiling AX shards (`stache-tiling-ax-<n>`, `stache-tiling-ax-overflow`; prefix supplied by the consumer) | One thread per tracked application (up to `MAX_APPLICATION_SHARDS` = 32; further applications share the overflow shard): the AX API (created in-thread from a `Send` factory), that application's `AxObserver`, the `CFRunLoop` that delivers its callbacks, its enumeration and every retained window element. The `WindowAdapter` router owns no thread and makes no AX call. |
+| MenuAnywhere AX owner (`stache-ax-owner`)                                                               | Its own state. Never shared: the adapter rejects that name and any name already used by a live adapter.                                                                                                                                                                                                                                                                         |
 
+- **Shards.** `WindowAdapter` is a router (no thread, no AX call) over application shards. A shard
+  is the owner core on its own thread with its own driver, system, observer, elements and bounded
+  queue. The first `track` of an application starts a dedicated shard (`<prefix>-<lowest free n>`,
+  at most `MAX_APPLICATION_SHARDS` = 32); further applications run on one `<prefix>-overflow` shard
+  that hosts several applications (`WindowAdapter::shard_stats` reports the count). `untrack` ends a
+  dedicated shard. The router mints the runtime epoch and installs it on every shard with shared
+  serial and event-sequence counters, so serials are unique per epoch across shards, and all shards
+  share the one `GenerationCell` and `EventQueue`. Window and application commands route by
+  application; an application without a shard answers the same typed `Stale`/`WrongEpoch` outcome as
+  before. `stop` seals the gate, then stops every shard under one shared deadline; a shard that does
+  not finish or quarantines keeps its thread handle in a router quarantine for `retry_cleanup`
+  (nothing is detached) and a refused thread is reported as `OwnerUnavailable`. One slow application
+  never delays another's actions or snapshots.
 - **Commands and wakeup.** Callers send pure `Command`s through a bounded channel
   (`OWNER_QUEUE_BOUND`) and a coalescing wakeup that performs a block on the owner's run loop
   (`CFRunLoopPerformBlock` plus `CFRunLoopWakeUp`; a queued block cannot be lost if it races ahead of
@@ -443,9 +456,21 @@ fake-proven only; construction starts nothing and sends no AX message.
   adapter refuses a new install until cleanup completes. Old-epoch cleanup cannot touch a successor.
   `close` joins the thread with a bounded wait and refuses while resources are quarantined.
 - **Tiling seam.** `stache-tiling` `backend.rs` exposes the safe `WindowBackend` trait,
-  `SystemWindowBackend`, `LazySystemBackend` (the production composition: it spawns the
-  `stache-tiling-ax-owner` thread on the first epoch install, so a disabled Tiling owns no thread)
-  and an in-crate `FakeWindowBackend`.
+  `SystemWindowBackend`, `LazySystemBackend` (the production composition: it creates the
+  adapter on the first epoch install; the `stache-tiling-ax-<n>` shard threads start on the first
+  tracked applications, so a disabled Tiling, and a running one before its first `track`, own no
+  thread) and an in-crate `FakeWindowBackend`.
+- **Tiling animation owners.** `stache-tiling` `animation/` splits the work by owner. The
+  `stache-tiling-animation` coordinator thread (spawned only while `animations.enabled`) owns the
+  running jobs, the per-display frame clocks and each job's counters and latency ring; it computes
+  frames and never makes an AX call. The application's AX shard (or the shared overflow shard) makes
+  every native write, keeps one pending frame per window and answers each frame. The actor owns the
+  planner state and sets `animate`; before each transition it copies the instant-fallback set into
+  the pure state, and it adds an application to the set when its Enhanced UI lease cannot be held.
+  The coordinator shares only an `AnimationShared` with the actor and status: the metrics book
+  (written at job end) and the fallback set, each behind a short lock never held across a call-out.
+  Every write goes through the `LiveSink` and the existing `FrameControl` gate; there is no second
+  write path and no SkyLight call.
 - **Tiling read-only actor (slice 04).** `stache-tiling` adds a single-writer actor thread
   (`stache-tiling-actor`) and a bounded read-effect worker thread, both started only by the
   internal `TrackingRuntime` harness, which nothing constructs or registers. The actor owns the pure

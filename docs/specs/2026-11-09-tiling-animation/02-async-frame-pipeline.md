@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 02 — Asynchronous frame pipeline
@@ -27,10 +27,10 @@ Today the stepper writes each window serially and waits for each reply (`animati
 
 ## Acceptance criteria
 
-- [ ] TA-02-01: With fakes, a held write in one application does not delay frames for other applications; the held application's newer frames replace the pending one and are counted as dropped.
-- [ ] TA-02-02: Intermediate frames perform no readback; the final frame performs exactly one settle readback; retarget performs at most one readback; outcomes stay truthful (Applied/Partial/Uncertain/Stale/NotIssued) per exact plan sequence, including A–B–A.
-- [ ] TA-02-03: Direct writes are asynchronous; seal during held writes leaves queued frames inert; stop drains every shard before restore, or quarantines with a typed owed stage.
-- [ ] TA-02-04: Membership revalidation happens at an animation's first and final write only (OQ-1), with tests for a window destroyed mid-animation.
+- [x] TA-02-01: With fakes, a held write in one application does not delay frames for other applications; the held application's newer frames replace the pending one and are counted as dropped.
+- [x] TA-02-02: Intermediate frames perform no readback; the final frame performs exactly one settle readback; retarget performs at most one readback; outcomes stay truthful (Applied/Partial/Uncertain/Stale/NotIssued) per exact plan sequence, including A–B–A.
+- [x] TA-02-03: Direct writes are asynchronous; seal during held writes leaves queued frames inert; stop drains every shard before restore, or quarantines with a typed owed stage.
+- [x] TA-02-04: Membership revalidation happens at an animation's first and final write only (OQ-1), with tests for a window destroyed mid-animation.
 
 ## Tests
 

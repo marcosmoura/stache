@@ -249,6 +249,42 @@ pub enum WindowEventKind {
         /// Whether it is available now.
         available: bool,
     },
+    /// The `AXEnhancedUserInterface` lease of an application changed or
+    /// failed. Only lease transitions, failures and re-enables are reported,
+    /// never one event per frame.
+    EnhancedUi {
+        /// The exact application instance.
+        application: ApplicationId,
+        /// What happened.
+        note: EnhancedUiNote,
+    },
+}
+
+/// What happened to an application's `AXEnhancedUserInterface` lease.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EnhancedUiNote {
+    /// The attribute was on; the shard turned it off for a burst of frame
+    /// writes and owes it back.
+    Leased,
+    /// The shard restored the attribute to on and closed the lease.
+    Restored,
+    /// The attribute could not be read: the writes proceed without a lease.
+    ReadFailed(AxError),
+    /// The attribute was on but could not be turned off: the writes proceed
+    /// without a lease.
+    SetFailed(AxError),
+    /// A third party turned the attribute back on during the lease. The shard
+    /// does not fight it. `consecutive` counts the leases in a row that ended
+    /// this way; two or more mean the application cannot be kept off.
+    ReEnabled {
+        /// Consecutive re-enabled leases of this application.
+        consecutive: u32,
+    },
+    /// Restoring the attribute failed: the shard keeps the lease and retries.
+    RestoreFailed(AxError),
+    /// `VoiceOver` is running: the attribute is never touched. Reported once per
+    /// application per epoch.
+    VoiceOverSkipped,
 }
 
 /// One event: pure value, epoch and monotonic per-epoch sequence.

@@ -83,6 +83,8 @@ pub enum Teardown {
     Drained,
     /// The animation worker was closed and joined: no animated frame can follow.
     Animation,
+    /// The open `AXEnhancedUserInterface` leases were restored.
+    EnhancedUi,
     /// The runtime-hidden applications were restored.
     Restore,
     /// The reservation watcher was stopped.
@@ -374,6 +376,8 @@ struct Owed {
     drain: bool,
     borders: bool,
     animation: bool,
+    frame_clock: bool,
+    enhanced_ui: bool,
     restore: bool,
     watcher: bool,
     displays: bool,
@@ -388,6 +392,8 @@ impl Owed {
             || self.borders
             || self.drain
             || self.animation
+            || self.frame_clock
+            || self.enhanced_ui
             || self.restore
             || self.watcher
             || self.displays
@@ -403,6 +409,8 @@ impl Owed {
             (self.borders, "borders runner"),
             (self.drain, "frame drain"),
             (self.animation, "animation worker"),
+            (self.frame_clock, "frame clock"),
+            (self.enhanced_ui, "enhanced ui restore"),
             (self.restore, "restore"),
             (self.watcher, "reservation watcher"),
             (self.displays, "display observer"),
@@ -566,6 +574,36 @@ impl Inner {
                 self.trace(Teardown::Animation);
             } else {
                 notes.push("the animation worker did not end".to_owned());
+            }
+        }
+        // Frame clocks that did not stop with the worker are kept and retried.
+        // Their callbacks never write, so the restore does not wait for them.
+        if held.owed.frame_clock && !held.owed.animation {
+            if held.runtime.as_ref().is_none_or(|rt| rt.stop_frame_clocks(hop)) {
+                held.owed.frame_clock = false;
+            } else {
+                notes.push("a frame clock did not stop".to_owned());
+            }
+        }
+        // The lease restore waits for the drain and the worker too: a frame
+        // write after it would take a new lease. It runs after the seal (owned
+        // cleanup) and before the runtime-hidden applications are restored.
+        if held.owed.enhanced_ui && !held.owed.drain && !held.owed.animation {
+            match held.runtime.as_ref().map(|rt| rt.restore_enhanced_ui(hop)) {
+                None | Some(stache_macos::windows::LeaseRestoreOutcome::Clean { .. }) => {
+                    held.owed.enhanced_ui = false;
+                    self.trace(Teardown::EnhancedUi);
+                }
+                Some(stache_macos::windows::LeaseRestoreOutcome::Owed { applications }) => {
+                    notes.push(format!(
+                        "{} application(s) still owe AXEnhancedUserInterface",
+                        applications.len()
+                    ));
+                }
+                Some(stache_macos::windows::LeaseRestoreOutcome::Unacknowledged) => {
+                    notes
+                        .push("the enhanced user interface restore is not acknowledged".to_owned());
+                }
             }
         }
         // Restore waits for the drain and the worker: nothing may still be
@@ -734,6 +772,8 @@ impl TilingModule {
             drain: false,
             borders: runtime.as_ref().is_some_and(|rt| rt.borders().owes_cleanup()),
             animation: runtime.is_some(),
+            frame_clock: runtime.is_some(),
+            enhanced_ui: runtime.is_some(),
             restore: false,
             watcher: watcher.is_some(),
             displays: displays.is_some(),
@@ -1095,6 +1135,17 @@ impl Module for TilingModule {
         inner.refresh_retained(&runtime);
         inner.status.running(runtime.snapshot_cell());
         inner.status.set_features(feature_diagnostics(&runtime, &pair.config));
+        let animation = Arc::downgrade(runtime.animation());
+        inner.status.set_pacing_source(Some(Box::new(move || {
+            animation
+                .upgrade()
+                .map(|control| control.pacing_diagnostics())
+                .unwrap_or_default()
+        })));
+        let animation = Arc::downgrade(runtime.animation());
+        inner.status.set_animation_source(Some(Box::new(move || {
+            animation.upgrade().map(|control| control.report()).unwrap_or_default()
+        })));
 
         // Stage 9: the passive drag observer. Optional: it cannot fail the
         // start, and ordinary tiling never depends on it.
@@ -1174,6 +1225,8 @@ impl Module for TilingModule {
                         borders: run.runtime.borders().owes_cleanup(),
                         drain: true,
                         animation: true,
+                        frame_clock: true,
+                        enhanced_ui: true,
                         restore: true,
                         watcher: true,
                         displays: had_displays,

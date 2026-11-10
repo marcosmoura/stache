@@ -353,6 +353,28 @@ pub trait WindowAx: AxApi {
     ///
     /// The AX failure. [`AxError::CannotComplete`] may follow an applied write.
     fn set_hidden(&self, application: &Self::Element, hidden: bool) -> Result<(), AxError>;
+
+    /// Copies `AXEnhancedUserInterface` from an **application** element. The
+    /// caller sets [`ELEMENT_TIMEOUT`] on the exact element first. Applications
+    /// that do not implement the attribute fail with
+    /// [`AxError::AttributeUnsupported`] or [`AxError::NoValue`].
+    ///
+    /// # Errors
+    ///
+    /// The AX failure or [`AxError::WrongType`].
+    fn enhanced_user_interface(&self, application: &Self::Element) -> Result<bool, AxError>;
+
+    /// Sets `AXEnhancedUserInterface` on an **application** element. The
+    /// caller sets [`PRESS_TIMEOUT`] on the exact element first.
+    ///
+    /// # Errors
+    ///
+    /// The AX failure. [`AxError::CannotComplete`] may follow an applied write.
+    fn set_enhanced_user_interface(
+        &self,
+        application: &Self::Element,
+        on: bool,
+    ) -> Result<(), AxError>;
 }
 
 /// Reads position and size separately after setting [`ELEMENT_TIMEOUT`].
@@ -857,6 +879,20 @@ impl WindowAx for SystemAx {
     fn set_hidden(&self, application: &AxElement, hidden: bool) -> Result<(), AxError> {
         let value = CFBoolean::from(hidden).as_CFType();
         Self::set_value(application, &self.names.hidden, &value)
+    }
+
+    fn enhanced_user_interface(&self, application: &AxElement) -> Result<bool, AxError> {
+        let value = Self::copy_value(application, &self.names.enhanced_ui)?;
+        value.downcast_into::<CFBoolean>().map(bool::from).ok_or(AxError::WrongType)
+    }
+
+    fn set_enhanced_user_interface(
+        &self,
+        application: &AxElement,
+        on: bool,
+    ) -> Result<(), AxError> {
+        let value = CFBoolean::from(on).as_CFType();
+        Self::set_value(application, &self.names.enhanced_ui, &value)
     }
 
     fn raise(&self, element: &AxElement) -> Result<(), AxError> {

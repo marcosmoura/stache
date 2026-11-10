@@ -21,8 +21,8 @@ use std::time::{Duration, Instant};
 
 use stache_macos::ax::{AxPoint, AxSize};
 use stache_macos::windows::{
-    ActionRequest, GenerationCell, NotIssuedReason, WindowAction, WindowActionOutcome,
-    WindowInstance, WindowIssuance,
+    ActionRequest, FrameReply, FrameReplyFn, FrameRequest, FrameStage, GenerationCell,
+    NotIssuedReason, WindowAction, WindowActionOutcome, WindowInstance, WindowIssuance,
 };
 use stache_sdk::CancellationToken;
 
@@ -157,35 +157,41 @@ impl FrameControl {
         self.shared.idle.notify_all();
     }
 
-    /// Issues one write through the backend.
+    /// The gated frame request for `job`, or the typed no-send that makes it
+    /// inert.
     ///
-    /// Inert (a typed no-send) when the plan is no longer the latest, the
-    /// runtime is sealed, the generation is not live or the caller cancelled.
-    /// Otherwise the backend's owner re-checks generation, accepted revision,
-    /// exact token, plan sequence and deadline at the native send.
-    #[must_use]
-    pub fn execute(
+    /// Inert when the plan is no longer the latest, the runtime is sealed, the
+    /// generation is not live or the caller cancelled. Otherwise the shard
+    /// re-checks generation, accepted revision, exact token, plan sequence and
+    /// deadline at the native send.
+    ///
+    /// # Errors
+    ///
+    /// The outcome to report for a frame that must not be sent.
+    pub fn request(
         &self,
-        backend: &dyn WindowBackend,
         cancel: &CancellationToken,
         job: &FrameJob,
-    ) -> WindowActionOutcome {
+        stage: FrameStage,
+    ) -> Result<FrameRequest, WindowActionOutcome> {
         let deadline = {
             let ledger = self.ledger();
             match ledger.latest.get(&job.window) {
                 Some((plan, deadline)) if *plan == job.plan_sequence => *deadline,
-                _ => return WindowActionOutcome::NotIssued(NotIssuedReason::Superseded),
+                _ => return Err(WindowActionOutcome::NotIssued(NotIssuedReason::Superseded)),
             }
         };
         if self.gate.is_sealed() {
-            return WindowActionOutcome::NotIssued(NotIssuedReason::Sealed);
+            return Err(WindowActionOutcome::NotIssued(NotIssuedReason::Sealed));
         }
         let live = self.gate.live_generation();
         if live == 0 || live != job.generation {
-            return WindowActionOutcome::NotIssued(NotIssuedReason::GenerationInvalid);
+            return Err(WindowActionOutcome::NotIssued(
+                NotIssuedReason::GenerationInvalid,
+            ));
         }
         if cancel.is_cancelled() {
-            return WindowActionOutcome::NotIssued(NotIssuedReason::Cancelled);
+            return Err(WindowActionOutcome::NotIssued(NotIssuedReason::Cancelled));
         }
         let position = job.components.position.then_some(AxPoint {
             x: job.target.x,
@@ -195,20 +201,60 @@ impl FrameControl {
             width: job.target.width,
             height: job.target.height,
         });
-        let issuance = WindowIssuance::new(
-            job.window,
-            job.generation,
-            job.revision,
-            job.plan_sequence,
-            deadline,
-        );
-        backend.act(
-            ActionRequest {
-                issuance,
-                action: WindowAction::SetFrame { position, size },
-            },
-            cancel,
-        )
+        Ok(FrameRequest {
+            issuance: WindowIssuance::new(
+                job.window,
+                job.generation,
+                job.revision,
+                job.plan_sequence,
+                deadline,
+            ),
+            position,
+            size,
+            stage,
+        })
+    }
+
+    /// Submits one non-animated frame write without waiting and answers
+    /// `reply` exactly once with its outcome: inline for a write that is inert
+    /// or refused, otherwise on the application's shard thread (or inline for
+    /// an unrouted application). The shard reads the frame back once
+    /// ([`FrameStage::Direct`]).
+    ///
+    /// `reply` must not block and no lock may be held across this call.
+    pub fn submit_direct(
+        &self,
+        backend: &dyn WindowBackend,
+        cancel: &CancellationToken,
+        job: &FrameJob,
+        reply: impl FnOnce(WindowActionOutcome) + Send + 'static,
+    ) {
+        let request = match self.request(cancel, job, FrameStage::Direct) {
+            Ok(request) => request,
+            Err(outcome) => return reply(outcome),
+        };
+        // Shared so a refused batch (whose reply never runs) can still answer.
+        let slot = Arc::new(Mutex::new(Some(reply)));
+        let answer = Arc::clone(&slot);
+        let callback: FrameReplyFn = Box::new(move |frame| {
+            let outcome = match frame {
+                FrameReply::Done(ack) => ack.outcome,
+                // A newer frame of the same plan replaced it unwritten.
+                FrameReply::Replaced => WindowActionOutcome::NotIssued(NotIssuedReason::Superseded),
+            };
+            let reply = answer.lock().unwrap_or_else(PoisonError::into_inner).take();
+            if let Some(reply) = reply {
+                reply(outcome);
+            }
+        });
+        if let Err(error) =
+            backend.submit_frames(job.window.application(), vec![(request, callback)])
+        {
+            let reply = slot.lock().unwrap_or_else(PoisonError::into_inner).take();
+            if let Some(reply) = reply {
+                reply(WindowActionOutcome::NotIssued(NotIssuedReason::Dispatch(error)));
+            }
+        }
     }
 
     /// Raises one exact window through the issuance gate (focus).

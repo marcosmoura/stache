@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 01 — Per-application AX owner shards
@@ -26,9 +26,9 @@ Today one `stache-tiling-ax-owner` thread (`backend.rs:31`) owns every applicati
 
 ## Acceptance criteria
 
-- [ ] TA-01-01: Each tracked application's AX observation, enumeration, snapshots and actions run on its own shard thread; fakes prove an application whose fake AX call is held never delays another application's action or snapshot.
-- [ ] TA-01-02: Shard count is bounded with a working overflow shard; spawn failure, untrack, stop and a stuck shard leave typed outcomes, quarantine with retained handles and no detached thread.
-- [ ] TA-01-03: Existing `windows` and Tiling suites pass unchanged in meaning: token identity, A–B–A, reused CG IDs/PIDs, generation turnover, seal during a held send, per-application event ordering and drain-before-restore.
+- [x] TA-01-01: Each tracked application's AX observation, enumeration, snapshots and actions run on its own shard thread; fakes prove an application whose fake AX call is held never delays another application's action or snapshot.
+- [x] TA-01-02: Shard count is bounded with a working overflow shard; spawn failure, untrack, stop and a stuck shard leave typed outcomes, quarantine with retained handles and no detached thread.
+- [x] TA-01-03: Existing `windows` and Tiling suites pass unchanged in meaning: token identity, A–B–A, reused CG IDs/PIDs, generation turnover, seal during a held send, per-application event ordering and drain-before-restore.
 
 ## Tests
 

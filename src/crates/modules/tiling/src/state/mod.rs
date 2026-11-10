@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use stache_macos::applications::LifecycleKind;
 use stache_macos::windows::{
-    FocusOutcome, RuntimeEpoch, SnapshotOutcome, TabBar, TabInfo, TrackOutcome,
+    EnhancedUiNote, FocusOutcome, RuntimeEpoch, SnapshotOutcome, TabBar, TabInfo, TrackOutcome,
     WindowActionOutcome, WindowEvent, WindowInstance,
 };
 use stache_macos::{ApplicationId, DisplayId, DisplayLayout};
@@ -360,6 +360,11 @@ pub enum Effect {
         animate: bool,
         /// The target display's reported refresh rate, for animation pacing.
         refresh_hz: Option<f64>,
+        /// The display containing the target, whose frame clock paces the
+        /// animation. `None` when unknown (the timer paces it).
+        display: Option<DisplayId>,
+        /// The window starts on another display than the target's.
+        cross_display: bool,
     },
     /// A queued frame write for this window is no longer wanted; it must become
     /// inert before it is issued.
@@ -580,6 +585,75 @@ pub struct AppRecord {
     pub skipped: bool,
     /// Observation was installed.
     pub tracked: bool,
+}
+
+/// What the application's shard reported about its `AXEnhancedUserInterface`
+/// lease: counters plus the latest problem. Part 06 reads it to decide whether
+/// an application can be animated at all (see [`Self::cannot_keep_up`] and
+/// [`Self::set_failed`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EnhancedUiStats {
+    /// Leases taken (the attribute was on and was turned off).
+    pub leases: u64,
+    /// Leases restored.
+    pub restores: u64,
+    /// Failed attribute reads.
+    pub read_failures: u64,
+    /// Failed attempts to turn the attribute off.
+    pub set_failures: u64,
+    /// Failed restores.
+    pub restore_failures: u64,
+    /// Leases a third party ended by turning the attribute back on.
+    pub re_enables: u64,
+    /// Consecutive re-enabled leases right now (zero after a clean lease).
+    pub consecutive_re_enables: u32,
+    /// Whether `VoiceOver` kept the lease off for this application.
+    pub voice_over_skipped: bool,
+    /// The latest failure, re-enable or restore problem that is still current.
+    pub latest_problem: Option<EnhancedUiNote>,
+}
+
+impl EnhancedUiStats {
+    /// Folds one shard note in.
+    pub const fn record(&mut self, note: EnhancedUiNote) {
+        match note {
+            EnhancedUiNote::Leased => self.leases += 1,
+            EnhancedUiNote::Restored => {
+                self.restores += 1;
+                self.consecutive_re_enables = 0;
+                if matches!(self.latest_problem, Some(EnhancedUiNote::RestoreFailed(_))) {
+                    self.latest_problem = None;
+                }
+            }
+            EnhancedUiNote::ReadFailed(_) => {
+                self.read_failures += 1;
+                self.latest_problem = Some(note);
+            }
+            EnhancedUiNote::SetFailed(_) => {
+                self.set_failures += 1;
+                self.latest_problem = Some(note);
+            }
+            EnhancedUiNote::ReEnabled { consecutive } => {
+                self.re_enables += 1;
+                self.consecutive_re_enables = consecutive;
+                self.latest_problem = Some(note);
+            }
+            EnhancedUiNote::RestoreFailed(_) => {
+                self.restore_failures += 1;
+                self.latest_problem = Some(note);
+            }
+            EnhancedUiNote::VoiceOverSkipped => self.voice_over_skipped = true,
+        }
+    }
+
+    /// Whether something keeps turning the attribute back on: two or more
+    /// consecutive leases ended with a re-enable.
+    #[must_use]
+    pub const fn cannot_keep_up(&self) -> bool { self.consecutive_re_enables >= 2 }
+
+    /// Whether the attribute was on and could not be turned off.
+    #[must_use]
+    pub const fn set_failed(&self) -> bool { self.set_failures > 0 }
 }
 
 /// Unused placeholder kept for the state shape: the runtime-owned visibility
@@ -834,6 +908,10 @@ pub struct TilingState {
     /// transition; their windows keep their layout slot while their workspace
     /// is visible, unlike an application someone else hid.
     pub(crate) owned_hidden: BTreeSet<ApplicationId>,
+    /// Applications that move without animation (the instant fallback). The
+    /// actor copies them from the animation control before each transition;
+    /// the planner writes their windows directly.
+    pub(crate) animation_fallback: BTreeSet<ApplicationId>,
     pub(crate) tabs: TabRegistry,
     pub(crate) tab_outbox: TabOutbox,
     /// Mints the ids of slots (tab groups).
@@ -845,6 +923,8 @@ pub struct TilingState {
     pub(crate) health: Health,
     pub(crate) diagnostics: Diagnostics,
     pub(crate) drag: DragState,
+    /// Lease facts per application (bounded by the known applications).
+    pub(crate) enhanced_ui: BTreeMap<ApplicationId, EnhancedUiStats>,
 }
 
 impl TilingState {
@@ -852,6 +932,12 @@ impl TilingState {
     /// before a transition, so the transition itself stays pure.
     pub fn set_owned_hidden(&mut self, owned: BTreeSet<ApplicationId>) {
         self.owned_hidden = owned;
+    }
+
+    /// Replaces the applications that move without animation. Called by the
+    /// actor before a transition, so the transition itself stays pure.
+    pub fn set_animation_fallback(&mut self, fallback: BTreeSet<ApplicationId>) {
+        self.animation_fallback = fallback;
     }
 
     /// Takes what the last transition asked of the shell's clock.
@@ -905,6 +991,7 @@ impl TilingState {
             tombstone_order: VecDeque::new(),
             ledger: VisibilityLedger::default(),
             owned_hidden: BTreeSet::new(),
+            animation_fallback: BTreeSet::new(),
             tabs: TabRegistry::default(),
             tab_outbox: TabOutbox::default(),
             next_tab_group: 1,
@@ -915,7 +1002,15 @@ impl TilingState {
             health: Health::Healthy,
             diagnostics: Diagnostics::default(),
             drag: DragState::default(),
+            enhanced_ui: BTreeMap::new(),
         }
+    }
+
+    /// What the shard reported about `application`'s enhanced user interface
+    /// lease, if anything.
+    #[must_use]
+    pub fn enhanced_ui(&self, application: ApplicationId) -> Option<&EnhancedUiStats> {
+        self.enhanced_ui.get(&application)
     }
 
     /// Declares whether the backend reads native tab groups. Without reads
@@ -1096,6 +1191,7 @@ impl TilingState {
             apps: self.apps.values().cloned().collect(),
             tabs: self.tabs.status(self.windows.values().filter(|w| w.is_inactive_tab()).count()),
             drag: drag::report(self),
+            enhanced_ui: self.enhanced_ui.iter().map(|(app, stats)| (*app, *stats)).collect(),
         }
     }
 
@@ -1206,9 +1302,20 @@ pub struct TilingSnapshot {
     pub tabs: TabsStatus,
     /// The drag gesture in progress and the latest finished one.
     pub drag: DragReport,
+    /// The `AXEnhancedUserInterface` lease facts per application.
+    pub enhanced_ui: Vec<(ApplicationId, EnhancedUiStats)>,
 }
 
 impl TilingSnapshot {
+    /// The lease facts of one application.
+    #[must_use]
+    pub fn enhanced_ui_of(&self, application: ApplicationId) -> Option<&EnhancedUiStats> {
+        self.enhanced_ui
+            .iter()
+            .find(|(app, _)| *app == application)
+            .map(|(_, stats)| stats)
+    }
+
     /// An empty snapshot before the first turn.
     #[must_use]
     pub fn initial() -> Self { TilingState::new("").snapshot() }

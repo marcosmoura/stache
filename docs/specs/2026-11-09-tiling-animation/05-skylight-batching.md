@@ -1,5 +1,5 @@
 ---
-status: draft
+status: skipped
 ---
 
 # 05 — Optional SkyLight update batching

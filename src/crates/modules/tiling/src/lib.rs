@@ -67,16 +67,16 @@ pub use actor::{
     Turn, spawn_actor,
 };
 pub use animation::{
-    AnimationControl, AnimationJob, AnimationSettings, AnimationSink, AnimationWorker, Animator,
-    LiveSink, MAX_ANIMATED, MIN_ANIMATION_DISTANCE, SETTLE, SpringParams, SpringState, Transition,
-    apply_easing, wants_animation,
+    Ack, AckPort, AnimationControl, AnimationFrame, AnimationJob, AnimationSettings, AnimationSink,
+    AnimationWorker, Animator, FrameCounters, LiveSink, MAX_ANIMATED, MIN_ANIMATION_DISTANCE,
+    ReadKind, ReadReplyFn, SETTLE, SpringParams, SpringState, Transition, apply_easing,
+    wants_animation,
 };
 pub use backend::{
-    BackendError, LazySystemBackend, SystemWindowBackend, TILING_AX_OWNER_THREAD_NAME,
-    WindowBackend,
+    BackendError, LazySystemBackend, SystemWindowBackend, TILING_AX_THREAD_PREFIX, WindowBackend,
 };
 #[cfg(any(test, feature = "testing"))]
-pub use backend::{FakeBackendCall, FakeWindowBackend, SendHold};
+pub use backend::{FakeBackendCall, FakeWindowBackend, FrameBatchRecord, SendHold, SentFrame};
 pub use borders::{
     ANIMATION_FPS, BORDERS_THREAD_NAME, BordersControl, BordersParts, BordersWorker,
     ExecutorFactory, FRAME_PERIOD, FRAME_SEND_DEADLINE, Fault, FaultKind, FaultSink, FocusInput,

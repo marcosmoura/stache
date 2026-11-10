@@ -1,30 +1,48 @@
 //! Opt-in window animation.
 //!
 //! `easing`, `spring` and `transition` are the pure curves and interpolation
-//! ported from the legacy implementation. `worker` holds the animation engine
-//! (a deterministic stepper over a fake clock and writer) and the one owned
-//! worker thread around it; `control` is the lifecycle handle (spawned only
+//! ported from the legacy implementation. `worker` holds the animation
+//! coordinator (a deterministic engine over a fake clock and sink that sends
+//! one batch per application per tick and never waits for a write) and the
+//! one owned worker thread around it; `control` is the lifecycle handle (spawned only
 //! while `animations.enabled`, retired on disable and on stop) plus the live
 //! sink that routes every write through the existing [`crate::FrameControl`]
 //! issuance gate. Nothing here is a parallel write path, a global or a static.
 
 mod control;
 mod easing;
+mod fallback;
+mod metrics;
+mod pacing;
+mod size;
 mod spring;
 mod transition;
 mod worker;
 
 use std::time::Duration;
 
-pub use control::{AnimationControl, LiveSink};
+pub use control::{AnimationControl, AnimationReport, LiveSink};
 pub use easing::apply_easing;
+pub use fallback::FallbackReason;
+pub use metrics::{MetricsSummary, describe as describe_metrics};
 pub use spring::{SpringParams, SpringState};
 pub use transition::Transition;
-pub use worker::{AnimationJob, AnimationSink, AnimationWorker, Animator};
+pub use worker::{
+    Ack, AckPort, AnimationFrame, AnimationJob, AnimationShared, AnimationSink, AnimationWorker,
+    Animator, FrameCounters, ReadKind, ReadReplyFn,
+};
 
 use crate::config::{AnimationConfig, EasingType};
 use crate::geometry::Rect;
 
+#[cfg(test)]
+mod coordinator_tests;
+#[cfg(test)]
+mod fallback_tests;
+#[cfg(test)]
+mod pacing_tests;
+#[cfg(test)]
+mod pipeline_tests;
 #[cfg(test)]
 mod tests;
 
@@ -46,6 +64,12 @@ pub const MIN_SCALED_DISTANCE: f64 = 20.0;
 pub const SETTLE: Duration = Duration::from_millis(50);
 /// Windows animated at once (the planner's in-flight bound).
 pub const MAX_ANIMATED: usize = 16;
+/// How many frame periods a retargeted job waits for its one starting read
+/// before it starts from the last acknowledged frame instead.
+pub const RETARGET_READ_PERIODS: u32 = 2;
+/// How long the settle readback may stay unanswered before the job reports the
+/// final write's outcome without it.
+pub const SETTLE_READ_BUDGET: Duration = Duration::from_secs(2);
 
 /// The resolved parameters of an animation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

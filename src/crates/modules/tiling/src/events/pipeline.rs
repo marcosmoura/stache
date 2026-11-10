@@ -112,7 +112,8 @@ const fn event_application(kind: &WindowEventKind) -> Option<ApplicationId> {
         | WindowEventKind::EnumerationUnsettled { application, .. }
         | WindowEventKind::EnumerationAborted { application, .. }
         | WindowEventKind::ObserverOverflow { application } => Some(*application),
-        WindowEventKind::CapabilityChanged { .. } => None,
+        // Lease notes are bounded and never need a refresh.
+        WindowEventKind::CapabilityChanged { .. } | WindowEventKind::EnhancedUi { .. } => None,
     }
 }
 

@@ -27,6 +27,8 @@ use super::window_id::{WindowIdCapability, WindowIdError};
 pub type NodeId = usize;
 
 type WriteHook = Arc<dyn Fn() + Send + Sync>;
+type NodeWriteHook = Arc<dyn Fn(NodeId) + Send + Sync>;
+type EnhancedUiHook = Arc<dyn Fn(NodeId, bool) + Send + Sync>;
 
 /// One scripted fake element.
 #[derive(Clone, Debug)]
@@ -51,6 +53,12 @@ pub struct FakeNode {
     pub raise_result: Result<(), AxError>,
     /// The result of `set_hidden`; on success the node's `Hidden` bool follows.
     pub set_hidden_result: Result<(), AxError>,
+    /// `AXEnhancedUserInterface` of an application node. An application that
+    /// lacks the attribute fails the read with `AttributeUnsupported`.
+    pub enhanced_ui: Result<bool, AxError>,
+    /// The result of `set_enhanced_user_interface`; on success `enhanced_ui`
+    /// follows the written value.
+    pub set_enhanced_ui_result: Result<(), AxError>,
 }
 
 impl Default for FakeNode {
@@ -74,6 +82,8 @@ impl Default for FakeNode {
             timeout_result: Ok(()),
             raise_result: Ok(()),
             set_hidden_result: Ok(()),
+            enhanced_ui: Err(AxError::AttributeUnsupported),
+            set_enhanced_ui_result: Ok(()),
         }
     }
 }
@@ -96,6 +106,8 @@ pub enum Call {
     WindowId(NodeId),
     Raise(NodeId),
     SetHidden(NodeId, bool),
+    EnhancedUi(NodeId),
+    SetEnhancedUi(NodeId, bool),
     Observe(NodeId, super::AxNotification),
     Unobserve(NodeId, super::AxNotification),
 }
@@ -114,6 +126,8 @@ pub struct FakeWindowAx {
     live: Arc<AtomicUsize>,
     window_id_available: bool,
     write_hook: Arc<Mutex<Option<WriteHook>>>,
+    node_write_hook: Arc<Mutex<Option<NodeWriteHook>>>,
+    enhanced_ui_hook: Arc<Mutex<Option<EnhancedUiHook>>>,
 }
 
 impl std::fmt::Debug for FakeWindowElement {
@@ -152,6 +166,8 @@ impl FakeWindowAx {
             live: Arc::new(AtomicUsize::new(0)),
             window_id_available: true,
             write_hook: Arc::new(Mutex::new(None)),
+            node_write_hook: Arc::new(Mutex::new(None)),
+            enhanced_ui_hook: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -181,10 +197,39 @@ impl FakeWindowAx {
         *lock(&self.write_hook) = Some(Arc::new(hook));
     }
 
-    fn run_write_hook(&self) {
+    /// Like [`Self::on_write`], but told which node is being written, so a test
+    /// can stall or slow the writes of one application's windows only.
+    pub fn on_node_write(&self, hook: impl Fn(NodeId) + Send + Sync + 'static) {
+        *lock(&self.node_write_hook) = Some(Arc::new(hook));
+    }
+
+    /// Runs `hook` on the calling (owner) thread after every successful or
+    /// failed `set_enhanced_user_interface`, once the call is recorded and the
+    /// attribute updated. A test uses it to simulate a third party turning the
+    /// attribute back on mid-lease.
+    pub fn on_enhanced_ui_set(&self, hook: impl Fn(NodeId, bool) + Send + Sync + 'static) {
+        *lock(&self.enhanced_ui_hook) = Some(Arc::new(hook));
+    }
+
+    /// The recorded `AXEnhancedUserInterface` writes as `(node, value)`.
+    pub fn enhanced_ui_writes(&self) -> Vec<(NodeId, bool)> {
+        self.calls()
+            .into_iter()
+            .filter_map(|call| match call {
+                Call::SetEnhancedUi(node, on) => Some((node, on)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn run_write_hook(&self, node: NodeId) {
         let hook = lock(&self.write_hook).clone();
         if let Some(hook) = hook {
             hook();
+        }
+        let hook = lock(&self.node_write_hook).clone();
+        if let Some(hook) = hook {
+            hook(node);
         }
     }
 
@@ -330,7 +375,7 @@ impl WindowAx for FakeWindowAx {
             node.position = Ok(position);
         }
         drop(state);
-        self.run_write_hook();
+        self.run_write_hook(element.node);
         result
     }
 
@@ -343,7 +388,7 @@ impl WindowAx for FakeWindowAx {
             node.size = Ok(size);
         }
         drop(state);
-        self.run_write_hook();
+        self.run_write_hook(element.node);
         result
     }
 
@@ -462,13 +507,39 @@ impl WindowAx for FakeWindowAx {
             node.bools.insert(BoolAttribute::Hidden, Ok(hidden));
         }
         drop(state);
-        self.run_write_hook();
+        self.run_write_hook(application.node);
+        result
+    }
+
+    fn enhanced_user_interface(&self, application: &FakeWindowElement) -> Result<bool, AxError> {
+        self.read(application, Call::EnhancedUi(application.node), |node| {
+            node.enhanced_ui
+        })
+    }
+
+    fn set_enhanced_user_interface(
+        &self,
+        application: &FakeWindowElement,
+        on: bool,
+    ) -> Result<(), AxError> {
+        let mut state = lock(&self.state);
+        state.calls.push(Call::SetEnhancedUi(application.node, on));
+        let node = &mut state.nodes[application.node];
+        let result = node.set_enhanced_ui_result;
+        if result.is_ok() {
+            node.enhanced_ui = Ok(on);
+        }
+        drop(state);
+        let hook = lock(&self.enhanced_ui_hook).clone();
+        if let Some(hook) = hook {
+            hook(application.node, on);
+        }
         result
     }
 
     fn raise(&self, element: &FakeWindowElement) -> Result<(), AxError> {
         let result = self.read(element, Call::Raise(element.node), |node| node.raise_result);
-        self.run_write_hook();
+        self.run_write_hook(element.node);
         result
     }
 }

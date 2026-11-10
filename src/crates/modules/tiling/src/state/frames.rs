@@ -617,16 +617,21 @@ pub(super) fn plan_and_issue(state: &mut TilingState, fx: &mut Vec<Effect>) {
             status: AttemptStatus::InFlight,
         });
         // A just-revealed window is written directly, whatever the config says.
+        // An application in instant fallback gets one direct write per plan.
         let animate = !state.frames.revealed.remove(token)
+            && !state.animation_fallback.contains(&token.application())
             && animations
                 .as_ref()
                 .is_some_and(|config| crate::animation::wants_animation(config, &actual, target));
-        let refresh_hz = animate
-            .then(|| {
-                let display = state.display_of(*token)?;
-                state.screens.iter().find(|screen| screen.id == display)?.refresh_hz
-            })
-            .flatten();
+        // The move is paced by the display that will contain the target; it
+        // crosses displays when that differs from the one the window is on.
+        let start_display = animate.then(|| state.display_of(*token)).flatten();
+        let display = animate.then(|| target_display(state, *token, target)).flatten();
+        let cross_display = matches!((start_display, display), (Some(a), Some(b)) if a != b);
+        let refresh_hz = display
+            .or(start_display)
+            .and_then(|id| state.screens.iter().find(|screen| screen.id == id))
+            .and_then(|screen| screen.refresh_hz);
         if let Some(attempt) =
             state.frames.records.get_mut(token).and_then(|record| record.attempt.as_mut())
         {
@@ -643,6 +648,8 @@ pub(super) fn plan_and_issue(state: &mut TilingState, fx: &mut Vec<Effect>) {
             from: actual,
             animate,
             refresh_hz,
+            display,
+            cross_display,
         });
     }
     // A one-shot frame whose attempt already settled is spent.
@@ -933,4 +940,24 @@ pub(super) fn statuses(state: &TilingState) -> Vec<FrameStatus> {
             minimum: record.minimum.effective(),
         })
         .collect()
+}
+
+/// The display containing `target`, else the window's workspace screen.
+fn target_display(
+    state: &TilingState,
+    token: stache_macos::windows::WindowInstance,
+    target: &Rect,
+) -> Option<stache_macos::DisplayId> {
+    state
+        .layout
+        .display_for_ax_rect(stache_macos::applications::DisplayRect::new(
+            target.x,
+            target.y,
+            target.width,
+            target.height,
+        ))
+        .or_else(|| {
+            let id = state.windows.get(&token)?.desired.workspace?;
+            state.workspaces.iter().find(|ws| ws.id == id).map(|ws| ws.screen)
+        })
 }

@@ -762,6 +762,63 @@ fn an_invalid_reload_is_held_and_repaired_independently_of_cleanup() {
     host.disable();
 }
 
+// ------------------------------------------------------------- TA-04-03
+
+#[test]
+fn the_lease_restore_follows_the_drain_and_precedes_the_hidden_restore() {
+    let host = Host::started();
+    host.disable();
+    let trace = host.trace();
+    let position = |step| trace.iter().position(|s| *s == step).expect("traced");
+    assert!(position(Teardown::Drained) < position(Teardown::Animation));
+    assert!(position(Teardown::Animation) < position(Teardown::EnhancedUi));
+    assert!(position(Teardown::EnhancedUi) < position(Teardown::Restore));
+    assert!(position(Teardown::Restore) < position(Teardown::Epoch));
+    assert!(
+        host.backend.calls().contains(&FakeBackendCall::RestoreLeases),
+        "the backend was asked to restore its leases"
+    );
+}
+
+#[test]
+fn a_failed_lease_restore_stays_owed_and_the_retry_restores_it() {
+    let host = Host::started();
+    host.backend
+        .script_lease_restore(stache_macos::windows::LeaseRestoreOutcome::Owed {
+            applications: vec![crate::test_support::app(1)],
+        });
+    host.disable();
+    let status = host.runtime.status().read();
+    assert_eq!(status.state, TilingRuntimeState::Quarantined, "{status:?}");
+    assert_eq!(status.owed, ["enhanced ui restore"], "{status:?}");
+    assert!(
+        status
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("AXEnhancedUserInterface")),
+        "{status:?}"
+    );
+    assert!(!host.trace().contains(&Teardown::EnhancedUi));
+    // The rest of the stop ran: the visibility restore does not wait for it.
+    assert!(host.trace().contains(&Teardown::Restore));
+    assert!(host.trace().contains(&Teardown::Epoch));
+
+    host.enable();
+    assert_eq!(
+        host.status(),
+        ModuleStatus::Running,
+        "{:?}",
+        host.runtime.status().read()
+    );
+    assert_eq!(
+        host.trace().iter().filter(|s| **s == Teardown::EnhancedUi).count(),
+        1,
+        "the lease restore completes once"
+    );
+    assert_eq!(host.stops(), 1, "the epoch was not stopped twice");
+    host.disable();
+}
+
 // ------------------------------------------------------------- TI-05-04
 
 #[test]
@@ -774,6 +831,7 @@ fn a_clean_stop_drains_before_restore_before_observer_removal() {
         Teardown::Drag,
         Teardown::Drained,
         Teardown::Animation,
+        Teardown::EnhancedUi,
         Teardown::Restore,
         Teardown::Watcher,
         Teardown::Epoch,
@@ -799,7 +857,15 @@ fn stop_seals_while_a_send_is_held_then_quarantines_truthfully() {
     assert_eq!(status.state, TilingRuntimeState::Quarantined);
     assert!(status.owed.contains(&"frame drain".to_owned()), "{status:?}");
     assert!(status.owed.contains(&"restore".to_owned()), "{status:?}");
-    assert!(status.owed.contains(&"effect worker".to_owned()), "{status:?}");
+    assert!(
+        status.owed.contains(&"enhanced ui restore".to_owned()),
+        "no lease is restored while a send could still take one: {status:?}"
+    );
+    assert!(!host.trace().contains(&Teardown::EnhancedUi));
+    assert!(
+        !status.owed.contains(&"effect worker".to_owned()),
+        "frame writes are asynchronous: the effect worker is not stuck: {status:?}"
+    );
     assert!(!status.owed.contains(&"backend epoch".to_owned()));
     assert!(matches!(host.status(), ModuleStatus::Failed(_)));
     // Restore never ran while a send could still move a window.
@@ -1154,6 +1220,7 @@ mod visibility {
             Teardown::Drag,
             Teardown::Drained,
             Teardown::Animation,
+            Teardown::EnhancedUi,
             Teardown::Restore,
             Teardown::Watcher,
             Teardown::Epoch,
@@ -1363,6 +1430,7 @@ mod production_surface {
             Teardown::Drag,
             Teardown::Drained,
             Teardown::Animation,
+            Teardown::EnhancedUi,
             Teardown::Restore,
             Teardown::Watcher,
             Teardown::Displays,
@@ -1912,6 +1980,31 @@ mod animation {
     }
 
     #[test]
+    fn a_reload_that_turns_animations_off_leaves_leases_to_the_grace() {
+        // Disabling animations is a configuration change, not a stop: the worker
+        // retires, the epoch keeps running, and the leases expire on their own
+        // after the idle grace; nothing is restored early.
+        let host = animated_host();
+        wait_until("the worker started", || running(&host));
+        let stops = host.stops();
+        let mut off = animated();
+        off.animations.enabled = false;
+        host.reload(off).expect("turn animations off");
+        wait_until("the worker retired", || !running(&host));
+        wait_until("adopted", || {
+            host.runtime_revision() == host.revision().to_string()
+        });
+        assert!(
+            !host.backend.calls().contains(&FakeBackendCall::RestoreLeases),
+            "a reload does not restore leases"
+        );
+        assert_eq!(host.stops(), stops, "a reload does not stop the epoch");
+        assert_eq!(host.state(), TilingRuntimeState::Running);
+        assert!(!host.trace().contains(&Teardown::EnhancedUi));
+        host.disable();
+    }
+
+    #[test]
     fn a_reload_starts_and_stops_the_worker_live() {
         let host = Host::started();
         assert!(!running(&host));
@@ -2035,6 +2128,7 @@ mod animation {
             Teardown::Drag,
             Teardown::Drained,
             Teardown::Animation,
+            Teardown::EnhancedUi,
             Teardown::Restore,
             Teardown::Watcher,
             Teardown::Epoch,

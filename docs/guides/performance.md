@@ -171,11 +171,57 @@ average is always shown. Misses are listed explicitly; targets are not relaxed.
 These are deterministic bounds, not measurements (live figures need a per-run
 approved measurement). Disabled Tiling owns no worker, timer or tap. Geometry
 flushes run no faster than the configured display rate, clamped to 30–360 Hz
-(60 Hz fallback). Animation is off by default and spawns its single worker only
-when `animations.enabled`; it keeps one latest plan per window in a mailbox of at
-most 16 windows, paces frames at that same clamped rate, never retries a refused
-or partial frame, and is capped at 1000 ms per move. The animation worker and its
-pacing are **unverified** on real hardware.
+(60 Hz fallback). Animation is off by default and spawns its single coordinator
+thread (`stache-tiling-animation`) only when `animations.enabled`. The
+coordinator never makes an AX call and never waits for a write: each tick it
+sends one batch per application to that application's AX thread, whose mailbox
+holds at most one pending frame per window, so a slow application skips frames
+and never delays another. It keeps one latest plan per window in a mailbox of at
+most 16 windows, paces frames with one display clock per display that has
+running animations (below), never retries a refused or partial frame, and is capped at
+1000 ms per move. Intermediate frames are write-only with no `AXWindows` listing
+and no readback; the first and final frames list membership, and each animation
+takes one settle readback (plus one at a retarget). Non-animated frame writes are
+submitted the same way, so the effect worker never blocks on a native write. The
+coordinator and its pacing are **unverified** on real hardware.
+
+Animation pacing owns one `CVDisplayLink` per display with running animations,
+created on its first job and stopped when it has none: idle and disabled Tiling
+own zero clocks. The link's callback thread belongs to CoreVideo and does one
+atomic store and one short mailbox lock plus a condition-variable notify per
+refresh (no AX call, no allocation, no lock held while calling out); the
+coordinator thread wakes once per refresh of a display that animates, takes only
+the latest tick, and computes one frame per window for it, so a late wake skips
+frames instead of bursting. Stopping a clock waits at most 100 ms for a callback
+in flight; a clock that will not stop is kept and retried. A display without a
+clock falls back to the timer at the clamped rate and reports it in status. The
+display-link availability, cadence and ProMotion behavior on macOS 26 are
+**unverified**. While the size changes, every frame writes the interpolated size with the
+position (the final frame writes the exact target), so content may relayout on
+each written frame; how each application copes with that is **unverified**.
+
+Tiling's AX work runs on one thread per tracked application
+(`stache-tiling-ax-<n>`, at most 32; applications beyond that share
+`stache-tiling-ax-overflow`), started on the first `track` and ended on
+`untrack` or stop. A disabled Tiling, and a running one before its first
+tracked application, own none. Every shard queue holds at most 64 commands and
+one slow application never delays another's actions or snapshots. The cost of
+one run loop and observer per thread is **unverified**.
+
+Threads an enabled, animating Tiling owns (all others are existing application
+threads): one `stache-tiling-ax-<n>` AX shard per tracked application (at most
+32), the shared `stache-tiling-ax-overflow` shard for applications beyond that,
+the single `stache-tiling-animation` coordinator, and one CoreVideo-owned
+callback thread per display clock while that display has a running animation.
+The shards and the overflow shard make every native write; the coordinator and
+the clock callbacks make none. The animation metrics cost the coordinator one
+short lock at the end of each animation (a fixed 64-sample latency array per
+running animation, a book of at most 8 animations for each of at most 64
+applications) and no AX call; status takes the same lock to read. SkyLight
+batching is not used, so no private window-server call or extra thread exists.
+Whether those threads, their wakeups and CPU cost are acceptable is
+**unverified**; the instant fallback (see [Tiling](../features/tiling.md#animation))
+bounds the cost of an application that cannot keep up.
 
 Borders are off by default and then own no thread, port, child or timer. Enabled,
 they spawn one runner thread holding the latest pending update; animation frames
@@ -183,6 +229,65 @@ are capped at **8 per second**, a Mach send at 0.5 s, a helper CLI child at 2 s
 (plus 2 s to reap, 64 KiB per output stream), and the stop join at the sum of
 those. Waits are cancellation-wakeable and no lock is held across a send or a
 sleep. The achieved rate and JankyBorders' own load are **unverified**.
+
+## Animation measurement method
+
+**Status: unverified. No approved native run has been recorded.** Every number
+a run would produce is marked "unverified: no approved native run yet" until one
+is recorded here with its raw samples. The run needs its own per-run approval
+under [validation](../specs/2026-11-03-tiling/validation.md#per-run-native-approval)
+naming the exact application instances, the temporary Tiling config, the display
+and the cleanup. Nothing in the default build or the test suites runs it, and no
+binary for it ships.
+
+**Scenario.**
+
+- Display: one named display. Record its refresh rate (and whether it is
+  ProMotion), the macOS version and the hardware build.
+- Config: a temporary `tiling.toml` with `[animations]` `enabled = true`,
+  `duration = 200`, `easing = "ease_out"`, and one workspace in the `master`
+  layout holding Ghostty, Zed, Safari (or Aside) and Spotify.
+- Action: 10 toggles `master` to `monocle` and 10 `monocle` to `master`, each
+  after the previous animation settled; repeat the set three times with a warmup
+  set first.
+- Record per application: effective rate, dropped frames, per-write latency p50
+  and p95, end lag (the final write's acknowledgement minus the tick or timer
+  deadline that produced it), whether Enhanced UI was on and leased, whether the instant
+  fallback triggered and why, thread count, and CPU and wakeups during the run
+  against the same run with animations off. The first five come from the status
+  `animation metrics` and `animation:` diagnostic lines; the rest from the
+  system's process tools.
+- Cleanup: restore the user's config, leave no lease open and report exactly
+  what the run owned.
+
+**Pass criterion.** Every scenario application either (a) has a median effective
+rate of at least half the display refresh, a p95 end lag of at most one frame
+period and zero writes after its settle readback, or (b) is in instant fallback
+with its diagnostic. All four applications must meet (a): a fallback for any of
+the four fails the run. Visual smoothness is judged by the user. The effective
+rate is measured at the AX acknowledgement, **not** at on-screen presentation,
+which cannot be observed without Screen Recording.
+
+The criterion above is the target of the native run. The shipped automatic
+fallback is looser and absolute: one record per application per layout change,
+bad below 15 written frames per second or more than 250 ms of end lag, and the
+fallback triggers when 2 of the last 3 records are bad. Pacing still targets the
+display's native refresh.
+
+**Results.**
+
+| Item                                                 | Result                                 |
+| ---------------------------------------------------- | -------------------------------------- |
+| Display, refresh rate, macOS, hardware               | unverified: no approved native run yet |
+| Effective rate per application                       | unverified: no approved native run yet |
+| Dropped frames per application                       | unverified: no approved native run yet |
+| Write latency p50 / p95 per application              | unverified: no approved native run yet |
+| End lag p95 per application                          | unverified: no approved native run yet |
+| Enhanced UI on and leased per application            | unverified: no approved native run yet |
+| Fallback triggered and why                           | unverified: no approved native run yet |
+| Thread count, CPU and wakeups against animations off | unverified: no approved native run yet |
+| Zero writes after the settle readback                | unverified: no approved native run yet |
+| On-screen smoothness                                 | unverified: no approved native run yet |
 
 ## Known limitations
 

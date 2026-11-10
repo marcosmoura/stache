@@ -4,7 +4,7 @@ branch: feat/tiling-animation
 
 # Tiling animation pipeline
 
-Read when planning or implementing the faster opt-in Tiling animation path. **DRAFT — NOT SHIPPED.** Every part needs separate approval, and every native gate needs its own per-run approval under [validation](../2026-11-03-tiling/validation.md#per-run-native-approval). This document authorizes no native run.
+Read when planning or implementing the faster opt-in Tiling animation path. **Parts 01–04 and 06 are implemented on this branch; part 05 is skipped; the TA-06-03 native measurement is unverified.** Every native run still needs its own per-run approval under [validation](../2026-11-03-tiling/validation.md#per-run-native-approval). This document authorizes no native run.
 
 ## Goal
 
@@ -33,7 +33,7 @@ Workspace switches already never animate (`state/frames.rs:619–622`, the `reve
 
 Approved by the user on 2026-11-09.
 
-1. Build the Rift-style AX pipeline: per-application AX threads, latest-frame-wins per-window mailboxes, per-application frame batches, no per-frame readback, display-link pacing, position-only interactive frames and a batch-scoped Enhanced UI suppression lease. No Screen Recording, snapshot proxy or SIP-requiring API.
+1. Build the Rift-style AX pipeline: per-application AX threads, latest-frame-wins per-window mailboxes, per-application frame batches, no per-frame readback, display-link pacing, position-only interactive frames (superseded 2026-11-10: size animates on every frame, see Resolved questions) and a batch-scoped Enhanced UI suppression lease. No Screen Recording, snapshot proxy or SIP-requiring API.
 2. Minimal private SkyLight APIs are allowed behind compile gates and approved native checks, with a public fallback, under the same policy as `_AXUIElementGetWindow` (`macos/src/ax/window_id.rs:1–19`: runtime `dlsym`, explicit capability, nothing else disabled when absent).
 3. When the smooth path is unavailable, or an application cannot keep up, its windows are placed instantly (one final write) and status shows a diagnostic. Never janky stepping.
 4. Workspace switches never animate (already on `main` since `ba51f20`; keep).
@@ -47,6 +47,12 @@ Approved by the user on 2026-11-09.
 - **OQ-3 (part 04): hard-kill residue — documented limit.** No journal; a crash or SIGKILL during a lease leaves the attribute off for that application until it relaunches. Documented in the feature doc.
 - **OQ-4 (part 06): pass threshold — all four.** Every listed application (Ghostty, Zed, Safari or Aside, Spotify) must meet the smooth criterion in the approved native run; a fallback for any of them fails the run. The per-application instant fallback still ships for other applications.
 - **OQ-5: Reduce Motion — no change.** `animations.enabled` alone decides; the system Reduce Motion setting does not override it.
+- **Size animation (2026-11-10, user):** after a real run, position-only frames with a snapped size looked wrong; every frame now carries the interpolated size while the size changes, and the final frame always writes the exact target. Pacing is unchanged (native refresh, latest frame wins).
+- **Fallback thresholds (2026-11-10, user):** pacing keeps the native display refresh; the automatic fallback counts one record per application per layout change and triggers below 30 written frames per second or more than 50 ms end lag in 2 of the last 3, replacing refresh/2 and one frame period after a real 120 Hz run put Zed (≈70 fps, 14 ms) in fallback after one layout change. Raised to 15 Hz / 250 ms the same day so that per-frame size writes on multi-window applications (serialized per application, about 10 ms each) never trip it; it is a last resort.
+
+## Part 05 decision (2026-11-10)
+
+The user decided to **skip part 05** (SkyLight update batching). It stays `skipped`; its fallback, public AX writes paced per display, is the shipped behavior. No private SkyLight symbol is resolved or linked. This recorded decision satisfies the sequencing rule for merging with part 05 not `done`.
 
 ## Sources
 
@@ -65,14 +71,14 @@ Research by the orchestrator, 2026-11-09; not re-verified while writing this spe
 
 ## Parts
 
-| Part                             | Summary                                                                        | Status |
-| -------------------------------- | ------------------------------------------------------------------------------ | ------ |
-| [01](01-application-shards.md)   | Per-application AX owner shards behind the existing adapter                    | draft  |
-| [02](02-async-frame-pipeline.md) | Asynchronous latest-frame mailboxes, per-app batches, no per-frame readback    | draft  |
-| [03](03-display-pacing-size.md)  | Display-link pacing, position-only frames and the size envelope                | draft  |
-| [04](04-enhanced-ui-lease.md)    | `AXEnhancedUserInterface` suppression lease on every frame write path          | draft  |
-| [05](05-skylight-batching.md)    | Optional, gated SkyLight update batching with public fallback                  | draft  |
-| [06](06-measurement-fallback.md) | Metrics, approved native measurement, instant fallback policy and lasting docs | draft  |
+| Part                             | Summary                                                                        | Status  |
+| -------------------------------- | ------------------------------------------------------------------------------ | ------- |
+| [01](01-application-shards.md)   | Per-application AX owner shards behind the existing adapter                    | done    |
+| [02](02-async-frame-pipeline.md) | Asynchronous latest-frame mailboxes, per-app batches, no per-frame readback    | done    |
+| [03](03-display-pacing-size.md)  | Display-link pacing, position-only frames and the size envelope                | done    |
+| [04](04-enhanced-ui-lease.md)    | `AXEnhancedUserInterface` suppression lease on every frame write path          | done    |
+| [05](05-skylight-batching.md)    | Optional, gated SkyLight update batching with public fallback                  | skipped |
+| [06](06-measurement-fallback.md) | Metrics, approved native measurement, instant fallback policy and lasting docs | done    |
 
 ## Sequencing
 

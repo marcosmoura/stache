@@ -57,6 +57,21 @@ pub enum StartStage {
 /// A failpoint: returns `true` to make `stage` fail before it acquires anything.
 pub type StageProbe = Arc<dyn Fn(StartStage) -> bool + Send + Sync>;
 
+/// The frame clocks of a run that injected none: the system display link, never
+/// in this crate's own tests (they pace with the timer fallback).
+fn default_frame_clocks() -> Arc<dyn stache_macos::FrameClockFactory> {
+    #[cfg(test)]
+    {
+        Arc::new(stache_macos::FakeFrameClockFactory::failing(
+            "default tests never create a display link",
+        ))
+    }
+    #[cfg(not(test))]
+    {
+        Arc::new(stache_macos::SystemFrameClockFactory)
+    }
+}
+
 /// Harness options.
 #[derive(Clone)]
 pub struct TrackingOptions {
@@ -82,6 +97,9 @@ pub struct TrackingOptions {
     pub borders_sink: Option<FaultSink>,
     /// The host logger, scoped to the module. `None` is silent.
     pub logger: Option<stache_sdk::ScopedLogger>,
+    /// Creates the per-display frame clocks that pace animations. `None` uses
+    /// the system display link; tests inject a fake.
+    pub frame_clocks: Option<Arc<dyn stache_macos::FrameClockFactory>>,
 }
 
 impl std::fmt::Debug for TrackingOptions {
@@ -111,6 +129,7 @@ impl TrackingOptions {
             borders: None,
             borders_sink: None,
             logger: None,
+            frame_clocks: None,
         }
     }
 
@@ -277,12 +296,15 @@ impl TrackingRuntime {
         let visibility = Arc::new(VisibilityControl::new());
         let origin = crate::logclock::LogOrigin::new(Instant::now());
         // Inert: no worker, thread or timer until an enabled configuration.
-        let animation = Arc::new(AnimationControl::live(
+        let animation = Arc::new(AnimationControl::live_logged(
             Arc::clone(&backend),
             Arc::clone(&ingress),
             Arc::clone(&frames),
             Arc::clone(&clock),
+            options.frame_clocks.clone().unwrap_or_else(default_frame_clocks),
             cancel.clone(),
+            options.logger.clone(),
+            origin,
         ));
         // Inert: no thread, port or child until an enabled configuration.
         let borders = Arc::new(BordersControl::new(
@@ -323,6 +345,7 @@ impl TrackingRuntime {
             clock,
         );
         engine.set_frame_control(Arc::clone(&frames));
+        engine.set_animation_control(Arc::clone(&animation));
         engine.set_visibility_control(Arc::clone(&visibility));
         engine.set_logger(options.logger.clone(), origin);
         visibility.set_logger(options.logger.clone(), origin);
@@ -474,6 +497,11 @@ impl TrackingRuntime {
     #[must_use]
     pub fn animation_failure(&self) -> Option<String> { self.animation.spawn_failure() }
 
+    /// Why some display is paced by the deadline timer instead of a frame
+    /// clock, if any is.
+    #[must_use]
+    pub fn animation_pacing(&self) -> Vec<String> { self.animation.pacing_diagnostics() }
+
     /// Submits an accepted configuration revision.
     ///
     /// While the authority is published the gate adopts the revision first, so
@@ -569,6 +597,11 @@ impl TrackingRuntime {
         self.animation.join_within(hop)
     }
 
+    /// Retries the frame clocks that did not stop with the animation worker,
+    /// within `hop`. `true` when none is left.
+    #[must_use]
+    pub fn stop_frame_clocks(&self, hop: Duration) -> bool { self.animation.release_clocks(hop) }
+
     /// The borders runner handle.
     #[must_use]
     pub const fn borders(&self) -> &Arc<BordersControl> { &self.borders }
@@ -596,6 +629,15 @@ impl TrackingRuntime {
             .as_deref()
             .map(ApplicationActions::running_details)
             .unwrap_or_default()
+    }
+
+    /// Restores every open `AXEnhancedUserInterface` lease now (ignoring the idle
+    /// grace), after the frame drain and before the runtime-hidden restore.
+    /// Owned cleanup, allowed after the seal. A lease that fails stays owed on
+    /// its shard; the epoch stop and its retry restore it again.
+    #[must_use]
+    pub fn restore_enhanced_ui(&self, hop: Duration) -> stache_macos::windows::LeaseRestoreOutcome {
+        self.backend.restore_enhanced_ui(Instant::now().checked_add(hop))
     }
 
     /// Restores what the runtime hid, after the frame drain. Uses a fresh
@@ -661,6 +703,7 @@ impl TrackingRuntime {
         }
         self.animation.stop();
         let _ = self.animation.join_within(HOP);
+        let _ = self.animation.release_clocks(HOP);
         let _ = self.stop_borders(crate::borders::JOIN_BOUND);
         self.runner.close();
         self.backend.stop(self.epoch, &self.gate, None)

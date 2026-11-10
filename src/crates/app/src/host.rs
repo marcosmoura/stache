@@ -716,7 +716,9 @@ impl TilingFactory {
     /// starts:
     ///
     /// - the window backend is [`stache_tiling::LazySystemBackend`]: the
-    ///   `stache-tiling-ax-owner` thread starts on the first epoch install;
+    ///   adapter is created on the first epoch install and its
+    ///   `stache-tiling-ax-<n>` shard threads start on the first tracked
+    ///   applications;
     /// - applications come from the run's own application observation over a
     ///   Tiling-private [`ApplicationControl`] (like every other consumer, one
     ///   control per module), used for exact hide, unhide, activation and the
@@ -738,6 +740,8 @@ impl TilingFactory {
                 stache_macos::windows::AdapterOptions {
                     read_tabs: false,
                     read_tab_bars: true,
+                    // `None`: the system adapter probes VoiceOver itself.
+                    ..stache_macos::windows::AdapterOptions::default()
                 },
             )),
             Arc::new(NoApplications),

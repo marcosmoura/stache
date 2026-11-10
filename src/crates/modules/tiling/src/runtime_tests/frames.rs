@@ -141,6 +141,147 @@ fn a_user_command_is_the_only_thing_that_retries_a_refused_frame() {
     assert_eq!(rig.backend.action_count(), 2);
 }
 
+#[test]
+fn the_effect_runner_returns_while_a_direct_write_is_held() {
+    let (mut rig, window) = Rig::framed();
+    let hold = rig.backend.hold_sends();
+    rig.backend.script_action(applied(TARGET));
+    // The inline runner would never return if the write blocked it.
+    rig.authorize();
+    assert!(
+        hold.wait_entered(1, Duration::from_secs(10)),
+        "the write is held in its shard"
+    );
+    assert_eq!(rig.frames.outstanding(), 1, "the write is owed");
+    let status = rig.snap().frames.iter().find(|s| s.window == window).cloned().expect("status");
+    assert!(status.in_flight && status.outcome.is_none(), "{status:?}");
+    // The actor keeps running while the write is held.
+    rig.pump();
+    assert_eq!(
+        rig.backend.action_count(),
+        1,
+        "the held write is still the only one sent"
+    );
+
+    hold.release();
+    rig.pump();
+    assert_eq!(rig.frames.outstanding(), 0);
+    let status = rig.snap().frames.iter().find(|s| s.window == window).cloned().expect("status");
+    assert!(
+        matches!(status.outcome, Some(OperationOutcome::Applied { .. })),
+        "{status:?}"
+    );
+    assert_eq!(status.actual, Some(TARGET), "the direct write read back once");
+    assert_eq!(rig.backend.sent_frames().len(), 1);
+    assert_eq!(
+        rig.backend.sent_frames()[0].stage,
+        stache_macos::windows::FrameStage::Direct
+    );
+}
+
+#[test]
+fn a_full_coordinator_falls_back_to_one_direct_write() {
+    use crate::actor::EffectEnv;
+    use crate::animation::{AnimationControl, AnimationJob, AnimationSettings};
+    use crate::config::AnimationConfig;
+    use crate::state::{Effect, Stamp};
+
+    let backend = Arc::new(FakeWindowBackend::default());
+    backend.script_echo_frames(true);
+    let gate = Arc::new(GenerationCell::new());
+    gate.publish(1, 1);
+    let epoch = backend.install(EventQueue::new(8), Arc::clone(&gate), None).expect("install");
+    let clock = Arc::new(ManualClock::default());
+    let frames = Arc::new(FrameControl::new(
+        Arc::clone(&gate),
+        Arc::clone(&clock) as Arc<dyn crate::actor::Clock>,
+    ));
+    let ingress = Arc::new(Ingress::new(Pipeline::with_bounds(
+        64,
+        crate::events::COMPLETION_CAPACITY,
+        GeometryCoalescer::default(),
+    )));
+    let cancel = CancellationToken::new();
+    let animation = Arc::new(AnimationControl::live(
+        Arc::clone(&backend) as Arc<dyn WindowBackend>,
+        Arc::clone(&ingress),
+        Arc::clone(&frames),
+        Arc::clone(&clock) as Arc<dyn crate::actor::Clock>,
+        Arc::new(stache_macos::FakeFrameClockFactory::failing("timer"))
+            as Arc<dyn stache_macos::FrameClockFactory>,
+        cancel.clone(),
+    ));
+    animation
+        .configure(&AnimationConfig {
+            enabled: true,
+            ..AnimationConfig::default()
+        })
+        .expect("worker");
+    let env = EffectEnv {
+        backend: Arc::clone(&backend) as Arc<dyn WindowBackend>,
+        directory: Arc::new(FakeAppDirectory::default()) as Arc<dyn AppDirectory>,
+        ingress: Arc::clone(&ingress),
+        cancel,
+        frames: Arc::clone(&frames),
+        visibility: Arc::new(crate::VisibilityControl::new()),
+        actions: None,
+        animation: Arc::clone(&animation),
+    };
+    let stamp = Stamp { epoch, registry: 1 };
+    let components = FrameComponents { position: true, size: true };
+    let from = Rect::new(0.0, 0.0, 100.0, 100.0);
+    // Fill the coordinator with jobs that wait a long time for their first frame.
+    for serial in 1..=crate::animation::MAX_ANIMATED as u64 {
+        let window = WindowInstance::for_testing(backend.adapter(), epoch, app(1), serial);
+        frames.note_dispatched(window, serial);
+        animation
+            .submit(AnimationJob {
+                stamp,
+                revision: 1,
+                plan_sequence: serial,
+                window,
+                from,
+                target: TARGET,
+                components,
+                period: Duration::from_secs(30),
+                display: None,
+                cross_display: false,
+                settings: AnimationSettings::default(),
+            })
+            .expect("room");
+    }
+    let overflow = WindowInstance::for_testing(backend.adapter(), epoch, app(1), 99);
+    frames.note_dispatched(overflow, 99);
+    env.run(&Effect::WriteFrame {
+        stamp,
+        revision: 1,
+        plan_sequence: 99,
+        window: overflow,
+        target: TARGET,
+        components,
+        from,
+        animate: true,
+        refresh_hz: Some(60.0),
+        display: None,
+        cross_display: false,
+    });
+    let sent = backend.sent_frames();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(
+        (sent[0].window, sent[0].stage, sent[0].frame),
+        (overflow, stache_macos::windows::FrameStage::Direct, Some(TARGET)),
+        "never a silent drop: the window gets one direct write"
+    );
+    assert_eq!(
+        frames.outstanding(),
+        crate::animation::MAX_ANIMATED,
+        "only the waiting jobs"
+    );
+    animation.stop();
+    assert!(animation.join_within(Duration::from_secs(5)));
+    assert_eq!(frames.outstanding(), 0, "stopping ended every waiting job");
+}
+
 // ----------------------------------------------------------- frame control
 
 fn control(
@@ -168,6 +309,20 @@ fn job(window: WindowInstance, plan: u64) -> FrameJob {
     }
 }
 
+/// One direct write and the outcome its reply carried.
+fn direct(
+    control: &FrameControl,
+    backend: &FakeWindowBackend,
+    cancel: &CancellationToken,
+    job: &FrameJob,
+) -> WindowActionOutcome {
+    let (tx, rx) = std::sync::mpsc::channel();
+    control.submit_direct(backend, cancel, job, move |outcome| {
+        tx.send(outcome).expect("reply receiver");
+    });
+    rx.recv_timeout(Duration::from_secs(5)).expect("the reply ran")
+}
+
 #[test]
 fn a_superseded_or_cancelled_queued_write_is_inert() {
     let backend = FakeWindowBackend::default();
@@ -178,12 +333,12 @@ fn a_superseded_or_cancelled_queued_write_is_inert() {
     control.note_dispatched(window, 2);
     // Plan one was replaced before it ran.
     assert_eq!(
-        control.execute(&backend, &cancel, &job(window, 1)),
+        direct(&control, &backend, &cancel, &job(window, 1)),
         WindowActionOutcome::NotIssued(NotIssuedReason::Superseded)
     );
     control.cancel(window);
     assert_eq!(
-        control.execute(&backend, &cancel, &job(window, 2)),
+        direct(&control, &backend, &cancel, &job(window, 2)),
         WindowActionOutcome::NotIssued(NotIssuedReason::Superseded)
     );
     assert_eq!(backend.action_count(), 0, "inert writes never reach the backend");
@@ -200,31 +355,31 @@ fn the_gate_facts_are_checked_before_every_dispatch() {
     control.note_dispatched(window, 1);
     // Nothing published: not live.
     assert_eq!(
-        control.execute(&backend, &cancel, &job(window, 1)),
+        direct(&control, &backend, &cancel, &job(window, 1)),
         WindowActionOutcome::NotIssued(NotIssuedReason::GenerationInvalid)
     );
     gate.publish(2, 1);
     assert_eq!(
-        control.execute(&backend, &cancel, &job(window, 1)),
+        direct(&control, &backend, &cancel, &job(window, 1)),
         WindowActionOutcome::NotIssued(NotIssuedReason::GenerationInvalid),
         "another registry's generation"
     );
     gate.publish(1, 1);
     backend.script_action(applied(TARGET));
     assert!(matches!(
-        control.execute(&backend, &cancel, &job(window, 1)),
+        direct(&control, &backend, &cancel, &job(window, 1)),
         WindowActionOutcome::Issued { kind: IssuedKind::Applied, .. }
     ));
     // The cancelled caller token never sends.
     let cancelled = CancellationToken::new();
     cancelled.cancel();
     assert_eq!(
-        control.execute(&backend, &cancelled, &job(window, 1)),
+        direct(&control, &backend, &cancelled, &job(window, 1)),
         WindowActionOutcome::NotIssued(NotIssuedReason::Cancelled)
     );
     gate.seal();
     assert_eq!(
-        control.execute(&backend, &cancel, &job(window, 1)),
+        direct(&control, &backend, &cancel, &job(window, 1)),
         WindowActionOutcome::NotIssued(NotIssuedReason::Sealed)
     );
     assert_eq!(backend.action_count(), 1);
@@ -356,6 +511,9 @@ fn invalidation_completes_while_a_send_is_held_and_queued_writes_become_inert() 
     // One write is stalled inside the (fake) native send, the other queued behind it.
     assert!(hold.wait_entered(1, Duration::from_secs(10)), "a send is held");
     wait_until("both outstanding", || live.runtime.outstanding_frames() == 2);
+    // Direct writes are submitted asynchronously: seal only once the second one
+    // is queued at the shard, else it is (correctly) refused before it queues.
+    wait_until("second queued", || live.backend.pending_frames(app(1)) == 1);
 
     // Logical invalidation is one atomic store: it returns at once.
     let started = Instant::now();
@@ -389,15 +547,20 @@ fn shutdown_seals_before_it_waits_on_a_stalled_send() {
     live.backend.script_action(applied(TARGET));
     assert!(live.runtime.authorize(1));
     assert!(hold.wait_entered(1, Duration::from_secs(10)));
-    let runtime = Arc::new(live.runtime);
-    let stopper = Arc::clone(&runtime);
-    let thread = std::thread::spawn(move || stopper.shutdown());
-    // The shutdown cannot finish (the worker join waits on the held send), yet
-    // the seal already landed.
-    wait_until("sealed first", || !runtime.is_authorized());
-    assert!(!thread.is_finished());
+    // Frame writes are asynchronous: no thread of the runtime waits on the held
+    // send, so the shutdown seals first and then finishes while it is stalled.
+    live.runtime.shutdown();
+    assert!(!live.runtime.is_authorized(), "sealed");
+    assert_eq!(
+        live.runtime.outstanding_frames(),
+        1,
+        "the held write is still owed"
+    );
     hold.release();
-    thread.join().expect("shutdown");
+    assert_eq!(
+        live.runtime.drain_frames(Duration::from_secs(10), &CancellationToken::new()),
+        DrainOutcome::Drained
+    );
     assert_eq!(live.backend.action_count(), 1);
 }
 
