@@ -3,7 +3,7 @@
 //! hidden, unhidden, activated or raised for real.
 
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use stache_macos::ax::AxReading;
 use stache_macos::windows::{
@@ -780,6 +780,118 @@ fn a_restore_fallback_write_without_a_confirming_readback_stays_owed() {
     f.windows.script_hidden(written(Ok(()), false, IssuedKind::Applied));
     let second = f.vis.restore(&f.exec(), Duration::from_secs(2));
     assert!(second.is_complete(), "{second:?}");
+}
+
+fn lagging_write(f: &Fixture) {
+    f.windows.script_hidden(HiddenOutcome::Written {
+        kind: IssuedKind::Applied,
+        status: Ok(()),
+        observed: AxReading::Value(true),
+    });
+}
+
+fn read(hidden: bool) -> HiddenOutcome { HiddenOutcome::Read(AxReading::Value(hidden)) }
+
+#[test]
+fn a_restore_readback_that_lags_clears_within_the_settle() {
+    let f = Fixture::new(&["com.a"]);
+    hidden_and_confirmed(&f, 0);
+    f.native.backend.refuse_visibility();
+    lagging_write(&f);
+    f.windows.script_hidden(read(true));
+    f.windows.script_hidden(read(false));
+    let outcome = f.vis.restore(&f.exec(), Duration::from_secs(2));
+    assert!(outcome.is_complete() && outcome.cleared == 1, "{outcome:?}");
+    assert!(f.vis.owned().is_empty());
+    assert_eq!(f.hidden_calls().len(), 3, "one write and two reads");
+}
+
+#[test]
+fn a_restore_readback_that_stays_hidden_stays_owed_after_a_bounded_settle() {
+    let f = Fixture::new(&["com.a"]);
+    hidden_and_confirmed(&f, 0);
+    f.native.backend.refuse_visibility();
+    lagging_write(&f);
+    for _ in 0..40 {
+        f.windows.script_hidden(read(true));
+    }
+    let started = Instant::now();
+    let outcome = f.vis.restore(&f.exec(), Duration::from_secs(2));
+    let took = started.elapsed();
+    assert!(!outcome.is_complete(), "{outcome:?}");
+    assert!(
+        outcome.remaining[0]
+            .reason
+            .as_deref()
+            .is_some_and(|r| r.contains("not confirmed")),
+        "{outcome:?}"
+    );
+    assert!(
+        took >= Duration::from_millis(200) && took < Duration::from_secs(1),
+        "{took:?}"
+    );
+}
+
+#[test]
+fn the_settle_is_shared_across_many_applications() {
+    let bundles = [
+        "com.a", "com.b", "com.c", "com.d", "com.e", "com.f", "com.g", "com.h",
+    ];
+    let f = Fixture::new(&bundles);
+    for n in 0..bundles.len() {
+        hidden_and_confirmed(&f, n);
+    }
+    f.native.backend.refuse_visibility();
+    for _ in 0..bundles.len() {
+        lagging_write(&f);
+    }
+    for _ in 0..400 {
+        f.windows.script_hidden(read(true));
+    }
+    let started = Instant::now();
+    let outcome = f.vis.restore(&f.exec(), Duration::from_secs(2));
+    let took = started.elapsed();
+    assert_eq!(outcome.remaining.len(), bundles.len(), "{outcome:?}");
+    assert!(
+        took < Duration::from_millis(900),
+        "one shared settle, not 8: {took:?}"
+    );
+}
+
+#[test]
+fn the_settle_never_outlasts_the_restore_hop() {
+    let f = Fixture::new(&["com.a"]);
+    hidden_and_confirmed(&f, 0);
+    f.native.backend.refuse_visibility();
+    lagging_write(&f);
+    for _ in 0..40 {
+        f.windows.script_hidden(read(true));
+    }
+    let started = Instant::now();
+    let outcome = f.vis.restore(&f.exec(), Duration::from_millis(60));
+    assert!(!outcome.is_complete(), "{outcome:?}");
+    assert!(
+        started.elapsed() < Duration::from_millis(200),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn the_runtime_unhide_does_not_settle_or_reread() {
+    let f = Fixture::new(&["com.a"]);
+    hidden_and_confirmed(&f, 0);
+    f.native.backend.refuse_visibility();
+    lagging_write(&f);
+    let before = f.hidden_calls().len();
+    f.vis.execute_unhide(&f.exec(), f.id(0));
+    assert_eq!(f.hidden_calls().len() - before, 1);
+    assert!(
+        !f.hidden_calls()
+            .iter()
+            .skip(before)
+            .any(|c| matches!(c, FakeBackendCall::Hidden(_, HiddenOperation::Read)))
+    );
 }
 
 #[test]

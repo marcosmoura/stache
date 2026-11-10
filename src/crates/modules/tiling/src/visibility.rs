@@ -88,6 +88,15 @@ pub const MAX_HIDE_ATTEMPTS: u8 = 3;
 /// Diagnostics and focus reports kept.
 pub const LOG_CAPACITY: usize = 32;
 
+/// How long a restore keeps re-reading `AXHidden` after an accepted
+/// `AXHidden(false)` write whose immediate readback did not confirm. The
+/// target application applies the write asynchronously, so the first read can
+/// still say `true`. One shared deadline for every pending application.
+pub const RESTORE_SETTLE: Duration = Duration::from_millis(250);
+
+/// Pause between two settle polls.
+pub const RESTORE_SETTLE_POLL: Duration = Duration::from_millis(25);
+
 // ---------------------------------------------------------------------------
 // Native application actions
 // ---------------------------------------------------------------------------
@@ -910,6 +919,14 @@ pub struct Exec<'a> {
     pub cancel: &'a CancellationToken,
 }
 
+/// The result of one unhide before any settle.
+enum UnhideAttempt {
+    Done(UnhideEvidence),
+    /// A restore's accepted `AXHidden` write was not confirmed by the first
+    /// readback; the string is the owed reason.
+    Unsettled(String),
+}
+
 /// One step of a focus request, in the order it ran.
 #[derive(Clone, Debug, PartialEq)]
 pub enum FocusStep {
@@ -1204,6 +1221,28 @@ impl VisibilityControl {
         self.shared.idle.notify_all();
     }
 
+    /// Reads `AXHidden` (no issuance: a read sends nothing). Anything other
+    /// than a plain reading is `Unsupported`, which never confirms.
+    fn ax_read_hidden(
+        exec: &Exec<'_>,
+        application: ApplicationId,
+        deadline: Instant,
+    ) -> stache_macos::ax::AxReading<bool> {
+        match exec.backend.application_hidden(
+            HiddenRequest {
+                epoch: exec.epoch,
+                application,
+                operation: HiddenOperation::Read,
+                issuance: None,
+            },
+            exec.cancel,
+            Some(deadline),
+        ) {
+            HiddenOutcome::Read(reading) => reading,
+            _ => stache_macos::ax::AxReading::Unsupported,
+        }
+    }
+
     fn ax_write(
         &self,
         exec: &Exec<'_>,
@@ -1296,8 +1335,30 @@ impl VisibilityControl {
         application: ApplicationId,
         restoring: bool,
     ) -> UnhideEvidence {
+        match self.unhide_attempt(exec, application, restoring) {
+            UnhideAttempt::Done(evidence) => evidence,
+            UnhideAttempt::Unsettled(reason) => UnhideEvidence::Failed(reason),
+        }
+    }
+
+    /// One unhide. Only a restore can end `Unsettled`: an accepted `AXHidden`
+    /// write whose immediate readback did not confirm (the caller may re-read).
+    ///
+    /// The public `-[NSRunningApplication unhide]` can answer `NO` during a
+    /// stop. The documentation only says it returns `NO` when the request is
+    /// not delivered (for example the application is not running or is
+    /// terminating) and names no other cause, so none is asserted here: the
+    /// `AXHidden` fallback is the designed path and its effect is observed.
+    fn unhide_attempt(
+        &self,
+        exec: &Exec<'_>,
+        application: ApplicationId,
+        restoring: bool,
+    ) -> UnhideAttempt {
         let Some(actions) = exec.actions else {
-            return UnhideEvidence::Failed("application control unavailable".to_owned());
+            return UnhideAttempt::Done(UnhideEvidence::Failed(
+                "application control unavailable".to_owned(),
+            ));
         };
         let authorization =
             actions.visibility_authorization(application, Instant::now() + VISIBILITY_DEADLINE);
@@ -1306,14 +1367,16 @@ impl VisibilityControl {
         } else {
             match self.arm(Armed::Visibility(authorization.clone())) {
                 Some(id) => Some(id),
-                None => return UnhideEvidence::Failed("sealed".to_owned()),
+                None => {
+                    return UnhideAttempt::Done(UnhideEvidence::Failed("sealed".to_owned()));
+                }
             }
         };
         let public = actions.unhide(&authorization);
         if let Some(id) = id {
             self.disarm(id);
         }
-        match public {
+        let evidence = match public {
             // `Requested` means the native unhide call returned true. The public
             // path has no confirming channel, so it counts as cleared (also in
             // a restore): requiring a readback here would quarantine every stop.
@@ -1330,9 +1393,9 @@ impl VisibilityControl {
                             // An accepted write without a confirming readback
                             // proves nothing: the record stays owed (spec 06:
                             // an uncertain unhide remains pending).
-                            UnhideEvidence::Failed(format!(
+                            return UnhideAttempt::Unsettled(format!(
                                 "AXHidden write accepted but not confirmed by readback ({observed:?})"
-                            ))
+                            ));
                         } else {
                             UnhideEvidence::Sent
                         }
@@ -1344,7 +1407,8 @@ impl VisibilityControl {
                 UnhideEvidence::Failed(format!("unhide not acknowledged: {error}"))
             }
             other => UnhideEvidence::Failed(format!("{other:?}")),
-        }
+        };
+        UnhideAttempt::Done(evidence)
     }
 
     /// Runs one focus request: unhide an owned-hidden application first, then
@@ -1424,6 +1488,7 @@ impl VisibilityControl {
     /// Ambiguous records are reported and retained, never unhidden.
     #[must_use]
     pub fn restore(&self, exec: &Exec<'_>, hop: Duration) -> RestoreOutcome {
+        let started = Instant::now();
         self.seal();
         match self.drain(hop, &CancellationToken::new()) {
             DrainOutcome::Drained => {}
@@ -1439,12 +1504,44 @@ impl VisibilityControl {
             book.ledger.restore_candidates()
         };
         let mut cleared = 0;
+        let mut unsettled = Vec::new();
         for application in candidates {
-            let evidence = self.unhide_evidence(exec, application, true);
-            if !matches!(evidence, UnhideEvidence::Failed(_)) {
-                cleared += 1;
+            match self.unhide_attempt(exec, application, true) {
+                UnhideAttempt::Done(evidence) => {
+                    if !matches!(evidence, UnhideEvidence::Failed(_)) {
+                        cleared += 1;
+                    }
+                    self.book().ledger.restored(application, evidence);
+                }
+                UnhideAttempt::Unsettled(reason) => unsettled.push((application, reason)),
             }
-            self.book().ledger.restored(application, evidence);
+        }
+        // The accepted writes are applied asynchronously by their targets, so
+        // the immediate readback can lag. Re-read every pending application
+        // together until one shared deadline: the total is bounded however
+        // many applications are pending.
+        let settle_end = (Instant::now() + RESTORE_SETTLE).min(started + hop);
+        while !unsettled.is_empty() {
+            if Instant::now() >= settle_end || exec.cancel.is_cancelled() {
+                break;
+            }
+            std::thread::sleep(RESTORE_SETTLE_POLL);
+            let pending = std::mem::take(&mut unsettled);
+            for (application, reason) in pending {
+                if Instant::now() < settle_end
+                    && !exec.cancel.is_cancelled()
+                    && Self::ax_read_hidden(exec, application, settle_end)
+                        == stache_macos::ax::AxReading::Value(false)
+                {
+                    cleared += 1;
+                    self.book().ledger.restored(application, UnhideEvidence::Shown);
+                } else {
+                    unsettled.push((application, reason));
+                }
+            }
+        }
+        for (application, reason) in unsettled {
+            self.book().ledger.restored(application, UnhideEvidence::Failed(reason));
         }
         self.restore_outcome(cleared)
     }
