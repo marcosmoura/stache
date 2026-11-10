@@ -4254,7 +4254,7 @@ mod caps_recovery {
     }
 
     #[test]
-    fn kb_04_07_a_stale_journal_is_restored_once_while_the_keybindings_module_is_disabled() {
+    fn a_stale_journal_is_restored_once_while_the_keybindings_module_is_disabled() {
         let fixture = fixture();
         fixture.write("keybindings.toml", "enabled = false\nbindings = {}\n");
         let world = stale(vec![KEY_A]);
@@ -4276,7 +4276,7 @@ mod caps_recovery {
     }
 
     #[test]
-    fn kb_04_07_an_invalid_keybindings_config_does_not_block_recovery_or_startup() {
+    fn an_invalid_keybindings_config_does_not_block_recovery_or_startup() {
         let fixture = fixture();
         fixture.write("keybindings.toml", "enabled = tru");
         let world = stale(vec![KEY_A]);
@@ -4290,7 +4290,7 @@ mod caps_recovery {
     }
 
     #[test]
-    fn kb_04_07_without_a_journal_recovery_is_a_no_op_that_touches_nothing() {
+    fn without_a_journal_recovery_is_a_no_op_that_touches_nothing() {
         for existing in [vec![KEY_A], vec![OWNED], vec![Mapping {
             src: CAPS_LOCK_USAGE,
             dst: 0x7_0000_00E0,
@@ -4316,7 +4316,7 @@ mod caps_recovery {
     }
 
     #[test]
-    fn kb_04_07_a_foreign_mapping_under_our_journal_is_refused_with_a_diagnostic() {
+    fn a_foreign_mapping_under_our_journal_is_refused_with_a_diagnostic() {
         let fixture = fixture();
         let world = stale(vec![KEY_A]);
         let foreign = Mapping {
@@ -4336,7 +4336,7 @@ mod caps_recovery {
     }
 
     #[test]
-    fn kb_04_07_a_failed_recovery_is_reported_once_without_blocking_startup_or_retrying() {
+    fn a_failed_recovery_is_reported_once_without_blocking_startup_or_retrying() {
         let fixture = fixture();
         let world = stale(vec![KEY_A]);
         world.script_set(SetFault::Exited);
@@ -4365,7 +4365,7 @@ mod caps_recovery {
     }
 
     #[test]
-    fn kb_04_07_a_busy_lease_during_recovery_does_not_block_ready_or_shutdown() {
+    fn a_busy_lease_during_recovery_does_not_block_ready_or_shutdown() {
         let fixture = fixture();
         let world = stale(vec![KEY_A]);
         // Another cooperating process holds the lease: recovery waits on it.
@@ -4457,7 +4457,7 @@ impl HoldHarness {
 }
 
 #[test]
-fn hq_04_01_enable_writes_toml_and_pause_writes_nothing() {
+fn enable_writes_toml_and_pause_writes_nothing() {
     let fixture = fixture();
     let source = "# Keep this comment.\nenabled = false # note\nhold_duration = 900\n";
     fixture.write("commandQuit.toml", source);
@@ -4497,7 +4497,7 @@ fn hq_04_01_enable_writes_toml_and_pause_writes_nothing() {
 }
 
 #[test]
-fn hq_04_01_a_malformed_or_deleted_file_keeps_the_last_good_runtime_with_a_diagnostic() {
+fn a_malformed_or_deleted_file_keeps_the_last_good_runtime_with_a_diagnostic() {
     let fixture = fixture();
     fixture.write("commandQuit.toml", "enabled = true\n");
     let mut hold = HoldHarness::new(FakePermissions::new(PermissionStatus::Granted));
@@ -4524,7 +4524,7 @@ fn hq_04_01_a_malformed_or_deleted_file_keeps_the_last_good_runtime_with_a_diagn
 }
 
 #[test]
-fn hq_04_01_permission_denied_then_granted_then_revoked_never_prompts_automatically() {
+fn permission_denied_then_granted_then_revoked_never_prompts_automatically() {
     let fixture = fixture();
     fixture.write("commandQuit.toml", "enabled = true\n");
     let permissions = FakePermissions::new(PermissionStatus::Denied);
@@ -4552,7 +4552,7 @@ fn hq_04_01_permission_denied_then_granted_then_revoked_never_prompts_automatica
 }
 
 #[test]
-fn hq_04_01_a_hud_install_failure_is_failed_start_and_retry_recovers() {
+fn a_hud_install_failure_is_failed_start_and_retry_recovers() {
     let fixture = fixture();
     fixture.write("commandQuit.toml", "enabled = true\n");
     let mut hold = HoldHarness::new(FakePermissions::new(PermissionStatus::Granted));
@@ -4583,7 +4583,7 @@ fn hq_04_01_a_hud_install_failure_is_failed_start_and_retry_recovers() {
 }
 
 #[test]
-fn hq_04_01_a_runtime_hud_failure_is_degraded_pass_through_with_a_detail() {
+fn a_runtime_hud_failure_is_degraded_pass_through_with_a_detail() {
     let fixture = fixture();
     fixture.write("commandQuit.toml", "enabled = true\n");
     let mut hold = HoldHarness::new(FakePermissions::new(PermissionStatus::Granted));
@@ -4641,7 +4641,7 @@ fn hq_04_01_a_runtime_hud_failure_is_degraded_pass_through_with_a_detail() {
 }
 
 #[test]
-fn hq_04_01_unrelated_modules_keep_working_and_no_extra_surface_exists() {
+fn unrelated_modules_keep_working_and_no_extra_surface_exists() {
     let fixture = fixture();
     fixture.write("commandQuit.toml", "enabled = true\n");
     fixture.write("testModule.toml", "enabled = true\n");
@@ -4663,7 +4663,7 @@ fn hq_04_01_unrelated_modules_keep_working_and_no_extra_surface_exists() {
 }
 
 #[test]
-fn hq_04_01_the_hud_owner_acknowledges_a_retained_hud_and_is_idle_otherwise() {
+fn the_hud_owner_acknowledges_a_retained_hud_and_is_idle_otherwise() {
     use stache_app::shutdown::OwnerState;
     let fakes = Fakes::new();
     let owner = HudOwner::new(Arc::clone(&fakes.hud));
@@ -4705,7 +4705,7 @@ fn hq_04_01_the_hud_owner_acknowledges_a_retained_hud_and_is_idle_otherwise() {
 }
 
 #[test]
-fn hq_04_01_the_hud_owner_release_never_waits_on_a_settle_holding_the_retained_lock() {
+fn the_hud_owner_release_never_waits_on_a_settle_holding_the_retained_lock() {
     use stache_app::shutdown::OwnerState;
     let fakes = Fakes::new();
     let owner = HudOwner::new(Arc::clone(&fakes.hud));
@@ -4947,7 +4947,7 @@ impl GateHarness {
 }
 
 #[test]
-fn ag_02_01_an_untrusted_launch_blocks_every_module_before_any_lifecycle_call() {
+fn an_untrusted_launch_blocks_every_module_before_any_lifecycle_call() {
     let mut gate = GateHarness::new(FakePermissions::new(PermissionStatus::Denied));
     gate.start();
     let first_ready = gate
@@ -4985,7 +4985,7 @@ fn ag_02_01_an_untrusted_launch_blocks_every_module_before_any_lifecycle_call() 
 }
 
 #[test]
-fn ag_02_01_a_gated_test_module_never_configures_or_starts() {
+fn a_gated_test_module_never_configures_or_starts() {
     let fixture = fixture();
     fixture.write("testModule.toml", "enabled = true\n");
     let permissions = FakePermissions::new(PermissionStatus::Denied);
@@ -5014,7 +5014,7 @@ fn ag_02_01_a_gated_test_module_never_configures_or_starts() {
 }
 
 #[test]
-fn ag_02_02_with_every_module_disabled_the_gate_still_blocks_and_polls_fast() {
+fn with_every_module_disabled_the_gate_still_blocks_and_polls_fast() {
     let fixture = fixture();
     fixture.write("testModule.toml", "enabled = false\n");
     let permissions = FakePermissions::new(PermissionStatus::Denied);
@@ -5039,7 +5039,7 @@ fn ag_02_02_with_every_module_disabled_the_gate_still_blocks_and_polls_fast() {
 }
 
 #[test]
-fn ag_02_03_denied_denied_granted_opens_without_restart_in_dependency_order() {
+fn denied_denied_granted_opens_without_restart_in_dependency_order() {
     // The registry's own per-slot checks also read the provider, so a queue
     // consumed per call would be order-fragile: the status is changed between
     // observed ticks instead (Denied at launch, Denied on ticks, then Granted).
@@ -5079,7 +5079,7 @@ fn ag_02_03_denied_denied_granted_opens_without_restart_in_dependency_order() {
 }
 
 #[test]
-fn ag_02_04_an_activation_refresh_opens_the_gate_before_the_next_tick() {
+fn an_activation_refresh_opens_the_gate_before_the_next_tick() {
     let permissions = FakePermissions::new(PermissionStatus::Denied);
     let mut gate = GateHarness::new(permissions.clone());
     // Ticks are a minute apart, so only the activation refresh can open it.
@@ -5098,8 +5098,7 @@ fn ag_02_04_an_activation_refresh_opens_the_gate_before_the_next_tick() {
 }
 
 #[test]
-fn ag_02_05_revocation_stops_in_reverse_order_and_a_second_grant_restarts_without_startup_commands()
-{
+fn revocation_stops_in_reverse_order_and_a_second_grant_restarts_without_startup_commands() {
     let permissions = FakePermissions::new(PermissionStatus::Granted);
     let mut gate = GateHarness::new(permissions.clone());
     gate.start();
@@ -5144,7 +5143,7 @@ fn ag_02_05_revocation_stops_in_reverse_order_and_a_second_grant_restarts_withou
 }
 
 #[test]
-fn ag_02_06_unknown_behaves_as_denied() {
+fn unknown_behaves_as_denied() {
     let permissions = FakePermissions::new(PermissionStatus::Unknown);
     let mut gate = GateHarness::new(permissions.clone());
     gate.start();
@@ -5163,7 +5162,7 @@ fn ag_02_06_unknown_behaves_as_denied() {
 }
 
 #[test]
-fn ag_02_07_only_an_explicit_request_while_blocked_calls_request() {
+fn only_an_explicit_request_while_blocked_calls_request() {
     let permissions = FakePermissions::new(PermissionStatus::Denied);
     let mut gate = GateHarness::new(permissions.clone());
     gate.start();
@@ -5197,7 +5196,7 @@ fn ag_02_07_only_an_explicit_request_while_blocked_calls_request() {
 }
 
 #[test]
-fn ag_02_08_the_settings_opener_runs_only_while_blocked_and_failures_are_cleared_by_success() {
+fn the_settings_opener_runs_only_while_blocked_and_failures_are_cleared_by_success() {
     let permissions = FakePermissions::new(PermissionStatus::Denied);
     let mut gate = GateHarness::new(permissions.clone());
     gate.start();
@@ -5235,7 +5234,7 @@ fn ag_02_08_the_settings_opener_runs_only_while_blocked_and_failures_are_cleared
 }
 
 #[test]
-fn ag_02_11_a_shutdown_while_blocked_never_requests_or_opens_settings_afterwards() {
+fn a_shutdown_while_blocked_never_requests_or_opens_settings_afterwards() {
     let permissions = FakePermissions::new(PermissionStatus::Denied);
     let mut gate = GateHarness::new(permissions.clone());
     gate.start();
@@ -5317,7 +5316,7 @@ fn gated_harness(permissions: Arc<FakePermissions>) -> Harness {
 }
 
 #[test]
-fn ag_03_02_module_methods_answer_unavailable_through_a_real_router_while_blocked() {
+fn module_methods_answer_unavailable_through_a_real_router_while_blocked() {
     let fixture = fixture();
     fixture.write("wallpapers.toml", "enabled = false\nlist = [\"wall.png\"]\n");
     let image = fixture.paths.directory().join("wall.png");
@@ -5453,7 +5452,7 @@ impl ModuleFactory for BusyStartFactory {
 }
 
 #[test]
-fn ag_03_06_a_gated_request_answers_while_the_lifecycle_lock_and_host_worker_are_busy() {
+fn a_gated_request_answers_while_the_lifecycle_lock_and_host_worker_are_busy() {
     let fixture = fixture();
     fixture.write("testModule.toml", "enabled = true\n");
     let counters = Arc::new(Counters::default());
@@ -5546,7 +5545,7 @@ fn wait_until(label: &str, condition: impl Fn() -> bool) {
 }
 
 #[test]
-fn ag_04_01_blocked_opens_one_window_a_grant_closes_it_and_a_revocation_opens_one_again() {
+fn blocked_opens_one_window_a_grant_closes_it_and_a_revocation_opens_one_again() {
     let fixture = fixture();
     let permissions = FakePermissions::new(PermissionStatus::Denied);
     let (mut harness, windows, host) = guide_harness(permissions.clone(), true);
@@ -5576,7 +5575,7 @@ fn ag_04_01_blocked_opens_one_window_a_grant_closes_it_and_a_revocation_opens_on
 }
 
 #[test]
-fn ag_04_01_a_user_close_is_not_reopened_by_more_blocked_ticks() {
+fn a_user_close_is_not_reopened_by_more_blocked_ticks() {
     let fixture = fixture();
     let permissions = FakePermissions::new(PermissionStatus::Denied);
     let (mut harness, windows, host) = guide_harness(permissions, true);
@@ -5594,7 +5593,7 @@ fn ag_04_01_a_user_close_is_not_reopened_by_more_blocked_ticks() {
 }
 
 #[test]
-fn ag_04_04_the_tray_command_reopens_after_a_user_close_and_focuses_an_open_window() {
+fn the_tray_command_reopens_after_a_user_close_and_focuses_an_open_window() {
     let fixture = fixture();
     let permissions = FakePermissions::new(PermissionStatus::Denied);
     let (mut harness, windows, host) = guide_harness(permissions.clone(), true);
@@ -5630,7 +5629,7 @@ fn ag_04_04_the_tray_command_reopens_after_a_user_close_and_focuses_an_open_wind
 }
 
 #[test]
-fn ag_04_02_a_trusted_launch_and_an_ungated_host_open_no_window() {
+fn a_trusted_launch_and_an_ungated_host_open_no_window() {
     for gated in [true, false] {
         let fixture = fixture();
         let permissions = FakePermissions::new(PermissionStatus::Granted);
@@ -5647,7 +5646,7 @@ fn ag_04_02_a_trusted_launch_and_an_ungated_host_open_no_window() {
 }
 
 #[test]
-fn ag_04_02_an_ungated_host_with_a_missing_permission_still_opens_no_window() {
+fn an_ungated_host_with_a_missing_permission_still_opens_no_window() {
     let fixture = fixture();
     let permissions = FakePermissions::new(PermissionStatus::Denied);
     let (mut harness, _windows, host) = guide_harness(permissions, false);
@@ -5733,7 +5732,7 @@ impl MenuHarness {
 }
 
 #[test]
-fn ma_03_06_enable_writes_toml_runs_the_trigger_and_pause_writes_nothing() {
+fn enable_writes_toml_runs_the_trigger_and_pause_writes_nothing() {
     let fixture = fixture();
     let source =
         "# Keep this comment.\nenabled = false # note\nmodifiers = [\"control\", \"command\"]\n";
@@ -5778,7 +5777,7 @@ fn ma_03_06_enable_writes_toml_runs_the_trigger_and_pause_writes_nothing() {
 }
 
 #[test]
-fn ma_03_06_permission_only_checks_and_only_the_explicit_tray_request_prompts() {
+fn permission_only_checks_and_only_the_explicit_tray_request_prompts() {
     let fixture = fixture();
     fixture.write("menuAnywhere.toml", "enabled = true\n");
     let permissions = FakePermissions::new(PermissionStatus::Denied);
@@ -5830,7 +5829,7 @@ fn ma_03_06_permission_only_checks_and_only_the_explicit_tray_request_prompts() 
 }
 
 #[test]
-fn ma_03_06_a_disabled_to_enabled_file_edit_only_checks_permission() {
+fn a_disabled_to_enabled_file_edit_only_checks_permission() {
     let fixture = fixture();
     fixture.write("menuAnywhere.toml", "enabled = false\n");
     let permissions = FakePermissions::new(PermissionStatus::Denied);
@@ -5863,7 +5862,7 @@ fn wait_until_true(what: &str, condition: impl Fn() -> bool) {
 }
 
 #[test]
-fn ma_03_06_a_malformed_deleted_then_repaired_file_keeps_the_runtime_and_clears_the_diagnostic() {
+fn a_malformed_deleted_then_repaired_file_keeps_the_runtime_and_clears_the_diagnostic() {
     let fixture = fixture();
     fixture.write("menuAnywhere.toml", "enabled = true\n");
     let mut menu = MenuHarness::new(FakePermissions::new(PermissionStatus::Granted));
@@ -5906,7 +5905,7 @@ fn ma_03_06_a_malformed_deleted_then_repaired_file_keeps_the_runtime_and_clears_
 }
 
 #[test]
-fn ma_03_06_a_start_failure_is_failed_with_full_rollback_and_retry_recovers() {
+fn a_start_failure_is_failed_with_full_rollback_and_retry_recovers() {
     let fixture = fixture();
     fixture.write("menuAnywhere.toml", "enabled = true\n");
     let mut menu = MenuHarness::new(FakePermissions::new(PermissionStatus::Granted));
@@ -5932,7 +5931,7 @@ fn ma_03_06_a_start_failure_is_failed_with_full_rollback_and_retry_recovers() {
 }
 
 #[test]
-fn ma_03_06_an_unhealthy_running_module_is_projected_unavailable_with_its_reason() {
+fn an_unhealthy_running_module_is_projected_unavailable_with_its_reason() {
     let fixture = fixture();
     fixture.write("menuAnywhere.toml", "enabled = true\n");
     let mut menu = MenuHarness::new(FakePermissions::new(PermissionStatus::Granted));
@@ -5955,7 +5954,7 @@ fn ma_03_06_an_unhealthy_running_module_is_projected_unavailable_with_its_reason
 }
 
 #[test]
-fn ma_03_08_supported_host_shutdown_with_an_open_menu_cancels_it_and_exits() {
+fn supported_host_shutdown_with_an_open_menu_cancels_it_and_exits() {
     let fixture = fixture();
     fixture.write("menuAnywhere.toml", "enabled = true\n");
     let mut menu = MenuHarness::new(FakePermissions::new(PermissionStatus::Granted));
@@ -5995,7 +5994,7 @@ fn ma_03_08_supported_host_shutdown_with_an_open_menu_cancels_it_and_exits() {
 }
 
 #[test]
-fn ma_03_06_a_missing_shared_input_service_is_projected_unavailable_not_failed() {
+fn a_missing_shared_input_service_is_projected_unavailable_not_failed() {
     let fixture = fixture();
     fixture.write("menuAnywhere.toml", "enabled = true\n");
     let mut menu = MenuHarness::new(FakePermissions::new(PermissionStatus::Granted));

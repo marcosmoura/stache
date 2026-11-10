@@ -254,7 +254,7 @@ test('uses the Catppuccin Mocha token background and text colors', async () => {
   expect(computed.fontFamily).toContain('system-ui');
 });
 
-test('AG-05-09 the test window leaves the document and its page opaque', async () => {
+test('the test window leaves the document and its page opaque', async () => {
   const { screen } = await renderWithClient(<TestWindow />);
 
   await expect.element(screen.getByText('Host test surface')).toBeVisible();

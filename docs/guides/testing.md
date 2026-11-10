@@ -110,7 +110,7 @@ They run the real `Registry`, `ConfigStore` and `Runner` registration/start path
 real hotkey, installs a real tap, runs `hidutil` or spawns a real command; real shortcut, layout, Caps
 and process-lifecycle checks are manual and need approval for each run.
 
-Hold-to-Quit tests (`stache-hold-to-quit` `tests.rs`, plus the `hq_04_01_` cases in the app `host.rs`
+Hold-to-Quit tests (`stache-hold-to-quit` `tests.rs`, plus the Hold-to-Quit host cases in the app `host.rs`
 suite) use the `testing` feature's `test_support::Rig`/`Fakes`: the shared `InputService` over its fake
 tap and clock (callbacks are driven with `InputService::dispatch`), `FakeApplicationBackend` with
 `FakeBarrier`s at the preflight, commit, issuance and after-issue points, `FakeHudBackend`, a separate
@@ -125,7 +125,7 @@ observer cleanup, and the Carbon yield in both registration orders. Nothing inst
 a real panel, terminates an application or prompts. Real tap, HUD, display, Space and quit checks are
 manual and need approval for each run (see [the feature](../features/hold-to-quit.md#verification)).
 
-MenuAnywhere tests (`stache-menu-anywhere` `tests.rs`, plus the `ma_03_` cases in the app `host.rs`
+MenuAnywhere tests (`stache-menu-anywhere` `tests.rs`, plus the MenuAnywhere host cases in the app `host.rs`
 suite and `config_catalog.rs`) use the `testing` feature's `test_support::Rig`/`Fakes`: the shared
 `InputService` over its fake tap (callbacks are driven with `InputService::dispatch`, including
 competing handlers at other priorities and `tap_disabled`/`retry_reenable`), `FakeApplicationBackend`

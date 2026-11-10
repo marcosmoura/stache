@@ -2811,7 +2811,7 @@ mod tests {
     }
 
     #[test]
-    fn ag_02_02_a_closed_gate_keeps_the_waiting_poll_with_every_module_disabled() {
+    fn a_closed_gate_keeps_the_waiting_poll_with_every_module_disabled() {
         let root = tempfile::tempdir().expect("root");
         let permissions = Counted::new(PermissionStatus::Denied);
         let mut runner = gated_runner(root.path(), permissions.clone(), Arc::default());
@@ -2875,7 +2875,7 @@ mod tests {
     }
 
     #[test]
-    fn tc_03_04_the_stale_jsonc_hint_is_logged_once_at_startup_and_not_on_reload() {
+    fn the_stale_jsonc_hint_is_logged_once_at_startup_and_not_on_reload() {
         let root = tempfile::tempdir().expect("root");
         let config = root.path().join("config");
         std::fs::create_dir_all(&config).expect("config dir");
@@ -2924,7 +2924,7 @@ mod tests {
     }
 
     #[test]
-    fn ag_02_01_startup_commands_run_once_even_when_the_first_opening_precedes_arming() {
+    fn startup_commands_run_once_even_when_the_first_opening_precedes_arming() {
         let root = tempfile::tempdir().expect("root");
         std::fs::create_dir_all(root.path().join("config")).expect("config dir");
         std::fs::write(
@@ -2970,7 +2970,7 @@ mod tests {
     }
 
     #[test]
-    fn ag_02_07_an_explicit_request_while_open_is_downgraded_to_a_check() {
+    fn an_explicit_request_while_open_is_downgraded_to_a_check() {
         let root = tempfile::tempdir().expect("root");
         let permissions = Counted::new(PermissionStatus::Denied);
         let mut runner = gated_runner(root.path(), permissions.clone(), Arc::default());
@@ -2993,7 +2993,7 @@ mod tests {
     }
 
     #[test]
-    fn ag_02_08_a_settings_failure_is_the_action_error_until_the_next_success() {
+    fn a_settings_failure_is_the_action_error_until_the_next_success() {
         let root = tempfile::tempdir().expect("root");
         let opener = Arc::new(Opens::default());
         let mut runner = gated_runner(
@@ -3012,7 +3012,7 @@ mod tests {
     }
 
     #[test]
-    fn ag_02_11_after_a_shutdown_request_nothing_is_requested_opened_or_checked() {
+    fn after_a_shutdown_request_nothing_is_requested_opened_or_checked() {
         let root = tempfile::tempdir().expect("root");
         let permissions = Counted::new(PermissionStatus::Denied);
         let opener = Arc::new(Opens::default());
@@ -3081,7 +3081,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_04_07_the_recovery_step_runs_once_and_reports_its_condition_once() {
+    fn the_recovery_step_runs_once_and_reports_its_condition_once() {
         let root = tempfile::tempdir().expect("root");
         let (mut runner, receiver) = runner_with_commands(root.path());
         let step = ScriptedRecovery::new(Some("Caps Lock recovery failed"));
@@ -3101,7 +3101,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_04_07_a_quiet_step_and_a_panicking_step_do_not_disturb_startup() {
+    fn a_quiet_step_and_a_panicking_step_do_not_disturb_startup() {
         let root = tempfile::tempdir().expect("root");
         let (mut runner, receiver) = runner_with_commands(root.path());
         runner.recovery = Some(ScriptedRecovery::new(None));
@@ -3119,7 +3119,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_04_07_teardown_cancels_a_slow_recovery_and_reaps_its_thread() {
+    fn teardown_cancels_a_slow_recovery_and_reaps_its_thread() {
         let root = tempfile::tempdir().expect("root");
         let (mut runner, _receiver) = runner_with_commands(root.path());
         let step = Arc::new(ScriptedRecovery {
@@ -3139,7 +3139,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_04_07_a_step_started_after_teardown_closed_the_cells_is_cancelled_and_reaped() {
+    fn a_step_started_after_teardown_closed_the_cells_is_cancelled_and_reaped() {
         let root = tempfile::tempdir().expect("root");
         let (mut runner, _receiver) = runner_with_commands(root.path());
         let step = Arc::new(ScriptedRecovery {
@@ -3157,7 +3157,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_04_07_the_production_recovery_restores_a_stale_journal_over_fakes() {
+    fn the_production_recovery_restores_a_stale_journal_over_fakes() {
         use stache_keybindings::caps::CapsRecoveryStep;
         use stache_macos::caps_remap::testing::World;
         use stache_macos::caps_remap::{Mapping, OWNED};
@@ -3590,7 +3590,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_05_04_host_policy_never_prompts_for_shared_input_except_on_explicit_request() {
+    fn host_policy_never_prompts_for_shared_input_except_on_explicit_request() {
         let trust = Arc::new(CountingTrust {
             trusted: std::sync::atomic::AtomicBool::new(false),
             requests: AtomicUsize::new(0),
@@ -4441,7 +4441,7 @@ mod tests {
     const KB_ON: &str = "enabled = true\nbindings = { \"Cmd+Q\" = \"/bin/sh hold-q\" }\n";
 
     #[test]
-    fn kb_05_01_the_keybindings_factory_is_inert_until_start_and_projects_runtime_details() {
+    fn the_keybindings_factory_is_inert_until_start_and_projects_runtime_details() {
         let mut host = KbHost::new(KbRig::new(), Some(KB_ON));
         host.register();
         // Registration and construction touch nothing.
@@ -4467,7 +4467,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_05_05_held_file_diagnostics_and_runtime_details_coexist_and_repair_independently() {
+    fn held_file_diagnostics_and_runtime_details_coexist_and_repair_independently() {
         let mut host = KbHost::new(KbRig::new(), Some(KB_ON));
         host.start();
         let revision = host.view().revision;
@@ -4507,7 +4507,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_05_07_a_rejected_or_unchanged_file_reload_cancels_no_accepted_work() {
+    fn a_rejected_or_unchanged_file_reload_cancels_no_accepted_work() {
         let mut host = KbHost::new(KbRig::new(), Some(KB_ON));
         host.start();
         host.rig.press_chord(KB_Q, KB_CMD);
@@ -4528,7 +4528,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_05_07_host_caps_recovery_runs_with_the_module_disabled_and_an_invalid_file() {
+    fn host_caps_recovery_runs_with_the_module_disabled_and_an_invalid_file() {
         use stache_keybindings::caps::CapsRecoveryStep;
         use stache_macos::caps_remap::{Mapping, OWNED};
 
@@ -4567,7 +4567,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_05_06_host_shutdown_closes_admission_then_stops_the_module_then_drains() {
+    fn host_shutdown_closes_admission_then_stops_the_module_then_drains() {
         let mut host = KbHost::new(KbRig::new(), Some(KB_ON));
         host.start();
         host.rig.press_chord(KB_Q, KB_CMD);
@@ -4597,7 +4597,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_05_06_two_independent_fake_hosts_share_nothing() {
+    fn two_independent_fake_hosts_share_nothing() {
         let mut first = KbHost::new(KbRig::new(), Some(KB_ON));
         let mut second = KbHost::new(KbRig::new(), Some(KB_ON));
         first.start();
@@ -4793,7 +4793,7 @@ mod tests {
     }
 
     #[test]
-    fn ti_05_01_the_tiling_factory_is_inert_until_start_and_projects_runtime_details() {
+    fn the_tiling_factory_is_inert_until_start_and_projects_runtime_details() {
         let mut host = TiHost::new(Some(TI_ON));
         host.register();
         assert!(
@@ -4837,7 +4837,7 @@ mod tests {
     }
 
     #[test]
-    fn ti_06_04_the_production_composition_registers_tiling_default_disabled() {
+    fn the_production_composition_registers_tiling_default_disabled() {
         let factories = production_with_tiling();
         assert!(factories.entries().iter().any(|factory| factory.id() == TilingConfig::ID));
         // Registering over an empty configuration directory: nothing starts.
@@ -4874,7 +4874,7 @@ mod tests {
     }
 
     #[test]
-    fn ti_06_04_enabling_tiling_over_fakes_reaches_running_and_delivers_displays_first() {
+    fn enabling_tiling_over_fakes_reaches_running_and_delivers_displays_first() {
         let mut host = TiHost::new(Some(TI_ON));
         host.start();
         let view = host.view();
@@ -4890,7 +4890,7 @@ mod tests {
     }
 
     #[test]
-    fn ti_06_04_missing_accessibility_waits_without_acquiring_or_prompting() {
+    fn missing_accessibility_waits_without_acquiring_or_prompting() {
         let (mut host, trust) = TiHost::composed(Some(TI_ON), Vec::new(), false);
         host.start();
         let view = host.view();
@@ -4904,7 +4904,7 @@ mod tests {
     }
 
     #[test]
-    fn ti_09_requested_borders_without_a_composed_authority_degrade_borders_only() {
+    fn requested_borders_without_a_composed_authority_degrade_borders_only() {
         let mut host = TiHost::new(Some(
             "enabled = true\nanimations = { enabled = true }\nborders = { enabled = true }\n",
         ));
@@ -4939,7 +4939,7 @@ mod tests {
     }
 
     #[test]
-    fn ti_06_04_a_stopped_or_quarantined_tiling_leaves_an_independent_module_running() {
+    fn a_stopped_or_quarantined_tiling_leaves_an_independent_module_running() {
         let backend = Arc::new(stache_macos::FakeApplicationBackend::new());
         let executor = Arc::new(stache_macos::ManualExecutor::new(true));
         let control = ApplicationControl::with_acknowledgement_budget(
@@ -4987,7 +4987,7 @@ mod tests {
     }
 
     #[test]
-    fn ti_05_03_held_file_diagnostics_repair_independently_of_cleanup_errors() {
+    fn held_file_diagnostics_repair_independently_of_cleanup_errors() {
         let mut host = TiHost::new(Some(TI_ON));
         host.start();
         let revision = host.view().revision;
@@ -5053,7 +5053,7 @@ mod tests {
     }
 
     #[test]
-    fn ti_07_02_the_factory_serves_tiling_methods_over_the_real_registry_lifecycle() {
+    fn the_factory_serves_tiling_methods_over_the_real_registry_lifecycle() {
         use stache_sdk::ipc::HandlerErrorKind;
         let mut host = TiHost::new(Some(TI_ON));
         host.start();
@@ -5118,7 +5118,7 @@ mod tests {
     }
 
     #[test]
-    fn ti_05_05_the_factory_shutdown_closes_the_backend() {
+    fn the_factory_shutdown_closes_the_backend() {
         let mut host = TiHost::new(Some(TI_ON));
         host.start();
         let _ = host.runner.registry.shutdown();

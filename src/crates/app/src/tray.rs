@@ -484,7 +484,7 @@ mod tests {
     fn pair(id: &str, label: &str) -> (String, String) { (id.to_owned(), label.to_owned()) }
 
     #[test]
-    fn ag_02_09_checking_shows_only_the_checking_status_row() {
+    fn checking_shows_only_the_checking_status_row() {
         let snapshot = gated(AccessState::Checking, false);
         assert_eq!(access_rows(&snapshot), vec![pair(
             "status",
@@ -493,7 +493,7 @@ mod tests {
     }
 
     #[test]
-    fn ag_02_09_blocked_shows_the_required_status_and_both_gate_actions() {
+    fn blocked_shows_the_required_status_and_both_gate_actions() {
         let snapshot = gated(AccessState::Blocked, false);
         assert_eq!(access_rows(&snapshot), vec![
             pair("status", "Stache Next — Accessibility required"),
@@ -507,7 +507,7 @@ mod tests {
     }
 
     #[test]
-    fn ag_04_04_the_guide_row_is_the_first_gate_row_and_only_while_blocked() {
+    fn the_guide_row_is_the_first_gate_row_and_only_while_blocked() {
         for revoked in [false, true] {
             let rows = rows(&gated(AccessState::Blocked, revoked));
             let ids: Vec<String> = labels(&rows).into_iter().map(|(id, _)| id).collect();
@@ -525,7 +525,7 @@ mod tests {
     }
 
     #[test]
-    fn ag_02_09_revoked_changes_only_the_status_wording() {
+    fn revoked_changes_only_the_status_wording() {
         let snapshot = gated(AccessState::Blocked, true);
         assert_eq!(access_rows(&snapshot), vec![
             pair("status", "Stache Next — Accessibility was turned off"),
@@ -536,7 +536,7 @@ mod tests {
     }
 
     #[test]
-    fn ag_02_09_open_has_no_gate_row_and_no_snapshot_has_a_permission_row() {
+    fn open_has_no_gate_row_and_no_snapshot_has_a_permission_row() {
         assert_eq!(access_rows(&gated(AccessState::Open, false)), vec![pair(
             "status",
             "Stache Next"
@@ -557,7 +557,7 @@ mod tests {
     }
 
     #[test]
-    fn ag_02_09_a_blocked_menu_keeps_modules_and_the_always_available_actions() {
+    fn a_blocked_menu_keeps_modules_and_the_always_available_actions() {
         let mut snapshot = gated(AccessState::Blocked, false);
         snapshot.modules = vec![module(ModuleState::WaitingForPermission, true, false)];
         let rows = rows(&snapshot);

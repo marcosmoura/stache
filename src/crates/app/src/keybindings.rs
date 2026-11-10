@@ -94,7 +94,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn kb_05_01_composition_is_inert_and_shares_one_remap_and_one_dispatcher() {
+    fn composition_is_inert_and_shares_one_remap_and_one_dispatcher() {
         let home = tempfile::tempdir().expect("home");
         let temporary = tempfile::tempdir().expect("temporary");
         let environment = AppEnvironment {

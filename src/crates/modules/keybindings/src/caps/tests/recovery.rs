@@ -18,7 +18,7 @@ fn stale_world(initial: Vec<Mapping>) -> World {
 }
 
 #[test]
-fn kb_04_07_a_stale_journal_is_restored_exactly_once_whatever_the_module_state() {
+fn a_stale_journal_is_restored_exactly_once_whatever_the_module_state() {
     // The step takes no configuration, enabled flag or module handle at all, so
     // a disabled module or an invalid config cannot influence it.
     let world = stale_world(vec![KEY_A]);
@@ -35,7 +35,7 @@ fn kb_04_07_a_stale_journal_is_restored_exactly_once_whatever_the_module_state()
 }
 
 #[test]
-fn kb_04_07_without_a_journal_recovery_does_nothing_even_if_caps_is_mapped() {
+fn without_a_journal_recovery_does_nothing_even_if_caps_is_mapped() {
     for existing in [vec![KEY_A], vec![OWNED], vec![Mapping {
         src: CAPS_LOCK_USAGE,
         dst: 0x7_0000_00E0,
@@ -54,7 +54,7 @@ fn kb_04_07_without_a_journal_recovery_does_nothing_even_if_caps_is_mapped() {
 }
 
 #[test]
-fn kb_04_07_a_foreign_mapping_under_our_journal_is_refused_with_a_diagnostic() {
+fn a_foreign_mapping_under_our_journal_is_refused_with_a_diagnostic() {
     let world = stale_world(vec![KEY_A]);
     let foreign = Mapping {
         src: CAPS_LOCK_USAGE,
@@ -69,7 +69,7 @@ fn kb_04_07_a_foreign_mapping_under_our_journal_is_refused_with_a_diagnostic() {
 }
 
 #[test]
-fn kb_04_07_corrupt_ambiguous_and_failed_recovery_report_once_and_never_retry() {
+fn corrupt_ambiguous_and_failed_recovery_report_once_and_never_retry() {
     // Corrupt journal.
     let world = World::new(vec![KEY_A, OWNED]);
     world.plant_journal(Some(b"not a journal".to_vec()));
@@ -99,7 +99,7 @@ fn kb_04_07_corrupt_ambiguous_and_failed_recovery_report_once_and_never_retry() 
 }
 
 #[test]
-fn kb_04_07_recovery_survives_a_crash_at_any_boundary_of_its_own() {
+fn recovery_survives_a_crash_at_any_boundary_of_its_own() {
     let baseline = stale_world(vec![KEY_A]);
     baseline.reset_steps();
     let _ = recover_stale_caps_remap(&baseline.remap(), &token());

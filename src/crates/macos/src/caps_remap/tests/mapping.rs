@@ -21,7 +21,7 @@ fn parse(text: &str) -> Result<Vec<Mapping>, MappingError> {
 }
 
 #[test]
-fn kb_04_02_real_output_shapes_parse() {
+fn real_output_shapes_parse() {
     assert_eq!(parse("(null)\n"), Ok(vec![]));
     assert_eq!(parse("  (null)  "), Ok(vec![]));
     assert_eq!(parse("()"), Ok(vec![]));
@@ -49,7 +49,7 @@ fn kb_04_02_real_output_shapes_parse() {
 }
 
 #[test]
-fn kb_04_02_unknown_truncated_malformed_null_and_quoted_output_is_refused() {
+fn unknown_truncated_malformed_null_and_quoted_output_is_refused() {
     let good = format!("(\n{}\n)\n", entry("100", "200"));
     assert!(parse(&good).is_ok());
     let cases: Vec<(&str, String, MappingError)> = vec![
@@ -140,7 +140,7 @@ fn kb_04_02_unknown_truncated_malformed_null_and_quoted_output_is_refused() {
 }
 
 #[test]
-fn kb_04_02_the_entry_count_is_bounded() {
+fn the_entry_count_is_bounded() {
     let entries = vec![
         "{ HIDKeyboardModifierMappingSrc = 1; HIDKeyboardModifierMappingDst = 2; }";
         MAX_ENTRIES
@@ -160,7 +160,7 @@ fn kb_04_02_the_entry_count_is_bounded() {
 }
 
 #[test]
-fn kb_04_02_duplicate_non_caps_sources_are_preserved_exactly() {
+fn duplicate_non_caps_sources_are_preserved_exactly() {
     let text = "( { HIDKeyboardModifierMappingSrc = 5; HIDKeyboardModifierMappingDst = 6; }, { HIDKeyboardModifierMappingSrc = 5; HIDKeyboardModifierMappingDst = 7; } )";
     assert_eq!(
         parse(text),
@@ -169,7 +169,7 @@ fn kb_04_02_duplicate_non_caps_sources_are_preserved_exactly() {
 }
 
 #[test]
-fn kb_04_02_any_unowned_caps_mapping_is_classified_foreign_even_f18() {
+fn any_unowned_caps_mapping_is_classified_foreign_even_f18() {
     assert_eq!(caps_state(&[OTHER]), CapsState::Absent);
     assert_eq!(caps_state(&[OTHER, OWNED]), CapsState::Surrogate);
     assert_eq!(
@@ -182,7 +182,7 @@ fn kb_04_02_any_unowned_caps_mapping_is_classified_foreign_even_f18() {
 }
 
 #[test]
-fn kb_04_04_edits_preserve_unrelated_mappings_exactly_and_remove_only_the_owned_entry() {
+fn edits_preserve_unrelated_mappings_exactly_and_remove_only_the_owned_entry() {
     let current = vec![OTHER, OTHER_2, Mapping { src: 9, dst: 9 }];
     let applied = with_surrogate(&current);
     assert_eq!(&applied[..3], current.as_slice());
@@ -200,7 +200,7 @@ fn kb_04_04_edits_preserve_unrelated_mappings_exactly_and_remove_only_the_owned_
 }
 
 #[test]
-fn kb_04_03_the_journal_round_trips_and_refuses_anything_it_did_not_write() {
+fn the_journal_round_trips_and_refuses_anything_it_did_not_write() {
     for phase in [
         Phase::ApplyPending,
         Phase::Applied,

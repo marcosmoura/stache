@@ -186,7 +186,7 @@ fn exits_at(at: Duration) -> Script {
 fn token() -> CancellationToken { CancellationToken::new() }
 
 #[test]
-fn kb_04_05_the_constants_are_the_specified_engineering_bounds() {
+fn the_constants_are_the_specified_engineering_bounds() {
     assert_eq!(HIDUTIL_PATH, "/usr/bin/hidutil");
     assert_eq!(HIDUTIL_DEADLINE, Duration::from_secs(5));
     assert_eq!(HIDUTIL_STDOUT_CAP, 1024 * 1024);
@@ -196,7 +196,7 @@ fn kb_04_05_the_constants_are_the_specified_engineering_bounds() {
 }
 
 #[test]
-fn kb_04_05_get_and_set_run_the_exact_absolute_program_with_exact_arguments() {
+fn get_and_set_run_the_exact_absolute_program_with_exact_arguments() {
     let fixture = fixture(Script {
         stdout: b"(null)\n".to_vec(),
         exit_at: Some(Duration::ZERO),
@@ -216,7 +216,7 @@ fn kb_04_05_get_and_set_run_the_exact_absolute_program_with_exact_arguments() {
 }
 
 #[test]
-fn kb_04_05_stdout_is_capped_at_exactly_one_mebibyte_and_overflow_returns_nothing() {
+fn stdout_is_capped_at_exactly_one_mebibyte_and_overflow_returns_nothing() {
     let at_cap = fixture(Script {
         stdout: vec![b'x'; HIDUTIL_STDOUT_CAP],
         exit_at: Some(Duration::ZERO),
@@ -238,7 +238,7 @@ fn kb_04_05_stdout_is_capped_at_exactly_one_mebibyte_and_overflow_returns_nothin
 }
 
 #[test]
-fn kb_04_05_stderr_is_capped_at_exactly_sixty_four_kibibytes() {
+fn stderr_is_capped_at_exactly_sixty_four_kibibytes() {
     let at_cap = fixture(Script {
         stderr: vec![b'e'; HIDUTIL_STDERR_CAP],
         exit_at: Some(Duration::ZERO),
@@ -257,7 +257,7 @@ fn kb_04_05_stderr_is_capped_at_exactly_sixty_four_kibibytes() {
 }
 
 #[test]
-fn kb_04_05_the_child_lifetime_is_five_seconds_of_fake_time() {
+fn the_child_lifetime_is_five_seconds_of_fake_time() {
     // Exits one poll before the deadline: success.
     let fine = fixture(exits_at(Duration::from_millis(4_990)));
     fine.hidutil.get(&token()).expect("inside the deadline");
@@ -280,7 +280,7 @@ fn kb_04_05_the_child_lifetime_is_five_seconds_of_fake_time() {
 }
 
 #[test]
-fn kb_04_05_an_unkillable_child_is_retained_after_two_seconds_and_blocks_trust() {
+fn an_unkillable_child_is_retained_after_two_seconds_and_blocks_trust() {
     let stuck = fixture(Script {
         kill_fails: true,
         ..Script::default()
@@ -302,7 +302,7 @@ fn kb_04_05_an_unkillable_child_is_retained_after_two_seconds_and_blocks_trust()
 }
 
 #[test]
-fn kb_04_05_reaper_saturation_refuses_a_new_child_before_spawning_it() {
+fn reaper_saturation_refuses_a_new_child_before_spawning_it() {
     let stuck = fixture(Script {
         kill_fails: true,
         ..Script::default()
@@ -325,7 +325,7 @@ fn kb_04_05_reaper_saturation_refuses_a_new_child_before_spawning_it() {
 }
 
 #[test]
-fn kb_04_05_a_retained_child_is_released_once_it_is_confirmed_gone() {
+fn a_retained_child_is_released_once_it_is_confirmed_gone() {
     // The kill is accepted but ignored; the child only exits at 20 s.
     let stuck = fixture(Script {
         exit_at: Some(Duration::from_secs(20)),
@@ -340,7 +340,7 @@ fn kb_04_05_a_retained_child_is_released_once_it_is_confirmed_gone() {
 }
 
 #[test]
-fn kb_04_05_a_nonzero_exit_and_a_cancelled_call_are_typed_not_successes() {
+fn a_nonzero_exit_and_a_cancelled_call_are_typed_not_successes() {
     let failing = fixture(Script {
         exit_at: Some(Duration::ZERO),
         exit_code: 1,

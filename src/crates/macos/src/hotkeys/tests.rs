@@ -139,7 +139,7 @@ fn active_outcome(report: &CommitReport, key: u64) -> &BindingOutcome {
 
 #[test]
 #[allow(clippy::items_after_statements)]
-fn kb_03_02_handles_are_send_and_native_objects_are_not() {
+fn handles_are_send_and_native_objects_are_not() {
     fn assert_send_sync<T: Send + Sync>() {}
     fn assert_send<T: Send>() {}
     assert_send_sync::<HotkeyControl>();
@@ -175,7 +175,7 @@ fn kb_03_02_handles_are_send_and_native_objects_are_not() {
 /// Compile-only: the real Carbon/TIS layer builds into a control. Nothing is
 /// executed natively: the control only enqueues, and the executor never runs.
 #[test]
-fn kb_03_02_the_real_native_layer_builds_without_running() {
+fn the_real_native_layer_builds_without_running() {
     let executor = Arc::new(ManualExecutor::new(false));
     let service = InputService::unavailable();
     let owner = service.reservations().new_owner();
@@ -193,7 +193,7 @@ fn kb_03_02_the_real_native_layer_builds_without_running() {
 }
 
 #[test]
-fn kb_03_02_handler_install_failure_is_a_distinct_outcome() {
+fn handler_install_failure_is_a_distinct_outcome() {
     let rig = rig();
     rig.log.fail_install(Some(-50));
     let report = rig.apply(vec![q(1), w(2)]);
@@ -225,7 +225,7 @@ fn kb_03_02_handler_install_failure_is_a_distinct_outcome() {
 }
 
 #[test]
-fn kb_03_02_the_handler_is_installed_lazily_and_only_once() {
+fn the_handler_is_installed_lazily_and_only_once() {
     let rig = rig();
     assert!(
         rig.log.calls().is_empty(),
@@ -243,7 +243,7 @@ fn kb_03_02_the_handler_is_installed_lazily_and_only_once() {
 }
 
 #[test]
-fn kb_03_02_one_occupied_chord_does_not_hide_the_successes() {
+fn one_occupied_chord_does_not_hide_the_successes() {
     let rig = rig();
     rig.log.occupy(KEY_W, CARBON_CMD);
     let report = rig.apply(vec![q(1), w(2), e(3)]);
@@ -269,7 +269,7 @@ fn kb_03_02_one_occupied_chord_does_not_hide_the_successes() {
 }
 
 #[test]
-fn kb_03_02_unsupported_keys_fail_per_binding() {
+fn unsupported_keys_fail_per_binding() {
     let rig = rig();
     let report = rig.apply(vec![
         physical(1, Code::MediaPlayPause, CMD),
@@ -289,7 +289,7 @@ fn kb_03_02_unsupported_keys_fail_per_binding() {
 }
 
 #[test]
-fn kb_03_02_native_ids_use_the_stache_signature_and_are_never_reused() {
+fn native_ids_use_the_stache_signature_and_are_never_reused() {
     let rig = rig();
     let first = rig.apply(vec![q(1)]);
     let (_, first_id) = Rig::active_ids(&first)[0];
@@ -306,7 +306,7 @@ fn kb_03_02_native_ids_use_the_stache_signature_and_are_never_reused() {
 }
 
 #[test]
-fn kb_03_02_a_press_dispatches_once_through_the_sink() {
+fn a_press_dispatches_once_through_the_sink() {
     let rig = rig();
     let report = rig.apply(vec![q(7)]);
     let id = rig.id(KEY_Q, CARBON_CMD);
@@ -319,7 +319,7 @@ fn kb_03_02_a_press_dispatches_once_through_the_sink() {
 }
 
 #[test]
-fn kb_03_02_foreign_release_and_malformed_events_never_dispatch() {
+fn foreign_release_and_malformed_events_never_dispatch() {
     let rig = rig();
     let _ = rig.apply(vec![q(1)]);
     let id = rig.id(KEY_Q, CARBON_CMD);
@@ -361,7 +361,7 @@ fn kb_03_02_foreign_release_and_malformed_events_never_dispatch() {
 }
 
 #[test]
-fn kb_03_02_the_callback_makes_no_native_call_even_when_it_dispatches() {
+fn the_callback_makes_no_native_call_even_when_it_dispatches() {
     let rig = rig();
     let _ = rig.apply(vec![q(1)]);
     let id = rig.id(KEY_Q, CARBON_CMD);
@@ -374,7 +374,7 @@ fn kb_03_02_the_callback_makes_no_native_call_even_when_it_dispatches() {
 }
 
 #[test]
-fn kb_03_02_a_panicking_sink_is_contained_and_still_owns_the_event() {
+fn a_panicking_sink_is_contained_and_still_owns_the_event() {
     struct Panics;
     impl HotkeySink for Panics {
         fn pressed(&self, _token: BindingToken) { panic!("sink bug") }
@@ -399,7 +399,7 @@ fn kb_03_02_a_panicking_sink_is_contained_and_still_owns_the_event() {
 // ---------------------------------------------------------------- KB-03-03
 
 #[test]
-fn kb_03_03_section_resolves_from_the_layout_and_merges_modifiers() {
+fn section_resolves_from_the_layout_and_merges_modifiers() {
     let rig = rig();
     rig.log.set_layout(FakeLayout::german());
     let report = rig.apply(vec![section(1, CMD)]);
@@ -419,7 +419,7 @@ fn kb_03_03_section_resolves_from_the_layout_and_merges_modifiers() {
 }
 
 #[test]
-fn kb_03_03_unreadable_layout_registers_the_iso_key_with_a_diagnostic() {
+fn unreadable_layout_registers_the_iso_key_with_a_diagnostic() {
     let rig = rig();
     rig.log.set_layout_unreadable("no uchr");
     let report = rig.apply(vec![section(1, CMD)]);
@@ -442,7 +442,7 @@ fn kb_03_03_unreadable_layout_registers_the_iso_key_with_a_diagnostic() {
 }
 
 #[test]
-fn kb_03_03_ordinary_and_section_collisions_are_deterministic() {
+fn ordinary_and_section_collisions_are_deterministic() {
     // On ANSI the section resolves to Option+6, exactly an ordinary chord.
     let ordinary = physical(5, Code::Digit6, ModifierFlags::OPTION);
     let expected_winner = 5;
@@ -467,7 +467,7 @@ fn kb_03_03_ordinary_and_section_collisions_are_deterministic() {
 }
 
 #[test]
-fn kb_03_03_section_bindings_with_different_modifiers_coexist() {
+fn section_bindings_with_different_modifiers_coexist() {
     let rig = rig();
     let report = rig.apply(vec![section(1, ModifierFlags::NONE), section(2, CMD)]);
     assert!(report.all_active());
@@ -480,7 +480,7 @@ fn kb_03_03_section_bindings_with_different_modifiers_coexist() {
 // ---------------------------------------------------------------- KB-03-04
 
 #[test]
-fn kb_03_04_unchanged_chords_are_reused_without_a_second_register() {
+fn unchanged_chords_are_reused_without_a_second_register() {
     let rig = rig();
     let first = rig.apply(vec![q(1), w(2)]);
     let before: Vec<_> = Rig::active_ids(&first);
@@ -513,7 +513,7 @@ fn kb_03_04_unchanged_chords_are_reused_without_a_second_register() {
 }
 
 #[test]
-fn kb_03_04_removed_chords_are_unregistered_only_after_the_commit() {
+fn removed_chords_are_unregistered_only_after_the_commit() {
     let rig = rig();
     let _ = rig.apply(vec![q(1), w(2)]);
     let w_id = rig.id(KEY_W, CARBON_CMD);
@@ -537,7 +537,7 @@ fn kb_03_04_removed_chords_are_unregistered_only_after_the_commit() {
 }
 
 #[test]
-fn kb_03_04_staging_is_inert_until_commit() {
+fn staging_is_inert_until_commit() {
     let rig = rig();
     let _ = rig.apply(vec![q(1)]);
     rig.log.clear_calls();
@@ -558,7 +558,7 @@ fn kb_03_04_staging_is_inert_until_commit() {
 }
 
 #[test]
-fn kb_03_04_a_commit_cancelled_midway_rolls_back_and_keeps_the_last_good_set() {
+fn a_commit_cancelled_midway_rolls_back_and_keeps_the_last_good_set() {
     let rig = rig();
     let first = rig.apply(vec![q(1)]);
     let q_id = rig.id(KEY_Q, CARBON_CMD);
@@ -603,7 +603,7 @@ fn kb_03_04_a_commit_cancelled_midway_rolls_back_and_keeps_the_last_good_set() {
 }
 
 #[test]
-fn kb_03_04_rollback_that_cannot_unregister_reports_the_owed_cleanup() {
+fn rollback_that_cannot_unregister_reports_the_owed_cleanup() {
     let rig = rig();
     let _ = rig.apply(vec![q(1)]);
     let cancel = rig.cancel.clone();
@@ -625,7 +625,7 @@ fn kb_03_04_rollback_that_cannot_unregister_reports_the_owed_cleanup() {
 }
 
 #[test]
-fn kb_03_04_a_layout_switch_between_prepare_and_commit_is_rejected_and_refreshed() {
+fn a_layout_switch_between_prepare_and_commit_is_rejected_and_refreshed() {
     let rig = rig();
     let staged = rig
         .control
@@ -644,7 +644,7 @@ fn kb_03_04_a_layout_switch_between_prepare_and_commit_is_rejected_and_refreshed
 }
 
 #[test]
-fn kb_03_04_a_layout_switch_during_the_register_loop_rolls_back_before_publication() {
+fn a_layout_switch_during_the_register_loop_rolls_back_before_publication() {
     let rig = rig();
     let log = Arc::clone(&rig.log);
     rig.log.set_hook(move |call| {
@@ -667,7 +667,7 @@ fn kb_03_04_a_layout_switch_during_the_register_loop_rolls_back_before_publicati
 }
 
 #[test]
-fn kb_03_04_refresh_replaces_obsolete_section_routes_and_preserves_the_rest() {
+fn refresh_replaces_obsolete_section_routes_and_preserves_the_rest() {
     let rig = rig();
     let first = rig.apply(vec![q(1), section(2, ModifierFlags::NONE)]);
     let q_id = rig.id(KEY_Q, CARBON_CMD);
@@ -703,7 +703,7 @@ fn kb_03_04_refresh_replaces_obsolete_section_routes_and_preserves_the_rest() {
 }
 
 #[test]
-fn kb_03_04_a_queued_old_event_never_reaches_the_successor() {
+fn a_queued_old_event_never_reaches_the_successor() {
     let rig = rig();
     let _ = rig.apply(vec![section(1, ModifierFlags::NONE)]);
     let old = rig.id(0x16, CARBON_OPT);
@@ -722,7 +722,7 @@ fn kb_03_04_a_queued_old_event_never_reaches_the_successor() {
 }
 
 #[test]
-fn kb_03_04_hints_are_coalesced_into_one_refresh() {
+fn hints_are_coalesced_into_one_refresh() {
     let rig = rig();
     let _ = rig.apply(vec![section(1, ModifierFlags::NONE)]);
     rig.log.clear_calls();
@@ -755,7 +755,7 @@ fn kb_03_04_hints_are_coalesced_into_one_refresh() {
 }
 
 #[test]
-fn kb_03_04_a_refresh_superseded_by_stop_does_nothing_native() {
+fn a_refresh_superseded_by_stop_does_nothing_native() {
     let rig = rig();
     let _ = rig.apply(vec![section(1, ModifierFlags::NONE)]);
     rig.executor.set_on_main(false);
@@ -779,7 +779,7 @@ fn kb_03_04_a_refresh_superseded_by_stop_does_nothing_native() {
 }
 
 #[test]
-fn kb_03_04_a_layout_switch_during_stop_cannot_resurrect_registrations() {
+fn a_layout_switch_during_stop_cannot_resurrect_registrations() {
     let rig = rig();
     let _ = rig.apply(vec![section(1, ModifierFlags::NONE), q(2)]);
     let log = Arc::clone(&rig.log);
@@ -801,7 +801,7 @@ fn kb_03_04_a_layout_switch_during_stop_cannot_resurrect_registrations() {
 }
 
 #[test]
-fn kb_03_04_restart_after_stop_adopts_the_new_generation() {
+fn restart_after_stop_adopts_the_new_generation() {
     let rig = rig();
     let first = rig.apply(vec![q(1)]);
     let _ = rig.control.stop(&rig.cancel).expect("stop");
@@ -814,7 +814,7 @@ fn kb_03_04_restart_after_stop_adopts_the_new_generation() {
 }
 
 #[test]
-fn kb_03_04_a_late_stop_never_disturbs_a_newer_commit() {
+fn a_late_stop_never_disturbs_a_newer_commit() {
     let slow = Timing {
         budget: Duration::from_millis(30),
         quantum: Duration::from_millis(5),
@@ -854,7 +854,7 @@ fn kb_03_04_a_late_stop_never_disturbs_a_newer_commit() {
 }
 
 #[test]
-fn kb_03_04_reservations_match_the_actual_routes() {
+fn reservations_match_the_actual_routes() {
     let rig = rig();
     let report = rig.apply(vec![q(1), section(2, CMD)]);
     let status = rig.status();
@@ -874,7 +874,7 @@ fn kb_03_04_reservations_match_the_actual_routes() {
 }
 
 #[test]
-fn kb_03_04_a_central_conflict_with_a_hid_filter_is_recorded_not_dispatch_changing() {
+fn a_central_conflict_with_a_hid_filter_is_recorded_not_dispatch_changing() {
     let rig = rig();
     let _ = rig.apply(vec![q(1)]);
     let hid = rig.service.reservations().new_owner();
@@ -898,7 +898,7 @@ fn kb_03_04_a_central_conflict_with_a_hid_filter_is_recorded_not_dispatch_changi
 }
 
 #[test]
-fn kb_03_04_a_failed_registration_has_no_reservation_and_removal_is_exact() {
+fn a_failed_registration_has_no_reservation_and_removal_is_exact() {
     let rig = rig();
     rig.log.occupy(KEY_W, CARBON_CMD);
     let report = rig.apply(vec![q(1), w(2)]);
@@ -936,7 +936,7 @@ fn kb_03_04_a_failed_registration_has_no_reservation_and_removal_is_exact() {
 }
 
 #[test]
-fn kb_03_04_refresh_moves_the_reservation_with_the_route() {
+fn refresh_moves_the_reservation_with_the_route() {
     let rig = rig();
     let _ = rig.apply(vec![section(1, ModifierFlags::NONE)]);
     let before = rig.status().active[0].reservation;
@@ -957,7 +957,7 @@ fn kb_03_04_refresh_moves_the_reservation_with_the_route() {
 }
 
 #[test]
-fn kb_03_04_a_priority_change_updates_the_reservation_in_place() {
+fn a_priority_change_updates_the_reservation_in_place() {
     let rig = rig();
     let _ = rig.apply(vec![q(1)]);
     let _ = rig.hid_claim(KEY_Q, CMD, 20);
@@ -985,7 +985,7 @@ fn kb_03_04_a_priority_change_updates_the_reservation_in_place() {
 // ---------------------------------------------------------------- KB-03-05
 
 #[test]
-fn kb_03_05_cleanup_failure_retains_an_inert_guard_and_reports_it() {
+fn cleanup_failure_retains_an_inert_guard_and_reports_it() {
     let rig = rig();
     let _ = rig.apply(vec![q(1), w(2)]);
     let w_id = rig.id(KEY_W, CARBON_CMD);
@@ -1012,7 +1012,7 @@ fn kb_03_05_cleanup_failure_retains_an_inert_guard_and_reports_it() {
 }
 
 #[test]
-fn kb_03_05_stop_keeps_the_handler_while_a_guard_remains() {
+fn stop_keeps_the_handler_while_a_guard_remains() {
     let rig = rig();
     let _ = rig.apply(vec![q(1), w(2)]);
     let w_id = rig.id(KEY_W, CARBON_CMD);
@@ -1038,7 +1038,7 @@ fn kb_03_05_stop_keeps_the_handler_while_a_guard_remains() {
 }
 
 #[test]
-fn kb_03_05_handler_and_observer_removal_failures_are_reported() {
+fn handler_and_observer_removal_failures_are_reported() {
     let rig = rig();
     let _ = rig.apply(vec![q(1)]);
     rig.log.fail_remove_handler(Some(-7));
@@ -1056,7 +1056,7 @@ fn kb_03_05_handler_and_observer_removal_failures_are_reported() {
 }
 
 #[test]
-fn kb_03_05_observer_failure_degrades_refresh_but_not_registration() {
+fn observer_failure_degrades_refresh_but_not_registration() {
     let rig = rig();
     rig.log.fail_observe(true);
     let report = rig.apply(vec![q(1)]);
@@ -1071,7 +1071,7 @@ fn kb_03_05_observer_failure_degrades_refresh_but_not_registration() {
 }
 
 #[test]
-fn kb_03_05_stop_inhibits_dispatch_before_any_main_thread_hop() {
+fn stop_inhibits_dispatch_before_any_main_thread_hop() {
     let slow = Timing {
         budget: Duration::from_millis(30),
         quantum: Duration::from_millis(5),
@@ -1090,7 +1090,7 @@ fn kb_03_05_stop_inhibits_dispatch_before_any_main_thread_hop() {
 }
 
 #[test]
-fn kb_03_05_a_cancelled_cleanup_skips_native_mutation_and_keeps_ownership() {
+fn a_cancelled_cleanup_skips_native_mutation_and_keeps_ownership() {
     let rig = rig();
     let _ = rig.apply(vec![q(1)]);
     let id = rig.id(KEY_Q, CARBON_CMD);
@@ -1112,7 +1112,7 @@ fn kb_03_05_a_cancelled_cleanup_skips_native_mutation_and_keeps_ownership() {
 }
 
 #[test]
-fn kb_03_05_dropping_the_control_inhibits_and_queues_teardown_without_waiting() {
+fn dropping_the_control_inhibits_and_queues_teardown_without_waiting() {
     let rig = rig();
     let _ = rig.apply(vec![q(1)]);
     let Rig {
@@ -1134,7 +1134,7 @@ fn kb_03_05_dropping_the_control_inhibits_and_queues_teardown_without_waiting() 
 // ---------------------------------------------------------------- KB-03-06
 
 #[test]
-fn kb_03_06_a_yielded_reservation_never_reaches_the_sink() {
+fn a_yielded_reservation_never_reaches_the_sink() {
     let rig = rig();
     let _ = rig.apply(vec![q(1), w(2)]);
     let q_id = rig.id(KEY_Q, CARBON_CMD);
@@ -1157,7 +1157,7 @@ fn kb_03_06_a_yielded_reservation_never_reaches_the_sink() {
 }
 
 #[test]
-fn kb_03_06_a_claimant_present_before_registration_yields_from_the_start() {
+fn a_claimant_present_before_registration_yields_from_the_start() {
     let rig = rig();
     let _ = rig.hid_claim(KEY_Q, CMD, 20);
     let _ = rig.apply(vec![q(1)]);
@@ -1167,7 +1167,7 @@ fn kb_03_06_a_claimant_present_before_registration_yields_from_the_start() {
 }
 
 #[test]
-fn kb_03_06_yield_and_restore_across_pause_reload_and_stop() {
+fn yield_and_restore_across_pause_reload_and_stop() {
     let rig = rig();
     let _ = rig.apply(vec![q(1), w(2)]);
     let q_id = rig.id(KEY_Q, CARBON_CMD);
@@ -1215,7 +1215,7 @@ fn kb_03_06_yield_and_restore_across_pause_reload_and_stop() {
 }
 
 #[test]
-fn kb_03_06_double_yield_and_stale_yield_are_safe() {
+fn double_yield_and_stale_yield_are_safe() {
     let rig = rig();
     let _ = rig.apply(vec![q(1)]);
     let reserved = rig.status().active[0].reservation;
@@ -1238,7 +1238,7 @@ fn kb_03_06_double_yield_and_stale_yield_are_safe() {
 }
 
 #[test]
-fn kb_03_06_a_removed_binding_stays_inert_even_if_a_claimant_is_removed() {
+fn a_removed_binding_stays_inert_even_if_a_claimant_is_removed() {
     let rig = rig();
     let _ = rig.apply(vec![q(1)]);
     let id = rig.id(KEY_Q, CARBON_CMD);
@@ -1337,7 +1337,7 @@ fn bounds_a_cancelled_token_is_refused_before_dispatch() {
 // ------------------------------------------------------------------ keymap
 
 #[test]
-fn kb_03_02_the_key_table_matches_the_archived_backend() {
+fn the_key_table_matches_the_archived_backend() {
     use super::keymap::virtual_key;
     for (code, expected) in [
         (Code::KeyA, 0x00),
@@ -1371,7 +1371,7 @@ fn kb_03_02_the_key_table_matches_the_archived_backend() {
 }
 
 #[test]
-fn kb_03_02_the_input_source_notification_name_is_the_tis_constant() {
+fn the_input_source_notification_name_is_the_tis_constant() {
     assert_eq!(
         crate::keyboard_layout::observer::INPUT_SOURCE_CHANGED,
         "com.apple.Carbon.TISNotifySelectedKeyboardInputSourceChanged"

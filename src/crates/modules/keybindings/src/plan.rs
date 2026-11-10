@@ -133,7 +133,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_03_01_plan_is_independent_of_insertion_order() {
+    fn plan_is_independent_of_insertion_order() {
         let entries = [
             ("Cmd+Ctrl+R", one("a")),
             ("Command+Control+R", one("b")),
@@ -156,7 +156,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_03_01_last_duplicate_in_lexical_order_wins_and_names_both() {
+    fn last_duplicate_in_lexical_order_wins_and_names_both() {
         let p = plan(&[
             ("Command+Control+R", one("second")),
             ("Cmd+Ctrl+R", one("first")),
@@ -182,7 +182,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_03_01_routes_caps_first_then_section_then_ordinary() {
+    fn routes_caps_first_then_section_then_ordinary() {
         let p = plan(&[
             ("CapsLock+§", one("")),
             ("CapsLock+S", one("")),
@@ -205,7 +205,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_03_01_section_placement_and_modifiers() {
+    fn section_placement_and_modifiers() {
         let p = plan(&[
             ("§+Command", one("")),
             ("Command+§+Shift", one("")),
@@ -250,7 +250,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_03_01_empty_and_blank_commands_capture_without_spawn() {
+    fn empty_and_blank_commands_capture_without_spawn() {
         let p = plan(&[
             ("Command+H", one("")),
             ("Command+J", one("   ")),
@@ -272,7 +272,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_03_01_quoted_commands_stay_opaque() {
+    fn quoted_commands_stay_opaque() {
         let quoted = r#"open -a "My App" --flag 'x y' \"#;
         let p = plan(&[("Command+Q", one(&format!("  {quoted}  ")))]);
         assert_eq!(p.bindings[0].commands, [quoted]);
@@ -282,7 +282,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_03_01_malformed_entries_are_skipped_without_dropping_valid_ones() {
+    fn malformed_entries_are_skipped_without_dropping_valid_ones() {
         let p = plan(&[
             ("", one("x")),
             ("Command++R", one("x")),
@@ -297,7 +297,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_03_01_sample_shortcuts_plan() {
+    fn sample_shortcuts_plan() {
         let p = plan(&[
             ("Command+Control+R", one("stache reload")),
             ("Command+Control+W", one("stache wallpaper set --random")),

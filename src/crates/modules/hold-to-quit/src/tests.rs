@@ -83,7 +83,7 @@ fn hides(rig: &Rig) -> usize {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn hq_04_02_the_filter_is_exact_command_keycode_twelve_plus_the_named_modifier_keys() {
+fn the_filter_is_exact_command_keycode_twelve_plus_the_named_modifier_keys() {
     let filter = policy::filter();
     let key = |code: u16| PressStream::Key(KeyCode(code));
     let down = InputEventKind::KeyDown;
@@ -121,7 +121,7 @@ fn hq_04_02_the_filter_is_exact_command_keycode_twelve_plus_the_named_modifier_k
 }
 
 #[test]
-fn hq_04_02_the_decision_table_fails_open_on_every_disagreement() {
+fn the_decision_table_fails_open_on_every_disagreement() {
     use stache_macos::{
         ApplicationBackend, ApplicationControl, FakeApplicationBackend, FrontmostSnapshot,
         FrontmostState as Native, ManualExecutor, Unconfirmed,
@@ -216,7 +216,7 @@ fn hq_04_02_the_decision_table_fails_open_on_every_disagreement() {
 }
 
 #[test]
-fn hq_04_02_a_command_only_q_down_is_suppressed_and_the_up_is_paired() {
+fn a_command_only_q_down_is_suppressed_and_the_up_is_paired() {
     let (rig, _editor) = focused(HOLD);
     assert_eq!(rig.q_down(), Disposition::Suppress);
     assert_eq!(rig.input.ledger_len(), 1);
@@ -226,7 +226,7 @@ fn hq_04_02_a_command_only_q_down_is_suppressed_and_the_up_is_paired() {
 }
 
 #[test]
-fn hq_04_02_the_modifier_matrix_passes_everything_but_command_only() {
+fn the_modifier_matrix_passes_everything_but_command_only() {
     let (rig, _editor) = focused(HOLD);
     for extra in [
         ModifierFlags::SHIFT,
@@ -258,7 +258,7 @@ fn hq_04_02_the_modifier_matrix_passes_everything_but_command_only() {
 }
 
 #[test]
-fn hq_04_02_a_repeat_never_starts_a_press() {
+fn a_repeat_never_starts_a_press() {
     let (rig, _editor) = focused(HOLD);
     assert_eq!(rig.q_repeat(), Disposition::Pass, "an orphan repeat passes");
     assert_eq!(rig.input.ledger_len(), 0);
@@ -266,7 +266,7 @@ fn hq_04_02_a_repeat_never_starts_a_press() {
 }
 
 #[test]
-fn hq_04_02_finder_self_and_unknown_frontmost_pass_without_a_hud() {
+fn finder_self_and_unknown_frontmost_pass_without_a_hud() {
     let rig = Rig::started(config(HOLD));
     let finder = {
         let mut app = rig.add_app("com.apple.finder");
@@ -299,7 +299,7 @@ fn hq_04_02_finder_self_and_unknown_frontmost_pass_without_a_hud() {
 }
 
 #[test]
-fn hq_04_02_both_frontmost_gates_must_agree_on_the_bundle() {
+fn both_frontmost_gates_must_agree_on_the_bundle() {
     let (rig, _editor) = focused(HOLD);
     // The SDK context names another bundle than the module's snapshot.
     rig.input.context_publisher().publish_frontmost(FrontmostApp {
@@ -319,7 +319,7 @@ fn hq_04_02_both_frontmost_gates_must_agree_on_the_bundle() {
 }
 
 #[test]
-fn hq_04_02_the_exact_instance_decides_self_not_the_bundle() {
+fn the_exact_instance_decides_self_not_the_bundle() {
     let rig = Rig::started(config(HOLD));
     let own = rig.add_app("com.example.stache");
     let other = rig.add_app("com.example.stache");
@@ -346,7 +346,7 @@ fn hq_04_02_the_exact_instance_decides_self_not_the_bundle() {
 }
 
 #[test]
-fn hq_04_02_a_passed_press_that_becomes_eligible_stays_passed() {
+fn a_passed_press_that_becomes_eligible_stays_passed() {
     let rig = Rig::started(config(HOLD));
     let finder = {
         let mut app = rig.add_app("com.apple.finder");
@@ -367,7 +367,7 @@ fn hq_04_02_a_passed_press_that_becomes_eligible_stays_passed() {
 }
 
 #[test]
-fn hq_04_02_two_presses_in_one_epoch_get_distinct_hud_press_ids() {
+fn two_presses_in_one_epoch_get_distinct_hud_press_ids() {
     let (rig, _editor) = focused(HOLD);
     begin_hold(&rig, HOLD);
     assert_eq!(rig.q_up(), Disposition::Suppress);
@@ -392,7 +392,7 @@ fn hq_04_02_two_presses_in_one_epoch_get_distinct_hud_press_ids() {
 }
 
 #[test]
-fn hq_04_02_command_release_before_the_q_up_cancels_and_the_rest_stays_swallowed() {
+fn command_release_before_the_q_up_cancels_and_the_rest_stays_swallowed() {
     let (rig, _editor) = focused(HOLD);
     begin_hold(&rig, HOLD);
     assert_eq!(rig.command_flags(ModifierFlags::NONE), Disposition::Pass);
@@ -409,7 +409,7 @@ fn hq_04_02_command_release_before_the_q_up_cancels_and_the_rest_stays_swallowed
 }
 
 #[test]
-fn hq_04_02_an_added_modifier_mid_hold_cancels_it() {
+fn an_added_modifier_mid_hold_cancels_it() {
     let (rig, _editor) = focused(HOLD);
     begin_hold(&rig, HOLD);
     assert_eq!(
@@ -438,7 +438,7 @@ fn hq_04_02_an_added_modifier_mid_hold_cancels_it() {
 }
 
 #[test]
-fn hq_04_02_a_fast_down_up_before_the_worker_runs_shows_nothing() {
+fn a_fast_down_up_before_the_worker_runs_shows_nothing() {
     let (rig, editor) = focused(HOLD);
     // Hold the worker inside its first press so the second queues behind it.
     let barrier = rig.apps.block_next_is_running();
@@ -460,7 +460,7 @@ fn hq_04_02_a_fast_down_up_before_the_worker_runs_shows_nothing() {
 }
 
 #[test]
-fn hq_04_02_a_full_inbox_fails_open_for_a_new_down_and_never_loses_a_cancel() {
+fn a_full_inbox_fails_open_for_a_new_down_and_never_loses_a_cancel() {
     let (rig, _editor) = focused(HOLD);
     // Phase one: the worker is busy, so the inbox fills (one press in flight and
     // eight queued) and the tenth down passes. The release of a passed press
@@ -501,7 +501,7 @@ fn hq_04_02_a_full_inbox_fails_open_for_a_new_down_and_never_loses_a_cancel() {
 }
 
 #[test]
-fn hq_04_02_a_slow_callback_goes_inert_but_leaves_the_press_tombstoned() {
+fn a_slow_callback_goes_inert_but_leaves_the_press_tombstoned() {
     let (rig, _editor) = focused(HOLD);
     let service_clock = Arc::clone(&rig.input_clock);
     rig.clock.set_on_now(Some(Arc::new(move || {
@@ -522,7 +522,7 @@ fn hq_04_02_a_slow_callback_goes_inert_but_leaves_the_press_tombstoned() {
 }
 
 #[test]
-fn hq_04_02_a_panicking_callback_fails_open_and_goes_inert() {
+fn a_panicking_callback_fails_open_and_goes_inert() {
     let (rig, _editor) = focused(HOLD);
     rig.clock.set_on_now(Some(Arc::new(|| panic!("boom"))));
     assert_eq!(
@@ -538,7 +538,7 @@ fn hq_04_02_a_panicking_callback_fails_open_and_goes_inert() {
 }
 
 #[test]
-fn hq_04_02_a_tap_disable_cancels_the_press_and_orphans_pass() {
+fn a_tap_disable_cancels_the_press_and_orphans_pass() {
     let (rig, _editor) = focused(HOLD);
     begin_hold(&rig, HOLD);
     rig.input.tap_disabled(TapKind::Suppressing);
@@ -555,7 +555,7 @@ fn hq_04_02_a_tap_disable_cancels_the_press_and_orphans_pass() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn hq_04_03_a_full_hold_asks_the_captured_instance_to_quit_gracefully_once() {
+fn a_full_hold_asks_the_captured_instance_to_quit_gracefully_once() {
     let (rig, editor) = focused(HOLD);
     begin_hold(&rig, HOLD);
     assert_eq!(orders(&rig), 1, "only the matching Shown arms the hold");
@@ -575,7 +575,7 @@ fn hq_04_03_a_full_hold_asks_the_captured_instance_to_quit_gracefully_once() {
 }
 
 #[test]
-fn hq_04_03_a_release_before_the_deadline_sends_nothing() {
+fn a_release_before_the_deadline_sends_nothing() {
     let (rig, _editor) = focused(HOLD);
     begin_hold(&rig, HOLD);
     rig.clock.advance(hold_for(HOLD - 1));
@@ -587,7 +587,7 @@ fn hq_04_03_a_release_before_the_deadline_sends_nothing() {
 }
 
 #[test]
-fn hq_04_03_a_release_delivered_at_the_deadline_wins_over_a_worker_that_has_not_run() {
+fn a_release_delivered_at_the_deadline_wins_over_a_worker_that_has_not_run() {
     let (rig, _editor) = focused(HOLD);
     begin_hold(&rig, HOLD);
     // The deadline passes, but the worker is not scheduled yet; the release is
@@ -600,7 +600,7 @@ fn hq_04_03_a_release_delivered_at_the_deadline_wins_over_a_worker_that_has_not_
 }
 
 #[test]
-fn hq_04_03_a_release_after_the_deadline_but_before_the_commit_prevents_the_send() {
+fn a_release_after_the_deadline_but_before_the_commit_prevents_the_send() {
     let (rig, _editor) = focused(HOLD);
     begin_hold(&rig, HOLD);
     let barrier = rig.apps.block_next_graceful_before_commit();
@@ -618,7 +618,7 @@ fn hq_04_03_a_release_after_the_deadline_but_before_the_commit_prevents_the_send
 }
 
 #[test]
-fn hq_04_03_a_release_after_the_commit_cannot_undo_the_request() {
+fn a_release_after_the_commit_cannot_undo_the_request() {
     let (rig, editor) = focused(HOLD);
     begin_hold(&rig, HOLD);
     let barrier = rig.apps.block_next_graceful_after_issue();
@@ -632,7 +632,7 @@ fn hq_04_03_a_release_after_the_commit_cannot_undo_the_request() {
 }
 
 #[test]
-fn hq_04_03_a_refusal_is_reported_as_refused_and_never_escalated() {
+fn a_refusal_is_reported_as_refused_and_never_escalated() {
     let (rig, _editor) = focused(HOLD);
     rig.apps.refuse_graceful_terminate();
     begin_hold(&rig, HOLD);
@@ -643,7 +643,7 @@ fn hq_04_03_a_refusal_is_reported_as_refused_and_never_escalated() {
 }
 
 #[test]
-fn hq_04_03_an_unacknowledged_send_is_uncertain_never_refused() {
+fn an_unacknowledged_send_is_uncertain_never_refused() {
     let rig = Rig::pumped(config(HOLD), Duration::from_millis(50));
     rig.start().expect("start");
     rig.wait_parked();
@@ -665,7 +665,7 @@ fn hq_04_03_an_unacknowledged_send_is_uncertain_never_refused() {
 }
 
 #[test]
-fn hq_04_03_zero_duration_proceeds_only_after_a_matching_shown() {
+fn zero_duration_proceeds_only_after_a_matching_shown() {
     let (rig, editor) = focused(0);
     assert_eq!(rig.q_down(), Disposition::Suppress);
     assert_eq!(wait_report(&rig).outcome, GracefulOutcome::Requested);
@@ -674,7 +674,7 @@ fn hq_04_03_zero_duration_proceeds_only_after_a_matching_shown() {
 }
 
 #[test]
-fn hq_04_03_a_zero_duration_with_a_pending_show_waits_for_the_acknowledgement() {
+fn a_zero_duration_with_a_pending_show_waits_for_the_acknowledgement() {
     let (rig, _editor) = focused(0);
     // New show jobs queue instead of running.
     rig.hud_executor.set_on_main(false);
@@ -694,8 +694,7 @@ fn hq_04_03_a_zero_duration_with_a_pending_show_waits_for_the_acknowledgement() 
 }
 
 #[test]
-fn hq_04_03_a_show_pending_at_the_deadline_never_issues_and_a_late_shown_is_ignored_when_cancelled()
-{
+fn a_show_pending_at_the_deadline_never_issues_and_a_late_shown_is_ignored_when_cancelled() {
     let (rig, _editor) = focused(100);
     rig.hud_executor.set_on_main(false);
     assert_eq!(rig.q_down(), Disposition::Suppress);
@@ -723,7 +722,7 @@ fn hq_04_03_a_show_pending_at_the_deadline_never_issues_and_a_late_shown_is_igno
 }
 
 #[test]
-fn hq_04_03_a_pending_show_expires_only_by_draining_hud_events_then_degrades() {
+fn a_pending_show_expires_only_by_draining_hud_events_then_degrades() {
     let (rig, _editor) = focused(HOLD);
     rig.hud_executor.set_on_main(false);
     assert_eq!(rig.q_down(), Disposition::Suppress);
@@ -749,7 +748,7 @@ fn hq_04_03_a_pending_show_expires_only_by_draining_hud_events_then_degrades() {
 }
 
 #[test]
-fn hq_04_03_a_failed_show_cancels_the_press_and_enters_degraded_pass_through() {
+fn a_failed_show_cancels_the_press_and_enters_degraded_pass_through() {
     let (rig, _editor) = focused(HOLD);
     rig.hud_backend.fail_next_show(HudShowFailure::Native("boom".to_owned()));
     assert_eq!(rig.q_down(), Disposition::Suppress);
@@ -769,7 +768,7 @@ fn hq_04_03_a_failed_show_cancels_the_press_and_enters_degraded_pass_through() {
 }
 
 #[test]
-fn hq_04_03_the_largest_duration_is_a_cancellable_indefinite_wait() {
+fn the_largest_duration_is_a_cancellable_indefinite_wait() {
     let (rig, _editor) = focused(MAX_MS);
     assert_eq!(rig.q_down(), Disposition::Suppress);
     wait_until("the HUD to be shown", || orders(&rig) == 1);
@@ -783,7 +782,7 @@ fn hq_04_03_the_largest_duration_is_a_cancellable_indefinite_wait() {
 }
 
 #[test]
-fn hq_04_03_deadline_arithmetic_is_checked() {
+fn deadline_arithmetic_is_checked() {
     let now = std::time::Instant::now();
     assert_eq!(policy::deadline(now, 0), Some(now));
     assert_eq!(policy::deadline(now, 1500), now.checked_add(hold_for(1500)));
@@ -799,7 +798,7 @@ fn hq_04_03_deadline_arithmetic_is_checked() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn hq_04_04_a_focus_change_cancels_and_never_quits_either_application() {
+fn a_focus_change_cancels_and_never_quits_either_application() {
     let (rig, _editor) = focused(HOLD);
     let other = rig.add_app("com.example.other");
     begin_hold(&rig, HOLD);
@@ -815,7 +814,7 @@ fn hq_04_04_a_focus_change_cancels_and_never_quits_either_application() {
 }
 
 #[test]
-fn hq_04_04_a_burst_a_to_b_to_a_still_cancels() {
+fn a_burst_a_to_b_to_a_still_cancels() {
     let (rig, editor) = focused(HOLD);
     let other = rig.add_app("com.example.other");
     begin_hold(&rig, HOLD);
@@ -831,7 +830,7 @@ fn hq_04_04_a_burst_a_to_b_to_a_still_cancels() {
 }
 
 #[test]
-fn hq_04_04_a_focus_change_before_the_notification_is_caught_by_the_main_preflight() {
+fn a_focus_change_before_the_notification_is_caught_by_the_main_preflight() {
     let (rig, _editor) = focused(HOLD);
     let other = rig.add_app("com.example.other");
     begin_hold(&rig, HOLD);
@@ -851,7 +850,7 @@ fn hq_04_04_a_focus_change_before_the_notification_is_caught_by_the_main_preflig
 }
 
 #[test]
-fn hq_04_04_an_exempt_application_at_show_time_is_never_shown() {
+fn an_exempt_application_at_show_time_is_never_shown() {
     let (rig, _editor) = focused(HOLD);
     let finder = rig.add_app("com.apple.finder");
     // Focus moved to Finder at the OS level before the show preflight.
@@ -868,7 +867,7 @@ fn hq_04_04_an_exempt_application_at_show_time_is_never_shown() {
 }
 
 #[test]
-fn hq_04_04_an_exempt_application_at_send_time_is_rejected() {
+fn an_exempt_application_at_send_time_is_rejected() {
     let (rig, _editor) = focused(HOLD);
     let finder = rig.add_app("com.apple.finder");
     begin_hold(&rig, HOLD);
@@ -879,7 +878,7 @@ fn hq_04_04_an_exempt_application_at_send_time_is_rejected() {
 }
 
 #[test]
-fn hq_04_04_a_captured_application_that_exits_is_not_replaced() {
+fn a_captured_application_that_exits_is_not_replaced() {
     let (rig, editor) = focused(HOLD);
     begin_hold(&rig, HOLD);
     rig.apps.terminate(editor.key);
@@ -895,7 +894,7 @@ fn hq_04_04_a_captured_application_that_exits_is_not_replaced() {
 }
 
 #[test]
-fn hq_04_04_reconfigure_cancels_the_press_and_rearms_at_the_new_value() {
+fn reconfigure_cancels_the_press_and_rearms_at_the_new_value() {
     let (rig, editor) = focused(HOLD);
     begin_hold(&rig, HOLD);
     let report = rig.registry.reload(rig.handle, config(300)).expect("reload");
@@ -927,7 +926,7 @@ fn hq_04_04_reconfigure_cancels_the_press_and_rearms_at_the_new_value() {
 }
 
 #[test]
-fn hq_04_04_new_presses_pass_between_reconfigure_and_the_matching_publication() {
+fn new_presses_pass_between_reconfigure_and_the_matching_publication() {
     let (rig, _editor) = focused(HOLD);
     let during = Arc::new(std::sync::Mutex::new(None));
     let probe = Arc::clone(&rig.input);
@@ -958,7 +957,7 @@ fn hq_04_04_new_presses_pass_between_reconfigure_and_the_matching_publication() 
 }
 
 #[test]
-fn hq_04_04_an_older_adoption_cannot_reopen_acceptance_while_a_newer_candidate_is_staged() {
+fn an_older_adoption_cannot_reopen_acceptance_while_a_newer_candidate_is_staged() {
     use std::sync::atomic::{AtomicBool, Ordering as O};
     let (rig, _editor) = focused(HOLD);
     let entered = Arc::new(AtomicBool::new(false));
@@ -1023,7 +1022,7 @@ fn hq_04_04_an_older_adoption_cannot_reopen_acceptance_while_a_newer_candidate_i
 }
 
 #[test]
-fn hq_04_04_an_unchanged_reload_is_a_no_op_and_keeps_the_press() {
+fn an_unchanged_reload_is_a_no_op_and_keeps_the_press() {
     let (rig, editor) = focused(HOLD);
     begin_hold(&rig, HOLD);
     let report = rig.registry.reload(rig.handle, config(HOLD)).expect("unchanged reload");
@@ -1035,7 +1034,7 @@ fn hq_04_04_an_unchanged_reload_is_a_no_op_and_keeps_the_press() {
 }
 
 #[test]
-fn hq_04_04_an_accept_timeout_rejects_the_candidate_and_preserves_the_old_state() {
+fn an_accept_timeout_rejects_the_candidate_and_preserves_the_old_state() {
     let (rig, editor) = focused(HOLD);
     begin_hold(&rig, HOLD);
     // A stalled native send holds the commit gate, so `accept` cannot be
@@ -1055,7 +1054,7 @@ fn hq_04_04_an_accept_timeout_rejects_the_candidate_and_preserves_the_old_state(
 }
 
 #[test]
-fn hq_04_04_rapid_accepted_changes_arm_only_the_last_value() {
+fn rapid_accepted_changes_arm_only_the_last_value() {
     let (rig, _editor) = focused(HOLD);
     for hold in [200_u64, 300, 400, 500] {
         rig.registry.reload(rig.handle, config(hold)).expect("reload");
@@ -1075,7 +1074,7 @@ fn hq_04_04_rapid_accepted_changes_arm_only_the_last_value() {
 }
 
 #[test]
-fn hq_04_04_a_stop_with_a_staged_unpublished_candidate_is_clean() {
+fn a_stop_with_a_staged_unpublished_candidate_is_clean() {
     let (rig, _editor) = focused(HOLD);
     let barrier = rig.apps.block_next_is_running();
     assert_eq!(rig.q_down(), Disposition::Suppress);
@@ -1103,7 +1102,7 @@ fn hq_04_04_a_stop_with_a_staged_unpublished_candidate_is_clean() {
 }
 
 #[test]
-fn hq_04_04_late_results_of_a_stopped_run_cannot_touch_its_successor() {
+fn late_results_of_a_stopped_run_cannot_touch_its_successor() {
     let (rig, _editor) = focused(HOLD);
     let barrier = rig.apps.block_next_is_running();
     assert_eq!(rig.q_down(), Disposition::Suppress);
@@ -1127,7 +1126,7 @@ fn hq_04_04_late_results_of_a_stopped_run_cannot_touch_its_successor() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn hq_04_05_an_idle_worker_never_polls() {
+fn an_idle_worker_never_polls() {
     let rig = Rig::started(config(HOLD));
     for _ in 0..5 {
         rig.clock.advance(Duration::from_secs(3600));
@@ -1140,7 +1139,7 @@ fn hq_04_05_an_idle_worker_never_polls() {
 }
 
 #[test]
-fn hq_04_05_stop_cancels_before_the_join_and_cleans_up_while_the_worker_is_blocked() {
+fn stop_cancels_before_the_join_and_cleans_up_while_the_worker_is_blocked() {
     let (rig, _editor) = focused(HOLD);
     begin_hold(&rig, HOLD);
     let barrier = rig.apps.block_next_graceful_before_commit();
@@ -1168,7 +1167,7 @@ fn hq_04_05_stop_cancels_before_the_join_and_cleans_up_while_the_worker_is_block
 }
 
 #[test]
-fn hq_04_05_stop_after_the_commit_reports_the_committed_request() {
+fn stop_after_the_commit_reports_the_committed_request() {
     let (rig, editor) = focused(HOLD);
     begin_hold(&rig, HOLD);
     let barrier = rig.apps.block_next_graceful_after_issue();
@@ -1188,7 +1187,7 @@ fn hq_04_05_stop_after_the_commit_reports_the_committed_request() {
 }
 
 #[test]
-fn hq_04_05_a_main_queue_that_never_drains_fails_start_boundedly_and_rolls_back() {
+fn a_main_queue_that_never_drains_fails_start_boundedly_and_rolls_back() {
     let rig = Rig::with(config(HOLD), Duration::from_millis(30), false);
     let started = std::time::Instant::now();
     let error = rig.start().expect_err("start cannot complete");
@@ -1206,7 +1205,7 @@ fn hq_04_05_a_main_queue_that_never_drains_fails_start_boundedly_and_rolls_back(
 }
 
 #[test]
-fn hq_04_05_a_hud_release_timeout_is_retained_then_retry_after_the_drain_succeeds() {
+fn a_hud_release_timeout_is_retained_then_retry_after_the_drain_succeeds() {
     let (rig, _editor) = focused(HOLD);
     rig.hud_executor.set_on_main(false);
     let error = rig.registry.pause(rig.handle).expect_err("the HUD release is not acknowledged");
@@ -1239,7 +1238,7 @@ fn hq_04_05_a_hud_release_timeout_is_retained_then_retry_after_the_drain_succeed
 }
 
 #[test]
-fn hq_04_05_an_observer_removal_failure_is_retained_and_retried_without_duplicates() {
+fn an_observer_removal_failure_is_retained_and_retried_without_duplicates() {
     let (rig, _editor) = focused(HOLD);
     rig.apps.fail_next_unobserve();
     let error = rig.registry.pause(rig.handle).expect_err("the removal is not acknowledged");
@@ -1269,7 +1268,7 @@ fn hq_04_05_an_observer_removal_failure_is_retained_and_retried_without_duplicat
 // ---------------------------------------------------------------------------
 
 #[test]
-fn hq_04_01_construction_registration_and_a_disabled_start_are_inert() {
+fn construction_registration_and_a_disabled_start_are_inert() {
     let rig = Rig::new(CommandQuitConfig::default());
     rig.start().expect("start");
     assert_eq!(rig.status(), ModuleStatus::Disabled);
@@ -1282,7 +1281,7 @@ fn hq_04_01_construction_registration_and_a_disabled_start_are_inert() {
 }
 
 #[test]
-fn hq_04_01_permissions_are_user_only_and_required_only_while_enabled() {
+fn permissions_are_user_only_and_required_only_while_enabled() {
     let rig = Rig::new(config(HOLD));
     let requirements = rig.registry.permission_requirements();
     assert_eq!(requirements.len(), 1);
@@ -1296,7 +1295,7 @@ fn hq_04_01_permissions_are_user_only_and_required_only_while_enabled() {
 }
 
 #[test]
-fn hq_04_01_a_denied_permission_waits_without_starting_anything_or_prompting() {
+fn a_denied_permission_waits_without_starting_anything_or_prompting() {
     let rig = Rig::new(config(HOLD));
     rig.trust.set(false);
     rig.start().expect("start");
@@ -1327,7 +1326,7 @@ fn hq_04_01_a_denied_permission_waits_without_starting_anything_or_prompting() {
 }
 
 #[test]
-fn hq_04_01_pause_and_resume_release_and_reacquire_everything() {
+fn pause_and_resume_release_and_reacquire_everything() {
     let (rig, _editor) = focused(HOLD);
     assert_eq!(rig.leaser.held(), 1);
     rig.registry.pause(rig.handle).expect("pause");
@@ -1358,7 +1357,7 @@ fn assert_start_failure(rig: &Rig) {
 }
 
 #[test]
-fn hq_04_01_a_lease_failure_is_a_typed_start_failure_then_retry_recovers() {
+fn a_lease_failure_is_a_typed_start_failure_then_retry_recovers() {
     let rig = Rig::new(config(HOLD));
     rig.leaser.fail_next_lease();
     let _ = rig.start();
@@ -1376,7 +1375,7 @@ fn hq_04_01_a_lease_failure_is_a_typed_start_failure_then_retry_recovers() {
 }
 
 #[test]
-fn hq_04_01_an_observation_failure_rolls_back_the_lease() {
+fn an_observation_failure_rolls_back_the_lease() {
     let rig = Rig::new(config(HOLD));
     rig.apps.fail_next_observe();
     let _ = rig.start();
@@ -1390,7 +1389,7 @@ fn hq_04_01_an_observation_failure_rolls_back_the_lease() {
 }
 
 #[test]
-fn hq_04_01_a_hud_install_failure_rolls_back_in_reverse_and_blocks_nothing() {
+fn a_hud_install_failure_rolls_back_in_reverse_and_blocks_nothing() {
     let rig = Rig::new(config(HOLD));
     rig.hud_backend.fail_next_install(HudInstallError::NoScreen);
     let _ = rig.start();
@@ -1404,7 +1403,7 @@ fn hq_04_01_a_hud_install_failure_rolls_back_in_reverse_and_blocks_nothing() {
 }
 
 #[test]
-fn hq_04_01_an_unavailable_input_service_is_a_typed_start_failure() {
+fn an_unavailable_input_service_is_a_typed_start_failure() {
     let mut rig = Rig::new(config(HOLD));
     // Re-register over the inert placeholder service.
     let parts = rig.registry.descriptors();
@@ -1437,7 +1436,7 @@ fn hq_04_01_an_unavailable_input_service_is_a_typed_start_failure() {
 }
 
 #[test]
-fn hq_04_01_a_runtime_hud_failure_is_degraded_pass_through_and_pause_resume_recovers() {
+fn a_runtime_hud_failure_is_degraded_pass_through_and_pause_resume_recovers() {
     let (rig, _editor) = focused(HOLD);
     rig.hud_backend.fail_next_show(HudShowFailure::NotInstalled);
     assert_eq!(rig.q_down(), Disposition::Suppress);
@@ -1460,7 +1459,7 @@ fn hq_04_01_a_runtime_hud_failure_is_degraded_pass_through_and_pause_resume_reco
 }
 
 #[test]
-fn hq_04_01_a_stop_that_cannot_release_the_lease_reports_it_and_retries_idempotently() {
+fn a_stop_that_cannot_release_the_lease_reports_it_and_retries_idempotently() {
     let (rig, _editor) = focused(HOLD);
     rig.leaser.fail_next_release();
     let error = rig
@@ -1494,7 +1493,7 @@ fn carbon_cmd_q(rig: &Rig, owner_priority: u16, chord: Chord) -> stache_sdk::inp
 }
 
 #[test]
-fn hq_04_06_the_hid_reservation_yields_a_carbon_cmd_q_in_both_orders_and_restores_it() {
+fn the_hid_reservation_yields_a_carbon_cmd_q_in_both_orders_and_restores_it() {
     let cmd_q = Chord::new(KeyCode(12), ModifierFlags::COMMAND);
     let cmd_shift_q = Chord::new(KeyCode(12), ModifierFlags::COMMAND | ModifierFlags::SHIFT);
 
@@ -1539,7 +1538,7 @@ fn hq_04_06_the_hid_reservation_yields_a_carbon_cmd_q_in_both_orders_and_restore
 }
 
 #[test]
-fn hq_04_06_degrade_restores_the_carbon_binding() {
+fn degrade_restores_the_carbon_binding() {
     let (rig, _editor) = focused(HOLD);
     let binding = carbon_cmd_q(&rig, 100, Chord::new(KeyCode(12), ModifierFlags::COMMAND));
     let registry = rig.input.reservations();
@@ -1554,7 +1553,7 @@ fn hq_04_06_degrade_restores_the_carbon_binding() {
 }
 
 #[test]
-fn hq_04_06_a_lower_priority_menu_anywhere_and_the_caps_handler_coexist_in_order() {
+fn a_lower_priority_menu_anywhere_and_the_caps_handler_coexist_in_order() {
     use std::sync::Mutex;
 
     use stache_sdk::input::{
@@ -1693,7 +1692,7 @@ fn release_early(rig: &Rig, total: u64, held: u64, dismiss: u64) {
 }
 
 #[test]
-fn hq_05_01_an_early_release_freezes_then_hides_after_the_dismiss_delay() {
+fn an_early_release_freezes_then_hides_after_the_dismiss_delay() {
     let (rig, _editor) = lingering(HOLD, DISMISS);
     release_early(&rig, HOLD, 400, DISMISS);
     let press = shown_presses(&rig)[0];
@@ -1717,7 +1716,7 @@ fn hq_05_01_an_early_release_freezes_then_hides_after_the_dismiss_delay() {
 }
 
 #[test]
-fn hq_05_01_a_shorter_delay_hides_at_release_plus_the_delay() {
+fn a_shorter_delay_hides_at_release_plus_the_delay() {
     let (rig, _editor) = lingering(HOLD, 300);
     release_early(&rig, HOLD, 400, 300);
     rig.clock.advance(hold_for(299));
@@ -1729,7 +1728,7 @@ fn hq_05_01_a_shorter_delay_hides_at_release_plus_the_delay() {
 }
 
 #[test]
-fn hq_05_01_a_zero_delay_hides_at_once_without_a_freeze() {
+fn a_zero_delay_hides_at_once_without_a_freeze() {
     let (rig, _editor) = lingering(HOLD, 0);
     begin_hold(&rig, HOLD);
     rig.clock.advance(hold_for(400));
@@ -1740,7 +1739,7 @@ fn hq_05_01_a_zero_delay_hides_at_once_without_a_freeze() {
 }
 
 #[test]
-fn hq_05_01_a_cancel_at_the_deadline_and_a_command_release_linger_too() {
+fn a_cancel_at_the_deadline_and_a_command_release_linger_too() {
     // Command released before Q: the same cancelled mark, so it lingers.
     let (rig, _editor) = lingering(HOLD, DISMISS);
     begin_hold(&rig, HOLD);
@@ -1762,7 +1761,7 @@ fn hq_05_01_a_cancel_at_the_deadline_and_a_command_release_linger_too() {
 }
 
 #[test]
-fn hq_05_01_a_focus_change_lingers_without_quitting() {
+fn a_focus_change_lingers_without_quitting() {
     let (rig, _editor) = lingering(HOLD, DISMISS);
     let other = rig.add_app("com.example.other");
     begin_hold(&rig, HOLD);
@@ -1775,7 +1774,7 @@ fn hq_05_01_a_focus_change_lingers_without_quitting() {
 }
 
 #[test]
-fn hq_05_02_a_new_press_during_the_linger_shows_and_is_never_hidden_by_the_old_one() {
+fn a_new_press_during_the_linger_shows_and_is_never_hidden_by_the_old_one() {
     let (rig, _editor) = lingering(HOLD, DISMISS);
     release_early(&rig, HOLD, 400, DISMISS);
     assert_eq!(rig.q_down(), Disposition::Suppress);
@@ -1817,7 +1816,7 @@ fn hq_05_02_a_new_press_during_the_linger_shows_and_is_never_hidden_by_the_old_o
 }
 
 #[test]
-fn hq_05_02_a_successor_refused_before_it_touches_the_panel_leaves_nothing_on_screen() {
+fn a_successor_refused_before_it_touches_the_panel_leaves_nothing_on_screen() {
     let (rig, _editor) = lingering(HOLD, DISMISS);
     release_early(&rig, HOLD, 400, DISMISS);
     let first = shown_presses(&rig)[0];
@@ -1854,7 +1853,7 @@ fn hq_05_02_a_successor_refused_before_it_touches_the_panel_leaves_nothing_on_sc
 }
 
 #[test]
-fn hq_05_02_a_successor_whose_show_fails_orders_the_old_panel_out() {
+fn a_successor_whose_show_fails_orders_the_old_panel_out() {
     let (rig, _editor) = lingering(HOLD, DISMISS);
     release_early(&rig, HOLD, 400, DISMISS);
     let first = shown_presses(&rig)[0];
@@ -1871,7 +1870,7 @@ fn hq_05_02_a_successor_whose_show_fails_orders_the_old_panel_out() {
 }
 
 #[test]
-fn hq_05_03_a_successful_fire_hides_at_once_with_no_freeze() {
+fn a_successful_fire_hides_at_once_with_no_freeze() {
     let (rig, _editor) = lingering(HOLD, DISMISS);
     begin_hold(&rig, HOLD);
     rig.clock.advance(hold_for(HOLD));
@@ -1882,7 +1881,7 @@ fn hq_05_03_a_successful_fire_hides_at_once_with_no_freeze() {
 }
 
 #[test]
-fn hq_05_03_a_revision_change_hides_a_live_press_at_once() {
+fn a_revision_change_hides_a_live_press_at_once() {
     let (rig, _editor) = lingering(HOLD, DISMISS);
     begin_hold(&rig, HOLD);
     rig.registry
@@ -1894,7 +1893,7 @@ fn hq_05_03_a_revision_change_hides_a_live_press_at_once() {
 }
 
 #[test]
-fn hq_05_03_a_revision_change_hides_a_pending_linger_at_once() {
+fn a_revision_change_hides_a_pending_linger_at_once() {
     let (rig, _editor) = lingering(HOLD, DISMISS);
     release_early(&rig, HOLD, 400, DISMISS);
     assert_eq!(hides(&rig), 0);
@@ -1908,7 +1907,7 @@ fn hq_05_03_a_revision_change_hides_a_pending_linger_at_once() {
 }
 
 #[test]
-fn hq_05_03_a_failed_show_degrades_with_an_immediate_hide_and_no_freeze() {
+fn a_failed_show_degrades_with_an_immediate_hide_and_no_freeze() {
     let (rig, _editor) = lingering(HOLD, DISMISS);
     rig.hud_backend.fail_next_show(HudShowFailure::Native("boom".to_owned()));
     assert_eq!(rig.q_down(), Disposition::Suppress);
@@ -1929,7 +1928,7 @@ fn assert_immediate_dismissal(rig: &Rig) {
 }
 
 #[test]
-fn hq_05_03_supersession_of_a_live_press_hides_it_at_once() {
+fn supersession_of_a_live_press_hides_it_at_once() {
     let (rig, _editor) = lingering(HOLD, DISMISS);
     begin_hold(&rig, HOLD);
     let first = shown_presses(&rig)[0];
@@ -1947,7 +1946,7 @@ fn hq_05_03_supersession_of_a_live_press_hides_it_at_once() {
 }
 
 #[test]
-fn hq_05_03_stop_during_a_live_press_hides_it_at_once() {
+fn stop_during_a_live_press_hides_it_at_once() {
     let (rig, _editor) = lingering(HOLD, DISMISS);
     begin_hold(&rig, HOLD);
     rig.registry.pause(rig.handle).expect("pause");
@@ -1958,7 +1957,7 @@ fn hq_05_03_stop_during_a_live_press_hides_it_at_once() {
 }
 
 #[test]
-fn hq_05_03_a_reconfigure_that_clears_accepting_hides_a_live_press_at_once() {
+fn a_reconfigure_that_clears_accepting_hides_a_live_press_at_once() {
     let (rig, _editor) = lingering(HOLD, DISMISS);
     begin_hold(&rig, HOLD);
     // A different dismiss_delay is an accepted change too.
@@ -1969,7 +1968,7 @@ fn hq_05_03_a_reconfigure_that_clears_accepting_hides_a_live_press_at_once() {
 }
 
 #[test]
-fn hq_05_03_an_epoch_the_worker_finds_stale_hides_at_once() {
+fn an_epoch_the_worker_finds_stale_hides_at_once() {
     let (rig, _editor) = lingering(HOLD, DISMISS);
     begin_hold(&rig, HOLD);
     // Invalidating the observation moves the watch past the press's epoch
@@ -1980,7 +1979,7 @@ fn hq_05_03_an_epoch_the_worker_finds_stale_hides_at_once() {
 }
 
 #[test]
-fn hq_05_03_a_tap_disable_cancel_lingers_and_never_quits() {
+fn a_tap_disable_cancel_lingers_and_never_quits() {
     let (rig, _editor) = lingering(HOLD, DISMISS);
     begin_hold(&rig, HOLD);
     // The callback cancel changes neither `accepting` nor the revision, so it
@@ -1996,7 +1995,7 @@ fn hq_05_03_a_tap_disable_cancel_lingers_and_never_quits() {
 }
 
 #[test]
-fn hq_05_03_stop_during_a_linger_ends_it_without_waiting() {
+fn stop_during_a_linger_ends_it_without_waiting() {
     let (rig, _editor) = lingering(HOLD, DISMISS);
     release_early(&rig, HOLD, 400, DISMISS);
     rig.registry.pause(rig.handle).expect("pause does not wait for the linger");
@@ -2009,7 +2008,7 @@ fn hq_05_03_stop_during_a_linger_ends_it_without_waiting() {
 }
 
 #[test]
-fn hq_05_04_a_stale_for_the_lingering_press_clears_it_without_a_second_hide() {
+fn a_stale_for_the_lingering_press_clears_it_without_a_second_hide() {
     let (rig, _editor) = lingering(HOLD, DISMISS);
     rig.hud_executor.set_on_main(false);
     assert_eq!(rig.q_down(), Disposition::Suppress);
@@ -2035,7 +2034,7 @@ fn hq_05_04_a_stale_for_the_lingering_press_clears_it_without_a_second_hide() {
 }
 
 #[test]
-fn hq_05_04_a_shown_after_the_release_is_frozen_never_tracked_and_hidden_once() {
+fn a_shown_after_the_release_is_frozen_never_tracked_and_hidden_once() {
     let (rig, _editor) = lingering(HOLD, DISMISS);
     rig.hud_executor.set_on_main(false);
     assert_eq!(rig.q_down(), Disposition::Suppress);
@@ -2074,7 +2073,7 @@ fn hq_05_04_a_shown_after_the_release_is_frozen_never_tracked_and_hidden_once() 
 }
 
 #[test]
-fn hq_05_06_the_idle_worker_parks_only_for_the_remaining_linger() {
+fn the_idle_worker_parks_only_for_the_remaining_linger() {
     let (rig, _editor) = lingering(HOLD, DISMISS);
     release_early(&rig, HOLD, 400, DISMISS);
     rig.clock.advance(hold_for(600));
@@ -2094,7 +2093,7 @@ fn hq_05_06_the_idle_worker_parks_only_for_the_remaining_linger() {
 }
 
 #[test]
-fn hq_05_01_an_unrepresentable_linger_waits_without_a_timeout() {
+fn an_unrepresentable_linger_waits_without_a_timeout() {
     let (rig, _editor) = lingering(HOLD, MAX_MS);
     begin_hold(&rig, HOLD);
     assert_eq!(rig.q_up(), Disposition::Suppress);
@@ -2129,7 +2128,7 @@ fn styled(position: HudPosition, animation: HudAnimation) -> CommandQuitConfig {
 }
 
 #[test]
-fn hq_06_04_the_default_show_carries_bottom_and_fade() {
+fn the_default_show_carries_bottom_and_fade() {
     let (rig, _editor) = focused(HOLD);
     begin_hold(&rig, HOLD);
     wait_until("the show", || orders(&rig) == 1);
@@ -2142,7 +2141,7 @@ fn hq_06_04_the_default_show_carries_bottom_and_fade() {
 }
 
 #[test]
-fn hq_06_04_every_position_and_animation_maps_to_the_adapter() {
+fn every_position_and_animation_maps_to_the_adapter() {
     let positions = [
         (HudPosition::Bottom, HudAnchor::Bottom),
         (HudPosition::Top, HudAnchor::Top),
@@ -2167,7 +2166,7 @@ fn hq_06_04_every_position_and_animation_maps_to_the_adapter() {
 }
 
 #[test]
-fn hq_06_04_a_reload_applies_the_new_values_to_the_next_press() {
+fn a_reload_applies_the_new_values_to_the_next_press() {
     let (rig, _editor) = focused(HOLD);
     begin_hold(&rig, HOLD);
     wait_until("the first show", || orders(&rig) == 1);

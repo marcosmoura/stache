@@ -121,7 +121,7 @@ impl V {
 }
 
 #[test]
-fn ti_06_02_only_requirement_driven_hides_and_unhides_with_no_oscillation() {
+fn only_requirement_driven_hides_and_unhides_with_no_oscillation() {
     let mut v = v();
     let a1 = v.window(0, 1);
     v.authorize();
@@ -155,8 +155,7 @@ fn ti_06_02_only_requirement_driven_hides_and_unhides_with_no_oscillation() {
 }
 
 #[test]
-fn ti_06_02_an_application_shared_by_two_workspaces_is_never_hidden_and_the_conflict_is_published()
-{
+fn an_application_shared_by_two_workspaces_is_never_hidden_and_the_conflict_is_published() {
     let mut v = v();
     let _a1 = v.window(0, 1);
     v.authorize();
@@ -177,7 +176,7 @@ fn ti_06_02_an_application_shared_by_two_workspaces_is_never_hidden_and_the_conf
 }
 
 #[test]
-fn ti_06_02_a_prehidden_application_is_never_hidden_owned_or_unhidden() {
+fn a_prehidden_application_is_never_hidden_owned_or_unhidden() {
     let mut v = v();
     let _a1 = v.window(0, 1);
     v.authorize();
@@ -190,7 +189,7 @@ fn ti_06_02_a_prehidden_application_is_never_hidden_owned_or_unhidden() {
 }
 
 #[test]
-fn ti_06_02_an_external_show_relinquishes_and_the_user_is_not_fought() {
+fn an_external_show_relinquishes_and_the_user_is_not_fought() {
     let mut v = v();
     let _a1 = v.window(0, 1);
     v.authorize();
@@ -203,7 +202,7 @@ fn ti_06_02_an_external_show_relinquishes_and_the_user_is_not_fought() {
 }
 
 #[test]
-fn ti_06_02_no_hide_is_issued_after_the_seal() {
+fn no_hide_is_issued_after_the_seal() {
     let mut v = v();
     let _a1 = v.window(0, 1);
     v.authorize();
@@ -214,7 +213,7 @@ fn ti_06_02_no_hide_is_issued_after_the_seal() {
 }
 
 #[test]
-fn ti_06_02_a_terminated_instance_clears_its_record() {
+fn a_terminated_instance_clears_its_record() {
     let mut v = v();
     let _a1 = v.window(0, 1);
     v.authorize();
@@ -234,7 +233,7 @@ fn raised() -> WindowActionOutcome {
 }
 
 #[test]
-fn ti_06_02_focus_unhides_an_owned_application_first_then_activates_then_raises() {
+fn focus_unhides_an_owned_application_first_then_activates_then_raises() {
     let mut v = v();
     let a1 = v.window(0, 1);
     v.authorize();
@@ -272,7 +271,7 @@ fn ti_06_02_focus_unhides_an_owned_application_first_then_activates_then_raises(
 }
 
 #[test]
-fn ti_06_02_a_focus_never_claims_native_success_from_the_enqueue() {
+fn a_focus_never_claims_native_success_from_the_enqueue() {
     let mut v = v();
     let a1 = v.window(0, 1);
     v.authorize();

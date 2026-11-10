@@ -272,7 +272,7 @@ fn level(reading: &StateReading) -> u32 {
 // --- registration, identity and authorization --------------------------------
 
 #[test]
-fn bar_02_01_independent_provider_and_consumer_share_one_registry() {
+fn independent_provider_and_consumer_share_one_registry() {
     let registry = registry();
     let (provider, _script, _slot) = provider_module(&registry, Cfg::on(3));
     let (consumer, consumer_script) = Fake::new(CONSUMER);
@@ -335,7 +335,7 @@ fn bar_02_01_independent_provider_and_consumer_share_one_registry() {
 }
 
 #[test]
-fn bar_02_01_an_unknown_provider_reads_absent_and_the_consumer_keeps_running() {
+fn an_unknown_provider_reads_absent_and_the_consumer_keeps_running() {
     let registry = registry();
     let (consumer, script) = Fake::new(CONSUMER);
     let observed: Arc<Mutex<Option<StateObserver>>> = Arc::new(Mutex::new(None));
@@ -362,7 +362,7 @@ fn bar_02_01_an_unknown_provider_reads_absent_and_the_consumer_keeps_running() {
 }
 
 #[test]
-fn bar_02_01_a_registered_provider_without_a_schema_reads_absent() {
+fn a_registered_provider_without_a_schema_reads_absent() {
     let registry = bare_registry();
     let (module, _) = Fake::new(PROVIDER);
     registry.register(module, Cfg::on(1)).expect("register");
@@ -374,7 +374,7 @@ fn bar_02_01_a_registered_provider_without_a_schema_reads_absent() {
 }
 
 #[test]
-fn bar_02_01_observing_requires_a_declaration() {
+fn observing_requires_a_declaration() {
     let registry = registry();
     let (consumer, script) = Fake::new(CONSUMER);
     let outcome: Arc<Mutex<Option<StateError>>> = Arc::new(Mutex::new(None));
@@ -397,7 +397,7 @@ fn bar_02_01_observing_requires_a_declaration() {
 }
 
 #[test]
-fn bar_02_01_observes_never_satisfies_or_changes_hard_requires() {
+fn observes_never_satisfies_or_changes_hard_requires() {
     let registry = registry();
     let (provider, _script, _slot) = provider_module(&registry, Cfg::on(1));
     let _ = provider;
@@ -411,7 +411,7 @@ fn bar_02_01_observes_never_satisfies_or_changes_hard_requires() {
 }
 
 #[test]
-fn bar_02_01_schema_registration_is_deterministic() {
+fn schema_registration_is_deterministic() {
     let duplicate = bare_registry()
         .with_state_schema::<Temp>(PROVIDER)
         .and_then(|registry| registry.with_state_schema::<TempV2>(PROVIDER));
@@ -438,7 +438,7 @@ fn bar_02_01_schema_registration_is_deterministic() {
 }
 
 #[test]
-fn bar_02_01_publishers_are_authorized_and_typed() {
+fn publishers_are_authorized_and_typed() {
     let registry = registry();
     let (provider, provider_script, _slot) = provider_module(&registry, Cfg::on(1));
     let _ = provider;
@@ -518,7 +518,7 @@ fn bar_02_01_publishers_are_authorized_and_typed() {
 // --- lifecycle, tombstones and generations -----------------------------------
 
 #[test]
-fn bar_02_02_disabled_paused_failed_and_recovered_providers_never_read_stale_data() {
+fn disabled_paused_failed_and_recovered_providers_never_read_stale_data() {
     let registry = registry();
     let (provider, script, slot) = provider_module(&registry, Cfg::on(5));
     let (consumer, consumer_script) = Fake::new(CONSUMER);
@@ -586,7 +586,7 @@ fn bar_02_02_disabled_paused_failed_and_recovered_providers_never_read_stale_dat
 }
 
 #[test]
-fn bar_02_02_a_stopping_runtime_is_tombstoned_before_cleanup_waits() {
+fn a_stopping_runtime_is_tombstoned_before_cleanup_waits() {
     let registry = registry();
     let (provider, script, slot) = provider_module(&registry, Cfg::on(7));
     let checks: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
@@ -611,7 +611,7 @@ fn bar_02_02_a_stopping_runtime_is_tombstoned_before_cleanup_waits() {
 }
 
 #[test]
-fn bar_02_02_a_retained_old_handle_cannot_update_or_clear_the_successor() {
+fn a_retained_old_handle_cannot_update_or_clear_the_successor() {
     let registry = registry();
     let (provider, _script, slot) = provider_module(&registry, Cfg::on(1));
     registry.start_all().expect("start");
@@ -650,7 +650,7 @@ fn bar_02_02_a_retained_old_handle_cannot_update_or_clear_the_successor() {
 }
 
 #[test]
-fn bar_02_02_sequences_are_monotonic_within_a_generation() {
+fn sequences_are_monotonic_within_a_generation() {
     let registry = registry();
     let (_provider, _script, slot) = provider_module(&registry, Cfg::on(0));
     registry.start_all().expect("start");
@@ -676,7 +676,7 @@ fn publish_at(slot: &Slot, revision: u64, level: u32) -> Result<PublishOutcome, 
 }
 
 #[test]
-fn bar_02_02_a_worker_labels_payloads_with_the_revision_it_computed_them_from() {
+fn a_worker_labels_payloads_with_the_revision_it_computed_them_from() {
     let registry = Arc::new(registry());
     let (provider, script, slot) = provider_module(&registry, Cfg::on(1));
     let (entered_tx, entered_rx) = mpsc::channel();
@@ -732,7 +732,7 @@ fn bar_02_02_a_worker_labels_payloads_with_the_revision_it_computed_them_from() 
 }
 
 #[test]
-fn bar_02_02_publishing_an_unaccepted_revision_is_rejected() {
+fn publishing_an_unaccepted_revision_is_rejected() {
     let registry = registry();
     let (provider, _script, slot) = provider_module(&registry, Cfg::on(1));
     registry.start_all().expect("start");
@@ -755,7 +755,7 @@ fn bar_02_02_publishing_an_unaccepted_revision_is_rejected() {
 }
 
 #[test]
-fn bar_02_02_an_older_revision_never_overwrites_a_newer_one() {
+fn an_older_revision_never_overwrites_a_newer_one() {
     let registry = registry();
     let (provider, script, slot) = provider_module(&registry, Cfg::on(1));
     registry.start_all().expect("start");
@@ -796,7 +796,7 @@ fn bar_02_02_an_older_revision_never_overwrites_a_newer_one() {
 }
 
 #[test]
-fn bar_02_02_a_rejected_reconfigure_changes_nothing_and_keeps_unrelated_publications() {
+fn a_rejected_reconfigure_changes_nothing_and_keeps_unrelated_publications() {
     let registry = registry();
     let (provider, script, slot) = provider_module(&registry, Cfg::on(1));
     {
@@ -841,7 +841,7 @@ fn bar_02_02_a_rejected_reconfigure_changes_nothing_and_keeps_unrelated_publicat
 }
 
 #[test]
-fn bar_02_02_the_cell_learns_a_revision_before_the_watch_shows_it() {
+fn the_cell_learns_a_revision_before_the_watch_shows_it() {
     let registry = registry();
     let (provider, _script, slot) = provider_module(&registry, Cfg::on(1));
     registry.start_all().expect("start");
@@ -865,7 +865,7 @@ fn bar_02_02_the_cell_learns_a_revision_before_the_watch_shows_it() {
 }
 
 #[test]
-fn bar_02_02_a_b_a_transitions_carry_strictly_increasing_revisions() {
+fn a_b_a_transitions_carry_strictly_increasing_revisions() {
     let registry = registry();
     let (provider, _script, slot) = provider_module(&registry, Cfg::on(1));
     registry.start_all().expect("start");
@@ -887,7 +887,7 @@ fn bar_02_02_a_b_a_transitions_carry_strictly_increasing_revisions() {
 }
 
 #[test]
-fn bar_02_02_a_provider_that_never_started_reads_the_registry_status() {
+fn a_provider_that_never_started_reads_the_registry_status() {
     let registry = registry();
     // Registered disabled: reads as disabled, not as merely not started.
     let (provider, _script, _slot) = provider_module(&registry, Cfg { enabled: false, value: 1 });
@@ -903,7 +903,7 @@ fn bar_02_02_a_provider_that_never_started_reads_the_registry_status() {
 }
 
 #[test]
-fn bar_02_02_a_paused_or_blocked_never_started_provider_reads_why() {
+fn a_paused_or_blocked_never_started_provider_reads_why() {
     let registry = registry();
     let (provider, _script, _slot) = provider_module(&registry, Cfg::on(1));
     let observer = registry.observe_state(PROVIDER);
@@ -926,7 +926,7 @@ fn bar_02_02_a_paused_or_blocked_never_started_provider_reads_why() {
 }
 
 #[test]
-fn bar_02_02_accepted_config_followed_by_a_start_failure_exposes_no_available_state() {
+fn accepted_config_followed_by_a_start_failure_exposes_no_available_state() {
     let registry = registry();
     let (provider, script, _slot) = provider_module(&registry, Cfg { enabled: false, value: 1 });
     let observer = registry.observe_state(PROVIDER);
@@ -964,7 +964,7 @@ fn one_generation_cell() -> (Arc<StateCell>, StateObserver, StatePublisher<Temp>
 }
 
 #[test]
-fn bar_02_02_a_publication_between_the_check_and_the_sleep_is_not_lost() {
+fn a_publication_between_the_check_and_the_sleep_is_not_lost() {
     let (cell, observer, publisher) = one_generation_cell();
     let seen = observer.read().version;
     let (entered_tx, entered_rx) = mpsc::channel();
@@ -988,7 +988,7 @@ fn bar_02_02_a_publication_between_the_check_and_the_sleep_is_not_lost() {
 }
 
 #[test]
-fn bar_02_02_an_overflowing_timeout_waits_unbounded_instead_of_panicking() {
+fn an_overflowing_timeout_waits_unbounded_instead_of_panicking() {
     let (cell, observer, publisher) = one_generation_cell();
     let seen = observer.read().version;
     let (entered_tx, entered_rx) = mpsc::channel();
@@ -1006,7 +1006,7 @@ fn bar_02_02_an_overflowing_timeout_waits_unbounded_instead_of_panicking() {
 }
 
 #[test]
-fn bar_02_02_cancellation_wakes_a_wait_in_progress() {
+fn cancellation_wakes_a_wait_in_progress() {
     let (cell, observer, _publisher) = one_generation_cell();
     let seen = observer.read().version;
     let (entered_tx, entered_rx) = mpsc::channel();
@@ -1024,7 +1024,7 @@ fn bar_02_02_cancellation_wakes_a_wait_in_progress() {
 }
 
 #[test]
-fn bar_02_02_wait_precedence_is_cancel_then_close_then_change_then_timeout() {
+fn wait_precedence_is_cancel_then_close_then_change_then_timeout() {
     let (cell, observer, publisher) = one_generation_cell();
     let seen = observer.read().version;
     let _ = publisher.publish(1, &Temp { level: 1 }).expect("publish");
@@ -1052,7 +1052,7 @@ fn bar_02_02_wait_precedence_is_cancel_then_close_then_change_then_timeout() {
 }
 
 #[test]
-fn bar_02_02_a_slow_consumer_sees_the_coalesced_latest_state() {
+fn a_slow_consumer_sees_the_coalesced_latest_state() {
     let (_cell, observer, publisher) = one_generation_cell();
     let seen = observer.read().version;
     for level in 1..=50 {
@@ -1076,7 +1076,7 @@ fn bar_02_02_a_slow_consumer_sees_the_coalesced_latest_state() {
 }
 
 #[test]
-fn bar_02_02_shutdown_wakes_waiters_with_closed_and_reads_keep_the_last_value() {
+fn shutdown_wakes_waiters_with_closed_and_reads_keep_the_last_value() {
     let registry = Arc::new(registry());
     let (_provider, _script, _slot) = provider_module(&registry, Cfg::on(8));
     registry.start_all().expect("start");
@@ -1099,7 +1099,7 @@ fn bar_02_02_shutdown_wakes_waiters_with_closed_and_reads_keep_the_last_value() 
 }
 
 #[test]
-fn bar_02_02_reads_stay_prompt_while_the_provider_is_stalled_in_module_code() {
+fn reads_stay_prompt_while_the_provider_is_stalled_in_module_code() {
     let registry = Arc::new(registry());
     let (provider, script, _slot) = provider_module(&registry, Cfg::on(1));
     let (entered_tx, entered_rx) = mpsc::channel();
@@ -1137,7 +1137,7 @@ fn bar_02_02_reads_stay_prompt_while_the_provider_is_stalled_in_module_code() {
 }
 
 #[test]
-fn bar_02_01_the_observer_is_read_only_and_the_publisher_is_typed() {
+fn the_observer_is_read_only_and_the_publisher_is_typed() {
     // `StateObserver` exposes only `provider`, `read` and `wait_for_change`; the
     // compile-time half of the contract is the `compile_fail` doctest on
     // `StatePublisher`. This checks that observers are cheap shared views.
@@ -1149,7 +1149,7 @@ fn bar_02_01_the_observer_is_read_only_and_the_publisher_is_typed() {
 }
 
 #[test]
-fn bar_02_02_a_tombstone_keeps_its_generation_while_its_reason_follows_the_status() {
+fn a_tombstone_keeps_its_generation_while_its_reason_follows_the_status() {
     let registry = registry();
     let (provider, script, _slot) = provider_module(&registry, Cfg::on(5));
     registry.start_all().expect("start");
@@ -1182,7 +1182,7 @@ fn bar_02_02_a_tombstone_keeps_its_generation_while_its_reason_follows_the_statu
 }
 
 #[test]
-fn bar_02_02_a_cell_created_after_shutdown_wakes_waiters_with_closed() {
+fn a_cell_created_after_shutdown_wakes_waiters_with_closed() {
     let registry = registry();
     registry.invalidate();
     let observer = registry.observe_state(GHOST);

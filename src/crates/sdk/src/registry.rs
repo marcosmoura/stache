@@ -3182,7 +3182,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_05_04_static_descriptor_requirements_are_the_default_and_automatic() {
+    fn static_descriptor_requirements_are_the_default_and_automatic() {
         let harness = Harness::new();
         let (mut module, _) = harness.fake("static");
         module.permissions = &ACCESSIBILITY;
@@ -3198,7 +3198,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_05_04_ordinary_config_needs_no_permission_and_starts_untrusted() {
+    fn ordinary_config_needs_no_permission_and_starts_untrusted() {
         let harness = Harness::new();
         harness.permissions.set(Permission::Accessibility, PermissionStatus::Denied);
         let (module, state) = caps_module(&harness, input_requirement());
@@ -3214,7 +3214,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_05_04_a_required_config_waits_without_trust_and_starts_when_granted() {
+    fn a_required_config_waits_without_trust_and_starts_when_granted() {
         let harness = Harness::new();
         harness.permissions.set(Permission::Accessibility, PermissionStatus::Denied);
         let (module, state) = caps_module(&harness, input_requirement());
@@ -3241,7 +3241,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_05_04_ordinary_to_required_without_trust_is_an_accepted_waiting_state() {
+    fn ordinary_to_required_without_trust_is_an_accepted_waiting_state() {
         let harness = Harness::new();
         harness.permissions.set(Permission::Accessibility, PermissionStatus::Denied);
         let (module, state) = caps_module(&harness, input_requirement());
@@ -3278,7 +3278,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_05_04_ordinary_to_required_with_trust_reconfigures_in_place() {
+    fn ordinary_to_required_with_trust_reconfigures_in_place() {
         let harness = Harness::new();
         let (module, state) = caps_module(&harness, input_requirement());
         let handle = harness.registry.register(module, FakeConfig::on(1)).expect("register");
@@ -3293,7 +3293,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_05_04_required_to_none_leaves_waiting_and_starts() {
+    fn required_to_none_leaves_waiting_and_starts() {
         let harness = Harness::new();
         harness.permissions.set(Permission::Accessibility, PermissionStatus::Denied);
         let (module, state) = caps_module(&harness, input_requirement());
@@ -3320,7 +3320,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_05_04_revocation_stops_a_required_module_and_ignores_an_ordinary_one() {
+    fn revocation_stops_a_required_module_and_ignores_an_ordinary_one() {
         let harness = Harness::new();
         let (module, state) = caps_module(&harness, input_requirement());
         let handle = harness.registry.register(module, FakeConfig::on(100)).expect("register");
@@ -3356,7 +3356,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_05_04_a_trusted_but_failed_start_is_failed_not_waiting() {
+    fn a_trusted_but_failed_start_is_failed_not_waiting() {
         let harness = Harness::new();
         let (mut module, _) = caps_module(&harness, input_requirement());
         module.fail.start = true;
@@ -3369,7 +3369,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_05_04_requirement_merge_prefers_user_only() {
+    fn requirement_merge_prefers_user_only() {
         let harness = Harness::new();
         let (mut automatic, _) = harness.fake("automatic");
         automatic.permissions = &ACCESSIBILITY;
@@ -4518,7 +4518,7 @@ mod tests {
     }
 
     #[test]
-    fn ag_01_01_the_default_baseline_is_empty() {
+    fn the_default_baseline_is_empty() {
         let harness = Harness::new();
         assert!(harness.registry.permission_requirements().is_empty());
         let harness = baseline_harness(Vec::new());
@@ -4531,7 +4531,7 @@ mod tests {
     }
 
     #[test]
-    fn ag_01_02_a_missing_baseline_blocks_every_module_before_any_module_code() {
+    fn a_missing_baseline_blocks_every_module_before_any_module_code() {
         let harness = baseline_harness(baseline());
         harness.permissions.set(Permission::Accessibility, PermissionStatus::Denied);
         let (mut provider, provider_state) = harness.fake("provider");
@@ -4554,7 +4554,7 @@ mod tests {
     }
 
     #[test]
-    fn ag_01_03_the_baseline_is_reported_with_disabled_paused_or_no_modules() {
+    fn the_baseline_is_reported_with_disabled_paused_or_no_modules() {
         let expected = baseline();
         let harness = baseline_harness(baseline());
         assert_eq!(
@@ -4577,7 +4577,7 @@ mod tests {
     }
 
     #[test]
-    fn ag_01_04_a_grant_starts_waiting_modules_in_dependency_order_and_a_failure_is_isolated() {
+    fn a_grant_starts_waiting_modules_in_dependency_order_and_a_failure_is_isolated() {
         let harness = baseline_harness(baseline());
         harness.permissions.set(Permission::Accessibility, PermissionStatus::Denied);
         // Registered consumer-first to prove the order comes from dependencies.
@@ -4606,7 +4606,7 @@ mod tests {
     }
 
     #[test]
-    fn ag_01_05_revocation_stops_running_modules_in_reverse_order_and_skips_disabled_and_paused() {
+    fn revocation_stops_running_modules_in_reverse_order_and_skips_disabled_and_paused() {
         let harness = baseline_harness(baseline());
         let (mut provider, _) = harness.fake("provider");
         provider.provides = &PROVIDES_SERVICE;
@@ -4652,7 +4652,7 @@ mod tests {
     }
 
     #[test]
-    fn ag_01_06_baseline_and_module_requirements_merge_to_one_user_only_entry() {
+    fn baseline_and_module_requirements_merge_to_one_user_only_entry() {
         let harness = baseline_harness(baseline());
         let (module, _) = caps_module(&harness, input_requirement());
         harness.registry.register(module, FakeConfig::on(100)).expect("register");
@@ -4677,7 +4677,7 @@ mod tests {
     }
 
     #[test]
-    fn ag_01_07_a_reload_while_the_baseline_is_missing_waits_and_a_grant_uses_the_newest() {
+    fn a_reload_while_the_baseline_is_missing_waits_and_a_grant_uses_the_newest() {
         let harness = baseline_harness(baseline());
         harness.permissions.set(Permission::Accessibility, PermissionStatus::Denied);
         let (module, state) = harness.fake("plain");
@@ -4699,7 +4699,7 @@ mod tests {
     }
 
     #[test]
-    fn ag_01_08_the_baseline_cannot_be_set_after_a_registration() {
+    fn the_baseline_cannot_be_set_after_a_registration() {
         let harness = Harness::new();
         let (module, _) = harness.fake("plain");
         harness.registry.register(module, FakeConfig::on(1)).expect("register");

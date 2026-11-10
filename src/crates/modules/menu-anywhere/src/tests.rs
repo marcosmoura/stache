@@ -66,7 +66,7 @@ fn dismiss(rig: &Rig) {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn ma_03_01_building_the_runtime_and_registering_are_inert() {
+fn building_the_runtime_and_registering_are_inert() {
     let rig = Rig::new(default_config());
     assert_eq!(rig.menu.opens(), 0, "no menu stack");
     assert_eq!(rig.apps.observations(), 0, "no application observer");
@@ -78,7 +78,7 @@ fn ma_03_01_building_the_runtime_and_registering_are_inert() {
 }
 
 #[test]
-fn ma_03_01_start_acquires_one_subscription_on_one_suppressing_tap_and_reads_nothing() {
+fn start_acquires_one_subscription_on_one_suppressing_tap_and_reads_nothing() {
     let (rig, _app) = Rig::started(default_config());
     assert_eq!(rig.status(), ModuleStatus::Running);
     assert_eq!(rig.tap.count(TapKind::Suppressing, ControlAction::Install), 1);
@@ -101,7 +101,7 @@ fn ma_03_01_start_acquires_one_subscription_on_one_suppressing_tap_and_reads_not
 }
 
 #[test]
-fn ma_03_01_the_module_requires_only_the_shared_input_accessibility_requirement() {
+fn the_module_requires_only_the_shared_input_accessibility_requirement() {
     use stache_sdk::{Module, PermissionRequirement, PromptPolicy};
     let rig = Rig::new(default_config());
     let module = rig.runtime.module();
@@ -119,7 +119,7 @@ fn ma_03_01_the_module_requires_only_the_shared_input_accessibility_requirement(
 // ---------------------------------------------------------------------------
 
 #[test]
-fn ma_03_02_right_click_matches_button_one_and_exact_modifiers_only() {
+fn right_click_matches_button_one_and_exact_modifiers_only() {
     let m = matcher(RightClick, &[Control, Command]);
     assert!(down(m, 1, CHORD));
     assert!(!down(m, 0, CHORD), "left");
@@ -144,7 +144,7 @@ fn ma_03_02_right_click_matches_button_one_and_exact_modifiers_only() {
 }
 
 #[test]
-fn ma_03_02_middle_click_matches_button_two_only() {
+fn middle_click_matches_button_two_only() {
     let m = matcher(MiddleClick, &[Shift]);
     assert!(down(m, 2, ModifierFlags::SHIFT));
     assert!(!down(m, 1, ModifierFlags::SHIFT));
@@ -156,7 +156,7 @@ fn ma_03_02_middle_click_matches_button_two_only() {
 }
 
 #[test]
-fn ma_03_02_an_empty_modifier_list_captures_bare_clicks_and_nothing_else() {
+fn an_empty_modifier_list_captures_bare_clicks_and_nothing_else() {
     let m = matcher(RightClick, &[]);
     assert!(down(m, 1, NONE));
     assert!(down(m, 1, ModifierFlags::CAPS_LOCK | ModifierFlags::FUNCTION));
@@ -167,7 +167,7 @@ fn ma_03_02_an_empty_modifier_list_captures_bare_clicks_and_nothing_else() {
 }
 
 #[test]
-fn ma_03_02_only_a_non_repeat_mouse_down_matches() {
+fn only_a_non_repeat_mouse_down_matches() {
     let m = matcher(RightClick, &[Control, Command]);
     let stream = PressStream::Button(MouseButton(1));
     assert!(!m.matches(InputEventKind::MouseUp, stream, CHORD, false));
@@ -183,7 +183,7 @@ fn ma_03_02_only_a_non_repeat_mouse_down_matches() {
 }
 
 #[test]
-fn ma_03_02_duplicate_and_reordered_modifiers_collapse_to_one_mask() {
+fn duplicate_and_reordered_modifiers_collapse_to_one_mask() {
     let a = matcher(RightClick, &[Control, Command, Control]);
     let b = matcher(RightClick, &[Command, Control]);
     assert_eq!(a, b);
@@ -201,7 +201,7 @@ fn ma_03_02_duplicate_and_reordered_modifiers_collapse_to_one_mask() {
 }
 
 #[test]
-fn ma_03_02_the_service_prefilter_is_config_independent_and_the_callback_is_exact() {
+fn the_service_prefilter_is_config_independent_and_the_callback_is_exact() {
     let filter = Matcher::prefilter();
     assert!(filter.validate().is_ok());
     assert!(filter.kinds().contains(InputEventKind::MouseDown));
@@ -226,7 +226,7 @@ fn ma_03_02_the_service_prefilter_is_config_independent_and_the_callback_is_exac
 }
 
 #[test]
-fn ma_03_02_through_the_shared_service_only_the_exact_chord_is_consumed() {
+fn through_the_shared_service_only_the_exact_chord_is_consumed() {
     let (rig, _app) = Rig::started(default_config());
     let passes = [
         rig.down(0, CHORD),
@@ -252,7 +252,7 @@ fn ma_03_02_through_the_shared_service_only_the_exact_chord_is_consumed() {
 }
 
 #[test]
-fn ma_03_02_a_middle_click_configuration_consumes_button_two_and_passes_the_right_button() {
+fn a_middle_click_configuration_consumes_button_two_and_passes_the_right_button() {
     let (rig, _app) = Rig::started(config(MiddleClick, &[Alt]));
     assert_eq!(rig.down(1, ModifierFlags::OPTION), Disposition::Pass);
     assert_eq!(rig.down(3, ModifierFlags::OPTION), Disposition::Pass);
@@ -299,7 +299,7 @@ fn competitor(rig: &Rig, level: u16, decision: Disposition) -> (Arc<Competitor>,
 }
 
 #[test]
-fn ma_03_02_a_higher_priority_handler_that_consumes_wins_and_menu_anywhere_stays_idle() {
+fn a_higher_priority_handler_that_consumes_wins_and_menu_anywhere_stays_idle() {
     let (rig, _app) = Rig::started(default_config());
     let (high, _sub) = competitor(&rig, 300, Disposition::Suppress);
     assert_eq!(rig.chord_down(), Disposition::Suppress);
@@ -314,7 +314,7 @@ fn ma_03_02_a_higher_priority_handler_that_consumes_wins_and_menu_anywhere_stays
 }
 
 #[test]
-fn ma_03_02_a_higher_priority_pass_reaches_menu_anywhere_and_a_lower_one_is_never_asked() {
+fn a_higher_priority_pass_reaches_menu_anywhere_and_a_lower_one_is_never_asked() {
     let (rig, _app) = Rig::started(default_config());
     let (high, _high_sub) = competitor(&rig, 300, Disposition::Pass);
     let (low, _low_sub) = competitor(&rig, 100, Disposition::Suppress);
@@ -330,7 +330,7 @@ fn ma_03_02_a_higher_priority_pass_reaches_menu_anywhere_and_a_lower_one_is_neve
 }
 
 #[test]
-fn ma_03_02_a_disabled_tap_that_is_re_enabled_keeps_the_subscription_working() {
+fn a_disabled_tap_that_is_re_enabled_keeps_the_subscription_working() {
     let (rig, _app) = Rig::started(default_config());
     rig.input.tap_disabled(TapKind::Suppressing);
     let cancel = CancellationToken::new();
@@ -362,7 +362,7 @@ fn admission() -> (Admission, std::sync::mpsc::Receiver<Message>, Arc<Counters>)
 }
 
 #[test]
-fn ma_03_03_a_free_reservation_and_queue_slot_suppress_with_one_request() {
+fn a_free_reservation_and_queue_slot_suppress_with_one_request() {
     let (admission, receiver, counters) = admission();
     let now = Instant::now();
     assert_eq!(
@@ -381,7 +381,7 @@ fn ma_03_03_a_free_reservation_and_queue_slot_suppress_with_one_request() {
 }
 
 #[test]
-fn ma_03_03_a_busy_reservation_swallows_and_drops_the_newest_trigger() {
+fn a_busy_reservation_swallows_and_drops_the_newest_trigger() {
     let (admission, receiver, counters) = admission();
     assert_eq!(
         admission.admit(&published(true), Instant::now(), None),
@@ -406,7 +406,7 @@ fn ma_03_03_a_busy_reservation_swallows_and_drops_the_newest_trigger() {
 }
 
 #[test]
-fn ma_03_03_a_full_queue_without_a_busy_reservation_passes_and_frees_its_own_reservation() {
+fn a_full_queue_without_a_busy_reservation_passes_and_frees_its_own_reservation() {
     let (sender, receiver) = sync_channel(1);
     let counters = Arc::new(Counters::default());
     let admission = Admission::new(sender.clone(), Arc::clone(&counters));
@@ -426,7 +426,7 @@ fn ma_03_03_a_full_queue_without_a_busy_reservation_passes_and_frees_its_own_res
 }
 
 #[test]
-fn ma_03_03_a_disconnected_queue_passes_frees_the_reservation_and_marks_health_false() {
+fn a_disconnected_queue_passes_frees_the_reservation_and_marks_health_false() {
     let (admission, receiver, counters) = admission();
     drop(receiver);
     assert_eq!(
@@ -439,7 +439,7 @@ fn ma_03_03_a_disconnected_queue_passes_frees_the_reservation_and_marks_health_f
 }
 
 #[test]
-fn ma_03_03_a_stale_holder_can_only_release_its_own_reservation() {
+fn a_stale_holder_can_only_release_its_own_reservation() {
     let (admission, receiver, _counters) = admission();
     assert_eq!(
         admission.admit(&published(true), Instant::now(), None),
@@ -465,7 +465,7 @@ fn ma_03_03_a_stale_holder_can_only_release_its_own_reservation() {
 }
 
 #[test]
-fn ma_03_03_an_ineligible_or_dead_tuple_passes_without_work() {
+fn an_ineligible_or_dead_tuple_passes_without_work() {
     let (rig, _app) = Rig::started(default_config());
     rig.runtime.begin_shutdown();
     assert_eq!(rig.chord_down(), Disposition::Pass);
@@ -474,7 +474,7 @@ fn ma_03_03_an_ineligible_or_dead_tuple_passes_without_work() {
 }
 
 #[test]
-fn ma_03_03_matches_during_a_read_are_coalesced_and_replay_nothing() {
+fn matches_during_a_read_are_coalesced_and_replay_nothing() {
     let (rig, _app) = Rig::started(default_config());
     let hold = hold_ax(&rig.menu.ax, Op::MenuBar);
     assert_eq!(rig.chord_down(), Disposition::Suppress);
@@ -513,7 +513,7 @@ fn ma_03_03_matches_during_a_read_are_coalesced_and_replay_nothing() {
 }
 
 #[test]
-fn ma_03_03_the_callback_fails_open_while_the_tuple_is_being_replaced() {
+fn the_callback_fails_open_while_the_tuple_is_being_replaced() {
     let (rig, _app) = Rig::started(default_config());
     let seen = rig.runtime.while_publishing(|| rig.chord_down()).expect("a run");
     assert_eq!(
@@ -528,7 +528,7 @@ fn ma_03_03_the_callback_fails_open_while_the_tuple_is_being_replaced() {
 }
 
 #[test]
-fn ma_03_03_a_callback_never_touches_applications_ax_or_the_presenter() {
+fn a_callback_never_touches_applications_ax_or_the_presenter() {
     let (rig, _app) = Rig::started(default_config());
     let hold = rig.hold(Stage::Admitted);
     let queries = rig.apps.frontmost_queries();
@@ -552,7 +552,7 @@ fn ma_03_03_a_callback_never_touches_applications_ax_or_the_presenter() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn ma_03_04_an_enabled_reload_replaces_the_filter_and_publishes_the_new_revision() {
+fn an_enabled_reload_replaces_the_filter_and_publishes_the_new_revision() {
     let (rig, _app) = Rig::started(default_config());
     let before = rig.runtime.published().expect("published");
     rig.registry.reload(rig.handle, config(RightClick, &[Shift])).expect("reload");
@@ -571,7 +571,7 @@ fn ma_03_04_an_enabled_reload_replaces_the_filter_and_publishes_the_new_revision
 }
 
 #[test]
-fn ma_03_04_a_button_change_swaps_the_service_prefilter_too() {
+fn a_button_change_swaps_the_service_prefilter_too() {
     let (rig, _app) = Rig::started(default_config());
     rig.registry
         .reload(rig.handle, config(MiddleClick, &[Control, Command]))
@@ -584,7 +584,7 @@ fn ma_03_04_a_button_change_swaps_the_service_prefilter_too() {
 }
 
 #[test]
-fn ma_03_04_a_callback_during_staging_uses_the_previous_accepted_tuple() {
+fn a_callback_during_staging_uses_the_previous_accepted_tuple() {
     let (rig, _app) = Rig::started(default_config());
     let held = rig.hold(Stage::AdoptBeforePublish);
     let before = rig.runtime.published().expect("published");
@@ -619,7 +619,7 @@ fn ma_03_04_a_callback_during_staging_uses_the_previous_accepted_tuple() {
 }
 
 #[test]
-fn ma_03_04_an_unchanged_reload_keeps_the_filter_and_revision() {
+fn an_unchanged_reload_keeps_the_filter_and_revision() {
     let (rig, _app) = Rig::started(default_config());
     let before = rig.runtime.published().expect("published");
     let submitted = rig.tap.submitted().len();
@@ -632,7 +632,7 @@ fn ma_03_04_an_unchanged_reload_keeps_the_filter_and_revision() {
 }
 
 #[test]
-fn ma_03_04_a_paused_reload_stages_for_the_next_start_and_changes_nothing_live() {
+fn a_paused_reload_stages_for_the_next_start_and_changes_nothing_live() {
     let (rig, _app) = Rig::started(default_config());
     rig.registry.pause(rig.handle).expect("pause");
     assert_eq!(rig.status(), ModuleStatus::Paused);
@@ -658,7 +658,7 @@ fn ma_03_04_a_paused_reload_stages_for_the_next_start_and_changes_nothing_live()
 }
 
 #[test]
-fn ma_03_04_a_disabling_reload_ends_eligibility_and_an_enabling_reload_restarts() {
+fn a_disabling_reload_ends_eligibility_and_an_enabling_reload_restarts() {
     let (rig, _app) = Rig::started(default_config());
     let mut disabled = default_config();
     disabled.enabled = false;
@@ -679,7 +679,7 @@ fn ma_03_04_a_disabling_reload_ends_eligibility_and_an_enabling_reload_restarts(
 }
 
 #[test]
-fn ma_03_04_an_enabled_reconfigure_keeps_the_in_flight_presentations_authority() {
+fn an_enabled_reconfigure_keeps_the_in_flight_presentations_authority() {
     let (rig, _app) = Rig::started(default_config());
     assert_eq!(rig.chord_down(), Disposition::Suppress);
     let id = rig.wait_tracking();
@@ -704,7 +704,7 @@ fn ma_03_04_an_enabled_reconfigure_keeps_the_in_flight_presentations_authority()
 }
 
 #[test]
-fn ma_03_04_a_reconfigure_racing_the_immediate_send_does_not_cancel_the_action() {
+fn a_reconfigure_racing_the_immediate_send_does_not_cancel_the_action() {
     let (rig, _app) = Rig::started(default_config());
     assert_eq!(rig.chord_down(), Disposition::Suppress);
     let id = rig.wait_tracking();
@@ -724,7 +724,7 @@ fn ma_03_04_a_reconfigure_racing_the_immediate_send_does_not_cancel_the_action()
 // ---------------------------------------------------------------------------
 
 #[test]
-fn ma_03_05_trigger_and_capture_times_are_recorded_separately_and_honestly() {
+fn trigger_and_capture_times_are_recorded_separately_and_honestly() {
     let (rig, _app) = Rig::started(default_config());
     let held = rig.hold(Stage::Admitted);
     assert_eq!(rig.chord_down(), Disposition::Suppress);
@@ -745,7 +745,7 @@ fn ma_03_05_trigger_and_capture_times_are_recorded_separately_and_honestly() {
 }
 
 #[test]
-fn ma_03_05_a_request_older_than_the_capture_window_is_dropped_without_native_work() {
+fn a_request_older_than_the_capture_window_is_dropped_without_native_work() {
     let (rig, _app) = Rig::started(default_config());
     let held = rig.hold(Stage::Admitted);
     assert_eq!(rig.chord_down(), Disposition::Suppress);
@@ -769,7 +769,7 @@ fn ma_03_05_a_request_older_than_the_capture_window_is_dropped_without_native_wo
 }
 
 #[test]
-fn ma_03_05_a_capture_hop_over_the_window_is_rejected() {
+fn a_capture_hop_over_the_window_is_rejected() {
     let (rig, _app) = Rig::started(default_config());
     let barrier = rig.apps.block_next_frontmost();
     assert_eq!(rig.chord_down(), Disposition::Suppress);
@@ -782,7 +782,7 @@ fn ma_03_05_a_capture_hop_over_the_window_is_rejected() {
 }
 
 #[test]
-fn ma_03_05_the_application_frontmost_at_processing_is_the_observed_capture_target() {
+fn the_application_frontmost_at_processing_is_the_observed_capture_target() {
     let (rig, first) = Rig::started(default_config());
     // Capture with the first application frontmost.
     assert_eq!(rig.chord_down(), Disposition::Suppress);
@@ -802,7 +802,7 @@ fn ma_03_05_the_application_frontmost_at_processing_is_the_observed_capture_targ
 }
 
 #[test]
-fn ma_03_05_no_frontmost_application_is_a_typed_outcome_and_frees_the_reservation() {
+fn no_frontmost_application_is_a_typed_outcome_and_frees_the_reservation() {
     let (rig, _app) = Rig::started(default_config());
     rig.apps.set_frontmost(None);
     let _ = rig.apps.deliver_activation();
@@ -818,7 +818,7 @@ fn ma_03_05_no_frontmost_application_is_a_typed_outcome_and_frees_the_reservatio
 }
 
 #[test]
-fn ma_03_05_this_process_is_never_read_or_shown() {
+fn this_process_is_never_read_or_shown() {
     let (rig, _app) = Rig::started(default_config());
     let own = rig.add_app("com.example.stache", 7);
     rig.apps.set_current_process(Some(own.key));
@@ -835,7 +835,7 @@ fn ma_03_05_this_process_is_never_read_or_shown() {
 }
 
 #[test]
-fn ma_03_05_a_focus_change_during_the_read_is_a_stale_target_and_shows_nothing() {
+fn a_focus_change_during_the_read_is_a_stale_target_and_shows_nothing() {
     let (rig, _app) = Rig::started(default_config());
     let other = rig.add_app("com.example.other", 5151);
     let hold = hold_ax(&rig.menu.ax, Op::MenuBar);
@@ -853,7 +853,7 @@ fn ma_03_05_a_focus_change_during_the_read_is_a_stale_target_and_shows_nothing()
 }
 
 #[test]
-fn ma_03_05_a_focus_change_between_the_read_and_the_show_is_stale() {
+fn a_focus_change_between_the_read_and_the_show_is_stale() {
     let (rig, _app) = Rig::started(default_config());
     let other = rig.add_app("com.example.other", 5151);
     let held = rig.hold(Stage::BeforeShow);
@@ -867,7 +867,7 @@ fn ma_03_05_a_focus_change_between_the_read_and_the_show_is_stale() {
 }
 
 #[test]
-fn ma_03_05_the_captured_instance_terminating_before_the_show_is_stale() {
+fn the_captured_instance_terminating_before_the_show_is_stale() {
     let (rig, app) = Rig::started(default_config());
     let held = rig.hold(Stage::BeforeShow);
     assert_eq!(rig.chord_down(), Disposition::Suppress);
@@ -880,7 +880,7 @@ fn ma_03_05_the_captured_instance_terminating_before_the_show_is_stale() {
 }
 
 #[test]
-fn ma_03_05_the_action_targets_the_captured_instance_even_if_focus_moved_while_tracking() {
+fn the_action_targets_the_captured_instance_even_if_focus_moved_while_tracking() {
     let (rig, app) = Rig::started(default_config());
     let other = rig.add_app("com.example.other", 5151);
     assert_eq!(rig.chord_down(), Disposition::Suppress);
@@ -898,7 +898,7 @@ fn ma_03_05_the_action_targets_the_captured_instance_even_if_focus_moved_while_t
 }
 
 #[test]
-fn ma_03_05_a_relaunched_instance_with_the_same_pid_and_bundle_is_stale_for_the_action() {
+fn a_relaunched_instance_with_the_same_pid_and_bundle_is_stale_for_the_action() {
     let (rig, app) = Rig::started(default_config());
     assert_eq!(rig.chord_down(), Disposition::Suppress);
     let id = rig.wait_tracking();
@@ -918,7 +918,7 @@ fn ma_03_05_a_relaunched_instance_with_the_same_pid_and_bundle_is_stale_for_the_
 }
 
 #[test]
-fn ma_03_05_an_activation_refusal_issues_no_press_and_is_never_retried() {
+fn an_activation_refusal_issues_no_press_and_is_never_retried() {
     let (rig, _app) = Rig::started(default_config());
     rig.apps.refuse_exact_activation();
     assert_eq!(rig.chord_down(), Disposition::Suppress);
@@ -931,7 +931,7 @@ fn ma_03_05_an_activation_refusal_issues_no_press_and_is_never_retried() {
 }
 
 #[test]
-fn ma_03_05_an_event_without_a_point_is_a_typed_outcome() {
+fn an_event_without_a_point_is_a_typed_outcome() {
     let (rig, _app) = Rig::started(default_config());
     assert_eq!(
         rig.mouse_at(InputEventKind::MouseDown, 1, CHORD, None),
@@ -943,7 +943,7 @@ fn ma_03_05_an_event_without_a_point_is_a_typed_outcome() {
 }
 
 #[test]
-fn ma_03_05_the_menu_is_shown_at_the_event_quartz_point() {
+fn the_menu_is_shown_at_the_event_quartz_point() {
     let (rig, _app) = Rig::started(default_config());
     let gate = rig.hold(Stage::BeforeCapture);
     // The event point is captured by the callback; nothing sampled later can
@@ -968,7 +968,7 @@ fn ma_03_05_the_menu_is_shown_at_the_event_quartz_point() {
 }
 
 #[test]
-fn ma_03_05_read_failures_are_typed_counted_and_never_fail_the_lifecycle() {
+fn read_failures_are_typed_counted_and_never_fail_the_lifecycle() {
     let (rig, _app) = Rig::started(default_config());
     rig.menu.ax.inject(Op::MenuBar, None, stache_macos::menu::AxError::ApiDisabled);
     assert_eq!(rig.chord_down(), Disposition::Suppress);
@@ -991,7 +991,7 @@ fn ma_03_05_read_failures_are_typed_counted_and_never_fail_the_lifecycle() {
 }
 
 #[test]
-fn ma_03_05_an_application_without_a_menu_bar_is_a_typed_no_menu() {
+fn an_application_without_a_menu_bar_is_a_typed_no_menu() {
     let rig = Rig::with_menu(default_config(), Vec::new());
     let app = rig.add_app("com.example.editor", 4242);
     rig.registry.start_all().expect("start");
@@ -1003,7 +1003,7 @@ fn ma_03_05_an_application_without_a_menu_bar_is_a_typed_no_menu() {
 }
 
 #[test]
-fn ma_03_05_a_rejected_dispatch_is_a_typed_show_failure_with_a_clean_release() {
+fn a_rejected_dispatch_is_a_typed_show_failure_with_a_clean_release() {
     let (rig, _app) = Rig::started(default_config());
     rig.menu.main.reject(true);
     assert_eq!(rig.chord_down(), Disposition::Suppress);
@@ -1020,7 +1020,7 @@ fn ma_03_05_a_rejected_dispatch_is_a_typed_show_failure_with_a_clean_release() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn ma_03_06_missing_accessibility_waits_without_acquiring_or_prompting() {
+fn missing_accessibility_waits_without_acquiring_or_prompting() {
     let rig = Rig::new(default_config());
     rig.trust.set(false);
     rig.registry.start_all().expect("start");
@@ -1035,7 +1035,7 @@ fn ma_03_06_missing_accessibility_waits_without_acquiring_or_prompting() {
 }
 
 #[test]
-fn ma_03_06_grant_then_revoke_then_grant_never_requests_and_follows_the_permission() {
+fn grant_then_revoke_then_grant_never_requests_and_follows_the_permission() {
     let rig = Rig::new(default_config());
     rig.trust.set(false);
     rig.registry.start_all().expect("start");
@@ -1067,7 +1067,7 @@ fn ma_03_06_grant_then_revoke_then_grant_never_requests_and_follows_the_permissi
 }
 
 #[test]
-fn ma_03_06_recovery_never_overrides_a_pause_or_a_disable() {
+fn recovery_never_overrides_a_pause_or_a_disable() {
     let rig = Rig::new(default_config());
     rig.registry.start_all().expect("start");
     rig.registry.pause(rig.handle).expect("pause");
@@ -1085,7 +1085,7 @@ fn ma_03_06_recovery_never_overrides_a_pause_or_a_disable() {
 }
 
 #[test]
-fn ma_03_06_a_missing_input_service_is_a_typed_dependency_failure_that_acquires_nothing() {
+fn a_missing_input_service_is_a_typed_dependency_failure_that_acquires_nothing() {
     let rig = Rig::without_input_service(default_config());
     let _ = rig.registry.start_all();
     let ModuleStatus::Failed(failure) = rig.status() else {
@@ -1105,7 +1105,7 @@ fn assert_fully_rolled_back(rig: &Rig) {
 }
 
 #[test]
-fn ma_03_06_a_failed_menu_stack_rolls_the_start_back_and_a_retry_recovers() {
+fn a_failed_menu_stack_rolls_the_start_back_and_a_retry_recovers() {
     let rig = Rig::new(default_config());
     rig.menu.fail_next_open();
     let _ = rig.registry.start_all();
@@ -1123,7 +1123,7 @@ fn ma_03_06_a_failed_menu_stack_rolls_the_start_back_and_a_retry_recovers() {
 }
 
 #[test]
-fn ma_03_06_a_rejected_subscription_rolls_back_the_observer_and_the_menu_stack() {
+fn a_rejected_subscription_rolls_back_the_observer_and_the_menu_stack() {
     let rig = Rig::new(default_config());
     rig.tap.script(
         TapKind::Suppressing,
@@ -1143,7 +1143,7 @@ fn ma_03_06_a_rejected_subscription_rolls_back_the_observer_and_the_menu_stack()
 }
 
 #[test]
-fn ma_03_06_a_failed_observer_install_rolls_back_cleanly() {
+fn a_failed_observer_install_rolls_back_cleanly() {
     let rig = Rig::new(default_config());
     rig.apps.fail_next_observe();
     let _ = rig.registry.start_all();
@@ -1155,7 +1155,7 @@ fn ma_03_06_a_failed_observer_install_rolls_back_cleanly() {
 }
 
 #[test]
-fn ma_03_06_a_tap_that_cannot_be_re_enabled_does_not_rewrite_the_lifecycle() {
+fn a_tap_that_cannot_be_re_enabled_does_not_rewrite_the_lifecycle() {
     let (rig, _app) = Rig::started(default_config());
     rig.tap.script(
         TapKind::Suppressing,
@@ -1184,7 +1184,7 @@ fn ma_03_06_a_tap_that_cannot_be_re_enabled_does_not_rewrite_the_lifecycle() {
 }
 
 #[test]
-fn ma_03_06_a_dead_worker_fails_open_withdraws_eligibility_and_reports_degraded_not_failed() {
+fn a_dead_worker_fails_open_withdraws_eligibility_and_reports_degraded_not_failed() {
     let (rig, _app) = Rig::started(default_config());
     rig.runtime.set_stage_hook(Some(Arc::new(|stage| {
         assert_ne!(stage, Stage::Admitted, "injected worker death");
@@ -1234,7 +1234,7 @@ fn assert_menu_gone(rig: &Rig, id: stache_macos::menu::PresentationId) {
 }
 
 #[test]
-fn ma_03_07_pause_during_tracking_cancels_the_menu_and_issues_nothing() {
+fn pause_during_tracking_cancels_the_menu_and_issues_nothing() {
     let (rig, _app) = Rig::started(default_config());
     assert_eq!(rig.chord_down(), Disposition::Suppress);
     assert_eq!(rig.chord_up(), Disposition::Suppress);
@@ -1252,7 +1252,7 @@ fn ma_03_07_pause_during_tracking_cancels_the_menu_and_issues_nothing() {
 }
 
 #[test]
-fn ma_03_07_disable_during_tracking_cancels_the_menu() {
+fn disable_during_tracking_cancels_the_menu() {
     let (rig, _app) = Rig::started(default_config());
     assert_eq!(rig.chord_down(), Disposition::Suppress);
     let id = rig.wait_tracking();
@@ -1262,7 +1262,7 @@ fn ma_03_07_disable_during_tracking_cancels_the_menu() {
 }
 
 #[test]
-fn ma_03_07_permission_loss_during_tracking_cancels_the_menu_and_waits() {
+fn permission_loss_during_tracking_cancels_the_menu_and_waits() {
     let (rig, _app) = Rig::started(default_config());
     assert_eq!(rig.chord_down(), Disposition::Suppress);
     let id = rig.wait_tracking();
@@ -1279,7 +1279,7 @@ fn ma_03_07_permission_loss_during_tracking_cancels_the_menu_and_waits() {
 }
 
 #[test]
-fn ma_03_07_pause_between_selection_and_action_issues_no_activation_or_press() {
+fn pause_between_selection_and_action_issues_no_activation_or_press() {
     let (rig, _app) = Rig::started(default_config());
     assert_eq!(rig.chord_down(), Disposition::Suppress);
     let id = rig.wait_tracking();
@@ -1313,7 +1313,7 @@ fn ma_03_07_pause_between_selection_and_action_issues_no_activation_or_press() {
 }
 
 #[test]
-fn ma_03_07_stop_with_a_stalled_press_reports_pending_then_releases_exactly_once() {
+fn stop_with_a_stalled_press_reports_pending_then_releases_exactly_once() {
     let (rig, _app) = Rig::started(default_config());
     let press = hold_ax(&rig.menu.ax, Op::Press);
     assert_eq!(rig.chord_down(), Disposition::Suppress);
@@ -1354,7 +1354,7 @@ fn ma_03_07_stop_with_a_stalled_press_reports_pending_then_releases_exactly_once
 }
 
 #[test]
-fn ma_03_07_a_late_read_from_a_stopped_run_cannot_touch_the_successor() {
+fn a_late_read_from_a_stopped_run_cannot_touch_the_successor() {
     let (rig, _app) = Rig::started(default_config());
     let read = hold_ax(&rig.menu.ax, Op::MenuBar);
     assert_eq!(rig.chord_down(), Disposition::Suppress);
@@ -1381,7 +1381,7 @@ fn ma_03_07_a_late_read_from_a_stopped_run_cannot_touch_the_successor() {
 }
 
 #[test]
-fn ma_03_07_a_removal_that_is_not_acknowledged_stays_pending_and_never_hits_a_successor() {
+fn a_removal_that_is_not_acknowledged_stays_pending_and_never_hits_a_successor() {
     let (rig, _app) = Rig::started(default_config());
     assert_eq!(rig.chord_down(), Disposition::Suppress);
     let old = rig.wait_tracking();
@@ -1414,7 +1414,7 @@ fn ma_03_07_a_removal_that_is_not_acknowledged_stays_pending_and_never_hits_a_su
 // ---------------------------------------------------------------------------
 
 #[test]
-fn ma_03_08_registry_shutdown_with_an_open_modal_menu_cancels_it_and_joins_the_owners() {
+fn registry_shutdown_with_an_open_modal_menu_cancels_it_and_joins_the_owners() {
     let (rig, _app) = Rig::started(default_config());
     assert_eq!(rig.chord_down(), Disposition::Suppress);
     let id = rig.wait_tracking();
@@ -1434,7 +1434,7 @@ fn ma_03_08_registry_shutdown_with_an_open_modal_menu_cancels_it_and_joins_the_o
 }
 
 #[test]
-fn ma_03_08_a_stalled_press_does_not_deadlock_shutdown() {
+fn a_stalled_press_does_not_deadlock_shutdown() {
     let (rig, _app) = Rig::started(default_config());
     let press = hold_ax(&rig.menu.ax, Op::Press);
     assert_eq!(rig.chord_down(), Disposition::Suppress);
@@ -1452,7 +1452,7 @@ fn ma_03_08_a_stalled_press_does_not_deadlock_shutdown() {
 }
 
 #[test]
-fn ma_03_07_repeated_pause_resume_cycles_do_not_keep_past_runs_alive() {
+fn repeated_pause_resume_cycles_do_not_keep_past_runs_alive() {
     let (rig, _app) = Rig::started(default_config());
     let mut probes = Vec::new();
     for _ in 0..3 {
@@ -1472,7 +1472,7 @@ fn ma_03_07_repeated_pause_resume_cycles_do_not_keep_past_runs_alive() {
 }
 
 #[test]
-fn ma_03_07_an_unacknowledged_tap_removal_is_reported_as_cleanup_pending() {
+fn an_unacknowledged_tap_removal_is_reported_as_cleanup_pending() {
     let (rig, _app) = Rig::started(default_config());
     assert!(rig.runtime.health_detail().is_none());
     rig.tap.script(

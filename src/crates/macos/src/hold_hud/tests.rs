@@ -296,7 +296,7 @@ const ANCHORS: [HudAnchor; 5] = [
 ];
 
 #[test]
-fn hq_06_bottom_layout_matches_the_default_placement() {
+fn bottom_layout_matches_the_default_placement() {
     for visible in [
         rect(100.0, 50.0, 1440.0, 800.0),
         rect(0.0, 0.0, 200.0, 80.0),
@@ -312,7 +312,7 @@ fn hq_06_bottom_layout_matches_the_default_placement() {
 }
 
 #[test]
-fn hq_06_layout_places_each_anchor_and_stays_inside_the_visible_frame() {
+fn layout_places_each_anchor_and_stays_inside_the_visible_frame() {
     let visible = rect(1440.0, 25.0, 1920.0, 1000.0);
     let panel = |anchor| compute_layout(visible, Some("Safari"), anchor).panel;
     let mid_x = visible.x + visible.width / 2.0;
@@ -351,7 +351,7 @@ fn hq_06_layout_places_each_anchor_and_stays_inside_the_visible_frame() {
 }
 
 #[test]
-fn hq_06_fade_motion_has_equal_start_and_end_frames() {
+fn fade_motion_has_equal_start_and_end_frames() {
     let panel = rect(500.0, 100.0, 300.0, 64.0);
     for anchor in ANCHORS {
         assert_eq!(
@@ -366,7 +366,7 @@ fn hq_06_fade_motion_has_equal_start_and_end_frames() {
 }
 
 #[test]
-fn hq_06_slide_offsets_follow_the_anchor() {
+fn slide_offsets_follow_the_anchor() {
     let panel = rect(500.0, 100.0, 300.0, 64.0);
     let start = |anchor| {
         let (start, end) = motion_frames(panel, anchor, HudMotion::Slide, false);
@@ -387,7 +387,7 @@ fn hq_06_slide_offsets_follow_the_anchor() {
 }
 
 #[test]
-fn hq_06_reduce_motion_turns_a_slide_into_a_fade() {
+fn reduce_motion_turns_a_slide_into_a_fade() {
     let panel = rect(500.0, 100.0, 300.0, 64.0);
     assert_eq!(effective_motion(HudMotion::Slide, true), HudMotion::Fade);
     assert_eq!(effective_motion(HudMotion::Slide, false), HudMotion::Slide);
@@ -401,13 +401,13 @@ fn hq_06_reduce_motion_turns_a_slide_into_a_fade() {
 }
 
 #[test]
-fn hq_06_durations_are_the_specified_constants() {
+fn durations_are_the_specified_constants() {
     assert_eq!(SHOW_DURATION, Duration::from_millis(200));
     assert_eq!(HIDE_DURATION, Duration::from_millis(150));
 }
 
 #[test]
-fn hq_06_a_stale_hide_token_is_not_current() {
+fn a_stale_hide_token_is_not_current() {
     let generation = MotionGeneration::default();
     let hide = generation.advance();
     assert!(generation.is_current(hide));
@@ -421,7 +421,7 @@ fn hq_06_a_stale_hide_token_is_not_current() {
 }
 
 #[test]
-fn hq_06_requests_default_to_bottom_fade_and_carry_overrides() {
+fn requests_default_to_bottom_fade_and_carry_overrides() {
     let (rig, handle) = ready();
     assert_eq!(request(handle, 1).anchor, HudAnchor::Bottom);
     assert_eq!(request(handle, 1).motion, HudMotion::Fade);
@@ -443,7 +443,7 @@ fn hq_06_requests_default_to_bottom_fade_and_carry_overrides() {
 }
 
 #[test]
-fn hq_06_the_fake_resolves_reduce_motion_to_a_fade() {
+fn the_fake_resolves_reduce_motion_to_a_fade() {
     let (rig, handle) = ready();
     rig.backend.set_appearance(HudAppearance {
         reduce_motion: true,
@@ -458,7 +458,7 @@ fn hq_06_the_fake_resolves_reduce_motion_to_a_fade() {
 }
 
 #[test]
-fn hq_06_a_hide_followed_by_a_successor_show_never_hides_the_successor() {
+fn a_hide_followed_by_a_successor_show_never_hides_the_successor() {
     let (rig, handle) = ready();
     rig.control.show(request(handle, 1));
     rig.control.hide(handle, press(1));

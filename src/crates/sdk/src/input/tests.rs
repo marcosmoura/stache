@@ -206,7 +206,7 @@ fn sup(rig: &Rig, raw: RawInput) -> Disposition { rig.service.dispatch(TapKind::
 // ---------------------------------------------------------------- KB-02-01
 
 #[test]
-fn kb_02_01_two_services_are_independent_and_ids_do_not_cross() {
+fn two_services_are_independent_and_ids_do_not_cross() {
     let first = rig();
     let second = rig();
     let recorder = Recorder::suppressing();
@@ -225,7 +225,7 @@ fn kb_02_01_two_services_are_independent_and_ids_do_not_cross() {
 }
 
 #[test]
-fn kb_02_01_lazy_tap_first_and_last_subscriber() {
+fn lazy_tap_first_and_last_subscriber() {
     let rig = rig();
     assert_eq!(rig.backend.submit_calls(), 0, "no idle tap");
     assert_eq!(rig.service.tap_status(TapKind::Suppressing), TapStatus::Absent);
@@ -247,7 +247,7 @@ fn kb_02_01_lazy_tap_first_and_last_subscriber() {
 
 #[test]
 #[allow(clippy::needless_collect)]
-fn kb_02_01_simultaneous_subscribe_installs_once_and_last_unsubscribe_removes_once() {
+fn simultaneous_subscribe_installs_once_and_last_unsubscribe_removes_once() {
     let rig = rig();
     let barrier = Arc::new(Barrier::new(8));
     let subs: Vec<Subscription> = std::thread::scope(|scope| {
@@ -288,7 +288,7 @@ fn kb_02_01_simultaneous_subscribe_installs_once_and_last_unsubscribe_removes_on
 }
 
 #[test]
-fn kb_02_01_startup_cancellation_never_installs_late() {
+fn startup_cancellation_never_installs_late() {
     let rig = rig();
     rig.backend
         .script(TapKind::Suppressing, ControlAction::Install, FakeResponse::Hold);
@@ -322,7 +322,7 @@ fn kb_02_01_startup_cancellation_never_installs_late() {
 }
 
 #[test]
-fn kb_02_01_late_readiness_is_ignored_and_removal_is_not_lost() {
+fn late_readiness_is_ignored_and_removal_is_not_lost() {
     let rig = rig();
     rig.backend
         .script(TapKind::Suppressing, ControlAction::Install, FakeResponse::Hold);
@@ -369,7 +369,7 @@ fn kb_02_01_late_readiness_is_ignored_and_removal_is_not_lost() {
 }
 
 #[test]
-fn kb_02_01_dropped_acknowledgement_times_out_without_false_success() {
+fn dropped_acknowledgement_times_out_without_false_success() {
     let rig = rig();
     rig.backend
         .script(TapKind::Suppressing, ControlAction::Install, FakeResponse::Drop);
@@ -394,7 +394,7 @@ fn kb_02_01_dropped_acknowledgement_times_out_without_false_success() {
 }
 
 #[test]
-fn kb_02_01_dispatch_rejection_is_counted_and_retains_nothing_for_install() {
+fn dispatch_rejection_is_counted_and_retains_nothing_for_install() {
     let rig = rig();
     rig.backend.script(
         TapKind::Suppressing,
@@ -418,7 +418,7 @@ fn kb_02_01_dispatch_rejection_is_counted_and_retains_nothing_for_install() {
 }
 
 #[test]
-fn kb_02_01_removal_rejection_retains_ids_and_successor_gets_new_generation() {
+fn removal_rejection_retains_ids_and_successor_gets_new_generation() {
     let rig = rig();
     let recorder = Recorder::suppressing();
     let sub = handler(&rig, &recorder, any_key(), 1);
@@ -446,7 +446,7 @@ fn kb_02_01_removal_rejection_retains_ids_and_successor_gets_new_generation() {
 }
 
 #[test]
-fn kb_02_01_control_queue_has_exact_256_boundary() {
+fn control_queue_has_exact_256_boundary() {
     let rig = rig();
     rig.backend.set_default(FakeResponse::Hold);
     let ticket = || super::control::Ticket::new(None);
@@ -464,7 +464,7 @@ fn kb_02_01_control_queue_has_exact_256_boundary() {
 }
 
 #[test]
-fn kb_02_01_unavailable_service_is_inert() {
+fn unavailable_service_is_inert() {
     let service = InputService::unavailable();
     let result = service.subscribe_handler(
         spec(any_key(), 1),
@@ -486,7 +486,7 @@ fn kb_02_01_unavailable_service_is_inert() {
 }
 
 #[test]
-fn kb_02_01_capability_invalidation_stops_callbacks_and_release_closes_tap() {
+fn capability_invalidation_stops_callbacks_and_release_closes_tap() {
     let rig = rig();
     let capability = InputCapability::new(
         ModuleId::new("t"),
@@ -520,7 +520,7 @@ fn kb_02_01_capability_invalidation_stops_callbacks_and_release_closes_tap() {
 // ---------------------------------------------------------------- KB-02-02
 
 #[test]
-fn kb_02_02_modifier_release_flags_changed_reaches_named_key_filter() {
+fn modifier_release_flags_changed_reaches_named_key_filter() {
     let filter = InputFilter::new(KindSet::of(InputEventKind::FlagsChanged))
         .with_keys([SHIFT_KEY])
         .with_modifiers(ModifierMatch::Exact(ModifierFlags::SHIFT));
@@ -537,7 +537,7 @@ fn kb_02_02_modifier_release_flags_changed_reaches_named_key_filter() {
 }
 
 #[test]
-fn kb_02_02_modifier_release_is_delivered_by_the_router() {
+fn modifier_release_is_delivered_by_the_router() {
     let rig = rig();
     let recorder = Recorder::passing();
     let filter = InputFilter::new(KindSet::of(InputEventKind::FlagsChanged))
@@ -558,7 +558,7 @@ fn kb_02_02_modifier_release_is_delivered_by_the_router() {
 }
 
 #[test]
-fn kb_02_02_button_two_is_exact_and_not_three_plus() {
+fn button_two_is_exact_and_not_three_plus() {
     let two =
         InputFilter::new(KindSet::of(InputEventKind::MouseDown)).with_buttons([MouseButton(2)]);
     let stream = |n| PressStream::Button(MouseButton(n));
@@ -575,7 +575,7 @@ fn kb_02_02_button_two_is_exact_and_not_three_plus() {
 }
 
 #[test]
-fn kb_02_02_modifier_semantics_are_explicit() {
+fn modifier_semantics_are_explicit() {
     let filter = |m| InputFilter::new(KindSet::of(InputEventKind::KeyDown)).with_modifiers(m);
     let key = PressStream::Key(A);
     let kind = InputEventKind::KeyDown;
@@ -592,7 +592,7 @@ fn kb_02_02_modifier_semantics_are_explicit() {
 }
 
 #[test]
-fn kb_02_02_filter_validation_and_overlap() {
+fn filter_validation_and_overlap() {
     assert_eq!(
         InputFilter::new(KindSet::empty()).validate(),
         Err(FilterError::NoKinds)
@@ -616,7 +616,7 @@ fn kb_02_02_filter_validation_and_overlap() {
 }
 
 #[test]
-fn kb_02_02_context_snapshots_are_versioned_with_unknown_and_stale_state() {
+fn context_snapshots_are_versioned_with_unknown_and_stale_state() {
     let rig = rig();
     let recorder = Recorder::passing();
     let _sub = handler(&rig, &recorder, any_key(), 1);
@@ -641,7 +641,7 @@ fn kb_02_02_context_snapshots_are_versioned_with_unknown_and_stale_state() {
 // ---------------------------------------------------------------- KB-02-03
 
 #[test]
-fn kb_02_03_first_suppressor_wins_and_lower_never_sees_suppressed_event() {
+fn first_suppressor_wins_and_lower_never_sees_suppressed_event() {
     let rig = rig();
     let low = Recorder::passing();
     let high = Recorder::suppressing();
@@ -660,7 +660,7 @@ fn kb_02_03_first_suppressor_wins_and_lower_never_sees_suppressed_event() {
 }
 
 #[test]
-fn kb_02_03_equal_priority_order_is_registration_order_and_diagnosed() {
+fn equal_priority_order_is_registration_order_and_diagnosed() {
     let rig = rig();
     let first = Recorder::suppressing();
     let second = Recorder::suppressing();
@@ -684,7 +684,7 @@ fn kb_02_03_equal_priority_order_is_registration_order_and_diagnosed() {
 }
 
 #[test]
-fn kb_02_03_tie_break_orders_equal_levels() {
+fn tie_break_orders_equal_levels() {
     let rig = rig();
     let low = Recorder::suppressing();
     let high = Recorder::suppressing();
@@ -706,7 +706,7 @@ fn kb_02_03_tie_break_orders_equal_levels() {
 }
 
 #[test]
-fn kb_02_03_work_overflow_fails_open_for_whole_press_and_never_runs_late() {
+fn work_overflow_fails_open_for_whole_press_and_never_runs_late() {
     let rig = rig_with_work(1);
     let recorder = Recorder::suppressing();
     recorder.take_work.store(true, Ordering::SeqCst);
@@ -739,7 +739,7 @@ fn kb_02_03_work_overflow_fails_open_for_whole_press_and_never_runs_late() {
 }
 
 #[test]
-fn kb_02_03_empty_capture_needs_ledger_entry_but_no_work_slot() {
+fn empty_capture_needs_ledger_entry_but_no_work_slot() {
     let rig = rig_with_work(0);
     let recorder = Recorder::suppressing();
     let _sub = handler(&rig, &recorder, any_key(), 1);
@@ -751,7 +751,7 @@ fn kb_02_03_empty_capture_needs_ledger_entry_but_no_work_slot() {
 }
 
 #[test]
-fn kb_02_03_reservation_registry_yields_carbon_to_higher_priority_hid() {
+fn reservation_registry_yields_carbon_to_higher_priority_hid() {
     let rig = rig();
     let registry = rig.service.reservations();
     let owner = registry.new_owner();
@@ -822,7 +822,7 @@ fn hid_for(key: KeyCode) -> Claim {
 const Q: KeyCode = KeyCode(12);
 
 #[test]
-fn kb_03_06_yield_restores_on_claimant_removal_pause_replace_and_owner_release() {
+fn yield_restores_on_claimant_removal_pause_replace_and_owner_release() {
     let rig = rig();
     let r = rig.service.reservations();
     let owner = r.new_owner();
@@ -873,7 +873,7 @@ fn kb_03_06_yield_restores_on_claimant_removal_pause_replace_and_owner_release()
 }
 
 #[test]
-fn kb_03_06_yield_survives_reclaim_of_the_carbon_reservation() {
+fn yield_survives_reclaim_of_the_carbon_reservation() {
     let rig = rig();
     let r = rig.service.reservations();
     let owner = r.new_owner();
@@ -912,7 +912,7 @@ fn kb_03_06_yield_survives_reclaim_of_the_carbon_reservation() {
 }
 
 #[test]
-fn kb_03_06_double_yield_is_idempotent_and_explicit_yield_is_validated() {
+fn double_yield_is_idempotent_and_explicit_yield_is_validated() {
     let rig = rig();
     let r = rig.service.reservations();
     let owner = r.new_owner();
@@ -966,7 +966,7 @@ fn kb_03_06_double_yield_is_idempotent_and_explicit_yield_is_validated() {
 }
 
 #[test]
-fn kb_03_06_stale_or_nonexistent_yield_is_rejected() {
+fn stale_or_nonexistent_yield_is_rejected() {
     let rig = rig();
     let r = rig.service.reservations();
     let owner = r.new_owner();
@@ -999,7 +999,7 @@ fn kb_03_06_stale_or_nonexistent_yield_is_rejected() {
 }
 
 #[test]
-fn kb_03_06_unrelated_reservations_are_unaffected_and_one_press_dispatches_once() {
+fn unrelated_reservations_are_unaffected_and_one_press_dispatches_once() {
     let rig = rig();
     let r = rig.service.reservations();
     let owner = r.new_owner();
@@ -1057,7 +1057,7 @@ fn kb_03_06_unrelated_reservations_are_unaffected_and_one_press_dispatches_once(
 }
 
 #[test]
-fn kb_02_03_reservation_ids_do_not_cross_registries() {
+fn reservation_ids_do_not_cross_registries() {
     let one = rig();
     let two = rig();
     let owner = one.service.reservations().new_owner();
@@ -1092,7 +1092,7 @@ fn kb_02_03_reservation_ids_do_not_cross_registries() {
 }
 
 #[test]
-fn kb_02_03_handlers_cannot_run_for_unrelated_events() {
+fn handlers_cannot_run_for_unrelated_events() {
     let rig = rig();
     let recorder = Recorder::suppressing();
     let _sub = handler(&rig, &recorder, any_key().with_keys([A]), 1);
@@ -1115,7 +1115,7 @@ fn kb_02_03_handlers_cannot_run_for_unrelated_events() {
 // ---------------------------------------------------------------- KB-02-04
 
 #[test]
-fn kb_02_04_suppressed_down_then_logical_stop_then_up_is_consumed_by_tombstone() {
+fn suppressed_down_then_logical_stop_then_up_is_consumed_by_tombstone() {
     let rig = rig();
     let recorder = Recorder::suppressing();
     let sub = handler(&rig, &recorder, any_key(), 1);
@@ -1133,7 +1133,7 @@ fn kb_02_04_suppressed_down_then_logical_stop_then_up_is_consumed_by_tombstone()
 }
 
 #[test]
-fn kb_02_04_passed_down_never_acquires_a_suppressor_mid_press() {
+fn passed_down_never_acquires_a_suppressor_mid_press() {
     let rig = rig();
     let passing = Recorder::passing();
     let _low = handler(&rig, &passing, any_key(), 1);
@@ -1153,7 +1153,7 @@ fn kb_02_04_passed_down_never_acquires_a_suppressor_mid_press() {
 }
 
 #[test]
-fn kb_02_04_priority_change_keeps_original_owner_tombstone_until_up() {
+fn priority_change_keeps_original_owner_tombstone_until_up() {
     let rig = rig();
     let recorder = Recorder::suppressing();
     let sub = handler(&rig, &recorder, any_key(), 1);
@@ -1172,7 +1172,7 @@ fn kb_02_04_priority_change_keeps_original_owner_tombstone_until_up() {
 }
 
 #[test]
-fn kb_02_04_repeat_and_up_follow_the_ledger_with_per_press_state() {
+fn repeat_and_up_follow_the_ledger_with_per_press_state() {
     let rig = rig();
     let recorder = Recorder::suppressing();
     // Only the key A is matched; repeat/up are not re-filtered.
@@ -1207,7 +1207,7 @@ fn kb_02_04_repeat_and_up_follow_the_ledger_with_per_press_state() {
 }
 
 #[test]
-fn kb_02_04_mouse_buttons_are_ledgered_per_button() {
+fn mouse_buttons_are_ledgered_per_button() {
     let rig = rig();
     let recorder = Recorder::suppressing();
     let filter =
@@ -1231,7 +1231,7 @@ fn kb_02_04_mouse_buttons_are_ledgered_per_button() {
 }
 
 #[test]
-fn kb_02_04_ledger_exhaustion_boundary_is_exactly_1024_and_fails_open() {
+fn ledger_exhaustion_boundary_is_exactly_1024_and_fails_open() {
     let rig = rig();
     let recorder = Recorder::suppressing();
     let _sub = handler(&rig, &recorder, any_key(), 1);
@@ -1257,7 +1257,7 @@ fn kb_02_04_ledger_exhaustion_boundary_is_exactly_1024_and_fails_open() {
 }
 
 #[test]
-fn kb_02_04_tap_disabled_cancels_presses_advances_epoch_and_never_synthesizes_releases() {
+fn tap_disabled_cancels_presses_advances_epoch_and_never_synthesizes_releases() {
     let rig = rig();
     let recorder = Recorder::suppressing();
     let _sub = handler(&rig, &recorder, any_key(), 1);
@@ -1285,7 +1285,7 @@ fn kb_02_04_tap_disabled_cancels_presses_advances_epoch_and_never_synthesizes_re
 }
 
 #[test]
-fn kb_02_04_reenable_failure_is_visible_and_retry_is_explicit_and_bounded() {
+fn reenable_failure_is_visible_and_retry_is_explicit_and_bounded() {
     let rig = rig();
     let recorder = Recorder::suppressing();
     let _sub = handler(&rig, &recorder, any_key(), 1);
@@ -1325,7 +1325,7 @@ fn kb_02_04_reenable_failure_is_visible_and_retry_is_explicit_and_bounded() {
 }
 
 #[test]
-fn kb_02_04_reenable_retry_can_recover() {
+fn reenable_retry_can_recover() {
     let rig = rig();
     let _sub = handler(&rig, &Recorder::suppressing(), any_key(), 1);
     rig.backend.script(
@@ -1346,7 +1346,7 @@ fn kb_02_04_reenable_retry_can_recover() {
 }
 
 #[test]
-fn kb_02_04_pending_reenable_stays_disabled_until_acknowledged() {
+fn pending_reenable_stays_disabled_until_acknowledged() {
     let rig = rig();
     let _sub = handler(&rig, &Recorder::suppressing(), any_key(), 1);
     rig.backend
@@ -1358,7 +1358,7 @@ fn kb_02_04_pending_reenable_stays_disabled_until_acknowledged() {
 }
 
 #[test]
-fn kb_02_04_disabled_tap_races_dispatch_without_inconsistency() {
+fn disabled_tap_races_dispatch_without_inconsistency() {
     let rig = rig();
     let recorder = Recorder::suppressing();
     let _sub = handler(&rig, &recorder, any_key(), 1);
@@ -1385,7 +1385,7 @@ fn kb_02_04_disabled_tap_races_dispatch_without_inconsistency() {
 // ---------------------------------------------------------------- KB-02-05
 
 #[test]
-fn kb_02_05_panic_is_contained_fails_open_and_makes_subscriber_inert() {
+fn panic_is_contained_fails_open_and_makes_subscriber_inert() {
     let rig = rig();
     let panicking = Recorder::suppressing();
     let sub = handler(&rig, &panicking, any_key(), 9);
@@ -1405,7 +1405,7 @@ fn kb_02_05_panic_is_contained_fails_open_and_makes_subscriber_inert() {
 }
 
 #[test]
-fn kb_02_05_panic_on_release_keeps_ledger_cleanup() {
+fn panic_on_release_keeps_ledger_cleanup() {
     let rig = rig();
     let recorder = Recorder::suppressing();
     let _sub = handler(&rig, &recorder, any_key(), 1);
@@ -1422,7 +1422,7 @@ fn kb_02_05_panic_on_release_keeps_ledger_cleanup() {
 }
 
 #[test]
-fn kb_02_05_slow_returned_callback_inhibits_future_delivery() {
+fn slow_returned_callback_inhibits_future_delivery() {
     let rig = rig();
     let recorder = Recorder::suppressing();
     *recorder.advance.lock().unwrap_or_else(PoisonError::into_inner) = Some((
@@ -1441,7 +1441,7 @@ fn kb_02_05_slow_returned_callback_inhibits_future_delivery() {
 }
 
 #[test]
-fn kb_02_05_callback_at_exactly_the_target_is_not_slow() {
+fn callback_at_exactly_the_target_is_not_slow() {
     let rig = rig();
     let recorder = Recorder::passing();
     *recorder.advance.lock().unwrap_or_else(PoisonError::into_inner) =
@@ -1452,7 +1452,7 @@ fn kb_02_05_callback_at_exactly_the_target_is_not_slow() {
 }
 
 #[test]
-fn kb_02_05_acknowledgement_uses_two_seconds_and_ten_millisecond_quanta() {
+fn acknowledgement_uses_two_seconds_and_ten_millisecond_quanta() {
     assert_eq!(ACKNOWLEDGEMENT_BUDGET, Duration::from_secs(2));
     assert_eq!(CANCELLATION_QUANTUM, Duration::from_millis(10));
     // Acknowledged inside the budget.
@@ -1512,7 +1512,7 @@ fn rig_for_late() -> Rig {
 }
 
 #[test]
-fn kb_02_05_unsubscribe_invalidates_before_slow_native_cleanup() {
+fn unsubscribe_invalidates_before_slow_native_cleanup() {
     let rig = rig();
     let recorder = Recorder::suppressing();
     let sub = handler(&rig, &recorder, any_key(), 1);
@@ -1537,7 +1537,7 @@ fn kb_02_05_unsubscribe_invalidates_before_slow_native_cleanup() {
 // ---------------------------------------------------------------- KB-02-06
 
 #[test]
-fn kb_02_06_passive_only_creates_exactly_one_listen_only_tap() {
+fn passive_only_creates_exactly_one_listen_only_tap() {
     let rig = rig();
     let first = Arc::new(Watcher::default());
     let second = Arc::new(Watcher::default());
@@ -1559,7 +1559,7 @@ fn kb_02_06_passive_only_creates_exactly_one_listen_only_tap() {
 }
 
 #[test]
-fn kb_02_06_listen_only_closes_while_suppressing_stays_live() {
+fn listen_only_closes_while_suppressing_stays_live() {
     let rig = rig();
     let watcher = Arc::new(Watcher::default());
     let recorder = Recorder::suppressing();
@@ -1573,7 +1573,7 @@ fn kb_02_06_listen_only_closes_while_suppressing_stays_live() {
 }
 
 #[test]
-fn kb_02_06_passive_cannot_suppress_reorder_or_be_called_by_the_suppressing_tap() {
+fn passive_cannot_suppress_reorder_or_be_called_by_the_suppressing_tap() {
     let rig = rig();
     let watcher = Arc::new(Watcher::default());
     let recorder = Recorder::suppressing();
@@ -1605,7 +1605,7 @@ fn kb_02_06_passive_cannot_suppress_reorder_or_be_called_by_the_suppressing_tap(
 }
 
 #[test]
-fn kb_02_06_observer_filters_modifier_release_and_discontinuity() {
+fn observer_filters_modifier_release_and_discontinuity() {
     let rig = rig();
     let watcher = Arc::new(Watcher::default());
     let filter = InputFilter::new(KindSet::of(InputEventKind::FlagsChanged)).with_keys([SHIFT_KEY]);
@@ -1632,7 +1632,7 @@ fn kb_02_06_observer_filters_modifier_release_and_discontinuity() {
 // ---------------------------------------------------------------- KB-02-07
 
 #[test]
-fn kb_02_07_work_fake_rejects_on_full_without_blocking() {
+fn work_fake_rejects_on_full_without_blocking() {
     let fake = CapacityWork::new(2);
     let owner: Arc<dyn WorkReservations> = Arc::clone(&fake) as Arc<dyn WorkReservations>;
     let a = WorkReservation::try_new(&owner).expect("first");
@@ -1646,7 +1646,7 @@ fn kb_02_07_work_fake_rejects_on_full_without_blocking() {
 }
 
 #[test]
-fn kb_05_02_redeem_consumes_without_release_and_refuses_a_foreign_owner() {
+fn redeem_consumes_without_release_and_refuses_a_foreign_owner() {
     let fake = CapacityWork::new(2);
     let owner: Arc<dyn WorkReservations> = Arc::clone(&fake) as Arc<dyn WorkReservations>;
     let other: Arc<dyn WorkReservations> = CapacityWork::new(1);
@@ -1662,7 +1662,7 @@ fn kb_05_02_redeem_consumes_without_release_and_refuses_a_foreign_owner() {
 }
 
 #[test]
-fn kb_02_07_work_fake_never_exceeds_capacity_under_contention() {
+fn work_fake_never_exceeds_capacity_under_contention() {
     let fake = CapacityWork::new(4);
     let owner: Arc<dyn WorkReservations> = Arc::clone(&fake) as Arc<dyn WorkReservations>;
     let peak = AtomicU64::new(0);
@@ -1706,7 +1706,7 @@ fn assert_still_installed(rig: &Rig) {
 }
 
 #[test]
-fn hq_04_09_last_handler_mid_press_keeps_tap_until_up_then_removes_acknowledged() {
+fn last_handler_mid_press_keeps_tap_until_up_then_removes_acknowledged() {
     let rig = rig();
     let recorder = Recorder::suppressing();
     let sub = handler(&rig, &recorder, any_key(), 1);
@@ -1722,7 +1722,7 @@ fn hq_04_09_last_handler_mid_press_keeps_tap_until_up_then_removes_acknowledged(
 }
 
 #[test]
-fn hq_04_09_removal_waits_for_every_tombstone() {
+fn removal_waits_for_every_tombstone() {
     let rig = rig();
     let sub = handler(&rig, &Recorder::suppressing(), any_key(), 1);
     assert_eq!(sup(&rig, down(A)), Disposition::Suppress);
@@ -1735,7 +1735,7 @@ fn hq_04_09_removal_waits_for_every_tombstone() {
 }
 
 #[test]
-fn hq_04_09_new_first_down_passes_while_deferred() {
+fn new_first_down_passes_while_deferred() {
     let rig = rig();
     let recorder = Recorder::suppressing();
     let sub = handler(&rig, &recorder, any_key(), 1);
@@ -1750,7 +1750,7 @@ fn hq_04_09_new_first_down_passes_while_deferred() {
 }
 
 #[test]
-fn hq_04_09_tap_disable_drains_ledger_and_removes_without_reenable() {
+fn tap_disable_drains_ledger_and_removes_without_reenable() {
     // The helper is held so the deferral is still pending when the disable checks.
     let (rig, hold) = deferred_rig();
     rig.service.tap_disabled(TapKind::Suppressing);
@@ -1763,7 +1763,7 @@ fn hq_04_09_tap_disable_drains_ledger_and_removes_without_reenable() {
 }
 
 #[test]
-fn hq_04_09_owner_shutdown_hands_removal_to_the_owner() {
+fn owner_shutdown_hands_removal_to_the_owner() {
     let rig = rig();
     let sub = handler(&rig, &Recorder::suppressing(), any_key(), 1);
     assert_eq!(sup(&rig, down(A)), Disposition::Suppress);
@@ -1781,7 +1781,7 @@ fn hq_04_09_owner_shutdown_hands_removal_to_the_owner() {
 }
 
 #[test]
-fn hq_04_09_carbon_yield_is_restored_immediately_on_unsubscribe() {
+fn carbon_yield_is_restored_immediately_on_unsubscribe() {
     let rig = rig();
     let registry = rig.service.reservations();
     let owner = registry.new_owner();
@@ -1816,7 +1816,7 @@ fn hq_04_09_carbon_yield_is_restored_immediately_on_unsubscribe() {
 }
 
 #[test]
-fn hq_04_09_resubscribe_during_deferral_reuses_the_tap() {
+fn resubscribe_during_deferral_reuses_the_tap() {
     let rig = rig();
     let first = Recorder::suppressing();
     let sub = handler(&rig, &first, any_key(), 1);
@@ -1860,7 +1860,7 @@ fn subscribe_again(rig: &Rig) -> Result<Subscription, InputError> {
 }
 
 #[test]
-fn hq_04_09_subscribe_after_disable_during_deferral_reenables_the_reused_tap() {
+fn subscribe_after_disable_during_deferral_reenables_the_reused_tap() {
     let (rig, hold) = deferred_rig();
     rig.service.tap_disabled(TapKind::Suppressing);
     assert_eq!(
@@ -1881,7 +1881,7 @@ fn hq_04_09_subscribe_after_disable_during_deferral_reenables_the_reused_tap() {
 }
 
 #[test]
-fn hq_04_09_subscribe_after_the_helper_removed_the_disabled_tap_installs_afresh() {
+fn subscribe_after_the_helper_removed_the_disabled_tap_installs_afresh() {
     let rig = rig();
     let sub = handler(&rig, &Recorder::suppressing(), any_key(), 1);
     assert_eq!(sup(&rig, down(A)), Disposition::Suppress);
@@ -1902,7 +1902,7 @@ fn hq_04_09_subscribe_after_the_helper_removed_the_disabled_tap_installs_afresh(
 }
 
 #[test]
-fn hq_04_09_failed_revive_fails_the_subscribe_and_the_helper_still_removes_the_tap() {
+fn failed_revive_fails_the_subscribe_and_the_helper_still_removes_the_tap() {
     let (rig, hold) = deferred_rig();
     rig.service.tap_disabled(TapKind::Suppressing);
     rig.backend.script(
@@ -1926,7 +1926,7 @@ fn hq_04_09_failed_revive_fails_the_subscribe_and_the_helper_still_removes_the_t
 }
 
 #[test]
-fn hq_04_09_disable_during_the_revive_enable_is_not_lost() {
+fn disable_during_the_revive_enable_is_not_lost() {
     let (rig, hold) = deferred_rig();
     rig.service.tap_disabled(TapKind::Suppressing);
     let service = Arc::clone(&rig.service);
@@ -1941,7 +1941,7 @@ fn hq_04_09_disable_during_the_revive_enable_is_not_lost() {
 }
 
 #[test]
-fn hq_04_09_unacknowledged_disable_during_the_revive_enable_keeps_the_status_honest() {
+fn unacknowledged_disable_during_the_revive_enable_keeps_the_status_honest() {
     let (rig, hold) = deferred_rig();
     rig.service.tap_disabled(TapKind::Suppressing);
     let service = Arc::clone(&rig.service);
@@ -1965,7 +1965,7 @@ fn hq_04_09_unacknowledged_disable_during_the_revive_enable_keeps_the_status_hon
 }
 
 #[test]
-fn hq_04_09_without_tombstones_removal_is_immediate() {
+fn without_tombstones_removal_is_immediate() {
     let passing_rig = rig();
     let rig = rig();
     let sub = handler(&rig, &Recorder::suppressing(), any_key(), 1);

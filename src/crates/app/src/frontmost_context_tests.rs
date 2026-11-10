@@ -70,7 +70,7 @@ fn known(bundle: &str, bits: u32) -> FrontmostState {
 }
 
 #[test]
-fn hq_04_08_nothing_runs_without_a_lessee() {
+fn nothing_runs_without_a_lessee() {
     let rig = rig();
     assert_eq!(rig.observers(), 0);
     assert_eq!(rig.backend.observations(), 0);
@@ -79,7 +79,7 @@ fn hq_04_08_nothing_runs_without_a_lessee() {
 }
 
 #[test]
-fn hq_04_08_lease_refcount_installs_once_and_stops_with_the_last_release() {
+fn lease_refcount_installs_once_and_stops_with_the_last_release() {
     let rig = rig();
     let first = rig.lease();
     assert_eq!(rig.observers(), 1);
@@ -99,7 +99,7 @@ fn hq_04_08_lease_refcount_installs_once_and_stops_with_the_last_release() {
 }
 
 #[test]
-fn hq_04_08_activation_marks_stale_before_the_refresh_publishes() {
+fn activation_marks_stale_before_the_refresh_publishes() {
     let rig = rig();
     let a = rig.app("com.example.a", 10);
     let b = rig.app("com.example.b", 11);
@@ -113,7 +113,7 @@ fn hq_04_08_activation_marks_stale_before_the_refresh_publishes() {
 }
 
 #[test]
-fn hq_04_08_exempt_applications_stay_known_with_their_bits() {
+fn exempt_applications_stay_known_with_their_bits() {
     let rig = rig();
     let finder = rig.app("com.apple.finder", 20);
     let own = rig.app("com.example.stache", 21);
@@ -135,7 +135,7 @@ fn hq_04_08_exempt_applications_stay_known_with_their_bits() {
 }
 
 #[test]
-fn hq_04_08_unconfirmed_missing_bundle_and_failed_refresh_are_unknown() {
+fn unconfirmed_missing_bundle_and_failed_refresh_are_unknown() {
     let rig = rig();
     let a = rig.app("com.example.a", 30);
     let b = rig.app("com.example.b", 31);
@@ -164,7 +164,7 @@ fn hq_04_08_unconfirmed_missing_bundle_and_failed_refresh_are_unknown() {
 }
 
 #[test]
-fn hq_04_08_a_superseded_refresh_never_overwrites_a_newer_stale() {
+fn a_superseded_refresh_never_overwrites_a_newer_stale() {
     let rig = rig();
     let a = rig.app("com.example.a", 40);
     rig.backend.set_frontmost(Some(a));
@@ -207,7 +207,7 @@ fn confirmed_snapshot(generation: u64, epoch: u64) -> FrontmostSnapshot {
 }
 
 #[test]
-fn hq_04_08_stop_marks_unknown() {
+fn stop_marks_unknown() {
     let rig = rig();
     let a = rig.app("com.example.a", 50);
     rig.backend.set_frontmost(Some(a));
@@ -218,7 +218,7 @@ fn hq_04_08_stop_marks_unknown() {
 }
 
 #[test]
-fn hq_04_08_a_previous_generation_cannot_overwrite_a_newer_lease() {
+fn a_previous_generation_cannot_overwrite_a_newer_lease() {
     let rig = rig();
     let a = rig.app("com.example.a", 60);
     rig.backend.set_frontmost(Some(a));
@@ -243,7 +243,7 @@ fn hq_04_08_a_previous_generation_cannot_overwrite_a_newer_lease() {
 }
 
 #[test]
-fn hq_04_08_publisher_reads_never_deadlock_with_listener_calls() {
+fn publisher_reads_never_deadlock_with_listener_calls() {
     let rig = rig();
     let a = rig.app("com.example.a", 70);
     let b = rig.app("com.example.b", 71);
@@ -269,7 +269,7 @@ fn hq_04_08_publisher_reads_never_deadlock_with_listener_calls() {
 }
 
 #[test]
-fn hq_04_08_failed_removal_stays_owned_blocks_a_duplicate_and_is_retried_first() {
+fn failed_removal_stays_owned_blocks_a_duplicate_and_is_retried_first() {
     let rig = rig();
     let a = rig.app("com.example.a", 80);
     rig.backend.set_frontmost(Some(a));
@@ -296,7 +296,7 @@ fn hq_04_08_failed_removal_stays_owned_blocks_a_duplicate_and_is_retried_first()
 }
 
 #[test]
-fn hq_04_08_a_removal_timeout_keeps_ownership_and_cleans_exactly_once() {
+fn a_removal_timeout_keeps_ownership_and_cleans_exactly_once() {
     let rig = rig();
     let lease = rig.lease();
     rig.executor.set_on_main(false);
@@ -321,7 +321,7 @@ fn hq_04_08_a_removal_timeout_keeps_ownership_and_cleans_exactly_once() {
 }
 
 #[test]
-fn hq_04_08_a_failed_install_is_a_typed_error_and_holds_no_lease() {
+fn a_failed_install_is_a_typed_error_and_holds_no_lease() {
     let rig = rig();
     rig.backend.fail_next_observe();
     let error = rig.context.lease(&CancellationToken::new()).expect_err("install fails");
@@ -339,7 +339,7 @@ fn hq_04_08_a_failed_install_is_a_typed_error_and_holds_no_lease() {
 }
 
 #[test]
-fn hq_04_08_concurrent_leases_and_releases_keep_exactly_one_observer_while_held() {
+fn concurrent_leases_and_releases_keep_exactly_one_observer_while_held() {
     let rig = Arc::new(rig());
     let workers: Vec<_> = (0..8)
         .map(|_| {
@@ -371,7 +371,7 @@ fn wait_answered(answer: &OwnerAnswer) -> OwnerState {
 }
 
 #[test]
-fn hq_04_08_the_teardown_owner_acknowledges_idle_and_retained_cleanup() {
+fn the_teardown_owner_acknowledges_idle_and_retained_cleanup() {
     let rig = rig();
     let owner = FrontmostContextOwner::new(rig.context.clone());
     assert_eq!(owner.name(), "frontmost-context");

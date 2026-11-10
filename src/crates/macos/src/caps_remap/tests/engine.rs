@@ -33,7 +33,7 @@ fn position(log: &[&str], point: &str) -> usize {
 }
 
 #[test]
-fn kb_04_03_the_journal_is_durable_before_the_native_write_and_verified_before_applied() {
+fn the_journal_is_durable_before_the_native_write_and_verified_before_applied() {
     let world = World::new(vec![KEY_A, KEY_B]);
     let remap = world.remap();
     remap.apply(&token()).expect("apply");
@@ -51,7 +51,7 @@ fn kb_04_03_the_journal_is_durable_before_the_native_write_and_verified_before_a
 }
 
 #[test]
-fn kb_04_03_restore_journals_intent_then_verifies_absence_before_retiring() {
+fn restore_journals_intent_then_verifies_absence_before_retiring() {
     let world = World::new(vec![KEY_A, KEY_B]);
     let remap = world.remap();
     remap.apply(&token()).expect("apply");
@@ -79,7 +79,7 @@ fn kb_04_03_restore_journals_intent_then_verifies_absence_before_retiring() {
 }
 
 #[test]
-fn kb_04_02_a_foreign_or_unproven_caps_mapping_is_refused_without_mutation() {
+fn a_foreign_or_unproven_caps_mapping_is_refused_without_mutation() {
     for existing in [FOREIGN, Mapping {
         src: CAPS_LOCK_USAGE,
         dst: F18_USAGE,
@@ -95,7 +95,7 @@ fn kb_04_02_a_foreign_or_unproven_caps_mapping_is_refused_without_mutation() {
 }
 
 #[test]
-fn kb_04_02_malformed_duplicate_null_and_quoted_output_refuses_before_any_write() {
+fn malformed_duplicate_null_and_quoted_output_refuses_before_any_write() {
     let cases: [&[u8]; 6] = [
         b"(",
         b"Error",
@@ -115,7 +115,7 @@ fn kb_04_02_malformed_duplicate_null_and_quoted_output_refuses_before_any_write(
 }
 
 #[test]
-fn kb_04_02_a_failed_read_or_cancelled_lease_changes_nothing() {
+fn a_failed_read_or_cancelled_lease_changes_nothing() {
     let world = World::new(vec![KEY_A]);
     world.fail_next("hidutil.get");
     assert!(matches!(world.remap().apply(&token()), Err(ApplyError::Read(_))));
@@ -132,7 +132,7 @@ fn kb_04_02_a_failed_read_or_cancelled_lease_changes_nothing() {
 }
 
 #[test]
-fn kb_04_04_a_busy_lease_mutates_nothing_and_a_second_owner_is_excluded() {
+fn a_busy_lease_mutates_nothing_and_a_second_owner_is_excluded() {
     let world = World::new(vec![KEY_A]);
     world.hold_lease(true);
     assert_eq!(
@@ -146,7 +146,7 @@ fn kb_04_04_a_busy_lease_mutates_nothing_and_a_second_owner_is_excluded() {
 }
 
 #[test]
-fn kb_04_04_a_replaced_lock_identity_fails_closed_before_every_mutation() {
+fn a_replaced_lock_identity_fails_closed_before_every_mutation() {
     let world = World::new(vec![KEY_A]);
     world.replace_lease(true);
     let error = world.remap().apply(&token()).expect_err("replaced");
@@ -168,7 +168,7 @@ fn kb_04_04_a_replaced_lock_identity_fails_closed_before_every_mutation() {
 }
 
 #[test]
-fn kb_04_03_journal_creation_failures_never_mutate_the_mapping() {
+fn journal_creation_failures_never_mutate_the_mapping() {
     for point in [
         "journal.create",
         "journal.fsync",
@@ -189,7 +189,7 @@ fn kb_04_03_journal_creation_failures_never_mutate_the_mapping() {
 }
 
 #[test]
-fn kb_04_03_unverified_restores_never_delete_the_journal() {
+fn unverified_restores_never_delete_the_journal() {
     // Native write refused: nothing changed, the journal stays, truthfully pending.
     let world = World::new(vec![KEY_A]);
     let remap = world.remap();
@@ -228,7 +228,7 @@ fn kb_04_03_unverified_restores_never_delete_the_journal() {
 }
 
 #[test]
-fn kb_04_05_a_post_spawn_timeout_is_uncertain_until_reread_and_child_are_confirmed() {
+fn a_post_spawn_timeout_is_uncertain_until_reread_and_child_are_confirmed() {
     // Timed out after applying, child reaped, reread proves absence: restored.
     let world = World::new(vec![KEY_A]);
     let remap = world.remap();
@@ -273,7 +273,7 @@ fn kb_04_05_a_post_spawn_timeout_is_uncertain_until_reread_and_child_are_confirm
 }
 
 #[test]
-fn kb_04_05_an_apply_that_times_out_keeps_the_journal_and_requires_restore() {
+fn an_apply_that_times_out_keeps_the_journal_and_requires_restore() {
     let world = World::new(vec![KEY_A]);
     let remap = world.remap();
     world.script_set(SetFault::TimedOutApplied { unconfirmed: true });
@@ -304,7 +304,7 @@ fn kb_04_05_an_apply_that_times_out_keeps_the_journal_and_requires_restore() {
 }
 
 #[test]
-fn kb_04_04_external_changes_are_preserved_and_ownership_loss_is_never_restored() {
+fn external_changes_are_preserved_and_ownership_loss_is_never_restored() {
     // Unrelated external edits between apply and restore survive the restore.
     let world = World::new(vec![KEY_A]);
     let remap = world.remap();
@@ -334,7 +334,7 @@ fn kb_04_04_external_changes_are_preserved_and_ownership_loss_is_never_restored(
 }
 
 #[test]
-fn kb_04_04_a_mapping_changed_during_restore_is_not_overwritten() {
+fn a_mapping_changed_during_restore_is_not_overwritten() {
     // Another writer replaces Caps between our write and the verification read.
     let world = World::new(vec![]);
     let remap = world.remap();
@@ -349,7 +349,7 @@ fn kb_04_04_a_mapping_changed_during_restore_is_not_overwritten() {
 }
 
 #[test]
-fn kb_04_03_a_corrupt_or_foreign_journal_blocks_without_touching_anything() {
+fn a_corrupt_or_foreign_journal_blocks_without_touching_anything() {
     let planted: [&[u8]; 4] = [
         b"not json",
         b"{\"previous_caps_usage\":300}",
@@ -370,7 +370,7 @@ fn kb_04_03_a_corrupt_or_foreign_journal_blocks_without_touching_anything() {
 }
 
 #[test]
-fn kb_04_03_a_mapping_without_a_journal_is_never_adopted() {
+fn a_mapping_without_a_journal_is_never_adopted() {
     let world = World::new(vec![OWNED]);
     let remap = world.remap();
     assert_eq!(remap.restore(&token()), RestoreOutcome::NoJournal);
@@ -381,7 +381,7 @@ fn kb_04_03_a_mapping_without_a_journal_is_never_adopted() {
 }
 
 #[test]
-fn kb_04_03_a_stale_journal_is_reconciled_before_a_fresh_apply() {
+fn a_stale_journal_is_reconciled_before_a_fresh_apply() {
     // Crash left an applied mapping and journal; the next apply restores first.
     let world = World::new(vec![KEY_A]);
     world.remap().apply(&token()).expect("apply");
@@ -393,7 +393,7 @@ fn kb_04_03_a_stale_journal_is_reconciled_before_a_fresh_apply() {
 }
 
 #[test]
-fn kb_04_05_an_unreaped_earlier_child_blocks_retirement() {
+fn an_unreaped_earlier_child_blocks_retirement() {
     let world = World::new(vec![KEY_A]);
     let remap = world.remap();
     remap.apply(&token()).expect("apply");
@@ -408,7 +408,7 @@ fn kb_04_05_an_unreaped_earlier_child_blocks_retirement() {
 /// write-ahead rule holds at every instant: the owned mapping never exists
 /// without a trusted journal.
 #[test]
-fn kb_04_03_every_apply_crash_boundary_recovers() {
+fn every_apply_crash_boundary_recovers() {
     let initial = vec![KEY_A, KEY_B];
     let baseline = World::new(initial.clone());
     baseline.remap().apply(&token()).expect("apply");
@@ -437,7 +437,7 @@ fn kb_04_03_every_apply_crash_boundary_recovers() {
 }
 
 #[test]
-fn kb_04_03_every_restore_crash_boundary_recovers() {
+fn every_restore_crash_boundary_recovers() {
     let initial = vec![KEY_A, KEY_B];
     let baseline = World::new(initial.clone());
     let remap = baseline.remap();
@@ -470,7 +470,7 @@ fn kb_04_03_every_restore_crash_boundary_recovers() {
 }
 
 #[test]
-fn kb_04_03_recovery_itself_survives_a_crash_at_every_boundary() {
+fn recovery_itself_survives_a_crash_at_every_boundary() {
     let initial = vec![KEY_A];
     let seed = |world: &World| {
         world.remap().apply(&token()).expect("apply");
@@ -496,7 +496,7 @@ fn kb_04_03_recovery_itself_survives_a_crash_at_every_boundary() {
 }
 
 #[test]
-fn kb_04_03_a_crash_after_the_write_but_before_the_phase_update_is_recovered() {
+fn a_crash_after_the_write_but_before_the_phase_update_is_recovered() {
     let world = World::new(vec![KEY_A]);
     // Crash right after hidutil.set takes effect (the acknowledgement is lost).
     let baseline = World::new(vec![KEY_A]);
@@ -530,7 +530,7 @@ fn stale(world: &World) {
 }
 
 #[test]
-fn kb_04_07_apply_blocks_until_the_startup_recovery_completes_then_proceeds() {
+fn apply_blocks_until_the_startup_recovery_completes_then_proceeds() {
     let world = World::new(vec![KEY_A]);
     stale(&world);
     let remap = Arc::new(world.remap());
@@ -573,7 +573,7 @@ impl Hidutil for PanicHidutil {
 }
 
 #[test]
-fn kb_04_07_a_panicking_recovery_still_releases_apply() {
+fn a_panicking_recovery_still_releases_apply() {
     let world = World::new(vec![KEY_A]);
     stale(&world);
     let panicking = Arc::new(CapsRemap::new(
@@ -598,7 +598,7 @@ fn kb_04_07_a_panicking_recovery_still_releases_apply() {
 }
 
 #[test]
-fn kb_04_07_an_unfinished_recovery_expires_into_a_typed_error_without_mutation() {
+fn an_unfinished_recovery_expires_into_a_typed_error_without_mutation() {
     let world = World::new(vec![KEY_A]);
     let remap = world.remap().with_startup_bound(Duration::from_millis(40));
     remap.begin_startup_recovery();
@@ -624,7 +624,7 @@ fn kb_04_07_an_unfinished_recovery_expires_into_a_typed_error_without_mutation()
 }
 
 #[test]
-fn kb_04_07_without_an_armed_latch_apply_does_not_wait() {
+fn without_an_armed_latch_apply_does_not_wait() {
     let world = World::new(vec![KEY_A]);
     let remap = world.remap().with_startup_bound(Duration::from_millis(1));
     remap.apply(&token()).expect("no recovery registered");
@@ -633,7 +633,7 @@ fn kb_04_07_without_an_armed_latch_apply_does_not_wait() {
 }
 
 #[test]
-fn kb_04_07_an_abandoned_recovery_releases_apply_immediately() {
+fn an_abandoned_recovery_releases_apply_immediately() {
     let world = World::new(vec![KEY_A]);
     let remap = world.remap().with_startup_bound(Duration::from_secs(60));
     remap.begin_startup_recovery();

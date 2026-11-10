@@ -59,7 +59,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn kb_04_07_a_recovery_dropped_without_running_releases_the_startup_latch() {
+    fn a_recovery_dropped_without_running_releases_the_startup_latch() {
         let world = World::new(Vec::new());
         let remap = Arc::new(world.remap().with_startup_bound(Duration::from_secs(60)));
         remap.begin_startup_recovery();

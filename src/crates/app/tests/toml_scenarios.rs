@@ -455,7 +455,7 @@ fn entries(directory: &Path) -> Vec<String> {
 }
 
 #[test]
-fn tc_03_02_per_module_jsonc_files_in_the_previous_spellings_migrate_and_load_cleanly() {
+fn per_module_jsonc_files_in_the_previous_spellings_migrate_and_load_cleanly() {
     let root = tempfile::tempdir().expect("temp dir");
     let directory = per_module_dir(root.path(), &[]);
     let catalog = catalog();
@@ -559,7 +559,7 @@ fn tc_03_02_per_module_jsonc_files_in_the_previous_spellings_migrate_and_load_cl
 }
 
 #[test]
-fn tc_03_03_a_partial_directory_migrates_only_what_exists() {
+fn a_partial_directory_migrates_only_what_exists() {
     let root = tempfile::tempdir().expect("temp dir");
     let directory = per_module_dir(root.path(), &["tiling"]);
     let (code, out, err) = cli(&args(&directory, &["config", "migrate"]));
@@ -569,7 +569,7 @@ fn tc_03_03_a_partial_directory_migrates_only_what_exists() {
 }
 
 #[test]
-fn tc_03_03_one_invalid_file_writes_nothing() {
+fn one_invalid_file_writes_nothing() {
     let root = tempfile::tempdir().expect("temp dir");
     let directory = per_module_dir(root.path(), &[]);
     fs::write(
@@ -586,7 +586,7 @@ fn tc_03_03_one_invalid_file_writes_nothing() {
 }
 
 #[test]
-fn tc_03_03_a_collision_refuses_without_force_and_force_replaces_only_planned_files() {
+fn a_collision_refuses_without_force_and_force_replaces_only_planned_files() {
     let root = tempfile::tempdir().expect("temp dir");
     let directory = per_module_dir(root.path(), &["tiling", "bar"]);
     fs::write(directory.join("bar.toml"), "# mine\nenabled = false\n").expect("existing");

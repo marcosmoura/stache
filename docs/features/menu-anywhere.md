@@ -25,7 +25,7 @@ The shared-service prefilter is configuration independent (mouse down of button 
 
 ## Verification
 
-Automated tests (`stache-menu-anywhere` `tests.rs`, the `ma_03_` cases in the app `host.rs` suite and `config_catalog.rs`) run the production worker over the shared input service's fake tap, the fake application backend, the real `MenuControl`/`AxOwner` over the Part 02 fakes and a fake clock; see [testing.md](../guides/testing.md). The manual runs (approval required for each: temporary config, exact launched test PID, effects) are listed in the [Part 03 spec](../specs/2026-11-03-menu-anywhere/03-runtime.md#per-run-approved-manual-integration-checks) and have **not** been performed. Supported tray Quit is the only teardown path claimed; Cmd-Q and logout coordination are a documented non-goal.
+Automated tests (`stache-menu-anywhere` `tests.rs`, the MenuAnywhere host cases in the app `host.rs` suite and `config_catalog.rs`) run the production worker over the shared input service's fake tap, the fake application backend, the real `MenuControl`/`AxOwner` over the Part 02 fakes and a fake clock; see [testing.md](../guides/testing.md). The manual runs (approval required for each: temporary config, exact launched test PID, effects) are listed in the [Part 03 spec](../specs/2026-11-03-menu-anywhere/03-runtime.md#per-run-approved-manual-integration-checks) and have **not** been performed. Supported tray Quit is the only teardown path claimed; Cmd-Q and logout coordination are a documented non-goal.
 
 ## Spec
 

@@ -15,7 +15,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bar_02_03_the_projection_preserves_the_raw_display_id() {
+    fn the_projection_preserves_the_raw_display_id() {
         for raw in [0, 1, 69_733_378, u32::MAX] {
             let native = stache_macos::desktop::DisplayId::new(raw);
             assert_eq!(sdk_display_id(native).raw(), raw);

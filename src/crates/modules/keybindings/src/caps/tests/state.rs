@@ -42,7 +42,7 @@ fn run(trace: &[(CapsInput, CapsDecision)], dispatch: bool) {
 }
 
 #[test]
-fn kb_04_01_a_bare_caps_tap_does_nothing_and_never_leaks_f18() {
+fn a_bare_caps_tap_does_nothing_and_never_leaks_f18() {
     run(&[(down(F18), Suppress), (up(F18), Suppress)], true);
     // Auto-repeat of the surrogate is swallowed too, and so is a stray up.
     run(
@@ -58,7 +58,7 @@ fn kb_04_01_a_bare_caps_tap_does_nothing_and_never_leaks_f18() {
 }
 
 #[test]
-fn kb_04_01_one_dispatch_per_discrete_chord_press() {
+fn one_dispatch_per_discrete_chord_press() {
     run(
         &[
             (down(F18), Suppress),
@@ -73,7 +73,7 @@ fn kb_04_01_one_dispatch_per_discrete_chord_press() {
 }
 
 #[test]
-fn kb_04_01_releasing_and_repressing_a_chord_under_held_caps_dispatches_again() {
+fn releasing_and_repressing_a_chord_under_held_caps_dispatches_again() {
     run(
         &[
             (down(F18), Suppress),
@@ -89,7 +89,7 @@ fn kb_04_01_releasing_and_repressing_a_chord_under_held_caps_dispatches_again() 
 }
 
 #[test]
-fn kb_04_01_the_chord_key_up_is_suppressed_after_caps_is_released() {
+fn the_chord_key_up_is_suppressed_after_caps_is_released() {
     run(
         &[
             (down(F18), Suppress),
@@ -106,7 +106,7 @@ fn kb_04_01_the_chord_key_up_is_suppressed_after_caps_is_released() {
 }
 
 #[test]
-fn kb_04_01_a_duplicate_caps_down_does_not_rearm_and_one_chord_is_active_at_a_time() {
+fn a_duplicate_caps_down_does_not_rearm_and_one_chord_is_active_at_a_time() {
     run(
         &[
             (down(F18), Suppress),
@@ -122,7 +122,7 @@ fn kb_04_01_a_duplicate_caps_down_does_not_rearm_and_one_chord_is_active_at_a_ti
 }
 
 #[test]
-fn kb_04_01_unbound_keys_and_keys_without_caps_pass() {
+fn unbound_keys_and_keys_without_caps_pass() {
     run(
         &[
             (down(S), Pass),
@@ -138,7 +138,7 @@ fn kb_04_01_unbound_keys_and_keys_without_caps_pass() {
 }
 
 #[test]
-fn kb_04_06_with_dispatch_invalidated_the_surrogate_is_swallowed_but_nothing_executes() {
+fn with_dispatch_invalidated_the_surrogate_is_swallowed_but_nothing_executes() {
     run(
         &[
             (down(F18), Suppress),
@@ -152,7 +152,7 @@ fn kb_04_06_with_dispatch_invalidated_the_surrogate_is_swallowed_but_nothing_exe
 }
 
 #[test]
-fn kb_04_01_clearing_and_cancelling_drop_armed_state() {
+fn clearing_and_cancelling_drop_armed_state() {
     let state = CapsState::new();
     state.step(down(F18), bound, true);
     state.step(down(S), bound, true);
@@ -260,7 +260,7 @@ impl Rig {
 }
 
 #[test]
-fn kb_04_01_the_ledger_swallows_repeats_and_matched_ups_even_after_caps_release() {
+fn the_ledger_swallows_repeats_and_matched_ups_even_after_caps_release() {
     let rig = rig();
     assert_eq!(rig.down(F18), Disposition::Suppress);
     assert_eq!(rig.down(S), Disposition::Suppress);
@@ -276,7 +276,7 @@ fn kb_04_01_the_ledger_swallows_repeats_and_matched_ups_even_after_caps_release(
 }
 
 #[test]
-fn kb_04_01_bare_taps_repeats_and_re_presses_through_the_service() {
+fn bare_taps_repeats_and_re_presses_through_the_service() {
     let rig = rig();
     assert_eq!(rig.down(F18), Disposition::Suppress);
     assert_eq!(rig.repeat(F18), Disposition::Suppress);
@@ -298,7 +298,7 @@ fn kb_04_01_bare_taps_repeats_and_re_presses_through_the_service() {
 }
 
 #[test]
-fn kb_04_01_a_real_f18_press_is_swallowed_like_the_surrogate() {
+fn a_real_f18_press_is_swallowed_like_the_surrogate() {
     // The global remap has no device identity, so a physical F18 key behaves
     // exactly like the Caps surrogate while the mapping is active.
     let rig = rig();
@@ -308,7 +308,7 @@ fn kb_04_01_a_real_f18_press_is_swallowed_like_the_surrogate() {
 }
 
 #[test]
-fn kb_04_06_tap_loss_cancels_dispatch_and_a_re_enable_never_resumes_an_armed_chord() {
+fn tap_loss_cancels_dispatch_and_a_re_enable_never_resumes_an_armed_chord() {
     let rig = rig();
     rig.down(F18);
     rig.down(S);
@@ -327,7 +327,7 @@ fn kb_04_06_tap_loss_cancels_dispatch_and_a_re_enable_never_resumes_an_armed_cho
 }
 
 #[test]
-fn kb_04_01_reload_mid_press_keeps_swallowing_the_owned_press_and_starts_fresh() {
+fn reload_mid_press_keeps_swallowing_the_owned_press_and_starts_fresh() {
     let rig = rig();
     rig.down(F18);
     rig.down(S);

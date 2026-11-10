@@ -199,7 +199,7 @@ mod tests {
     }
 
     #[test]
-    fn bar_02_04_the_app_registers_a_codec_and_factory_context_reads_the_state() {
+    fn the_app_registers_a_codec_and_factory_context_reads_the_state() {
         let root = tempfile::tempdir().expect("root");
         let registry = Arc::new(
             Registry::new(
@@ -260,7 +260,7 @@ mod tests {
     }
 
     #[test]
-    fn bar_02_04_numbers_above_two_to_the_fifty_third_stay_exact() {
+    fn numbers_above_two_to_the_fifty_third_stay_exact() {
         let envelope = StateEnvelope {
             provider: FAKE_PROVIDER,
             generation: u64::MAX,
@@ -280,7 +280,7 @@ mod tests {
     }
 
     #[test]
-    fn bar_02_04_tombstones_project_a_stable_reason_and_generation() {
+    fn tombstones_project_a_stable_reason_and_generation() {
         let tombstone = StateReading::Unavailable(stache_sdk::StateUnavailable {
             reason: StateUnavailableReason::Ended(stache_sdk::RuntimeEnd::Paused),
             generation: Some(7),

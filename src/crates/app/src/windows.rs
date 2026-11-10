@@ -935,7 +935,7 @@ mod tests {
     }
 
     #[test]
-    fn ag_04_03_access_and_test_host_requests_are_accepted_with_their_own_labels() {
+    fn access_and_test_host_requests_are_accepted_with_their_own_labels() {
         let (windows, host) = windows();
         windows.open_test_window().expect("test");
         windows
@@ -959,7 +959,7 @@ mod tests {
     }
 
     #[test]
-    fn ag_05_01_chrome_is_frameless_for_access_and_default_for_test() {
+    fn chrome_is_frameless_for_access_and_default_for_test() {
         assert_eq!(chrome_for(ACCESS_SURFACE), WindowChrome {
             decorations: false,
             transparent: true,
@@ -983,7 +983,7 @@ mod tests {
     }
 
     #[test]
-    fn ag_04_03_the_access_window_is_reused_and_every_other_surface_kind_or_size_is_refused() {
+    fn the_access_window_is_reused_and_every_other_surface_kind_or_size_is_refused() {
         let (windows, host) = windows();
         let first = windows.open(HOST_OWNER, &request("access", "access")).expect("first");
         let second = windows.open(HOST_OWNER, &request("access", "access")).expect("second");

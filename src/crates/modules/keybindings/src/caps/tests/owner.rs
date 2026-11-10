@@ -19,7 +19,7 @@ use crate::caps::parser::CapsKey;
 const BINDINGS: [CapsKey; 1] = [CapsKey(S)];
 
 #[test]
-fn kb_04_02_the_remap_is_applied_only_after_the_tap_is_confirmed_ready() {
+fn the_remap_is_applied_only_after_the_tap_is_confirmed_ready() {
     let rig = Rig::new(vec![KEY_A]);
     let ready_at_set = Arc::new(AtomicBool::new(false));
     let seen_ready = Arc::clone(&ready_at_set);
@@ -44,7 +44,7 @@ fn kb_04_02_the_remap_is_applied_only_after_the_tap_is_confirmed_ready() {
 }
 
 #[test]
-fn kb_04_02_a_missing_permission_failed_install_or_timeout_never_mutates_caps() {
+fn a_missing_permission_failed_install_or_timeout_never_mutates_caps() {
     // Install refused (for example no Input Monitoring grant).
     let rig = Rig::new(vec![KEY_A]);
     rig.backend.script(
@@ -102,7 +102,7 @@ fn kb_04_02_a_missing_permission_failed_install_or_timeout_never_mutates_caps() 
 }
 
 #[test]
-fn kb_04_02_a_foreign_mapping_or_an_empty_binding_set_releases_the_tap_without_a_remap() {
+fn a_foreign_mapping_or_an_empty_binding_set_releases_the_tap_without_a_remap() {
     let rig = Rig::new(vec![Mapping {
         src: stache_macos::caps_remap::CAPS_LOCK_USAGE,
         dst: F18_USAGE,
@@ -126,7 +126,7 @@ fn kb_04_02_a_foreign_mapping_or_an_empty_binding_set_releases_the_tap_without_a
 }
 
 #[test]
-fn kb_04_06_stop_invalidates_dispatch_before_any_restore_work() {
+fn stop_invalidates_dispatch_before_any_restore_work() {
     let rig = Rig::new(vec![KEY_A]);
     let owner_cell = Arc::new(Mutex::new(Vec::<(&'static str, usize, usize)>::new()));
     let observed = Arc::clone(&owner_cell);
@@ -188,7 +188,7 @@ fn raw(kind: InputEventKind, key: u16) -> stache_sdk::input::RawInput {
 }
 
 #[test]
-fn kb_04_06_a_failed_restore_is_cleanup_pending_with_an_inert_safety_subscription() {
+fn a_failed_restore_is_cleanup_pending_with_an_inert_safety_subscription() {
     let rig = Rig::new(vec![KEY_A]);
     let owner = rig.owner();
     owner.start(&BINDINGS, rig.sink(), &token()).expect("start");
@@ -249,7 +249,7 @@ fn kb_04_06_a_failed_restore_is_cleanup_pending_with_an_inert_safety_subscriptio
 }
 
 #[test]
-fn kb_04_06_an_unavailable_tap_with_a_pending_restore_discloses_f18_exposure() {
+fn an_unavailable_tap_with_a_pending_restore_discloses_f18_exposure() {
     let rig = Rig::new(vec![KEY_A]);
     let owner = rig.owner();
     owner.start(&BINDINGS, rig.sink(), &token()).expect("start");
@@ -275,7 +275,7 @@ fn kb_04_06_an_unavailable_tap_with_a_pending_restore_discloses_f18_exposure() {
 }
 
 #[test]
-fn kb_04_06_tap_loss_without_a_held_press_is_detected_and_cleans_up() {
+fn tap_loss_without_a_held_press_is_detected_and_cleans_up() {
     let rig = Rig::new(vec![KEY_A]);
     let owner = rig.owner();
     owner.start(&BINDINGS, rig.sink(), &token()).expect("start");
@@ -292,7 +292,7 @@ fn kb_04_06_tap_loss_without_a_held_press_is_detected_and_cleans_up() {
 }
 
 #[test]
-fn kb_04_05_an_uncertain_apply_keeps_an_inert_subscription_until_restored() {
+fn an_uncertain_apply_keeps_an_inert_subscription_until_restored() {
     let rig = Rig::new(vec![KEY_A]);
     let owner = rig.owner();
     rig.world.script_set(SetFault::TimedOutApplied { unconfirmed: true });
@@ -316,7 +316,7 @@ fn kb_04_05_an_uncertain_apply_keeps_an_inert_subscription_until_restored() {
 }
 
 #[test]
-fn kb_04_05_a_restore_with_an_unconfirmed_child_is_uncertain_not_restored() {
+fn a_restore_with_an_unconfirmed_child_is_uncertain_not_restored() {
     let rig = Rig::new(vec![KEY_A]);
     let owner = rig.owner();
     owner.start(&BINDINGS, rig.sink(), &token()).expect("start");
@@ -334,7 +334,7 @@ fn kb_04_05_a_restore_with_an_unconfirmed_child_is_uncertain_not_restored() {
 }
 
 #[test]
-fn kb_04_04_losing_ownership_on_stop_is_reported_and_the_foreign_mapping_kept() {
+fn losing_ownership_on_stop_is_reported_and_the_foreign_mapping_kept() {
     let rig = Rig::new(vec![KEY_A]);
     let owner = rig.owner();
     owner.start(&BINDINGS, rig.sink(), &token()).expect("start");
@@ -352,7 +352,7 @@ fn kb_04_04_losing_ownership_on_stop_is_reported_and_the_foreign_mapping_kept() 
 }
 
 #[test]
-fn kb_04_06_stopping_with_nothing_owned_is_a_quiet_no_op() {
+fn stopping_with_nothing_owned_is_a_quiet_no_op() {
     let rig = Rig::new(vec![KEY_A]);
     let owner = rig.owner();
     let report = owner.stop(&token());
@@ -365,7 +365,7 @@ fn kb_04_06_stopping_with_nothing_owned_is_a_quiet_no_op() {
 }
 
 #[test]
-fn kb_04_06_late_stop_and_successor_races_serialize_on_the_lease() {
+fn late_stop_and_successor_races_serialize_on_the_lease() {
     let rig = Rig::new(vec![KEY_A]);
     let first = rig.owner();
     first.start(&BINDINGS, rig.sink(), &token()).expect("start");

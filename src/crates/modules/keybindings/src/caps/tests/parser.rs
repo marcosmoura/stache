@@ -82,7 +82,7 @@ const TABLE: &[(&str, u16)] = &[
 ];
 
 #[test]
-fn kb_04_01_every_key_and_alias_parses_to_the_archived_code_case_insensitively() {
+fn every_key_and_alias_parses_to_the_archived_code_case_insensitively() {
     for (name, code) in TABLE {
         for spelling in [(*name).to_owned(), name.to_uppercase(), name.to_lowercase()] {
             let shortcut = format!("CapsLock+{spelling}");
@@ -103,7 +103,7 @@ fn kb_04_01_every_key_and_alias_parses_to_the_archived_code_case_insensitively()
 }
 
 #[test]
-fn kb_04_01_only_the_single_key_grammar_is_accepted_and_the_prefix_is_case_sensitive() {
+fn only_the_single_key_grammar_is_accepted_and_the_prefix_is_case_sensitive() {
     assert_eq!(parse_shortcut("Command+A"), CapsShortcut::NotCaps);
     assert_eq!(parse_shortcut("A"), CapsShortcut::NotCaps);
     assert_eq!(parse_shortcut(""), CapsShortcut::NotCaps);

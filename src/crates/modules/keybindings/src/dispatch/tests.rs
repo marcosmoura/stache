@@ -203,7 +203,7 @@ fn saturate(rig: &Rig) {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn kb_05_02_lazy_zero_idle_tasks_and_completed_tasks_are_reaped() {
+fn lazy_zero_idle_tasks_and_completed_tasks_are_reaped() {
     let rig = rig();
     assert_eq!(rig.dispatcher.snapshot(), DispatchSnapshot::default());
     rig.dispatcher.submit(&seq(&["quick"])).unwrap();
@@ -216,7 +216,7 @@ fn kb_05_02_lazy_zero_idle_tasks_and_completed_tasks_are_reaped() {
 }
 
 #[test]
-fn kb_05_02_admits_16_active_and_64_waiting_and_rejects_the_81st() {
+fn admits_16_active_and_64_waiting_and_rejects_the_81st() {
     let rig = rig();
     saturate(&rig);
     let snapshot = rig.dispatcher.snapshot();
@@ -231,7 +231,7 @@ fn kb_05_02_admits_16_active_and_64_waiting_and_rejects_the_81st() {
 }
 
 #[test]
-fn kb_05_02_fifo_promotion_without_bypass_when_completion_order_differs() {
+fn fifo_promotion_without_bypass_when_completion_order_differs() {
     let rig = rig();
     saturate(&rig);
     // Complete out of admission order: h5 then h3.
@@ -274,7 +274,7 @@ fn kb_05_02_fifo_promotion_without_bypass_when_completion_order_differs() {
 }
 
 #[test]
-fn kb_05_02_a_long_running_child_occupies_only_its_slot() {
+fn a_long_running_child_occupies_only_its_slot() {
     let rig = rig();
     rig.dispatcher.submit(&seq(&["long"])).unwrap();
     wait_until("long spawned", || rig.factory.spawn_count() == 1);
@@ -291,7 +291,7 @@ fn kb_05_02_a_long_running_child_occupies_only_its_slot() {
 }
 
 #[test]
-fn kb_05_02_two_presses_overlap_with_sequential_independently_aborting_steps() {
+fn two_presses_overlap_with_sequential_independently_aborting_steps() {
     let rig = rig();
     let commands = seq(&["a", "b"]);
     rig.dispatcher.submit(&commands).unwrap();
@@ -317,7 +317,7 @@ fn kb_05_02_two_presses_overlap_with_sequential_independently_aborting_steps() {
 }
 
 #[test]
-fn kb_05_03_a_superseded_tag_starts_no_further_child_before_invalidation() {
+fn a_superseded_tag_starts_no_further_child_before_invalidation() {
     let rig = rig();
     let current = Arc::new(AtomicU64::new(1));
     let seen = Arc::clone(&current);
@@ -354,7 +354,7 @@ fn kb_05_03_a_superseded_tag_starts_no_further_child_before_invalidation() {
 }
 
 #[test]
-fn kb_05_02_invalidation_cancels_all_active_and_waiting_with_no_stale_spawn() {
+fn invalidation_cancels_all_active_and_waiting_with_no_stale_spawn() {
     let rig = rig();
     saturate(&rig);
     let old_generation = rig.dispatcher.generation();
@@ -388,7 +388,7 @@ fn kb_05_02_invalidation_cancels_all_active_and_waiting_with_no_stale_spawn() {
 }
 
 #[test]
-fn kb_05_02_an_unchanged_reload_preserves_every_accepted_sequence() {
+fn an_unchanged_reload_preserves_every_accepted_sequence() {
     let rig = rig();
     saturate(&rig);
     // A rejected or unchanged candidate never calls invalidate.
@@ -405,7 +405,7 @@ fn kb_05_02_an_unchanged_reload_preserves_every_accepted_sequence() {
 }
 
 #[test]
-fn kb_05_02_spawn_gate_serializes_invalidation_against_child_creation() {
+fn spawn_gate_serializes_invalidation_against_child_creation() {
     let rig = rig();
     let barrier = Arc::new(Barrier::new(2));
     *rig.factory.hook.lock().unwrap() = Some(Arc::clone(&barrier));
@@ -448,7 +448,7 @@ fn kb_05_02_spawn_gate_serializes_invalidation_against_child_creation() {
 }
 
 #[test]
-fn kb_05_02_no_process_starts_after_invalidation_returns() {
+fn no_process_starts_after_invalidation_returns() {
     for _ in 0..60 {
         let rig = rig();
         for _ in 0..MAX_ACTIVE {
@@ -464,7 +464,7 @@ fn kb_05_02_no_process_starts_after_invalidation_returns() {
 }
 
 #[test]
-fn kb_05_02_empty_capture_is_admitted_at_saturation() {
+fn empty_capture_is_admitted_at_saturation() {
     let rig = rig();
     saturate(&rig);
     assert_eq!(rig.dispatcher.submit(&[]), Ok(Admission::Bypassed));
@@ -478,7 +478,7 @@ fn kb_05_02_empty_capture_is_admitted_at_saturation() {
 }
 
 #[test]
-fn kb_05_02_retained_ownership_exhaustion_blocks_new_dispatch() {
+fn retained_ownership_exhaustion_blocks_new_dispatch() {
     let rig = rig();
     // Three rounds of 16 children that ignore kill leave 48 retained.
     for round in 0..3 {
@@ -520,7 +520,7 @@ fn kb_05_02_retained_ownership_exhaustion_blocks_new_dispatch() {
 }
 
 #[test]
-fn kb_05_02_reservations_share_one_exact_budget_with_the_dispatcher() {
+fn reservations_share_one_exact_budget_with_the_dispatcher() {
     let rig = rig();
     let owner = rig.dispatcher.reservations();
     let mut held: Vec<WorkReservation> =
@@ -581,7 +581,7 @@ fn kb_05_02_reservations_share_one_exact_budget_with_the_dispatcher() {
 }
 
 #[test]
-fn kb_05_02_a_foreign_reservation_is_refused_and_released_by_its_owner() {
+fn a_foreign_reservation_is_refused_and_released_by_its_owner() {
     let first = rig();
     let second = rig();
     let reservation = WorkReservation::try_new(&first.dispatcher.reservations()).unwrap();
@@ -594,7 +594,7 @@ fn kb_05_02_a_foreign_reservation_is_refused_and_released_by_its_owner() {
 }
 
 #[test]
-fn kb_05_02_shutdown_is_bounded_with_a_child_that_ignores_kill() {
+fn shutdown_is_bounded_with_a_child_that_ignores_kill() {
     let rig = rig();
     rig.dispatcher.submit(&seq(&["stubborn"])).unwrap();
     wait_until("spawned", || rig.factory.spawn_count() == 1);
@@ -608,7 +608,7 @@ fn kb_05_02_shutdown_is_bounded_with_a_child_that_ignores_kill() {
 }
 
 #[test]
-fn kb_05_02_shutdown_detaches_a_task_stuck_in_process_creation() {
+fn shutdown_detaches_a_task_stuck_in_process_creation() {
     let rig = rig_with(DispatcherConfig {
         spawn_drain: Duration::from_millis(50),
         shutdown_bound: Duration::from_millis(100),
@@ -630,7 +630,7 @@ fn kb_05_02_shutdown_detaches_a_task_stuck_in_process_creation() {
 }
 
 #[test]
-fn kb_05_02_snapshot_reads_do_not_wait_on_the_core_lock() {
+fn snapshot_reads_do_not_wait_on_the_core_lock() {
     let rig = rig();
     let guard = rig.dispatcher.inner.core.lock().unwrap();
     let snapshot = rig.dispatcher.snapshot();

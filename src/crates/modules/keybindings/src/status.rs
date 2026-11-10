@@ -401,7 +401,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn kb_05_05_status_uses_exact_camel_case_names_and_decimal_strings() {
+    fn status_uses_exact_camel_case_names_and_decimal_strings() {
         let status = KeybindingsRuntimeStatus {
             revision: u64::MAX.to_string(),
             state: RuntimeState::Degraded,
@@ -443,7 +443,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_05_05_every_remap_phase_has_a_stable_spelling() {
+    fn every_remap_phase_has_a_stable_spelling() {
         let spelled: Vec<_> = [
             RemapPhase::Inactive,
             RemapPhase::Applying,
@@ -466,7 +466,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_05_05_the_diagnostic_log_is_bounded_and_ordered() {
+    fn the_diagnostic_log_is_bounded_and_ordered() {
         let log = DiagnosticLog::new();
         for index in 0..(MAX_DIAGNOSTICS + 5) {
             log.push(format!("message {index}"));

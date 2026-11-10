@@ -1764,7 +1764,7 @@ mod integration_tests {
     }
 
     #[test]
-    fn tc_03_01_source_selection_follows_the_documented_order() {
+    fn source_selection_follows_the_documented_order() {
         let root = tempfile::tempdir().expect("temp dir");
         let source = root.path().join("source");
         let config = root.path().join("config");
@@ -1911,7 +1911,7 @@ mod integration_tests {
     }
 
     #[test]
-    fn tc_03_03_a_partial_directory_writes_only_the_existing_files() {
+    fn a_partial_directory_writes_only_the_existing_files() {
         let root = tempfile::tempdir().expect("temp dir");
         let source = root.path().join("source");
         let destination = root.path().join("new");
@@ -1942,7 +1942,7 @@ mod integration_tests {
     }
 
     #[test]
-    fn tc_03_03_an_invalid_source_writes_nothing_and_a_non_object_is_a_shape_error() {
+    fn an_invalid_source_writes_nothing_and_a_non_object_is_a_shape_error() {
         let root = tempfile::tempdir().expect("temp dir");
         let source = root.path().join("source");
         let destination = root.path().join("new");
@@ -1970,7 +1970,7 @@ mod integration_tests {
     }
 
     #[test]
-    fn tc_03_03_collisions_refuse_without_force_and_force_replaces_only_planned_files() {
+    fn collisions_refuse_without_force_and_force_replaces_only_planned_files() {
         let root = tempfile::tempdir().expect("temp dir");
         let source = root.path().join("source");
         let destination = root.path().join("new");

@@ -51,7 +51,7 @@ fn the_desktop_manifest_has_no_fixed_window_and_an_explicit_capability() {
 }
 
 #[test]
-fn ag_04_05_the_access_window_has_only_the_named_least_privilege_permissions() {
+fn the_access_window_has_only_the_named_least_privilege_permissions() {
     let capability: serde_json::Value =
         serde_json::from_str(include_str!("../capabilities/access-window.json"))
             .expect("capability");
@@ -87,7 +87,7 @@ fn ag_04_05_the_access_window_has_only_the_named_least_privilege_permissions() {
 }
 
 #[test]
-fn ag_04_05_the_test_window_does_not_gain_the_guidance_commands() {
+fn the_test_window_does_not_gain_the_guidance_commands() {
     let capability: serde_json::Value =
         serde_json::from_str(include_str!("../capabilities/test-window.json")).expect("capability");
     let joined = capability["permissions"].to_string();
@@ -102,7 +102,7 @@ fn ag_04_05_the_test_window_does_not_gain_the_guidance_commands() {
 }
 
 #[test]
-fn ag_05_03_macos_private_api_is_enabled_in_config_and_cargo() {
+fn macos_private_api_is_enabled_in_config_and_cargo() {
     let config: serde_json::Value =
         serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri config");
     assert_eq!(config["app"]["macOSPrivateApi"], serde_json::json!(true));

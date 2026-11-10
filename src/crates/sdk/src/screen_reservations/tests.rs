@@ -221,7 +221,7 @@ fn owners(registry: &Registry, display: DisplayId) -> Vec<(ModuleId, u64)> {
 // --- identity, validation, gating --------------------------------------------
 
 #[test]
-fn bar_02_03_insets_reject_invalid_values_deterministically() {
+fn insets_reject_invalid_values_deterministically() {
     for bad in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
         assert!(matches!(
             EdgeInsets::new(0.0, 0.0, bad, 0.0),
@@ -242,7 +242,7 @@ fn bar_02_03_insets_reject_invalid_values_deterministically() {
 }
 
 #[test]
-fn bar_02_03_a_module_must_declare_screen_reservations() {
+fn a_module_must_declare_screen_reservations() {
     let registry = registry();
     let script = Arc::new(Script::default());
     let outcome: Arc<Mutex<Option<ScreenReservationError>>> = Arc::new(Mutex::new(None));
@@ -279,7 +279,7 @@ fn bar_02_03_a_module_must_declare_screen_reservations() {
 }
 
 #[test]
-fn bar_02_03_topology_must_advance_and_never_lists_the_null_display() {
+fn topology_must_advance_and_never_lists_the_null_display() {
     let registry = registry();
     assert_eq!(
         registry.observe_screen_reservations().read().topology,
@@ -300,7 +300,7 @@ fn bar_02_03_topology_must_advance_and_never_lists_the_null_display() {
 // --- aggregation --------------------------------------------------------------
 
 #[test]
-fn bar_02_03_overlapping_reservations_aggregate_by_maximum_never_sum() {
+fn overlapping_reservations_aggregate_by_maximum_never_sum() {
     let registry = registry();
     topology(&registry, &[D2, D1]);
     let (_a, _, bar) = reserver(&registry, BAR);
@@ -341,7 +341,7 @@ fn bar_02_03_overlapping_reservations_aggregate_by_maximum_never_sum() {
 }
 
 #[test]
-fn bar_02_03_replacement_is_atomic_and_removal_is_idempotent() {
+fn replacement_is_atomic_and_removal_is_idempotent() {
     let registry = registry();
     topology(&registry, &[D1, D2]);
     let (_h, _, slot) = reserver(&registry, BAR);
@@ -374,7 +374,7 @@ fn bar_02_03_replacement_is_atomic_and_removal_is_idempotent() {
 }
 
 #[test]
-fn bar_02_03_invalid_replacements_are_rejected_without_changing_state() {
+fn invalid_replacements_are_rejected_without_changing_state() {
     let registry = registry();
     topology(&registry, &[D1]);
     let (_h, _, slot) = reserver(&registry, BAR);
@@ -419,7 +419,7 @@ fn bar_02_03_invalid_replacements_are_rejected_without_changing_state() {
 // --- display removal and ID reuse ---------------------------------------------
 
 #[test]
-fn bar_02_03_display_removal_drops_orphans_and_a_reused_id_is_not_resurrected() {
+fn display_removal_drops_orphans_and_a_reused_id_is_not_resurrected() {
     let registry = registry();
     topology(&registry, &[D1, D2]);
     let (_h, _, slot) = reserver(&registry, BAR);
@@ -465,7 +465,7 @@ fn bar_02_03_display_removal_drops_orphans_and_a_reused_id_is_not_resurrected() 
 // --- lifecycle ----------------------------------------------------------------
 
 #[test]
-fn bar_02_03_stop_disable_and_pause_clear_exact_generation_before_stop_cleanup() {
+fn stop_disable_and_pause_clear_exact_generation_before_stop_cleanup() {
     for how in ["disable", "pause", "stop_all"] {
         let registry = registry();
         topology(&registry, &[D1]);
@@ -526,7 +526,7 @@ static PROVIDES: [ServiceId; 1] = [SERVICE];
 static REQUIRES: [ServiceId; 1] = [SERVICE];
 
 #[test]
-fn bar_02_03_permission_revocation_clears_the_owner_exactly() {
+fn permission_revocation_clears_the_owner_exactly() {
     let registry = registry();
     topology(&registry, &[D1]);
     let (_handle, slot) = reserver_with(&registry, BAR, &[], &[], &NEEDS_ACCESSIBILITY);
@@ -550,7 +550,7 @@ fn bar_02_03_permission_revocation_clears_the_owner_exactly() {
 }
 
 #[test]
-fn bar_02_03_dependency_loss_clears_the_owner_exactly() {
+fn dependency_loss_clears_the_owner_exactly() {
     let registry = registry();
     topology(&registry, &[D1]);
     let (_provider, _provider_slot) = reserver_with(&registry, PLAIN, &PROVIDES, &[], &[]);
@@ -570,7 +570,7 @@ fn bar_02_03_dependency_loss_clears_the_owner_exactly() {
 }
 
 #[test]
-fn bar_02_03_repeated_capability_requests_register_one_end_listener() {
+fn repeated_capability_requests_register_one_end_listener() {
     let registry = registry();
     topology(&registry, &[D1]);
     let script = Arc::new(Script::default());
@@ -620,7 +620,7 @@ fn bar_02_03_repeated_capability_requests_register_one_end_listener() {
 }
 
 #[test]
-fn bar_02_03_a_failed_start_leaves_nothing_behind() {
+fn a_failed_start_leaves_nothing_behind() {
     let registry = registry();
     topology(&registry, &[D1]);
     let script = Arc::new(Script::default());
@@ -666,7 +666,7 @@ fn bar_02_03_a_failed_start_leaves_nothing_behind() {
 }
 
 #[test]
-fn bar_02_03_an_old_handle_cannot_replace_or_remove_the_successor() {
+fn an_old_handle_cannot_replace_or_remove_the_successor() {
     let registry = registry();
     topology(&registry, &[D1]);
     let (handle, _script, slot) = reserver(&registry, BAR);
@@ -712,7 +712,7 @@ fn bar_02_03_an_old_handle_cannot_replace_or_remove_the_successor() {
 // --- snapshot watch -----------------------------------------------------------
 
 #[test]
-fn bar_02_03_wait_returns_changes_and_a_publication_during_check_and_sleep_is_not_lost() {
+fn wait_returns_changes_and_a_publication_during_check_and_sleep_is_not_lost() {
     let registry = Arc::new(registry());
     topology(&registry, &[D1]);
     let (_h, _, slot) = reserver(&registry, BAR);
@@ -754,7 +754,7 @@ fn bar_02_03_wait_returns_changes_and_a_publication_during_check_and_sleep_is_no
 }
 
 #[test]
-fn bar_02_03_wait_times_out() {
+fn wait_times_out() {
     let registry = registry();
     let observer = registry.observe_screen_reservations();
     let seen = observer.read().revision;
@@ -765,7 +765,7 @@ fn bar_02_03_wait_times_out() {
 }
 
 #[test]
-fn bar_02_03_cancel_during_wait_and_shutdown_close_waiters() {
+fn cancel_during_wait_and_shutdown_close_waiters() {
     let registry = Arc::new(registry());
     let observer = registry.observe_screen_reservations();
     let seen = observer.read().revision;
@@ -804,7 +804,7 @@ fn bar_02_03_cancel_during_wait_and_shutdown_close_waiters() {
 }
 
 #[test]
-fn bar_02_03_cancellation_wins_over_a_pending_change() {
+fn cancellation_wins_over_a_pending_change() {
     let registry = registry();
     topology(&registry, &[D1]);
     let observer = registry.observe_screen_reservations();

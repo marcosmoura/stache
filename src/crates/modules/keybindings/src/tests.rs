@@ -206,7 +206,7 @@ fn arm() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn kb_05_01_construction_registration_and_disabled_are_inert() {
+fn construction_registration_and_disabled_are_inert() {
     let host = Host::new(config(false, &[
         ("Cmd+Q", &["quick"]),
         ("CapsLock+S", &["quick2"]),
@@ -232,7 +232,7 @@ fn assert_inert(host: &Host) {
 }
 
 #[test]
-fn kb_05_01_an_enabled_ordinary_configuration_registers_without_a_tap_or_remap() {
+fn an_enabled_ordinary_configuration_registers_without_a_tap_or_remap() {
     let host = Host::started(config(true, &[("Cmd+Q", &["quick-q"])]));
     assert_eq!(host.status(), ModuleStatus::Running);
     let status = host.runtime();
@@ -254,7 +254,7 @@ fn kb_05_01_an_enabled_ordinary_configuration_registers_without_a_tap_or_remap()
 }
 
 #[test]
-fn kb_05_01_partial_registration_reports_the_exact_active_and_rejected_subset() {
+fn partial_registration_reports_the_exact_active_and_rejected_subset() {
     let rig = Rig::new();
     rig.carbon.occupy(KEY_W, CMD);
     let host = Host::with(
@@ -293,7 +293,7 @@ fn kb_05_01_partial_registration_reports_the_exact_active_and_rejected_subset() 
 }
 
 #[test]
-fn kb_05_01_every_usable_binding_failing_is_a_start_failure_that_cleans_up() {
+fn every_usable_binding_failing_is_a_start_failure_that_cleans_up() {
     let rig = Rig::new();
     rig.carbon.occupy(KEY_Q, CMD);
     rig.carbon.occupy(KEY_W, CMD);
@@ -315,7 +315,7 @@ fn kb_05_01_every_usable_binding_failing_is_a_start_failure_that_cleans_up() {
 }
 
 #[test]
-fn kb_05_01_an_intentionally_empty_or_all_invalid_map_is_valid_and_inactive() {
+fn an_intentionally_empty_or_all_invalid_map_is_valid_and_inactive() {
     let empty = Host::started(config(true, &[]));
     assert_eq!(empty.status(), ModuleStatus::Running);
     assert_eq!(empty.runtime().state, RuntimeState::Inactive);
@@ -333,7 +333,7 @@ fn kb_05_01_an_intentionally_empty_or_all_invalid_map_is_valid_and_inactive() {
 }
 
 #[test]
-fn kb_05_01_pause_resume_and_retry_release_and_reacquire_the_resources() {
+fn pause_resume_and_retry_release_and_reacquire_the_resources() {
     let host = Host::started(config(true, &[("Cmd+Q", &["quick"])]));
     host.registry.pause(host.handle).expect("pause");
     assert_eq!(host.status(), ModuleStatus::Paused);
@@ -363,7 +363,7 @@ fn kb_05_01_pause_resume_and_retry_release_and_reacquire_the_resources() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn kb_05_04_only_caps_bindings_require_user_only_input_trust() {
+fn only_caps_bindings_require_user_only_input_trust() {
     let module = Rig::new().runtime.module();
     assert!(module.required_permissions(&config(true, &[("Cmd+Q", &["x"])])).is_empty());
     assert!(module.required_permissions(&config(true, &[("Cmd+§", &["x"])])).is_empty());
@@ -378,7 +378,7 @@ fn kb_05_04_only_caps_bindings_require_user_only_input_trust() {
 }
 
 #[test]
-fn kb_05_04_caps_without_trust_waits_and_never_prompts_or_touches_caps() {
+fn caps_without_trust_waits_and_never_prompts_or_touches_caps() {
     let host = Host::with(Rig::new(), config(true, &[("CapsLock+S", &["quick"])]), false);
     host.registry.start_all().expect("waiting is not a failure");
     assert_eq!(
@@ -413,7 +413,7 @@ fn kb_05_04_caps_without_trust_waits_and_never_prompts_or_touches_caps() {
 }
 
 #[test]
-fn kb_05_04_a_trusted_but_failed_tap_is_a_start_failure_not_waiting() {
+fn a_trusted_but_failed_tap_is_a_start_failure_not_waiting() {
     let rig = Rig::new();
     rig.backend.script(
         TapKind::Suppressing,
@@ -435,7 +435,7 @@ fn kb_05_04_a_trusted_but_failed_tap_is_a_start_failure_not_waiting() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn kb_05_03_nothing_executes_between_publication_and_observation() {
+fn nothing_executes_between_publication_and_observation() {
     let (rig, window) = windowed_rig();
     let host = Host::with(
         rig,
@@ -491,7 +491,7 @@ fn kb_05_03_nothing_executes_between_publication_and_observation() {
 }
 
 #[test]
-fn kb_05_03_a_newer_staged_candidate_survives_observation_of_an_older_revision() {
+fn a_newer_staged_candidate_survives_observation_of_an_older_revision() {
     let (rig, window) = windowed_rig();
     let host = Host::with(rig, config(true, &[("Cmd+Q", &["quick-old"])]), true);
     host.registry.start_all().expect("start");
@@ -520,7 +520,7 @@ fn kb_05_03_a_newer_staged_candidate_survives_observation_of_an_older_revision()
 }
 
 #[test]
-fn kb_04_07_module_start_is_ordered_after_the_host_startup_recovery() {
+fn module_start_is_ordered_after_the_host_startup_recovery() {
     use stache_sdk::CancellationToken;
 
     use crate::caps::CapsRecoveryStep;
@@ -554,7 +554,7 @@ fn kb_04_07_module_start_is_ordered_after_the_host_startup_recovery() {
 }
 
 #[test]
-fn kb_05_03_an_observed_revision_stops_old_binding_work() {
+fn an_observed_revision_stops_old_binding_work() {
     let host = Host::started(config(true, &[("Cmd+Q", &["hold-a", "quick-after"])]));
     host.press(KEY_Q);
     wait_until("the first step", || host.tags() == ["hold-a"]);
@@ -581,7 +581,7 @@ fn kb_05_03_an_observed_revision_stops_old_binding_work() {
 }
 
 #[test]
-fn kb_05_03_an_unchanged_reload_cancels_nothing() {
+fn an_unchanged_reload_cancels_nothing() {
     let setup = config(true, &[("Cmd+Q", &["hold-a"])]);
     let host = Host::started(setup.clone());
     host.press(KEY_Q);
@@ -600,7 +600,7 @@ fn kb_05_03_an_unchanged_reload_cancels_nothing() {
 }
 
 #[test]
-fn kb_05_03_a_rejected_candidate_keeps_the_last_good_state_and_queued_work() {
+fn a_rejected_candidate_keeps_the_last_good_state_and_queued_work() {
     let host = Host::started(config(true, &[("Cmd+Q", &["hold-a"])]));
     host.press(KEY_Q);
     wait_until("running", || host.tags() == ["hold-a"]);
@@ -626,7 +626,7 @@ fn kb_05_03_a_rejected_candidate_keeps_the_last_good_state_and_queued_work() {
 }
 
 #[test]
-fn kb_05_03_a_candidate_with_no_usable_binding_is_rejected_before_publication() {
+fn a_candidate_with_no_usable_binding_is_rejected_before_publication() {
     let host = Host::started(config(true, &[("Cmd+Q", &["quick"])]));
     let revision = host.revision();
     let rejected = host.reload(config(true, &[("Cmd+MediaPlayPause", &["quick"])]));
@@ -642,7 +642,7 @@ fn kb_05_03_a_candidate_with_no_usable_binding_is_rejected_before_publication() 
 }
 
 #[test]
-fn kb_05_03_caps_is_applied_only_after_the_revision_is_observed() {
+fn caps_is_applied_only_after_the_revision_is_observed() {
     let (rig, window) = windowed_rig();
     let host = Host::with(rig, config(true, &[("Cmd+Q", &["quick"])]), true);
     host.registry.start_all().expect("start");
@@ -667,7 +667,7 @@ fn kb_05_03_caps_is_applied_only_after_the_revision_is_observed() {
 }
 
 #[test]
-fn kb_05_03_caps_removal_is_deferred_until_commit_and_never_by_a_rejected_candidate() {
+fn caps_removal_is_deferred_until_commit_and_never_by_a_rejected_candidate() {
     let (rig, window) = windowed_rig();
     let host = Host::with(
         rig,
@@ -704,7 +704,7 @@ fn kb_05_03_caps_removal_is_deferred_until_commit_and_never_by_a_rejected_candid
 }
 
 #[test]
-fn kb_05_03_a_post_commit_caps_failure_is_an_accepted_degraded_configuration() {
+fn a_post_commit_caps_failure_is_an_accepted_degraded_configuration() {
     let host = Host::started(config(true, &[("Cmd+Q", &["quick"])]));
     host.rig.backend.script(
         TapKind::Suppressing,
@@ -733,7 +733,7 @@ fn kb_05_03_a_post_commit_caps_failure_is_an_accepted_degraded_configuration() {
 }
 
 #[test]
-fn kb_05_03_a_restore_failure_after_commit_is_visible_cleanup_not_a_rejection() {
+fn a_restore_failure_after_commit_is_visible_cleanup_not_a_rejection() {
     let host = Host::started(config(true, &[
         ("CapsLock+S", &["quick-caps"]),
         ("Cmd+Q", &["quick"]),
@@ -761,7 +761,7 @@ fn kb_05_03_a_restore_failure_after_commit_is_visible_cleanup_not_a_rejection() 
 }
 
 #[test]
-fn kb_05_03_ordinary_to_caps_to_ordinary_follows_trust() {
+fn ordinary_to_caps_to_ordinary_follows_trust() {
     let host = Host::with(Rig::new(), config(true, &[("Cmd+Q", &["quick"])]), true);
     host.registry.start_all().expect("start");
     host.trust.trusted.store(false, Ordering::SeqCst);
@@ -806,7 +806,7 @@ fn kb_05_03_ordinary_to_caps_to_ordinary_follows_trust() {
 }
 
 #[test]
-fn kb_05_03_edits_while_paused_apply_on_resume_with_no_staging() {
+fn edits_while_paused_apply_on_resume_with_no_staging() {
     let host = Host::started(config(true, &[("Cmd+Q", &["quick"])]));
     host.registry.pause(host.handle).expect("pause");
     let calls = host.rig.carbon.calls().len();
@@ -827,7 +827,7 @@ fn kb_05_03_edits_while_paused_apply_on_resume_with_no_staging() {
 }
 
 #[test]
-fn kb_05_03_a_revision_without_staged_resources_leaves_every_route_inert() {
+fn a_revision_without_staged_resources_leaves_every_route_inert() {
     // Disabling publishes a revision the coordinator may observe before the
     // registry stops the module; it must not adopt anything for it.
     let host = Host::started(config(true, &[("Cmd+Q", &["quick"])]));
@@ -849,7 +849,7 @@ impl Host {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn kb_05_02_a_full_dispatcher_makes_a_carbon_press_a_lost_invocation_never_run_late() {
+fn a_full_dispatcher_makes_a_carbon_press_a_lost_invocation_never_run_late() {
     let host = Host::started(config(true, &[("Cmd+Q", &["target"])]));
     for index in 0..CAPACITY {
         host.rig.dispatcher.submit(&[cmd(&format!("h{index}"))]).expect("admitted");
@@ -873,7 +873,7 @@ fn kb_05_02_a_full_dispatcher_makes_a_carbon_press_a_lost_invocation_never_run_l
 }
 
 #[test]
-fn kb_05_02_caps_chords_and_carbon_chords_share_one_bounded_dispatcher() {
+fn caps_chords_and_carbon_chords_share_one_bounded_dispatcher() {
     let host = Host::started(config(true, &[
         ("CapsLock+S", &["quick-caps"]),
         ("Cmd+Q", &["quick-carbon"]),
@@ -898,7 +898,7 @@ fn kb_05_02_caps_chords_and_carbon_chords_share_one_bounded_dispatcher() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn kb_05_05_reading_status_never_waits_for_native_work() {
+fn reading_status_never_waits_for_native_work() {
     let host = Host::started(config(true, &[("Cmd+Q", &["quick"])]));
     let (entered_tx, entered) = channel();
     let (release_tx, release) = channel::<()>();
@@ -929,7 +929,7 @@ fn kb_05_05_reading_status_never_waits_for_native_work() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn kb_05_06_stop_invalidates_first_is_repeatable_and_successors_get_a_new_generation() {
+fn stop_invalidates_first_is_repeatable_and_successors_get_a_new_generation() {
     let host = Host::started(config(true, &[("Cmd+Q", &["hold-a"])]));
     host.press(KEY_Q);
     wait_until("running", || host.tags() == ["hold-a"]);
@@ -950,7 +950,7 @@ fn kb_05_06_stop_invalidates_first_is_repeatable_and_successors_get_a_new_genera
 }
 
 #[test]
-fn kb_05_06_a_stop_during_adoption_invalidates_the_adopted_generation() {
+fn a_stop_during_adoption_invalidates_the_adopted_generation() {
     let (rig, window, armed) = adopting_rig();
     let host = Host::with(rig, config(true, &[("Cmd+Q", &["hold-a"])]), true);
     host.registry.start_all().expect("start");
@@ -986,7 +986,7 @@ fn kb_05_06_a_stop_during_adoption_invalidates_the_adopted_generation() {
 }
 
 #[test]
-fn kb_05_06_retained_carbon_cleanup_is_bounded_visible_and_retried() {
+fn retained_carbon_cleanup_is_bounded_visible_and_retried() {
     let host = Host::started(config(true, &[("Cmd+Q", &["quick"]), ("Cmd+W", &["quick"])]));
     host.rig.carbon.fail_unregisters(8);
     let stopped = host.registry.pause(host.handle);
@@ -1009,7 +1009,7 @@ fn kb_05_06_retained_carbon_cleanup_is_bounded_visible_and_retried() {
 }
 
 #[test]
-fn kb_05_06_an_uncertain_caps_start_keeps_ownership_and_stop_retries_it() {
+fn an_uncertain_caps_start_keeps_ownership_and_stop_retries_it() {
     let rig = Rig::new();
     let host = {
         rig.world.script_set(SetFault::TimedOutApplied { unconfirmed: false });
@@ -1042,7 +1042,7 @@ fn kb_05_06_an_uncertain_caps_start_keeps_ownership_and_stop_retries_it() {
 }
 
 #[test]
-fn kb_05_06_shutdown_during_setup_cancels_the_wait_and_leaves_nothing_behind() {
+fn shutdown_during_setup_cancels_the_wait_and_leaves_nothing_behind() {
     let rig = Rig::new();
     rig.backend
         .script(TapKind::Suppressing, ControlAction::Install, FakeResponse::Hold);
@@ -1065,7 +1065,7 @@ fn kb_05_06_shutdown_during_setup_cancels_the_wait_and_leaves_nothing_behind() {
 }
 
 #[test]
-fn kb_05_06_host_shutdown_closes_admission_then_the_dispatcher() {
+fn host_shutdown_closes_admission_then_the_dispatcher() {
     let host = Host::started(config(true, &[("Cmd+Q", &["quick"])]));
     host.rig.runtime.begin_shutdown();
     host.press(KEY_Q);
@@ -1079,7 +1079,7 @@ fn kb_05_06_host_shutdown_closes_admission_then_the_dispatcher() {
 }
 
 #[test]
-fn kb_05_06_two_hosts_are_independent() {
+fn two_hosts_are_independent() {
     let first = Host::started(config(true, &[("Cmd+Q", &["quick-one"])]));
     let second = Host::started(config(true, &[("Cmd+Q", &["quick-two"])]));
     first.press(KEY_Q);
@@ -1094,7 +1094,7 @@ fn kb_05_06_two_hosts_are_independent() {
 }
 
 #[test]
-fn kb_05_03_a_carbon_removal_failure_after_commit_is_retained_inert_and_visible() {
+fn a_carbon_removal_failure_after_commit_is_retained_inert_and_visible() {
     let host = Host::started(config(true, &[("Cmd+Q", &["quick-q"]), ("Cmd+W", &["quick-w"])]));
     let retired = host.rig.carbon.id_of(KEY_W, CMD).expect("registered");
     host.rig.carbon.fail_unregisters(1);
@@ -1116,7 +1116,7 @@ fn kb_05_03_a_carbon_removal_failure_after_commit_is_retained_inert_and_visible(
 }
 
 #[test]
-fn kb_05_03_a_layout_switch_between_publication_and_observation_still_adopts_the_revision() {
+fn a_layout_switch_between_publication_and_observation_still_adopts_the_revision() {
     use stache_macos::hotkeys::testing::FakeLayout;
 
     let (rig, window) = windowed_rig();
@@ -1142,7 +1142,7 @@ fn kb_05_03_a_layout_switch_between_publication_and_observation_still_adopts_the
 }
 
 #[test]
-fn kb_05_06_a_blocked_main_thread_bounds_stop_instead_of_deadlocking() {
+fn a_blocked_main_thread_bounds_stop_instead_of_deadlocking() {
     let host = Host::started(config(true, &[("Cmd+Q", &["hold-a"])]));
     host.press(KEY_Q);
     wait_until("running", || host.tags() == ["hold-a"]);

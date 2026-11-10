@@ -455,7 +455,7 @@ fn hold_one_send(host: &Host) -> Arc<crate::backend::SendHold> {
 // ------------------------------------------------------------- TI-05-01
 
 #[test]
-fn ti_05_01_construction_and_registration_are_inert() {
+fn construction_and_registration_are_inert() {
     let host = Host::new();
     assert!(host.backend.calls().is_empty(), "no native call before start");
     assert_eq!(host.source.reads(), 0);
@@ -466,7 +466,7 @@ fn ti_05_01_construction_and_registration_are_inert() {
 }
 
 #[test]
-fn ti_05_01_start_returns_running_before_the_enumeration_completes() {
+fn start_returns_running_before_the_enumeration_completes() {
     let host = Host::with(Setup {
         directory_open: false,
         ..Setup::default()
@@ -489,7 +489,7 @@ fn ti_05_01_start_returns_running_before_the_enumeration_completes() {
 }
 
 #[test]
-fn ti_05_01_every_start_stage_failure_unwinds_exactly() {
+fn every_start_stage_failure_unwinds_exactly() {
     for stage in [
         StartStage::Install,
         StartStage::Runner,
@@ -537,7 +537,7 @@ fn ti_05_01_every_start_stage_failure_unwinds_exactly() {
 }
 
 #[test]
-fn ti_05_01_a_backend_refusal_installs_nothing() {
+fn a_backend_refusal_installs_nothing() {
     let host = Host::new();
     host.backend
         .script_install_error(stache_macos::windows::InstallError::Quarantined {
@@ -556,7 +556,7 @@ fn ti_05_01_a_backend_refusal_installs_nothing() {
 }
 
 #[test]
-fn ti_05_01_missing_accessibility_waits_without_acquiring_or_prompting() {
+fn missing_accessibility_waits_without_acquiring_or_prompting() {
     let host = Host::with(Setup {
         trusted: false,
         ..Setup::default()
@@ -587,7 +587,7 @@ fn ti_05_01_missing_accessibility_waits_without_acquiring_or_prompting() {
 }
 
 #[test]
-fn ti_05_01_the_status_projects_the_actors_own_revision() {
+fn the_status_projects_the_actors_own_revision() {
     let host = Host::started();
     let status = host.runtime.status().read();
     assert_eq!(status.state, TilingRuntimeState::Running);
@@ -604,7 +604,7 @@ fn ti_05_01_the_status_projects_the_actors_own_revision() {
 // ------------------------------------------------------------- TI-05-03
 
 #[test]
-fn ti_05_03_staged_resources_flip_only_after_the_same_revision_is_observed() {
+fn staged_resources_flip_only_after_the_same_revision_is_observed() {
     let (entered_tx, entered) = std::sync::mpsc::channel::<u64>();
     let (release, release_rx) = std::sync::mpsc::channel::<()>();
     let release_rx = Mutex::new(release_rx);
@@ -659,7 +659,7 @@ fn ti_05_03_staged_resources_flip_only_after_the_same_revision_is_observed() {
 }
 
 #[test]
-fn ti_05_03_a_rejected_candidate_keeps_the_runtime_and_coherent_revisions() {
+fn a_rejected_candidate_keeps_the_runtime_and_coherent_revisions() {
     let mut setup = Setup::default();
     setup.timing.stage = Some(Arc::new(|config| {
         if config.default_layout == LayoutType::Grid {
@@ -705,7 +705,7 @@ fn ti_05_03_a_rejected_candidate_keeps_the_runtime_and_coherent_revisions() {
 }
 
 #[test]
-fn ti_06_01_a_structural_reload_is_prepared_against_the_live_state_before_acceptance() {
+fn a_structural_reload_is_prepared_against_the_live_state_before_acceptance() {
     let host = Host::started();
     wait_until("adopted", || {
         host.runtime_revision() == host.revision().to_string()
@@ -726,7 +726,7 @@ fn ti_06_01_a_structural_reload_is_prepared_against_the_live_state_before_accept
 }
 
 #[test]
-fn ti_05_03_a_b_a_revisions_are_distinct_and_each_is_observed() {
+fn a_b_a_revisions_are_distinct_and_each_is_observed() {
     let host = Host::started();
     wait_until("adopted", || {
         host.runtime_revision() == host.revision().to_string()
@@ -741,7 +741,7 @@ fn ti_05_03_a_b_a_revisions_are_distinct_and_each_is_observed() {
 }
 
 #[test]
-fn ti_05_03_an_invalid_reload_is_held_and_repaired_independently_of_cleanup() {
+fn an_invalid_reload_is_held_and_repaired_independently_of_cleanup() {
     let host = Host::started();
     let revision = host.revision();
     let invalid = TilingConfig {
@@ -765,7 +765,7 @@ fn ti_05_03_an_invalid_reload_is_held_and_repaired_independently_of_cleanup() {
 // ------------------------------------------------------------- TI-05-04
 
 #[test]
-fn ti_05_04_a_clean_stop_drains_before_restore_before_observer_removal() {
+fn a_clean_stop_drains_before_restore_before_observer_removal() {
     let host = Host::started();
     host.disable();
     assert_eq!(host.status(), ModuleStatus::Disabled);
@@ -785,7 +785,7 @@ fn ti_05_04_a_clean_stop_drains_before_restore_before_observer_removal() {
 }
 
 #[test]
-fn ti_05_04_stop_seals_while_a_send_is_held_then_quarantines_truthfully() {
+fn stop_seals_while_a_send_is_held_then_quarantines_truthfully() {
     let host = Host::started();
     let hold = hold_one_send(&host);
     let tracking = host.runtime.tracking().expect("running");
@@ -862,7 +862,7 @@ fn ti_05_04_stop_seals_while_a_send_is_held_then_quarantines_truthfully() {
 }
 
 #[test]
-fn ti_05_04_an_incomplete_epoch_stop_is_retried_without_repeating_other_stages() {
+fn an_incomplete_epoch_stop_is_retried_without_repeating_other_stages() {
     let host = Host::started();
     host.backend.script_stop(StopOutcome::Quarantined {
         applications: 1,
@@ -891,7 +891,7 @@ fn ti_05_04_an_incomplete_epoch_stop_is_retried_without_repeating_other_stages()
 }
 
 #[test]
-fn ti_05_04_a_failed_start_with_an_incomplete_unwind_is_quarantined_and_retried() {
+fn a_failed_start_with_an_incomplete_unwind_is_quarantined_and_retried() {
     let fail = Arc::new(AtomicBool::new(true));
     let armed = Arc::clone(&fail);
     let mut setup = Setup::default();
@@ -930,7 +930,7 @@ fn ti_05_04_a_failed_start_with_an_incomplete_unwind_is_quarantined_and_retried(
 }
 
 #[test]
-fn ti_05_04_an_unacknowledged_epoch_stop_is_stopped_again_on_retry() {
+fn an_unacknowledged_epoch_stop_is_stopped_again_on_retry() {
     let host = Host::started();
     host.backend.script_stop(StopOutcome::Unacknowledged);
     host.disable();
@@ -945,7 +945,7 @@ fn ti_05_04_an_unacknowledged_epoch_stop_is_stopped_again_on_retry() {
 }
 
 #[test]
-fn ti_05_04_waits_wake_before_joins() {
+fn waits_wake_before_joins() {
     // A long coordinator poll and a long reservation wait must not delay a stop.
     let mut setup = Setup::default();
     setup.timing.poll = Duration::from_secs(60);
@@ -966,7 +966,7 @@ fn ti_05_04_waits_wake_before_joins() {
 // ------------------------------------------------------------- TI-05-05
 
 #[test]
-fn ti_05_05_reservations_and_projection_are_consumed_before_the_first_authorize() {
+fn reservations_and_projection_are_consumed_before_the_first_authorize() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let log = Arc::clone(&seen);
     let host_cell: Arc<Mutex<Option<Arc<Source>>>> = Arc::new(Mutex::new(None));
@@ -1040,7 +1040,7 @@ impl Module for Other {
 }
 
 #[test]
-fn ti_05_05_a_stopped_or_quarantined_tiling_does_not_affect_independent_modules() {
+fn a_stopped_or_quarantined_tiling_does_not_affect_independent_modules() {
     let host = Host::new();
     let other = host.registry.register(Other, OtherConfig).expect("other");
     host.registry.start_all().expect("start");
@@ -1142,7 +1142,7 @@ mod visibility {
     }
 
     #[test]
-    fn ti_06_03_stop_restores_owned_hides_after_the_drain_and_before_observer_removal() {
+    fn stop_restores_owned_hides_after_the_drain_and_before_observer_removal() {
         let rig = rig();
         let a = rig.source.ids()[0];
         let keys = rig.source.keys();
@@ -1169,7 +1169,7 @@ mod visibility {
     }
 
     #[test]
-    fn ti_06_03_a_refused_restore_quarantines_and_the_retry_restores_only_what_remains() {
+    fn a_refused_restore_quarantines_and_the_retry_restores_only_what_remains() {
         let rig = rig();
         let ids = rig.source.ids();
         let keys = rig.source.keys();
@@ -1213,7 +1213,7 @@ mod visibility {
     }
 
     #[test]
-    fn ti_06_03_ambiguous_records_are_retained_reported_and_never_unhidden() {
+    fn ambiguous_records_are_retained_reported_and_never_unhidden() {
         let rig = rig();
         rig.control().seed(rig.source.ids()[0], Ownership::Ambiguous);
         rig.host.disable();
@@ -1232,7 +1232,7 @@ mod visibility {
     }
 
     #[test]
-    fn ti_06_03_an_ambiguous_record_survives_stop_start_stop_and_stays_reported() {
+    fn an_ambiguous_record_survives_stop_start_stop_and_stays_reported() {
         let rig = rig();
         rig.control().seed(rig.source.ids()[0], Ownership::Ambiguous);
         rig.host.disable();
@@ -1267,7 +1267,7 @@ mod visibility {
     }
 
     #[test]
-    fn ti_06_03_a_terminated_instance_clears_its_retained_record() {
+    fn a_terminated_instance_clears_its_retained_record() {
         let rig = rig();
         rig.control().seed(rig.source.ids()[0], Ownership::Ambiguous);
         rig.host.disable();
@@ -1582,7 +1582,7 @@ mod drag_input {
     }
 
     #[test]
-    fn ti_08_02_start_subscribes_only_the_listen_only_tap_and_reports_no_drag_problem() {
+    fn start_subscribes_only_the_listen_only_tap_and_reports_no_drag_problem() {
         let host = Host::started();
         assert!(listen_only_live(&host));
         assert!(!input(&host).backend.is_live(TapKind::Suppressing));
@@ -1603,7 +1603,7 @@ mod drag_input {
     }
 
     #[test]
-    fn ti_08_02_stop_removes_the_observer_first_and_the_tap_closes_with_the_last_subscriber() {
+    fn stop_removes_the_observer_first_and_the_tap_closes_with_the_last_subscriber() {
         let host = Host::started();
         assert!(listen_only_live(&host));
         host.disable();
@@ -1625,7 +1625,7 @@ mod drag_input {
     }
 
     #[test]
-    fn ti_08_02_the_tap_outlives_tiling_while_another_passive_subscriber_remains() {
+    fn the_tap_outlives_tiling_while_another_passive_subscriber_remains() {
         let host = Host::started();
         let bystander = Arc::new(Bystander::default());
         let other = input(&host)
@@ -1648,8 +1648,7 @@ mod drag_input {
     }
 
     #[test]
-    fn ti_08_02_overlapping_suppressors_cannot_hide_a_press_from_tiling_and_tiling_changes_nothing()
-    {
+    fn overlapping_suppressors_cannot_hide_a_press_from_tiling_and_tiling_changes_nothing() {
         let host = Host::started();
         let service = &input(&host).service;
         let handlers: Vec<Arc<Suppressor>> =
@@ -1700,7 +1699,7 @@ mod drag_input {
     }
 
     #[test]
-    fn ti_08_02_a_press_reaches_the_actor_as_a_gesture_without_any_window_read_in_the_callback() {
+    fn a_press_reaches_the_actor_as_a_gesture_without_any_window_read_in_the_callback() {
         let host = Host::started();
         let (runtime, tiled) = ready_window(&host);
         // The user moved the window a little; the final read reports it there.
@@ -1738,7 +1737,7 @@ mod drag_input {
     }
 
     #[test]
-    fn ti_08_02_a_disabled_listen_only_tap_cancels_the_gesture_and_reconciles_once() {
+    fn a_disabled_listen_only_tap_cancels_the_gesture_and_reconciles_once() {
         let host = Host::started();
         let (runtime, _) = ready_window(&host);
         input(&host).service.dispatch(TapKind::ListenOnly, down());
@@ -1761,7 +1760,7 @@ mod drag_input {
     }
 
     #[test]
-    fn ti_08_02_an_input_epoch_change_between_down_and_up_cancels_the_gesture() {
+    fn an_input_epoch_change_between_down_and_up_cancels_the_gesture() {
         let host = Host::started();
         let (runtime, _) = ready_window(&host);
         input(&host).service.dispatch(TapKind::ListenOnly, down());
@@ -1779,7 +1778,7 @@ mod drag_input {
     }
 
     #[test]
-    fn ti_08_02_a_refused_listen_only_tap_degrades_drag_only() {
+    fn a_refused_listen_only_tap_degrades_drag_only() {
         let host = Host::with(Setup {
             listen_only_refused: true,
             ..Setup::default()
@@ -1806,7 +1805,7 @@ mod drag_input {
     }
 
     #[test]
-    fn ti_08_02_an_unattached_input_service_degrades_drag_only() {
+    fn an_unattached_input_service_degrades_drag_only() {
         let host = Host::with(Setup {
             input: false,
             ..Setup::default()
@@ -1826,7 +1825,7 @@ mod drag_input {
     }
 
     #[test]
-    fn ti_08_02_the_observer_never_changes_a_decision_and_a_stopped_feed_goes_quiet() {
+    fn the_observer_never_changes_a_decision_and_a_stopped_feed_goes_quiet() {
         // The observer trait returns nothing: it cannot suppress. A removed feed
         // enqueues nothing even if the service still dispatches to it.
         let host = Host::started();

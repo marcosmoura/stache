@@ -62,7 +62,7 @@ fn strings(args: &[&str]) -> Vec<String> { args.iter().map(|a| (*a).to_owned()).
 // ------------------------------------------------------------------ policy
 
 #[test]
-fn ti_09_01_default_base_batch_matches_the_legacy_init_argv() {
+fn default_base_batch_matches_the_legacy_init_argv() {
     let config = BordersConfig::default();
     let args = base_args(&config, "BL");
     assert_eq!(
@@ -79,7 +79,7 @@ fn ti_09_01_default_base_batch_matches_the_legacy_init_argv() {
 }
 
 #[test]
-fn ti_09_01_style_hidpi_and_width_follow_the_config() {
+fn style_hidpi_and_width_follow_the_config() {
     let config = BordersConfig {
         style: Some(BorderStyle::Square),
         hidpi: Some(false),
@@ -103,7 +103,7 @@ fn ti_09_01_style_hidpi_and_width_follow_the_config() {
 }
 
 #[test]
-fn ti_09_01_color_conversion_fixtures() {
+fn color_conversion_fixtures() {
     let janky = |color: &str| state_settings(&solid(color)).0;
     assert_eq!(janky("#F00"), "0xFFFF0000");
     assert_eq!(janky("#F008"), "0x88FF0000");
@@ -122,7 +122,7 @@ fn ti_09_01_color_conversion_fixtures() {
 }
 
 #[test]
-fn ti_09_01_glow_and_disabled_states() {
+fn glow_and_disabled_states() {
     let glow = BorderStateConfig::GlowColor {
         width: 8,
         glow: "#B4BEFE".to_owned(),
@@ -135,7 +135,7 @@ fn ti_09_01_glow_and_disabled_states() {
 }
 
 #[test]
-fn ti_09_01_gradient_angle_boundaries() {
+fn gradient_angle_boundaries() {
     let top_right = "gradient(top_right=0xFFFF0000,bottom_left=0xFF0000FF)";
     let top_left = "gradient(top_left=0xFFFF0000,bottom_right=0xFF0000FF)";
     for (angle, expected) in [
@@ -162,7 +162,7 @@ fn ti_09_01_gradient_angle_boundaries() {
 }
 
 #[test]
-fn ti_09_01_state_precedence_matches_focused_state_config() {
+fn state_precedence_matches_focused_state_config() {
     let mut config = BordersConfig {
         focused: solid("#111111"),
         floating: solid("#222222"),
@@ -192,7 +192,7 @@ fn ti_09_01_state_precedence_matches_focused_state_config() {
 }
 
 #[test]
-fn ti_09_01_focus_command_carries_width_active_inactive_and_the_animation() {
+fn focus_command_carries_width_active_inactive_and_the_animation() {
     let config = BordersConfig {
         monocle: animated(),
         ..BordersConfig::default()
@@ -230,7 +230,7 @@ fn ti_09_01_focus_command_carries_width_active_inactive_and_the_animation() {
 }
 
 #[test]
-fn ti_09_01_ping_pong_frames_reverse_at_each_leg_end() {
+fn ping_pong_frames_reverse_at_each_leg_end() {
     let config = BordersConfig {
         monocle: animated(),
         ..BordersConfig::default()
@@ -259,7 +259,7 @@ fn ti_09_01_ping_pong_frames_reverse_at_each_leg_end() {
 }
 
 #[test]
-fn ti_09_01_a_short_animation_leg_is_clamped_to_16_ms() {
+fn a_short_animation_leg_is_clamped_to_16_ms() {
     let config = BordersConfig {
         monocle: BorderStateConfig::GradientColor {
             width: 5,
@@ -287,7 +287,7 @@ fn ti_09_01_a_short_animation_leg_is_clamped_to_16_ms() {
 }
 
 #[test]
-fn ti_09_01_blacklist_composes_system_tiling_and_border_rules_in_legacy_order() {
+fn blacklist_composes_system_tiling_and_border_rules_in_legacy_order() {
     let tiling = [
         WindowRule {
             app_id: Some("com.tile".to_owned()),
@@ -318,7 +318,7 @@ fn ti_09_01_blacklist_composes_system_tiling_and_border_rules_in_legacy_order() 
 }
 
 #[test]
-fn ti_09_01_argument_boundaries_not_concatenation_decide_equality() {
+fn argument_boundaries_not_concatenation_decide_equality() {
     let left = strings(&["a b", "c"]);
     let right = strings(&["a", "b c"]);
     assert_ne!(left, right, "same words, different argument boundaries");
@@ -397,7 +397,7 @@ impl Rig {
 }
 
 #[test]
-fn ti_09_01_the_base_batch_then_the_focus_command_are_sent_in_order() {
+fn the_base_batch_then_the_focus_command_are_sent_in_order() {
     let mut rig = rig();
     let settings = settings(BordersConfig::default());
     rig.core.apply(configure(&settings), 1);
@@ -415,7 +415,7 @@ fn ti_09_01_the_base_batch_then_the_focus_command_are_sent_in_order() {
 }
 
 #[test]
-fn ti_09_03_identical_commands_are_deduplicated_by_argument_vectors() {
+fn identical_commands_are_deduplicated_by_argument_vectors() {
     let mut rig = rig();
     let settings = settings(BordersConfig::default());
     rig.core.apply(configure(&settings), 1);
@@ -430,7 +430,7 @@ fn ti_09_03_identical_commands_are_deduplicated_by_argument_vectors() {
 }
 
 #[test]
-fn ti_09_03_a_stale_frame_cannot_overwrite_a_newer_focus() {
+fn a_stale_frame_cannot_overwrite_a_newer_focus() {
     let mut rig = rig();
     let config = BordersConfig {
         monocle: animated(),
@@ -460,7 +460,7 @@ fn ti_09_03_a_stale_frame_cannot_overwrite_a_newer_focus() {
 }
 
 #[test]
-fn ti_09_03_an_unchanged_command_keeps_the_running_animation_under_the_new_epoch() {
+fn an_unchanged_command_keeps_the_running_animation_under_the_new_epoch() {
     let mut rig = rig();
     let config = BordersConfig {
         monocle: animated(),
@@ -481,7 +481,7 @@ fn ti_09_03_an_unchanged_command_keeps_the_running_animation_under_the_new_epoch
 }
 
 #[test]
-fn ti_09_03_animation_frames_never_exceed_eight_per_second() {
+fn animation_frames_never_exceed_eight_per_second() {
     let mut rig = rig();
     let config = BordersConfig {
         monocle: animated(),
@@ -516,7 +516,7 @@ fn ti_09_03_animation_frames_never_exceed_eight_per_second() {
 }
 
 #[test]
-fn ti_09_03_a_burst_of_new_animations_still_respects_the_frame_period() {
+fn a_burst_of_new_animations_still_respects_the_frame_period() {
     let mut rig = rig();
     let config = BordersConfig {
         monocle: animated(),
@@ -559,7 +559,7 @@ fn ti_09_03_a_burst_of_new_animations_still_respects_the_frame_period() {
 }
 
 #[test]
-fn ti_09_02_a_missing_service_sends_nothing_and_spawns_no_cli() {
+fn a_missing_service_sends_nothing_and_spawns_no_cli() {
     let mut rig = rig_with(FakeTransport::missing(), true);
     let settings = settings(BordersConfig::default());
     rig.core.apply(configure(&settings), 1);
@@ -572,7 +572,7 @@ fn ti_09_02_a_missing_service_sends_nothing_and_spawns_no_cli() {
 }
 
 #[test]
-fn ti_09_02_the_service_appearing_later_is_used_only_on_a_new_update() {
+fn the_service_appearing_later_is_used_only_on_a_new_update() {
     let mut rig = rig_with(FakeTransport::missing(), true);
     let settings = settings(BordersConfig::default());
     rig.core.apply(configure(&settings), 1);
@@ -588,7 +588,7 @@ fn ti_09_02_the_service_appearing_later_is_used_only_on_a_new_update() {
 }
 
 #[test]
-fn ti_09_02_a_mach_rejection_after_a_lookup_falls_back_to_the_cli_once() {
+fn a_mach_rejection_after_a_lookup_falls_back_to_the_cli_once() {
     let mut rig = rig();
     // A message-validation rejection (MACH_SEND_TOO_LARGE), not a dead destination.
     rig.fake.script(SendOutcome::Rejected(Rejection::Kernel(0x1000_000e)));
@@ -602,7 +602,7 @@ fn ti_09_02_a_mach_rejection_after_a_lookup_falls_back_to_the_cli_once() {
 }
 
 #[test]
-fn ti_09_02_a_rejection_relooks_up_and_runs_the_cli_once_while_the_service_is_present() {
+fn a_rejection_relooks_up_and_runs_the_cli_once_while_the_service_is_present() {
     let mut rig = rig();
     rig.fake.script(SendOutcome::Rejected(Rejection::Kernel(0x1000_000e)));
     let settings = settings(BordersConfig::default());
@@ -617,7 +617,7 @@ fn ti_09_02_a_rejection_relooks_up_and_runs_the_cli_once_while_the_service_is_pr
 }
 
 #[test]
-fn ti_09_02_a_service_that_vanishes_after_a_rejection_never_gets_the_cli() {
+fn a_service_that_vanishes_after_a_rejection_never_gets_the_cli() {
     let mut rig = rig();
     rig.fake.script(SendOutcome::Rejected(Rejection::Kernel(0x1000_000e)));
     rig.fake.vanish_on_send();
@@ -630,7 +630,7 @@ fn ti_09_02_a_service_that_vanishes_after_a_rejection_never_gets_the_cli() {
 }
 
 #[test]
-fn ti_09_02_a_dead_destination_is_a_missing_service_and_never_runs_the_cli() {
+fn a_dead_destination_is_a_missing_service_and_never_runs_the_cli() {
     let mut rig = rig();
     rig.fake.script(SendOutcome::MissingService);
     let settings = settings(BordersConfig::default());
@@ -645,7 +645,7 @@ fn ti_09_02_a_dead_destination_is_a_missing_service_and_never_runs_the_cli() {
 }
 
 #[test]
-fn ti_09_02_a_failing_cli_fallback_is_a_protocol_fault_and_not_cached() {
+fn a_failing_cli_fallback_is_a_protocol_fault_and_not_cached() {
     let mut rig = rig();
     rig.cli.set_exit(3);
     rig.fake.script(SendOutcome::Rejected(Rejection::Kernel(0x1000_000e)));
@@ -660,7 +660,7 @@ fn ti_09_02_a_failing_cli_fallback_is_a_protocol_fault_and_not_cached() {
 }
 
 #[test]
-fn ti_09_02_an_uncertain_send_never_falls_back_or_retries() {
+fn an_uncertain_send_never_falls_back_or_retries() {
     for (code, kind) in [
         (MACH_SEND_TIMED_OUT, FaultKind::Timeout),
         (0x1000_0007, FaultKind::Protocol),
@@ -680,7 +680,7 @@ fn ti_09_02_an_uncertain_send_never_falls_back_or_retries() {
 }
 
 #[test]
-fn ti_09_03_invalid_arguments_are_a_protocol_fault_without_a_fallback() {
+fn invalid_arguments_are_a_protocol_fault_without_a_fallback() {
     let mut rig = rig();
     rig.fake.script(SendOutcome::Rejected(Rejection::InvalidArguments(
         stache_macos::borders::EncodeError::InteriorNul { index: 5 },
@@ -692,7 +692,7 @@ fn ti_09_03_invalid_arguments_are_a_protocol_fault_without_a_fallback() {
 }
 
 #[test]
-fn ti_09_03_the_next_new_update_retries_a_failed_command_but_nothing_else_does() {
+fn the_next_new_update_retries_a_failed_command_but_nothing_else_does() {
     let mut rig = rig();
     let settings = settings(BordersConfig::default());
     rig.core.apply(configure(&settings), 1);
@@ -717,7 +717,7 @@ fn ti_09_03_the_next_new_update_retries_a_failed_command_but_nothing_else_does()
 }
 
 #[test]
-fn ti_09_03_an_explicit_retry_resends_the_base_and_focus() {
+fn an_explicit_retry_resends_the_base_and_focus() {
     let mut rig = rig();
     let settings = settings(BordersConfig::default());
     rig.core.apply(configure(&settings), 1);
@@ -733,7 +733,7 @@ fn ti_09_03_an_explicit_retry_resends_the_base_and_focus() {
 }
 
 #[test]
-fn ti_09_03_a_failed_frame_stops_the_animation_with_no_retry_loop() {
+fn a_failed_frame_stops_the_animation_with_no_retry_loop() {
     let mut rig = rig();
     let config = BordersConfig {
         monocle: animated(),
@@ -756,7 +756,7 @@ fn ti_09_03_a_failed_frame_stops_the_animation_with_no_retry_loop() {
 }
 
 #[test]
-fn ti_09_02_frames_look_the_service_up_and_stop_when_it_disappears() {
+fn frames_look_the_service_up_and_stop_when_it_disappears() {
     let mut rig = rig();
     let config = BordersConfig {
         monocle: animated(),
@@ -774,7 +774,7 @@ fn ti_09_02_frames_look_the_service_up_and_stop_when_it_disappears() {
 }
 
 #[test]
-fn ti_09_04_a_hung_helper_child_that_cannot_be_reaped_is_retained_not_dropped() {
+fn a_hung_helper_child_that_cannot_be_reaped_is_retained_not_dropped() {
     let mut rig = rig();
     rig.cli.set_hang(true);
     rig.fake.script(SendOutcome::Rejected(Rejection::Kernel(0x1000_000e)));
@@ -791,7 +791,7 @@ fn ti_09_04_a_hung_helper_child_that_cannot_be_reaped_is_retained_not_dropped() 
 }
 
 #[test]
-fn ti_09_04_a_clean_finish_releases_the_connection_and_retains_nothing() {
+fn a_clean_finish_releases_the_connection_and_retains_nothing() {
     let rig = rig();
     assert!(rig.core.finish().is_none());
 }
@@ -826,7 +826,7 @@ fn last_fault(log: &Mutex<Vec<Option<Fault>>>) -> Option<Fault> {
 }
 
 #[test]
-fn ti_09_02_disabled_owns_no_runner_port_or_child() {
+fn disabled_owns_no_runner_port_or_child() {
     let net = Net::new(true);
     let cli = Cli::new();
     let (control, log) = control(Some(parts(&net, &cli)));
@@ -841,7 +841,7 @@ fn ti_09_02_disabled_owns_no_runner_port_or_child() {
 }
 
 #[test]
-fn ti_09_02_without_composed_authority_an_enabled_config_only_reports() {
+fn without_composed_authority_an_enabled_config_only_reports() {
     let (control, log) = control(None);
     control.configure(&enabled_config(BordersConfig::default()));
     assert!(!control.is_running());
@@ -851,7 +851,7 @@ fn ti_09_02_without_composed_authority_an_enabled_config_only_reports() {
 }
 
 #[test]
-fn ti_09_03_the_runner_sends_the_base_batch_then_the_latest_focus() {
+fn the_runner_sends_the_base_batch_then_the_latest_focus() {
     let net = Net::new(true);
     let cli = Cli::new();
     let (control, _) = control(Some(parts(&net, &cli)));
@@ -877,7 +877,7 @@ fn ti_09_03_the_runner_sends_the_base_batch_then_the_latest_focus() {
 }
 
 #[test]
-fn ti_09_02_a_focus_seen_before_enabling_is_sent_when_the_runner_starts() {
+fn a_focus_seen_before_enabling_is_sent_when_the_runner_starts() {
     let net = Net::new(true);
     let cli = Cli::new();
     let (control, _) = control(Some(parts(&net, &cli)));
@@ -890,7 +890,7 @@ fn ti_09_02_a_focus_seen_before_enabling_is_sent_when_the_runner_starts() {
 }
 
 #[test]
-fn ti_09_02_stop_releases_the_connection_and_sends_no_mutation() {
+fn stop_releases_the_connection_and_sends_no_mutation() {
     let net = Net::new(true);
     let cli = Cli::new();
     let (control, _) = control(Some(parts(&net, &cli)));
@@ -916,7 +916,7 @@ fn ti_09_02_stop_releases_the_connection_and_sends_no_mutation() {
 }
 
 #[test]
-fn ti_09_02_reload_enables_retunes_and_disables_live_without_a_mutation_on_disable() {
+fn reload_enables_retunes_and_disables_live_without_a_mutation_on_disable() {
     let net = Net::new(true);
     let cli = Cli::new();
     let (control, _) = control(Some(parts(&net, &cli)));
@@ -950,7 +950,7 @@ fn ti_09_02_reload_enables_retunes_and_disables_live_without_a_mutation_on_disab
 }
 
 #[test]
-fn ti_09_02_a_missing_service_is_a_diagnostic_with_no_send_and_no_cli() {
+fn a_missing_service_is_a_diagnostic_with_no_send_and_no_cli() {
     let net = Net::new(false);
     let cli = Cli::new();
     let (control, log) = control(Some(parts(&net, &cli)));
@@ -972,7 +972,7 @@ fn ti_09_02_a_missing_service_is_a_diagnostic_with_no_send_and_no_cli() {
 }
 
 #[test]
-fn ti_09_03_cancellation_wakes_the_pacing_wait_promptly() {
+fn cancellation_wakes_the_pacing_wait_promptly() {
     let net = Net::new(true);
     let cli = Cli::new();
     let mut parts = parts(&net, &cli);
@@ -996,7 +996,7 @@ fn ti_09_03_cancellation_wakes_the_pacing_wait_promptly() {
 }
 
 #[test]
-fn ti_09_04_a_runner_blocked_in_a_send_is_joined_late_never_detached() {
+fn a_runner_blocked_in_a_send_is_joined_late_never_detached() {
     let net = Net::new(true);
     let cli = Cli::new();
     net.hold();
@@ -1022,7 +1022,7 @@ fn ti_09_04_a_runner_blocked_in_a_send_is_joined_late_never_detached() {
 }
 
 #[test]
-fn ti_09_04_enabling_while_a_previous_runner_is_still_ending_reports_cleanup() {
+fn enabling_while_a_previous_runner_is_still_ending_reports_cleanup() {
     let net = Net::new(true);
     let cli = Cli::new();
     net.hold();

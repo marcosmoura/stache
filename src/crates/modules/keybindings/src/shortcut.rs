@@ -289,7 +289,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_03_01_normalization_matches_the_archive() {
+    fn normalization_matches_the_archive() {
         assert_eq!(
             normalize("Ctrl+Cmd+Alt+Opt+Super+Meta+`"),
             "Control+Command+Option+Option+Command+Command+Backquote"
@@ -306,7 +306,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_03_01_every_modifier_alias_parses() {
+    fn every_modifier_alias_parses() {
         for (alias, flag) in [
             ("Ctrl", K),
             ("Control", K),
@@ -334,7 +334,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_03_01_keys_match_the_archived_parser() {
+    fn keys_match_the_archived_parser() {
         let mut keys: Vec<(String, Code)> = Vec::new();
         for letter in 'A'..='Z' {
             let code = ordinary(&format!("Command+{letter}")).expect("letter").key;
@@ -431,7 +431,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_03_01_sample_shortcuts() {
+    fn sample_shortcuts() {
         for (raw, key, modifiers) in [
             ("Command+Control+R", Code::KeyR, C | K),
             ("Command+Control+W", Code::KeyW, C | K),
@@ -447,7 +447,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_03_01_rejected_forms_match_the_archive() {
+    fn rejected_forms_match_the_archive() {
         for raw in [
             "",
             "Command+",
@@ -485,7 +485,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_03_01_routing_precedence() {
+    fn routing_precedence() {
         assert_eq!(parse("CapsLock+S"), Ok(Route::Caps { key: CapsKey(1) }));
         assert_eq!(parse("CapsLock+§"), Ok(Route::Caps { key: CapsKey(0x0A) }));
         assert_eq!(parse("CapsLock+return"), Ok(Route::Caps { key: CapsKey(36) }));

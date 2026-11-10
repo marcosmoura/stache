@@ -419,7 +419,7 @@ mod tests {
     }
 
     #[test]
-    fn ag_03_01_a_wrapped_handler_refuses_while_checking_or_blocked_and_delegates_when_open() {
+    fn a_wrapped_handler_refuses_while_checking_or_blocked_and_delegates_when_open() {
         let inner = Arc::new(Counting(std::sync::atomic::AtomicUsize::new(0)));
         let cell = AccessCell::checking();
         let handler = GatedHandler::new(cell.clone(), inner.clone());

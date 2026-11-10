@@ -330,7 +330,7 @@ afterEach(async () => {
   await commands.setReducedMotion(false);
 });
 
-test('AG-05-05 the header is a drag region and Close sits outside it', async () => {
+test('the header is a drag region and Close sits outside it', async () => {
   const { screen } = await renderWithClient(<AccessibilityGuide />);
   const closeButton = screen.getByRole('button', { name: 'Close' });
 
@@ -346,7 +346,7 @@ test('AG-05-05 the header is a drag region and Close sits outside it', async () 
   expect(document.querySelectorAll('h1')).toHaveLength(1);
 });
 
-test('AG-05-06 Close and one Escape each call close once; a repeated Escape does not', async () => {
+test('Close and one Escape each call close once; a repeated Escape does not', async () => {
   const { screen } = await renderWithClient(<AccessibilityGuide />);
 
   await expect.element(screen.getByRole('button', { name: 'Close' })).toBeVisible();
@@ -369,19 +369,16 @@ test.each([
   ['blocked', { revoked: true }, 'blocked', 'peach'],
   ['blocked', { appPath: null }, 'blocked', 'mauve'],
   ['open', {}, 'open', 'green'],
-] as const)(
-  'AG-05-07 %s %j sets data-state %s and tone %s',
-  async (state, overrides, dataState, tone) => {
-    mockStatus(access(state, overrides));
+] as const)('%s %j sets data-state %s and tone %s', async (state, overrides, dataState, tone) => {
+  mockStatus(access(state, overrides));
 
-    const { screen } = await renderWithClient(<AccessibilityGuide />);
+  const { screen } = await renderWithClient(<AccessibilityGuide />);
 
-    await expect.element(screen.getByRole('main')).toHaveAttribute('data-state', dataState);
-    await vi.waitFor(() => expect(badge().dataset.tone).toBe(tone));
-  },
-);
+  await expect.element(screen.getByRole('main')).toHaveAttribute('data-state', dataState);
+  await vi.waitFor(() => expect(badge().dataset.tone).toBe(tone));
+});
 
-test('AG-05-07 the panel starts in the checking state before the host answers', async () => {
+test('the panel starts in the checking state before the host answers', async () => {
   vi.mocked(invoke).mockImplementation((async () => new Promise(() => {})) as never);
 
   await renderWithClient(<AccessibilityGuide />);
@@ -390,7 +387,7 @@ test('AG-05-07 the panel starts in the checking state before the host answers', 
   expect(badge().dataset.tone).toBe('overlay');
 });
 
-test('AG-05-07 the identity card lists name, bundle id and path', async () => {
+test('the identity card lists name, bundle id and path', async () => {
   const { screen } = await renderWithClient(<AccessibilityGuide />);
 
   await expect
@@ -409,7 +406,7 @@ test('AG-05-07 the identity card lists name, bundle id and path', async () => {
   ]);
 });
 
-test('AG-05-07 an unbundled copy reads "not an app bundle" in the Path row', async () => {
+test('an unbundled copy reads "not an app bundle" in the Path row', async () => {
   mockStatus(access('blocked', { appPath: null }));
 
   const { screen } = await renderWithClient(<AccessibilityGuide />);
@@ -425,7 +422,7 @@ test('AG-05-07 an unbundled copy reads "not an app bundle" in the Path row', asy
   expect(path?.querySelector('dd')?.textContent).toBe('not an app bundle');
 });
 
-test('AG-05-08 the actions keep their order and a pending command shows a spinner', async () => {
+test('the actions keep their order and a pending command shows a spinner', async () => {
   let finish: (() => void) | undefined;
 
   vi.mocked(invoke).mockImplementation((async (command: string) => {
@@ -468,7 +465,7 @@ test('AG-05-08 the actions keep their order and a pending command shows a spinne
   expect(pending.element().querySelector('[data-spinner]')).toBeNull();
 });
 
-test('AG-05-09 the access surface clears the document background and releases it on unmount', async () => {
+test('the access surface clears the document background and releases it on unmount', async () => {
   const opaque = document.createElement('style');
 
   opaque.textContent = 'html, body { background: rgb(255, 0, 0); }';
@@ -496,7 +493,7 @@ test('AG-05-09 the access surface clears the document background and releases it
   }
 });
 
-test('AG-05-10 reduced motion turns off animations and transitions', async () => {
+test('reduced motion turns off animations and transitions', async () => {
   await commands.setReducedMotion(true);
 
   const still = (element: Element | null) => {
@@ -551,7 +548,7 @@ test('AG-05-10 reduced motion turns off animations and transitions', async () =>
   }
 });
 
-test('AG-05-10 normal motion animates the checking badge', async () => {
+test('normal motion animates the checking badge', async () => {
   mockStatus(access('checking'));
 
   const { screen } = await renderWithClient(<AccessibilityGuide />);

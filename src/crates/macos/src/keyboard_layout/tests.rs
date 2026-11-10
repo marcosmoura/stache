@@ -11,7 +11,7 @@ const SECTION: u16 = 0x00A7;
 fn available(layout: FakeLayout) -> LayoutRead { LayoutRead::Available(Box::new(layout)) }
 
 #[test]
-fn kb_03_03_ansi_needs_option_on_the_six_key() {
+fn ansi_needs_option_on_the_six_key() {
     let resolution = resolver::resolve(&available(FakeLayout::ansi()));
     assert_eq!(resolution.key_code, 0x16);
     assert_eq!(resolution.source, SectionSource::Layout {
@@ -24,7 +24,7 @@ fn kb_03_03_ansi_needs_option_on_the_six_key() {
 }
 
 #[test]
-fn kb_03_03_iso_uses_the_dedicated_key_with_no_modifier() {
+fn iso_uses_the_dedicated_key_with_no_modifier() {
     let resolution = resolver::resolve(&available(FakeLayout::iso()));
     assert_eq!(resolution.key_code, ISO_SECTION_KEY);
     assert_eq!(resolution.source, SectionSource::Layout {
@@ -34,7 +34,7 @@ fn kb_03_03_iso_uses_the_dedicated_key_with_no_modifier() {
 }
 
 #[test]
-fn kb_03_03_required_modifiers_are_or_ed_with_configured_ones() {
+fn required_modifiers_are_or_ed_with_configured_ones() {
     let german = resolver::resolve(&available(FakeLayout::german()));
     assert_eq!(
         german.chord(ModifierFlags::COMMAND),
@@ -45,7 +45,7 @@ fn kb_03_03_required_modifiers_are_or_ed_with_configured_ones() {
 }
 
 #[test]
-fn kb_03_03_missing_layout_data_falls_back_with_an_honest_diagnostic() {
+fn missing_layout_data_falls_back_with_an_honest_diagnostic() {
     let resolution = resolver::resolve(&LayoutRead::Unavailable("no uchr".to_owned()));
     assert_eq!(resolution.key_code, ISO_SECTION_KEY);
     assert_eq!(
@@ -62,7 +62,7 @@ fn kb_03_03_missing_layout_data_falls_back_with_an_honest_diagnostic() {
 }
 
 #[test]
-fn kb_03_03_a_layout_without_section_has_no_candidate() {
+fn a_layout_without_section_has_no_candidate() {
     let resolution = resolver::resolve(&available(FakeLayout::without_section()));
     assert_eq!(resolution.key_code, ISO_SECTION_KEY);
     assert_eq!(
@@ -79,7 +79,7 @@ fn kb_03_03_a_layout_without_section_has_no_candidate() {
 }
 
 #[test]
-fn kb_03_03_candidate_tie_breaks_are_fewest_modifiers_then_bits_then_key() {
+fn candidate_tie_breaks_are_fewest_modifiers_then_bits_then_key() {
     // Fewest modifiers beats a lower key code.
     assert_eq!(select_candidate(&[(10, CARBON_SHIFT), (50, 0)]), Some((50, 0)));
     // Equal count: lower Carbon bits (Shift 0x200 < Option 0x800 < Control 0x1000).
@@ -113,7 +113,7 @@ fn kb_03_03_candidate_tie_breaks_are_fewest_modifiers_then_bits_then_key() {
 }
 
 #[test]
-fn kb_03_03_modifier_conversions_are_exact() {
+fn modifier_conversions_are_exact() {
     use resolver::{CARBON_COMMAND, carbon_modifiers, section_modifiers};
     assert_eq!(carbon_modifiers(ModifierFlags::NONE), Some(0));
     assert_eq!(

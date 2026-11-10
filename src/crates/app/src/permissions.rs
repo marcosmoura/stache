@@ -447,7 +447,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_05_04_user_only_requirements_are_never_requested_automatically() {
+    fn user_only_requirements_are_never_requested_automatically() {
         let provider = provider(PermissionStatus::Denied);
         let mut manager = PermissionManager::new(provider.clone());
         let host = FakeHost::default();
@@ -477,7 +477,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_05_04_a_user_only_requirement_wins_over_automatic_prompting_state() {
+    fn a_user_only_requirement_wins_over_automatic_prompting_state() {
         let provider = provider(PermissionStatus::Denied);
         let mut manager = PermissionManager::new(provider.clone());
         let host = FakeHost::default();
@@ -492,7 +492,7 @@ mod tests {
     }
 
     #[test]
-    fn kb_05_04_a_requirement_that_returns_rereads_a_fresh_status() {
+    fn a_requirement_that_returns_rereads_a_fresh_status() {
         let provider = provider(PermissionStatus::Granted);
         let mut manager = PermissionManager::new(provider.clone());
         let host = FakeHost::default();

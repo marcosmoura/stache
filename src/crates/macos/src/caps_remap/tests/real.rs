@@ -75,7 +75,7 @@ fn durable_directory(paths: &AppPaths) -> std::path::PathBuf {
 }
 
 #[test]
-fn kb_04_04_the_real_journal_is_private_durable_and_outside_cache_runtime_and_config() {
+fn the_real_journal_is_private_durable_and_outside_cache_runtime_and_config() {
     let root = tempfile::tempdir().expect("root");
     let paths = paths(root.path());
     let world = World::new(vec![KEY_A]);
@@ -104,7 +104,7 @@ fn kb_04_04_the_real_journal_is_private_durable_and_outside_cache_runtime_and_co
 }
 
 #[test]
-fn kb_04_07_inspecting_without_a_journal_creates_no_directory_lease_or_process() {
+fn inspecting_without_a_journal_creates_no_directory_lease_or_process() {
     let root = tempfile::tempdir().expect("root");
     let paths = paths(root.path());
     let world = World::new(vec![]);
@@ -116,7 +116,7 @@ fn kb_04_07_inspecting_without_a_journal_creates_no_directory_lease_or_process()
 }
 
 #[test]
-fn kb_04_04_a_busy_real_lease_expires_after_five_seconds_of_fake_time_with_no_mutation() {
+fn a_busy_real_lease_expires_after_five_seconds_of_fake_time_with_no_mutation() {
     let root = tempfile::tempdir().expect("root");
     let paths = paths(root.path());
     let world = World::new(vec![KEY_A]);
@@ -142,7 +142,7 @@ fn kb_04_04_a_busy_real_lease_expires_after_five_seconds_of_fake_time_with_no_mu
 }
 
 #[test]
-fn kb_04_04_a_cancelled_lease_wait_mutates_nothing() {
+fn a_cancelled_lease_wait_mutates_nothing() {
     let root = tempfile::tempdir().expect("root");
     let paths = paths(root.path());
     let world = World::new(vec![KEY_A]);
@@ -165,7 +165,7 @@ fn kb_04_04_a_cancelled_lease_wait_mutates_nothing() {
 }
 
 #[test]
-fn kb_04_04_different_identities_and_config_roots_do_not_share_a_lease_but_one_identity_does() {
+fn different_identities_and_config_roots_do_not_share_a_lease_but_one_identity_does() {
     let first_root = tempfile::tempdir().expect("first");
     let second_root = tempfile::tempdir().expect("second");
     let first = paths(first_root.path());
@@ -196,7 +196,7 @@ fn kb_04_04_different_identities_and_config_roots_do_not_share_a_lease_but_one_i
 }
 
 #[test]
-fn kb_04_04_a_symlinked_journal_or_directory_fails_closed() {
+fn a_symlinked_journal_or_directory_fails_closed() {
     let root = tempfile::tempdir().expect("root");
     let paths = paths(root.path());
     let world = World::new(vec![KEY_A]);
@@ -262,7 +262,7 @@ impl Hidutil for ReplaceLockOnGet {
 }
 
 #[test]
-fn kb_04_04_a_lock_inode_replaced_while_held_stops_the_write_ahead_journal() {
+fn a_lock_inode_replaced_while_held_stops_the_write_ahead_journal() {
     let root = tempfile::tempdir().expect("root");
     let paths = paths(root.path());
     let world = World::new(vec![KEY_A]);
@@ -288,7 +288,7 @@ fn kb_04_04_a_lock_inode_replaced_while_held_stops_the_write_ahead_journal() {
 }
 
 #[test]
-fn kb_04_03_a_corrupt_real_journal_is_never_deleted() {
+fn a_corrupt_real_journal_is_never_deleted() {
     let root = tempfile::tempdir().expect("root");
     let paths = paths(root.path());
     let directory = durable::prepare_directory(&paths, DIRECTORY).expect("directory");
