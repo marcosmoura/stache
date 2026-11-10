@@ -291,6 +291,62 @@ diagnostics. A contributed command that calls a module method prints the
 apply, because only `NotRunning` permits that. Commands that never contact the
 app are unaffected.
 
+## Bar data bridge (Tauri IPC)
+
+Not the control socket: the Bar webview talks to the host through one generated
+command and one generated event (`src/ui/src/sdk/bindings.gen.ts`).
+
+- `bar_snapshot()` returns `BarSnapshotOutcome`, tagged by `kind`: `available`
+  (`view`: `generation`, `sequence`, `configRevision` as decimal strings, `panel`,
+  `menu`, `frame`, `height`, `padding`, `detail`), `unavailable` (`reason`,
+  `detail`, `generation`, `sequence`) or `unauthorized`. It takes no argument:
+  the caller is the actual webview window, never a supplied label.
+- `BarChanged` (`generation`, `sequence`, `resnapshot`, `outcome`) is emitted to
+  the live Bar window only. Ordering: subscribe, then snapshot, then apply only a
+  strictly greater numeric `sequence` (use `BigInt`); `resnapshot: true` means call
+  `bar_snapshot` again. Delivery is coalesced and bounded and never blocks the
+  command, which reads published state only.
+
+- `bar_action(action)` runs one fixed Bar click. `action` is the closed enum
+  `cpu | clock | battery | wifi | weather`; there is no name, path, URL or argv. It returns
+  `BarActionOutcome` (command result data, never an error string), tagged by `kind`:
+  `completed`, `stale`, `notIssued`, `refused` (`detail`), `notInstalled`,
+  `timedOutBeforeIssuance`, `uncertainAfterIssuance`, `busy`, `unauthorized` or
+  `unavailable` (`reason`, `detail`). `completed` means macOS reported the issued
+  request done, not that a window is visible; `uncertainAfterIssuance` is never
+  retried. The caller is the actual webview window, authorized like `bar_snapshot`.
+  It is an async command: the bounded native work runs on the blocking pool and one
+  action is in flight at a time (`busy` otherwise). See
+  [Bar fixed clicks](../features/bar.md#click-actions).
+- `bar_weather()` returns `BarWeatherOutcome` (tagged by `kind`: `ready`
+  with `weather`, `unavailable`, `unauthorized`, `stale`) for one weather refresh.
+  `weather` carries the configured provider, the trimmed Visual Crossing key and
+  the location (`coreLocation`, `defaultLocation` or `none`). The key and
+  coordinates exist only in this response, which goes to the authorized Bar window
+  only; they are never in `bar_snapshot`, `BarChanged`, `host_status` or
+  `StatusChanged`. Async, off the main thread and bounded. See
+  [Bar weather data path](../features/bar.md#weather-data-path).
+
+- `bar_session_action(module, action)` pauses or resumes one module for this
+  session and returns `SessionActionOutcome` (tagged by `kind`: `applied`,
+  `notApplied` (`reason`), `stale`, `disabled`, `unavailable` (`reason`), `busy`,
+  `uncertain`, `unauthorized`). `action` is the closed enum `pause | resume`;
+  `module` is validated strictly and the Bar capability holds only `keepAwake`.
+  The actual calling window must be the live Bar panel; the host runner executes
+  the request in command order through the module's existing pause/resume control
+  and returns the actual result (never a queue acknowledgement); a request whose
+  action no longer matches the current session state is `stale`. ACL-gated by
+  `allow-bar-session-action`. Async, bounded, one in flight (`busy`). No CLI
+  grammar or socket method is added. See
+  [Keep Awake session click](../features/bar.md#keep-awake-session-click).
+- `bar_media_artwork(id)` returns `BarArtworkOutcome` (tagged by `kind`: `ready`
+  with `artwork` (base64 PNG), `missing`, `unauthorized`, `unavailable`). `id` is the
+  `artworkId` of `BarView.media`; a malformed id is `missing` without touching the
+  filesystem. Authorized like `bar_weather`, ACL-gated by `allow-bar-media-artwork`.
+  `BarAction` also has `media` (no identifier; the host maps the published player)
+  and `BarActionOutcome` has `notAttempted`. See
+  [Bar media data path](../features/bar.md#media-data-path).
+
 ## Client behavior
 
 `IpcClient` sets a five-second total response deadline and write timeout. A

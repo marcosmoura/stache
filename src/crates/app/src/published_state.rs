@@ -9,7 +9,20 @@
 
 use serde::Serialize;
 use serde_json::Value;
-use stache_sdk::{StateEnvelope, StateReading, StateUnavailableReason};
+use stache_keep_awake::{KeepAwakeConfig, KeepAwakeRuntimeStatus};
+use stache_sdk::{StateEnvelope, StateReading, StateSchemas, StateUnavailableReason};
+
+/// The provider schema contracts the application registers before any module.
+///
+/// Keep Awake is the first production provider: its original
+/// [`KeepAwakeRuntimeStatus`] DTO is the codec for `keepAwake`, so the registry
+/// only accepts that type from that module and consumers decode it with
+/// [`StateEnvelope::decode`]. Adding a provider means adding one `with` here;
+/// the SDK and the observing modules never import the provider's crate.
+#[must_use]
+pub fn state_schemas() -> StateSchemas {
+    StateSchemas::new().with::<KeepAwakeRuntimeStatus>(KeepAwakeConfig::ID)
+}
 
 /// One published envelope with its numbers as exact decimal strings.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -101,6 +114,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use serde::Deserialize;
+    use stache_keep_awake::{KeepAwakeConfig, KeepAwakeRuntimeStatus};
     use stache_sdk::{
         ConfigError, ConfigPaths, ConfigStore, DiscardLogger, EventBus, LogFilter,
         MainThreadExecutor, Module, ModuleConfig, ModuleContext, ModuleDescriptor, ModuleId,
@@ -292,5 +306,223 @@ mod tests {
                 generation: Some("7".to_owned()),
             }
         );
+    }
+
+    /// A stand-in module registered under Keep Awake's identifier so the test
+    /// can publish the original DTO without starting the real runtime.
+    struct KeepAwakeStub {
+        status: KeepAwakeRuntimeStatus,
+        wrong_type: Arc<Mutex<Option<stache_sdk::StateError>>>,
+    }
+
+    impl Module for KeepAwakeStub {
+        type Config = FakeConfig;
+
+        fn descriptor(&self) -> ModuleDescriptor {
+            ModuleDescriptor {
+                id: KeepAwakeConfig::ID,
+                provides: &[],
+                requires: &[],
+                permissions: &[],
+                executables: &[],
+                surfaces: &[],
+                observes: &[],
+                reserves_screen: false,
+            }
+        }
+
+        fn configure(&mut self, _: &FakeConfig, _: &ModuleContext) -> ModuleResult<()> { Ok(()) }
+
+        fn start(&mut self, ctx: &ModuleContext) -> ModuleResult<()> {
+            // Only the registered DTO may be published by this provider.
+            *self.wrong_type.lock().expect("lock") = ctx.state_publisher::<FakeStatus>().err();
+            let publisher = ctx.state_publisher::<KeepAwakeRuntimeStatus>().expect("registered");
+            let _ = publisher.publish(1, &self.status).expect("publish");
+            Ok(())
+        }
+
+        fn reconfigure(&mut self, _: &FakeConfig, _: &ModuleContext) -> ModuleResult<()> { Ok(()) }
+
+        fn stop(&mut self, _: &ModuleContext) -> ModuleResult<()> { Ok(()) }
+    }
+
+    /// The same payload under a newer schema version, as a future incompatible
+    /// consumer would declare it.
+    #[derive(Debug, Serialize, Deserialize)]
+    struct KeepAwakeStatusV2 {
+        #[serde(rename = "assertionState")]
+        assertion_state: String,
+    }
+
+    impl PublishedState for KeepAwakeStatusV2 {
+        const SCHEMA: StateSchema = StateSchema {
+            name: "keepAwakeStatus",
+            version: 2,
+        };
+    }
+
+    fn production_registry() -> Arc<Registry> {
+        Arc::new(
+            Registry::new(
+                Arc::new(DiscardLogger),
+                Arc::new(EventBus::new()),
+                Arc::new(Inline),
+                Arc::new(Grant),
+                Arc::new(UnavailableWindows),
+            )
+            .with_state_schemas(&state_schemas())
+            .expect("the production schemas register before modules"),
+        )
+    }
+
+    #[test]
+    fn keep_awake_registers_its_own_dto_and_an_independent_consumer_decodes_it() {
+        let root = tempfile::tempdir().expect("root");
+        let registry = production_registry();
+        let context = context(root.path(), Arc::clone(&registry));
+        let observer = context.observe_state(KeepAwakeConfig::ID);
+        assert_eq!(observer.read().state, StateReading::Absent);
+
+        let status = KeepAwakeRuntimeStatus {
+            assertion_state: stache_keep_awake::AssertionState::Active,
+            lock_state: stache_keep_awake::LockState::Unlocked,
+            observation: stache_keep_awake::LockObservation::NotificationsAndPolling,
+            conditions: Vec::new(),
+        };
+        let wrong_type = Arc::new(Mutex::new(None));
+        registry
+            .register(
+                KeepAwakeStub {
+                    status: status.clone(),
+                    wrong_type: Arc::clone(&wrong_type),
+                },
+                FakeConfig,
+            )
+            .expect("register");
+        registry.start_all().expect("start");
+
+        let reading = observer.read().state;
+        let StateReading::Available(envelope) = &reading else {
+            panic!("expected an available state");
+        };
+        assert_eq!(envelope.schema.provider, KeepAwakeConfig::ID);
+        assert_eq!(envelope.schema.name, "keepAwakeStatus");
+        assert_eq!(envelope.schema.version, 1);
+        // The consumer needs only the SDK and the provider's type.
+        assert_eq!(
+            envelope.decode::<KeepAwakeRuntimeStatus>(KeepAwakeConfig::ID).expect("decode"),
+            status
+        );
+        // The frontend projection carries the exact wire payload.
+        let json = serde_json::to_value(PublishedStateView::from(&reading)).expect("encode");
+        assert_eq!(json["envelope"]["payload"]["assertionState"], "active");
+        assert_eq!(json["envelope"]["schema"], "keepAwakeStatus");
+
+        // Publishing any other type from this provider is rejected.
+        assert!(matches!(
+            wrong_type.lock().expect("lock").take(),
+            Some(stache_sdk::StateError::SchemaMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn a_mismatched_schema_version_is_rejected_by_the_codec() {
+        let root = tempfile::tempdir().expect("root");
+        let registry = production_registry();
+        let context = context(root.path(), Arc::clone(&registry));
+        registry
+            .register(
+                KeepAwakeStub {
+                    status: KeepAwakeRuntimeStatus::default(),
+                    wrong_type: Arc::new(Mutex::new(None)),
+                },
+                FakeConfig,
+            )
+            .expect("register");
+        registry.start_all().expect("start");
+        let StateReading::Available(envelope) =
+            context.observe_state(KeepAwakeConfig::ID).read().state
+        else {
+            panic!("expected an available state");
+        };
+        assert!(matches!(
+            envelope.decode::<KeepAwakeStatusV2>(KeepAwakeConfig::ID),
+            Err(stache_sdk::StateError::DecodeSchema { .. })
+        ));
+        // Another provider's identity never decodes either.
+        assert!(matches!(
+            envelope.decode::<KeepAwakeRuntimeStatus>(FAKE_PROVIDER),
+            Err(stache_sdk::StateError::DecodeSchema { .. })
+        ));
+    }
+
+    #[test]
+    fn a_second_publisher_for_keep_awake_is_rejected() {
+        // A duplicate contract for the provider fails when applied.
+        let duplicate = state_schemas().with::<FakeStatus>(KeepAwakeConfig::ID);
+        let registry = Registry::new(
+            Arc::new(DiscardLogger),
+            Arc::new(EventBus::new()),
+            Arc::new(Inline),
+            Arc::new(Grant),
+            Arc::new(UnavailableWindows),
+        );
+        assert!(registry.with_state_schemas(&duplicate).is_err());
+
+        // A different module cannot publish the Keep Awake DTO.
+        let registry = production_registry();
+        let refused = Arc::new(Mutex::new(None));
+        registry
+            .register(Intruder { refused: Arc::clone(&refused) }, FakeConfig)
+            .expect("register");
+        registry.start_all().expect("start");
+        assert!(matches!(
+            refused.lock().expect("lock").take(),
+            Some(stache_sdk::StateError::Unauthorized { provider, .. }) if provider == KeepAwakeConfig::ID
+        ));
+        assert_eq!(
+            registry.observe_state(KeepAwakeConfig::ID).read().state,
+            StateReading::Absent,
+            "the Keep Awake cell is untouched"
+        );
+    }
+
+    /// Another module trying to publish Keep Awake's DTO.
+    struct Intruder {
+        refused: Arc<Mutex<Option<stache_sdk::StateError>>>,
+    }
+
+    impl Module for Intruder {
+        type Config = FakeConfig;
+
+        fn descriptor(&self) -> ModuleDescriptor {
+            ModuleDescriptor {
+                id: FAKE_PROVIDER,
+                provides: &[],
+                requires: &[],
+                permissions: &[],
+                executables: &[],
+                surfaces: &[],
+                observes: &[],
+                reserves_screen: false,
+            }
+        }
+
+        fn configure(&mut self, _: &FakeConfig, _: &ModuleContext) -> ModuleResult<()> { Ok(()) }
+
+        fn start(&mut self, ctx: &ModuleContext) -> ModuleResult<()> {
+            *self.refused.lock().expect("lock") =
+                ctx.state_publisher::<KeepAwakeRuntimeStatus>().err();
+            Ok(())
+        }
+
+        fn reconfigure(&mut self, _: &FakeConfig, _: &ModuleContext) -> ModuleResult<()> { Ok(()) }
+
+        fn stop(&mut self, _: &ModuleContext) -> ModuleResult<()> { Ok(()) }
+    }
+
+    #[test]
+    fn bar_declares_keep_awake_as_an_optional_observed_provider() {
+        assert_eq!(stache_bar::KEEP_AWAKE_PROVIDER, KeepAwakeConfig::ID);
     }
 }

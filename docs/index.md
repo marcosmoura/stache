@@ -25,7 +25,7 @@ Read when navigating the shipped foundation, explicitly planned rewrites or the 
 | Hold-to-Quit (runtime)                      | [feature](features/hold-to-quit.md), [spec](specs/2026-11-03-hold-to-quit/00-overview.md)                   |
 | MenuAnywhere (runtime, native unverified)   | [feature](features/menu-anywhere.md), [spec](specs/2026-11-03-menu-anywhere/00-overview.md)                 |
 | Bar foundation (shipped)                    | [spec](specs/2026-11-08-bar-foundation/00-overview.md)                                                      |
-| Bar (planned)                               | [feature](features/bar.md), [spec](specs/2026-11-03-bar/00-overview.md)                                     |
+| Bar (shipped, default off)                  | [feature](features/bar.md), [spec](specs/2026-11-03-bar/00-overview.md)                                     |
 | Tiling (core, workspaces, CLI; default off) | [feature](features/tiling.md), [spec](specs/2026-11-03-tiling/00-overview.md)                               |
 | Tiling CLI and socket methods               | [features/tiling.md#cli](features/tiling.md#cli), [architecture/ipc.md](architecture/ipc.md#tiling-command) |
 | Tiling animation pipeline (shipped)         | [feature](features/tiling.md#animation), [spec](specs/2026-11-09-tiling-animation/00-overview.md)           |

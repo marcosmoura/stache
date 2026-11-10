@@ -1390,3 +1390,207 @@ fn invalidation_cancels_only_the_native_token_and_still_stops_native_work() {
     assert_eq!(harness.runtime(), KeepAwakeRuntimeStatus::default());
     assert!(harness.owner.pending().is_empty());
 }
+
+mod published_state {
+    use stache_sdk::{
+        ModuleId, PublishedState, RuntimeEnd, SchemaIdentity, StateEnvelope, StateReading,
+        StateSchema, StateUnavailableReason,
+    };
+
+    use super::*;
+
+    fn envelope(harness: &Harness) -> Option<StateEnvelope> {
+        match harness.states.read().state {
+            StateReading::Available(envelope) => Some(envelope),
+            _ => None,
+        }
+    }
+
+    fn published(harness: &Harness) -> Option<KeepAwakeRuntimeStatus> {
+        envelope(harness)
+            .map(|envelope| envelope.decode(KeepAwakeConfig::ID).expect("the codec decodes"))
+    }
+
+    fn wait_published(harness: &Harness, expected: &KeepAwakeRuntimeStatus) {
+        wait_until("the published state", || {
+            published(harness).as_ref() == Some(expected)
+        });
+    }
+
+    fn tombstone(harness: &Harness) -> Option<StateUnavailableReason> {
+        match harness.states.read().state {
+            StateReading::Unavailable(tombstone) => Some(tombstone.reason),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn the_schema_identity_is_owned_by_keep_awake() {
+        assert_eq!(KeepAwakeRuntimeStatus::SCHEMA, StateSchema {
+            name: "keepAwakeStatus",
+            version: 1,
+        });
+        let harness = Harness::new(true);
+        harness.start().expect("start_all");
+        let envelope = envelope(&harness).expect("published after start");
+        assert_eq!(envelope.schema, SchemaIdentity {
+            provider: ModuleId::new("keepAwake"),
+            name: "keepAwakeStatus",
+            version: 1,
+        });
+        // The envelope carries the accepted revision the watch showed.
+        let accepted = harness.registry.accepted_watch(harness.handle).expect("watch").read();
+        assert_eq!(envelope.revision, accepted.expect("accepted").revision);
+    }
+
+    #[test]
+    fn start_releases_the_final_held_state_and_never_acquires_for_real() {
+        let harness = Harness::new(true);
+        harness.start().expect("start_all");
+        let status = published(&harness).expect("published");
+        assert_eq!(status.assertion_state, AssertionState::Active);
+        assert_eq!(status.lock_state, LockState::Unlocked);
+        assert_eq!(status, harness.runtime());
+        // Only the injected fake backend ever created assertions.
+        assert_eq!(harness.backend.created().len(), 3);
+    }
+
+    #[test]
+    fn every_observable_transition_is_published() {
+        let harness = Harness::new(true);
+        harness.start().expect("start_all");
+        wait_published(&harness, &harness.runtime());
+
+        harness.probe.set(NativeLockState::Locked);
+        assert!(harness.deliver());
+        wait_assertion(&harness, AssertionState::Inactive);
+        let locked = published(&harness);
+        wait_until("locked published", || {
+            published(&harness).is_some_and(|status| status.lock_state == LockState::Locked)
+        });
+        assert_eq!(
+            published(&harness).expect("locked").assertion_state,
+            AssertionState::Inactive
+        );
+        drop(locked);
+
+        harness.probe.set(NativeLockState::Unlocked);
+        let barrier = harness.backend.block_next_create();
+        assert!(harness.deliver());
+        assert!(barrier.wait_entered(WAIT));
+        wait_until("acquiring published", || {
+            published(&harness)
+                .is_some_and(|status| status.assertion_state == AssertionState::Acquiring)
+        });
+        assert!(barrier.release());
+        wait_published(&harness, &KeepAwakeRuntimeStatus {
+            assertion_state: AssertionState::Active,
+            lock_state: LockState::Unlocked,
+            observation: LockObservation::NotificationsAndPolling,
+            conditions: Vec::new(),
+        });
+    }
+
+    #[test]
+    fn an_unknown_lock_probe_is_published_as_unknown_and_never_active() {
+        let harness = Harness::new(true);
+        harness.start().expect("start_all");
+        harness.probe.set(NativeLockState::Unknown(
+            LockUnknown::SessionDictionaryUnavailable,
+        ));
+        assert!(harness.deliver());
+        wait_until("unknown lock published", || {
+            published(&harness).is_some_and(|status| status.lock_state == LockState::Unknown)
+        });
+        assert_eq!(published(&harness), Some(harness.runtime()));
+        assert!(
+            published(&harness)
+                .expect("published")
+                .conditions
+                .iter()
+                .any(|condition| condition.kind == KeepAwakeConditionKind::LockProbeFailed),
+            "the failed probe is a published condition"
+        );
+    }
+
+    #[test]
+    fn a_start_failure_publishes_nothing_available() {
+        let harness = Harness::build(
+            true,
+            NativeLockState::Unknown(LockUnknown::SessionDictionaryUnavailable),
+            |module| module,
+        );
+        assert!(harness.start().is_err());
+        assert!(envelope(&harness).is_none());
+    }
+
+    #[test]
+    fn disable_pause_and_failed_release_tombstone_the_channel() {
+        let harness = Harness::new(true);
+        harness.start().expect("start_all");
+        assert!(published(&harness).is_some());
+
+        harness.pause().expect("pause");
+        assert_eq!(
+            tombstone(&harness),
+            Some(StateUnavailableReason::Ended(RuntimeEnd::Paused))
+        );
+
+        harness.resume().expect("resume");
+        wait_until("republished after resume", || published(&harness).is_some());
+        let sequence = envelope(&harness).expect("published").sequence;
+        assert!(sequence >= 1);
+
+        harness.set_enabled(false).expect("disable");
+        assert_eq!(
+            tombstone(&harness),
+            Some(StateUnavailableReason::Ended(RuntimeEnd::Disabled))
+        );
+    }
+
+    #[test]
+    fn a_new_generation_restarts_the_sequence() {
+        let harness = Harness::new(true);
+        harness.start().expect("start_all");
+        let first = envelope(&harness).expect("first");
+        harness.pause().expect("pause");
+        harness.resume().expect("resume");
+        wait_until("second generation", || envelope(&harness).is_some());
+        let second = envelope(&harness).expect("second");
+        assert_ne!(first.generation, second.generation);
+        assert!(second.sequence >= 1);
+    }
+
+    #[test]
+    fn a_failed_release_never_leaves_stale_active_data() {
+        let harness = Harness::new(true);
+        harness.start().expect("start_all");
+        harness
+            .backend
+            .fail_release_always(AssertionKind::Display, RELEASE_FAILURE_CODE);
+        assert!(harness.set_enabled(false).is_err());
+        assert!(
+            envelope(&harness).is_none(),
+            "the ended generation reads unavailable"
+        );
+        assert!(matches!(
+            tombstone(&harness),
+            Some(StateUnavailableReason::Ended(
+                RuntimeEnd::Disabled | RuntimeEnd::Failed
+            ))
+        ));
+        // The truthful pending state stays in the module's own snapshot.
+        assert_eq!(harness.runtime().assertion_state, AssertionState::ReleasePending);
+    }
+
+    #[test]
+    fn a_start_failure_never_exposes_available_state() {
+        let harness = Harness::build(
+            true,
+            NativeLockState::Unlocked,
+            KeepAwakeModule::with_spawn_failure,
+        );
+        assert!(harness.start().is_err());
+        assert!(envelope(&harness).is_none());
+    }
+}

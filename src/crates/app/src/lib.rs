@@ -8,6 +8,10 @@
 #![forbid(unsafe_code)]
 
 pub mod access;
+pub mod bar;
+pub mod bar_actions;
+pub mod bar_bridge;
+pub mod bar_keep_awake;
 pub mod bindings;
 pub mod caps_recovery;
 pub mod catalog;
@@ -21,8 +25,12 @@ pub mod input;
 pub mod keep_awake;
 pub mod keybindings;
 pub mod logging;
+pub mod media_resources;
+#[cfg(all(feature = "panel-native-check", not(feature = "smoke")))]
+pub mod panel_check;
 pub mod permissions;
 pub mod published_state;
+pub mod session_action;
 pub mod shutdown;
 #[cfg(feature = "smoke")]
 pub mod smoke;
@@ -41,6 +49,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use stache_bar::WeatherParts;
 use stache_cli::CliEnvironment;
 use stache_macos::{
     AccessibilityPermission, ActivationObserver, AssertionOwner, MainThread, TerminateObservation,
@@ -53,6 +62,7 @@ use stache_sdk::{
 use tauri::{Emitter, Manager, RunEvent};
 use tauri_specta::Event as _;
 
+use crate::bar::BarFactory;
 use crate::bindings::{HostStatus, StatusChanged};
 use crate::frontmost_context::{FrontmostContext, FrontmostContextOwner};
 use crate::hold_to_quit::{HoldToQuitFactory, HudOwner, ObserverOwner};
@@ -88,13 +98,25 @@ fn take_activation() {
 #[derive(Clone)]
 struct WindowsState(Arc<NativeWindows>);
 
+/// Emits Bar bridge events to exactly one window label.
+struct AppBarEvents(tauri::AppHandle);
+
+impl bar_bridge::BarEventSink for AppBarEvents {
+    fn emit(&self, label: &str, event: &bar_bridge::BarChanged) -> Result<(), String> {
+        event.emit_to(&self.0, label).map_err(|error| error.to_string())
+    }
+}
+
 struct AppUi {
     app: tauri::AppHandle,
     main_thread: Arc<dyn MainThreadExecutor>,
+    bar: Arc<bar_bridge::BarBridge>,
 }
 
 impl HostUi for AppUi {
     fn status(&self, status: &HostStatus) {
+        // Signal only: the bridge worker re-samples the Keep Awake projection.
+        self.bar.host_changed();
         let _ = self.app.emit(StatusChanged::NAME, StatusChanged { status: status.clone() });
         let app = self.app.clone();
         let snapshot = status.clone();
@@ -213,6 +235,25 @@ type SetupHook = Box<
 /// startup errors.
 pub fn run(config_paths: ConfigPaths) -> Result<(), String> {
     run_with(config_paths, None, Instant::now())
+}
+
+/// Runs the desktop with the opt-in live non-activating panel gate.
+///
+/// # Errors
+/// Returns the same failures as [`run`].
+#[cfg(all(feature = "panel-native-check", not(feature = "smoke")))]
+pub fn run_panel_check(
+    config_paths: ConfigPaths,
+    args: panel_check::PanelCheckArgs,
+) -> Result<(), String> {
+    panel_check::prepare_disabled_config(&config_paths)?;
+    run_with(
+        config_paths,
+        Some(Box::new(move |_app, host, windows, _gate| {
+            panel_check::start(args, host.clone(), Arc::clone(windows));
+        })),
+        Instant::now(),
+    )
 }
 
 /// Runs the desktop with the opt-in native smoke harness.
@@ -354,7 +395,8 @@ fn run_with(
 ) -> Result<(), String> {
     let environment = AppEnvironment::from_env();
     let app_paths = AppPaths::resolve(&environment).map_err(|error| error.to_string())?;
-    let wallpapers_home = environment.home;
+    let wallpapers_home = environment.home.clone();
+    let bar_home = environment.home;
     let instance = match InstanceLock::acquire(&app_paths) {
         Ok(instance) => instance,
         Err(InstanceError::AlreadyRunning { .. }) => return Ok(()),
@@ -401,6 +443,7 @@ fn run_with(
     let (host, driver) = new_host(Arc::clone(&teardown));
     let driver = driver
         .with_input_service(keybindings.input)
+        .with_state_schemas(published_state::state_schemas())
         .with_startup_recovery(Arc::new(keybindings.recovery));
     // The composition root owns one Keep Awake assertion owner for the whole
     // module lifetime. The setup closure moves a clone into the production
@@ -442,10 +485,6 @@ fn run_with(
                 window_host,
                 Arc::clone(&logger),
             ));
-            let ui = Arc::new(AppUi {
-                app: app.handle().clone(),
-                main_thread: Arc::clone(&main_thread),
-            });
             // The production factories take the last executor clone: modules
             // dispatch native work through it and never retain a second one.
             // Wallpapers needs the identity paths, configuration directory and
@@ -457,6 +496,40 @@ fn run_with(
                 Arc::clone(&main_thread),
             )
             .map_err(|error| format!("cannot create the Wallpapers factory: {error}"))?;
+            // The Bar data bridge is created with the window backend and the
+            // host handle, before the factories, so the production Bar factory
+            // is attached to it before it can start. It is managed below,
+            // before the host starts any module.
+            let bar_bridge = bar_bridge::BarBridge::new(
+                window_backend.clone(),
+                Arc::new(setup_host.clone()),
+                Arc::new(AppBarEvents(app.handle().clone())),
+            );
+            bar_bridge.set_session(Arc::new(setup_host.clone()));
+            // The host status sink also wakes the Bar bridge so the Keep Awake
+            // projection re-samples after every host lifecycle or session
+            // change; there is no timer behind it.
+            let ui = Arc::new(AppUi {
+                app: app.handle().clone(),
+                main_thread: Arc::clone(&main_thread),
+                bar: Arc::clone(&bar_bridge),
+            });
+            // Weather resolves `weather.api_keys` against the configuration
+            // directory and home, and reads one native location per refresh.
+            // Media reads the vendored adapter from the resource directory
+            // (or the in-repo copy in debug builds) and caches artwork under
+            // this app's own cache directory; it never reads `_legacy`.
+            let media = media_resources::media_parts(
+                app.path().resource_dir().ok(),
+                app.path().app_cache_dir().ok().as_deref(),
+            );
+            let bar = BarFactory::production_with_media(Arc::clone(&main_thread), Some(media))
+                .with_weather(WeatherParts::new(
+                    Arc::new(stache_macos::SystemLocation),
+                    bar_home,
+                    config_paths.directory().to_path_buf(),
+                ));
+            bar.attach_bridge(&bar_bridge);
             let factories =
                 ModuleFactories::production(Arc::clone(&main_thread), setup_power_owner)
                     .with(wallpapers)
@@ -467,7 +540,11 @@ fn run_with(
                     .with(TilingFactory::production(
                         Arc::clone(&main_thread),
                         &app.config().identifier,
-                    ));
+                    ))
+                    // Bar is registered default disabled. Its construction is
+                    // inert (no window, worker or topology feed); the module's
+                    // own `enabled` setting starts it.
+                    .with(bar);
             let services = HostServices {
                 logger: Arc::clone(&logger),
                 log_filter: filter,
@@ -486,6 +563,9 @@ fn run_with(
                 catalog,
                 factories,
             };
+            // Managed before any module starts so the Bar webview can never
+            // call `bar_snapshot` ahead of its state.
+            app.manage(bar_bridge::BarBridgeState(bar_bridge));
             if let Err(error) = start_host(driver, settings, services, ui) {
                 setup_gate.record_exit(1);
                 return Err(error);

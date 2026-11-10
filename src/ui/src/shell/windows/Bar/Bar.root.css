@@ -1,0 +1,85 @@
+/*
+ * The legacy root rules (`_legacy/app/ui/main.css`) scoped to the Bar window.
+ * `Bar.state.ts` sets `html[data-surface='bar']`. Every selector keeps the
+ * specificity of the legacy rule (`:where()` adds none), so no computed value
+ * changes and no other surface is affected.
+ */
+
+/* Reset focus */
+:where(html[data-surface='bar']) [tabindex='-1']:focus {
+  outline: none !important;
+}
+
+/* Reset media */
+:where(html[data-surface='bar']) img,
+:where(html[data-surface='bar']) svg {
+  display: block;
+
+  max-width: 100%;
+}
+
+:where(html[data-surface='bar']) img,
+:where(html[data-surface='bar']) svg,
+:where(html[data-surface='bar']) video,
+:where(html[data-surface='bar']) canvas {
+  height: auto;
+}
+
+/* Reduce motion */
+@media (prefers-reduced-motion: reduce) {
+  :where(html[data-surface='bar']),
+  :where(html[data-surface='bar']) *,
+  :where(html[data-surface='bar']) ::before,
+  :where(html[data-surface='bar']) ::after {
+    scroll-behavior: auto !important;
+
+    background-attachment: initial !important;
+
+    transition-delay: 0s !important;
+    transition-duration: 0s !important;
+    animation-duration: 1ms !important;
+    animation-delay: -1ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+/* Structure */
+:root:where([data-surface='bar']) {
+  overflow: hidden;
+
+  box-sizing: border-box;
+
+  font-family: 'Maple Mono NF', 'SF Mono', monospace;
+  font-size: 13px;
+  font-feature-settings: 'tnum';
+  font-weight: 500;
+
+  /** make tabular numbers the default */
+  font-variant-numeric: tabular-nums;
+  line-height: 1.6em;
+  color: color-mix(in srgb, #fff 90%, transparent);
+  text-rendering: optimizelegibility;
+
+  color-scheme: light dark;
+  -webkit-font-smoothing: subpixel-antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-touch-callout: none;
+}
+
+:where(html[data-surface='bar']),
+:where(html[data-surface='bar']) body,
+:where(html[data-surface='bar'] #root) {
+  height: 100%;
+}
+
+html:where([data-surface='bar']) *,
+html:where([data-surface='bar']) *::before,
+html:where([data-surface='bar']) *::after {
+  box-sizing: inherit;
+}
+
+:where(html[data-surface='bar']) body {
+  position: relative;
+
+  margin: 0;
+}

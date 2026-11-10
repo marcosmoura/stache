@@ -21,9 +21,13 @@ pub mod hotkeys;
 pub mod input;
 pub mod keep_awake;
 pub mod keyboard_layout;
+pub mod location;
 pub mod main_thread;
 pub mod menu;
+pub mod menu_bar;
+pub mod panel;
 pub mod settings;
+pub mod system;
 pub mod termination;
 pub mod windows;
 
@@ -39,8 +43,8 @@ pub use applications::{
     CANCELLATION_QUANTUM, DisplayHint, DisplayRect, DisplaySource, FINDER_BUNDLE_IDENTIFIER,
     FrontmostApplication, FrontmostClass, FrontmostListener, FrontmostPreflight, FrontmostSnapshot,
     FrontmostState, FrontmostWatch, GracefulOutcome, IssuancePermit, LifecycleEvent, LifecycleKind,
-    LifecycleSink, NativeOpenCompletion, OpenCompletion, OpenCompletionContext, OpenRequest,
-    PreflightRejection, PressAuthorization, PressCancel, RefreshTicket, ScreenRecord,
+    LifecycleSink, NativeOpenCompletion, OpenCompletion, OpenCompletionContext, OpenFailure,
+    OpenRequest, PreflightRejection, PressAuthorization, PressCancel, RefreshTicket, ScreenRecord,
     SystemApplicationBackend, TerminateOutcome, Unconfirmed, VisibilityAuthorization,
     VisibilityOperation, VisibilityOutcome, WindowRecord, appkit_rect_from_cg, classify_preflight,
     select_display,
@@ -91,12 +95,28 @@ pub use keep_awake::{
     OwnedAssertion, OwnerReleaseState, PendingAssertion, ReleaseReport, ReleaseStatus,
     SystemAssertionBackend, SystemLockObservationBackend, SystemLockProbe,
 };
+#[cfg(any(test, feature = "testing"))]
+pub use location::testing::FakeLocationSource;
+pub use location::{
+    ConsentNotifier, LocationFix, LocationOutcome, LocationRequest, LocationSource,
+    LocationUnavailable, SystemLocation,
+};
 pub use main_thread::{MainThread, is_main_thread, run_on_main};
 pub use menu::{
     ActionToken, AxOwner, MenuItemKind, MenuItemSnapshot, MenuReadOutcome, MenuReleaseOutcome,
     MenuSnapshot, MenuTarget, PresentationId, ReadRequest, TargetCheck, TargetValidator,
 };
-pub use settings::{SettingsError, open_accessibility_settings};
+#[cfg(any(test, feature = "testing"))]
+pub use menu_bar::testing::FakeMenuBarBackend;
+pub use menu_bar::{
+    ListedWindow, MenuBarBackend, MenuBarBasis, MenuBarControl, MenuBarError, MenuBarHint,
+    MenuBarObserver, MenuBarResolution, MenuBarSample, MenuBarVisibility, SystemMenuBarBackend,
+    pointer_in_menu_bar_row, window_list_has_menu_bar,
+};
+pub use panel::{NativeWindowHandle, PanelAdapter, PanelError, SystemPanelAdapter};
+pub use settings::{
+    SettingsError, open_accessibility_settings, open_battery_settings, open_wifi_settings,
+};
 #[cfg(feature = "test")]
 pub use termination::terminate_after;
 pub use termination::{TerminateAnswer, TerminateError, TerminateObservation, reply_to_terminate};

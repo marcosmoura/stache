@@ -1,0 +1,14 @@
+{
+  "identifier": "bar-window",
+  "description": "Least-privilege surface for the Bar panel webview. It can call the read-only bar_snapshot command, the fixed-target bar_action click command and the on-demand bar_weather and bar_media_artwork commands, and the bar_session_action command (Pause/Resume of keepAwake only) (all ACL-gated to this capability; each also authorizes the calling window label itself) and listen for the host's bar-changed event. No close, drag, filesystem, shell, opener, dialog, HTTP, system or plugin permissions are granted.",
+  "windows": ["stache-bar-*"],
+  "permissions": [
+    "allow-bar-snapshot",
+    "allow-bar-action",
+    "allow-bar-weather",
+    "allow-bar-media-artwork",
+    "allow-bar-session-action",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
+}

@@ -30,6 +30,11 @@ path = "src/bin/generate-bindings.rs"
 required-features = ["dev-tools"]
 
 [[bin]]
+name = "panel-native-check"
+path = "src/bin/panel-native-check.rs"
+required-features = ["panel-native-check"]
+
+[[bin]]
 name = "menu-native-check"
 path = "src/bin/menu-native-check.rs"
 required-features = ["menu-native-check"]
@@ -38,6 +43,7 @@ required-features = ["menu-native-check"]
 custom-protocol = ["tauri/custom-protocol"]
 dev-tools = []
 menu-native-check = []
+panel-native-check = ["custom-protocol"]
 smoke = ["custom-protocol", "stache-macos/test"]
 
 [dependencies]
@@ -66,6 +72,7 @@ tempfile = "3.27.0"
 tauri-build = { version = "=2.7.4", features = [] }
 
 [dev-dependencies]
+base64 = { version = "0.23.1", default-features = false, features = ["std"] }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 schemars = "1.2.3"
 stache-hold-to-quit = { path = "../modules/hold-to-quit", features = ["testing"] }

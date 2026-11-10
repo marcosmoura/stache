@@ -1,0 +1,1546 @@
+{
+  "schema": 1,
+  "pinnedCommit": "e0b4648ed22891d3ba29abf3d8fa8f56f949c657",
+  "pinnedObjects": [
+    {
+      "path": "_legacy/app/ui/renderer/bar",
+      "expected": "57d4212a9f591d3230076918a2f6527b7baf5a67",
+      "actual": "57d4212a9f591d3230076918a2f6527b7baf5a67"
+    },
+    {
+      "path": "_legacy/app/ui/stores",
+      "expected": "2dc990c01a99673cdce2260f577896283f1d909a",
+      "actual": "2dc990c01a99673cdce2260f577896283f1d909a"
+    },
+    {
+      "path": "_legacy/app/ui/design-system",
+      "expected": "b8af6c5b4cdd411d5a4c752b89c18dcff772d050",
+      "actual": "b8af6c5b4cdd411d5a4c752b89c18dcff772d050"
+    },
+    {
+      "path": "_legacy/app/ui/components",
+      "expected": "f935047c48d6cb595f12f0ea24a98327bb41bc55",
+      "actual": "f935047c48d6cb595f12f0ea24a98327bb41bc55"
+    },
+    {
+      "path": "_legacy/app/ui/main.css",
+      "expected": "d9080d2880fc419ada4133530a2eec31ec4d18b8",
+      "actual": "d9080d2880fc419ada4133530a2eec31ec4d18b8"
+    },
+    {
+      "path": "_legacy/app/native/src/modules/bar",
+      "expected": "093dc10ac555e036f70eb71c520653bcea6f9539",
+      "actual": "093dc10ac555e036f70eb71c520653bcea6f9539"
+    }
+  ],
+  "sources": [
+    {
+      "path": "_legacy/app/ui/components/Button/Button.styles.ts",
+      "blob": "9cd75833a9e929551348e22498f8efba2f4ef1e0",
+      "sha256": "11d030488c087543b9c48b19fe474367296660571010010f51bd729aa24e4000",
+      "pinnedBy": "table:ui/components"
+    },
+    {
+      "path": "_legacy/app/ui/components/Button/Button.tsx",
+      "blob": "9bfccd175a170135f532d5468ed44d2995020b9d",
+      "sha256": "c7ade745792afc28c806f93538f13c0dcff22ea766b8fe9720db0ad82c35a3f9",
+      "pinnedBy": "table:ui/components"
+    },
+    {
+      "path": "_legacy/app/ui/components/Button/index.ts",
+      "blob": "fe9c53c5118c480711f1788df35c51647d045a47",
+      "sha256": "ee083b355085d100be23d1decf29d53d4ddefdda6ae215abc7cbbf131735ceef",
+      "pinnedBy": "table:ui/components"
+    },
+    {
+      "path": "_legacy/app/ui/components/Icon/Icon.tsx",
+      "blob": "8c74fe0654e1454e29a4768d9f6a901ec8cc90bb",
+      "sha256": "4e49edd1b6975fff75a0b585d653ade4ebffbda2a06c08e200e0af02eaaf08d0",
+      "pinnedBy": "table:ui/components"
+    },
+    {
+      "path": "_legacy/app/ui/components/Icon/Icon.types.ts",
+      "blob": "fe7b2f4fc8b8dc80eeeaa5326c53c74b4a98ccbf",
+      "sha256": "bb42f1fb5c9e73cd0afd09a243350a87f9628cc7e1b2fb0dd73c1679ce4b8bd0",
+      "pinnedBy": "table:ui/components"
+    },
+    {
+      "path": "_legacy/app/ui/components/Icon/index.ts",
+      "blob": "8a06110842d2b538c0a23406b3c58a937ab69809",
+      "sha256": "7a30ef7b0dbbf5c9245be1d1c856ab0d5c59939a741f706f2f5d593a61ede55b",
+      "pinnedBy": "table:ui/components"
+    },
+    {
+      "path": "_legacy/app/ui/components/QueryErrorFallback/index.ts",
+      "blob": "ad6b0640af4e9eec4980eceb0da200bc30476e24",
+      "sha256": "1d34871d39a1a6c4c395cc34169312e8e3d7c30356c11866c4174d07f0b1b1ef",
+      "pinnedBy": "table:ui/components"
+    },
+    {
+      "path": "_legacy/app/ui/components/QueryErrorFallback/QueryErrorFallback.styles.ts",
+      "blob": "234bc395ff83b5046f92547b73db88f28016e321",
+      "sha256": "ceaae3af9b6a320b127d9078d20706d8afe391e4e47268ca9ca0eff689c24309",
+      "pinnedBy": "table:ui/components"
+    },
+    {
+      "path": "_legacy/app/ui/components/QueryErrorFallback/QueryErrorFallback.tsx",
+      "blob": "2571e54c6529b6d75d2d381fe70d02aad043eec5",
+      "sha256": "a147ac602dd30636f1d32b16a8ef67fd4e9a3e33c0c0f6e0305a5637a8be2eeb",
+      "pinnedBy": "table:ui/components"
+    },
+    {
+      "path": "_legacy/app/ui/components/ScrollingLabel/index.ts",
+      "blob": "f27a3471266476a1f682e78b7fbaf40b05b109c6",
+      "sha256": "4d356dbae949c1a90c08e20ab040c7aebbb16d12b98a8d26126869ecfd8410ba",
+      "pinnedBy": "table:ui/components"
+    },
+    {
+      "path": "_legacy/app/ui/components/ScrollingLabel/ScrollingLabel.styles.ts",
+      "blob": "5b5775aa60b5b4fb159740363d0a5e8699a58ade",
+      "sha256": "713bda0b7f59f047ffa413504c0e926336095f4f4ea590d0f7ad043d372ffd94",
+      "pinnedBy": "table:ui/components"
+    },
+    {
+      "path": "_legacy/app/ui/components/ScrollingLabel/ScrollingLabel.tsx",
+      "blob": "83b5400a42c3af3fa0736c5d31c2fec68998e7cd",
+      "sha256": "dc67bf84763ccd006edfa2057b0e303cd690075584276ece9fc193bb71b42286",
+      "pinnedBy": "table:ui/components"
+    },
+    {
+      "path": "_legacy/app/ui/components/Stack/index.ts",
+      "blob": "54507b6ea210c819df4afdc6eed261e192d8e8e3",
+      "sha256": "f10b2770fbaa0a1522b5d83fc6577fab239912704e0713712aa1766d2856b3c5",
+      "pinnedBy": "table:ui/components"
+    },
+    {
+      "path": "_legacy/app/ui/components/Stack/Stack.styles.ts",
+      "blob": "b48d27b4242dbb90569970527d5402596175e4f3",
+      "sha256": "3cfe69d8d993e643265ae0702649bf6d23e8681ccf989a7d9ef0fd21a9735221",
+      "pinnedBy": "table:ui/components"
+    },
+    {
+      "path": "_legacy/app/ui/components/Stack/Stack.tsx",
+      "blob": "f259f4b56bb50b38809655abed0b88c158e782e3",
+      "sha256": "a4a2d52e863e5a4fcf35272398217d5e1c22776289513029abf69afcf7f9d974",
+      "pinnedBy": "table:ui/components"
+    },
+    {
+      "path": "_legacy/app/ui/components/Surface/index.ts",
+      "blob": "16c03f7d05d5ff5ff9df002083ccb2e100e6fd61",
+      "sha256": "44963745b3a67dce36501c980dd8bff7c79edec36ed247556f1ca9c50559bd3a",
+      "pinnedBy": "table:ui/components"
+    },
+    {
+      "path": "_legacy/app/ui/components/Surface/Surface.motion.ts",
+      "blob": "ddaec6e46bb8258b0a6664d74888c546140e8cd8",
+      "sha256": "67857d67ff27add6547351fdaec341cf4f372822cac2e024efc8a7b3e6e1f61d",
+      "pinnedBy": "table:ui/components"
+    },
+    {
+      "path": "_legacy/app/ui/components/Surface/Surface.styles.ts",
+      "blob": "89c8c92b31a48e012b159acd998d90f265c6fd0e",
+      "sha256": "98ce69c7467da226cc0a3f92ed7237fec88d4b238596dabd184cd1c2322e6dfc",
+      "pinnedBy": "table:ui/components"
+    },
+    {
+      "path": "_legacy/app/ui/components/Surface/Surface.tsx",
+      "blob": "4777b352e5c37862754b270fb5b724eac9b04a2c",
+      "sha256": "ff9c17a666be30170b6a2599d8aebfb84c31a9ee5de43ec73d27bdf9e1f76e87",
+      "pinnedBy": "table:ui/components"
+    },
+    {
+      "path": "_legacy/app/ui/design-system/colors.ts",
+      "blob": "f1a611a6ee49c237022147217bcaeae9da0c755a",
+      "sha256": "bb7e16d8b4cdffbbc84f5ab7febaf10fef93640514128f466e4ec3dcd7d48705",
+      "pinnedBy": "table:ui/design-system"
+    },
+    {
+      "path": "_legacy/app/ui/design-system/index.ts",
+      "blob": "933f75edb386126fd02119b9d72efccb6354b870",
+      "sha256": "76954b15cc42bfeb38d0a00081e68ad30587af49cd52df9286e05fd3ca0724cb",
+      "pinnedBy": "table:ui/design-system"
+    },
+    {
+      "path": "_legacy/app/ui/design-system/motion.ts",
+      "blob": "78d871444cc358134da730b043181c97a5e360b5",
+      "sha256": "22d9a3cfb1455f27d01dbcafa59d61d6f379b8b690984a6f420dd98b983c5be7",
+      "pinnedBy": "table:ui/design-system"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Bar.state.ts",
+      "blob": "82ff64817c2caa1d15b56acb160414869b2883cc",
+      "sha256": "58130cdbbe839702573a2aa572842ac4ae9f49fd85248aaf252879c3f4a92d49",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Bar.styles.ts",
+      "blob": "6dd1e5290ba3fdf926c5aafff041f9a97e5edb7d",
+      "sha256": "b428563a28b7e99fa1d3be1c226767f52c9adfdab4c08b2b85610d2ad9590d8b",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Bar.tsx",
+      "blob": "e5d2d272109ec923b28c820416825ea2d9a2ac07",
+      "sha256": "bee24e000ae9c623de511807218ec28399154c029196d76bfad266c0d438b1ce",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/index.ts",
+      "blob": "856726b09bcaa1b0848d886a68e4b416f051601e",
+      "sha256": "a84f2eeb988b1589af9512c82e76afad632c7256abacd64fbf8961723b27f6a6",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Media/index.ts",
+      "blob": "213497b87db77f0c53673d71dc565ca345229e75",
+      "sha256": "dbecb42730905df7c9bb97f09472bf08a046d178724460e5b66371ca0fd7ef50",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Media/Media.constants.ts",
+      "blob": "3be859c1dd5bc5afd89082f504655d79f4d6c96b",
+      "sha256": "3b87ab04352b19e8b4add0d2c31d5c5a479dc80a9890ca52286c958c841d3960",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Media/Media.state.ts",
+      "blob": "66b8fbe3bff44c8fd547cb1083e397605614f051",
+      "sha256": "e9dcd24af397a8b56bb883869a39e1ea80144218af2c7647fa4fa447007aa5d5",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Media/Media.styles.ts",
+      "blob": "d2984e8cb31ba38d09bf68c5a80cf8d2ea57dcb6",
+      "sha256": "6a249e0d7252e621fbf6e3b08e322d6a7afa75639dbeed220626f2b994bb7658",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Media/Media.tsx",
+      "blob": "71db91ce9221912194b5f9ea4883dc0b0e052d41",
+      "sha256": "c140a0e121809c4c474fc1ea44eea691132ccfb6e52fe5b5d44460686f986c72",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Spaces/index.ts",
+      "blob": "ff0780fbdefcc5a35fedd9428ff16df68fb641c1",
+      "sha256": "17fe0fb88a0e749ad6ea1fcd1a6ebcace550c411fc59f2c0943bae69dc1e6903",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Spaces/Spaces.styles.ts",
+      "blob": "e04a6392f019b94c5fde6c121a38f06bd0528621",
+      "sha256": "703cbe07d0245c538f4d1e9d3616788ec333d3504f1353cce1895af14c5b8837",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Spaces/Spaces.tsx",
+      "blob": "9d874e26e41eb82002fd54efa93e6b520ae20223",
+      "sha256": "975ed963c58e5600d0fbaff37132d3de31811f34b64e6cbcba7060046723194b",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Status/Battery/Battery.state.ts",
+      "blob": "2a3d178b803d4d33a54eba626f37999c4203f9d1",
+      "sha256": "8b988b95b16a84a786331f82992a809b62302dd97e911858b2eb6f780b06dccd",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Status/Battery/Battery.tsx",
+      "blob": "d3229d634364b5452c7c2256ab8921ff3084e0a2",
+      "sha256": "179b705df697ce0f74136edaab74c0316f272b7ae208131c7ea2a7a1619c6d6e",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Status/Battery/index.ts",
+      "blob": "40a2e95521c9c92e28bfe462fec11e7cb6246cd0",
+      "sha256": "61e6222e96920be55e5945f6432f15709aefe86cf6109be02b2a6785c0d9b839",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Status/Clock/Clock.state.ts",
+      "blob": "1cc38bccb72e69c697d4ee0d49fe425b1bcad690",
+      "sha256": "4ba7e6266e43b7a1239a942dbed8a3764ba9cb52411921d82f22605b372fcdc5",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Status/Clock/Clock.tsx",
+      "blob": "9df4f061424f63d3dbcc272ab6fe110eecf76ecc",
+      "sha256": "50247f68684985bf3583fcecf4f44eb5f593beb1d2239d868a656a69439d2b70",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Status/Clock/index.ts",
+      "blob": "e289d20c5db6aa3f801f87cb776e99d25aaaabee",
+      "sha256": "675defa5401f172947496f691594d2e0b36487d5bce8a113bc6e6f039b857166",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Status/Cpu/Cpu.state.ts",
+      "blob": "9a4356a9fa84d1f1405b2c2e1576c07184a42014",
+      "sha256": "2da9ccf91a6869278f24038909640e66af126ac82eaf20b5f43a76a928ae0785",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Status/Cpu/Cpu.tsx",
+      "blob": "6eb1cabdb1a7c457be99f5aab952c2c009024190",
+      "sha256": "83de78ec686a05705a46f138fcbac56c3d9bef4bab5152d35235264ab1771923",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Status/Cpu/index.ts",
+      "blob": "2912b2649d73aa42382b28a1b47a2a058900a8e8",
+      "sha256": "abb32a776ea2b1da6c3d9fcd6335847e472015d9614026eeba8be8bf2ec2bb47",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Status/index.ts",
+      "blob": "07c95abc8cb499cc1a865ef5274a1d812c2bea40",
+      "sha256": "3dd1c5af23641058f22420ef5eb0117997905b60ba163b583bb0ce5140cca968",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Status/KeepAwake/index.ts",
+      "blob": "495545c2b3abc7ac7f1a2e4337b185189afbcce4",
+      "sha256": "988e23fa6b2639d1600b04f8b109ab24eb51db8cdacb3820f43435bf8ef1380d",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Status/KeepAwake/KeepAwake.state.ts",
+      "blob": "1ae751b72aaf9a79021ad211473aa95ea20efb68",
+      "sha256": "48ec3d31d9307168520d7abf265bcfcee45cbb3d8edef255ff765da3fbfffc5b",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Status/KeepAwake/KeepAwake.styles.ts",
+      "blob": "7bdcbca447022cd3d8c46999ce8b95e439d86906",
+      "sha256": "e60565c59e185ee6c3dd341fe33bdf4b5de0c785d89e62d8bfa637c2d9fb27cd",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Status/KeepAwake/KeepAwake.tsx",
+      "blob": "4d44fdf6b949f363731135de146b9f38c9e1a02b",
+      "sha256": "3670230e85a49226378a76a3f8e5aa254a0ec8d9e0bb521855a442f3690f1da3",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Status/Status.tsx",
+      "blob": "b50adda60763cb23c6c1bb111c0cce86eb7a6859",
+      "sha256": "2ed9d501661f813fb4552f43609ec11c739f374812121ba818540e90f25edd57",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Status/Weather/index.ts",
+      "blob": "8c35d8a45cfa500f9b31631770ae33294f2e2d2a",
+      "sha256": "831d5311680e9e0c5e280af6f6fe7ee10542b024bf4f70d9b83c5427e9970dfd",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Status/Weather/Weather.state.ts",
+      "blob": "7a909c4f5e8a1c5ef1627cebd331ad4df4e656f4",
+      "sha256": "50324b698c8b4fb5ca7ae9352364b99840efe65bfb64e43c3c467cca54f102f5",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Status/Weather/Weather.styles.ts",
+      "blob": "858173a3652b8b04ee90450b9950c9a7bd7d1f21",
+      "sha256": "4dd36c55065a4bbdae8de152221e8164e5fdd6f152da42292d3b23e19126190a",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Status/Weather/Weather.tsx",
+      "blob": "5f7828ca5473255b8b57c842c0709f7b01374418",
+      "sha256": "008e5fba790f5744bdf672c7a36d5a6352091b0d2a789afc188b7a5e652678ce",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Status/Wifi/index.ts",
+      "blob": "8635d48fd0d10df6d7dc74ca7ed256d15c8208d5",
+      "sha256": "46f6ad647c3e3bb07235828064c901612ce37f1ce00d297215bec1a7f64fe676",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Status/Wifi/Wifi.state.ts",
+      "blob": "162a363daf0f5483a0002c685fcc25826398651a",
+      "sha256": "9d99cdf2e7d322adc16d0a14da3a4a48ce06aa53b10597ad2a370a8d30dd6ef6",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Status/Wifi/Wifi.styles.ts",
+      "blob": "8e53df656168420750a3bf7add815c8675817550",
+      "sha256": "9f064f15970681fe4646f1925ec29a611762c9bc7c761d5643b644193c149dd3",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Status/Wifi/Wifi.tsx",
+      "blob": "e35b47e71fd14a3997fa04d9f93860186542f738",
+      "sha256": "9f2a40e73641fa7b73c1c98feed09d651102f91be95a09999344b324d236d854",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/stores/BatteryStore/BatteryStore.icons.ts",
+      "blob": "44fbdc0daf23867b349324f46c0c25e0fc19d983",
+      "sha256": "9621f2648a5f0e69cb7f1921478afc89732059cbb1cdc16edb205b859a619834",
+      "pinnedBy": "table:ui/stores"
+    },
+    {
+      "path": "_legacy/app/ui/stores/BatteryStore/BatteryStore.ts",
+      "blob": "c9c3f0752fd323e619a3cb7894d5032d506ce693",
+      "sha256": "3c8ff1442c9271df3c5f724c86b671d15a7ebf6b0ed04b97c83d57bcf1f37a77",
+      "pinnedBy": "table:ui/stores"
+    },
+    {
+      "path": "_legacy/app/ui/stores/BatteryStore/index.ts",
+      "blob": "cddb423c3204ab9113ab13db6237947af6eed263",
+      "sha256": "03a58ac8398a86a3a024a169274b6788d1cfb1c60977c1255d5497de121fca04",
+      "pinnedBy": "table:ui/stores"
+    },
+    {
+      "path": "_legacy/app/ui/stores/WeatherStore/WeatherStore.icons.ts",
+      "blob": "fe445a89b3f7c1cc52cbb353776da4666cc80c33",
+      "sha256": "7c90b1f301c488c928d1bd3072813fae345cd8672c90d4d3ecbf6ad4579ac863",
+      "pinnedBy": "table:ui/stores"
+    },
+    {
+      "path": "_legacy/app/ui/utils/media-query.ts",
+      "blob": "ef393c4123c70064e820d8c822afc03648da6daa",
+      "sha256": "712d941c64d8be27d0a0c82ea825eab4492a4f063f997086769d69e7de3310fd",
+      "pinnedBy": "commit-only"
+    }
+  ],
+  "lockfile": {
+    "path": "_legacy/pnpm-lock.yaml",
+    "blob": "1e9e44d0a2ad0483f272dd5eb0a7bee587a19bde",
+    "sha256": "6151adb2ee31b45a5781dc0459372bc073763350b7d2b87b2f980f918082a2e4"
+  },
+  "iconPackages": [
+    {
+      "name": "@hugeicons/core-free-icons",
+      "version": "4.2.3",
+      "integrity": "sha512-fpiU0qFZkv4ABi23xJ2m4qNr0BBfuIaYjPboN8WDA6aj9D+OzXa7eykxKOpACZRuGbDz1U9S5DsNx1d5KNnsgA==",
+      "registryUrl": "https://registry.npmjs.org/@hugeicons/core-free-icons/-/core-free-icons-4.2.3.tgz",
+      "license": "MIT",
+      "licenseFile": null,
+      "filesRead": [
+        {
+          "file": "dist/cjs/index.js",
+          "sha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631"
+        }
+      ]
+    },
+    {
+      "name": "@hugeicons/react",
+      "version": "1.1.9",
+      "integrity": "sha512-O+lWSWjbijoAvMCxn4K2bQWCGN5+mP1y5j+X99j23mXMj+s0X25fs71T6t9YJLaBodwmZdaewD27dzS/PiboQw==",
+      "registryUrl": "https://registry.npmjs.org/@hugeicons/react/-/react-1.1.9.tgz",
+      "license": "MIT",
+      "licenseFile": {
+        "path": "LICENSE.md",
+        "sha256": "1658d8213209df7b9b86dfc05d724ede48d00dbc27abc15976ec7adec9601cde"
+      },
+      "filesRead": [
+        {
+          "file": "dist/cjs/HugeiconsIcon.js",
+          "sha256": "c72e09d275c0a02535b142876bcd9d103d6bce8af2623d547c4e41484553f88e"
+        },
+        {
+          "file": "dist/cjs/index.js",
+          "sha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039"
+        }
+      ]
+    },
+    {
+      "name": "@icons-pack/react-simple-icons",
+      "version": "13.15.1",
+      "integrity": "sha512-S35E7vJlJzMeoqjwwI7ZmQUJ2W+2KspnB6bc49KdoDGwp5mCgAy9L3sscfWMewQSMgBdPU8KWWwpSGq5DJyAFw==",
+      "registryUrl": "https://registry.npmjs.org/@icons-pack/react-simple-icons/-/react-simple-icons-13.15.1.tgz",
+      "license": "MIT",
+      "licenseFile": {
+        "path": "LICENSE",
+        "sha256": "8aa9c015690fe3b82ba102b6bd8eefd519b76d6af03abaf0f3426c1c4c22a8a4"
+      },
+      "filesRead": [
+        {
+          "file": "icons/SiTidal.cjs",
+          "sha256": "aff200895b7765d99c7ea082b9b7f440c76d485c31c85113f8ccbbb5af9062dd"
+        }
+      ]
+    }
+  ],
+  "icons": [
+    {
+      "file": "icons/BatteryChargingIcon.svg",
+      "icon": "BatteryChargingIcon",
+      "aliasOf": "BatteryCharging01Icon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "2a529c5d881b9279b2aa026235370adc858ef6d48ca965d6938dc8c89dc82aef",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "723be8144a3eeb037a57277a280145f5d2d1bc18801ad0766d859f87c52a5039"
+    },
+    {
+      "file": "icons/BatteryEmptyIcon.svg",
+      "icon": "BatteryEmptyIcon",
+      "aliasOf": "BatteryEmptyIcon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "e18e02be3f34b8e85742faf9773a0628cf7ef953252529bcd9b1dbef69060e52",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "69c8a52471cedb4f6994259850c48b2db50eb0f57dfaf001a2087e2727470bb0"
+    },
+    {
+      "file": "icons/BatteryFullIcon.svg",
+      "icon": "BatteryFullIcon",
+      "aliasOf": "BatteryFullIcon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "f5abae83097dbb36b8d6aefd52dfe8e1f34cdb4d70e82f7c351d93b2d5c087c2",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "f25b73c9853f52a355b36c9e845a852120384a048d7ef798cf89c4e3869af9c1"
+    },
+    {
+      "file": "icons/BatteryLowIcon.svg",
+      "icon": "BatteryLowIcon",
+      "aliasOf": "BatteryLowIcon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "e204447b550f8a0c49b824f26dd1de7888effcc901586b14e1017df3c3be1d05",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "c9941822dcb1cbea5891b138a5d46b7d21bec834e00a8f3879c94225a64c7d73"
+    },
+    {
+      "file": "icons/BatteryMedium02Icon.svg",
+      "icon": "BatteryMedium02Icon",
+      "aliasOf": "BatteryMedium02Icon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "2103647ca10888d2a65517b9469b6d31d1fb2b7928b114c2b469a3835ab565b0",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "28c067db96dd3e0caeea7a8ad216961e2cfa6ec62ebad00b418468743b52c12a"
+    },
+    {
+      "file": "icons/BatteryMediumIcon.svg",
+      "icon": "BatteryMediumIcon",
+      "aliasOf": "BatteryMedium01Icon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "8d8cd30a8247995958fb0e3eb8f3bee27b10ab3cf44b23db3e659347036b2c33",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "f1a01ed9678d4a23bf3e5127e1bf4e56bf47c1ee14deeb7fc557d5a7e183f2e6"
+    },
+    {
+      "file": "icons/CloudAngledRainIcon.svg",
+      "icon": "CloudAngledRainIcon",
+      "aliasOf": "CloudAngledRainIcon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "ee68b7f1708a042da21c7953df4859ad632b4ad538eb6a23451dab5bdcc0e2c0",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "02c384716f72dfd13e595e7fcfd43548fce9398b7c4e2af3cec1f7c1e1c5260f"
+    },
+    {
+      "file": "icons/CloudAngledRainZapIcon.svg",
+      "icon": "CloudAngledRainZapIcon",
+      "aliasOf": "CloudAngledRainZapIcon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "d616f461603260b74cc43702aaa883ec09522b249b32355b23d5ac099588e1c7",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "c7054d715159b005a6bd7108c79a932005fa15d8e6b3e75afbefe68ca74d930e"
+    },
+    {
+      "file": "icons/CloudIcon.svg",
+      "icon": "CloudIcon",
+      "aliasOf": "CloudIcon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "893179b9ba847cebcc4d1c8413ee96a75dacc017d9019eeb3e41fcb74a72e3a9",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "46933647f78757857690b5e9609853801857b513d541dda14c5254fb2c1ec9fb"
+    },
+    {
+      "file": "icons/CloudSlowWindIcon.svg",
+      "icon": "CloudSlowWindIcon",
+      "aliasOf": "CloudSlowWindIcon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "313878de4eb12c1584f42e51ea65aa885e2887ba5c846e0b9d0a9dc8b27e0759",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "41b8020ce21b0a2ab6cb840cc9ec650b4c1fe165e374d8fa6727634ba5e03436"
+    },
+    {
+      "file": "icons/Coffee02Icon.active.svg",
+      "icon": "Coffee02Icon",
+      "aliasOf": "Coffee02Icon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "6f10b20cfe64af027f038de1868bb57bbfbd24c063232cd8494843d3a623824e",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8,
+        "fill": "#a6e3a1",
+        "color": "#a6e3a1"
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "ee4a6edeab2602747ebdcf8b13e9e68efdc1b0c1df59d7b00f530859c5636a0b"
+    },
+    {
+      "file": "icons/Coffee02Icon.inactive.svg",
+      "icon": "Coffee02Icon",
+      "aliasOf": "Coffee02Icon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "6f10b20cfe64af027f038de1868bb57bbfbd24c063232cd8494843d3a623824e",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8,
+        "fill": "transparent"
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "6fb9b58ee7138c918f28531749014d5b1ce60f022b4ca68814808ad6069d6981"
+    },
+    {
+      "file": "icons/CpuChargeIcon.svg",
+      "icon": "CpuChargeIcon",
+      "aliasOf": "CpuChargeIcon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "160671fa0b3eb9c6bf98731976c05f93a80fc3756dace8b7fbd2aba9c0cb8721",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "6ea2933b03cddada935c72da791c58e031c8587e44347731dc1218ff1f244d68"
+    },
+    {
+      "file": "icons/CpuIcon.svg",
+      "icon": "CpuIcon",
+      "aliasOf": "CpuIcon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "ab978e76a8b75787722aa3db031cc426ee577ad5877aeff909c6ef60c5b0dae7",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "f5be10200d4ff3fbd20f43f5f9091e94a7f560e2d04cbdbef7d9502186d582f1"
+    },
+    {
+      "file": "icons/FastWindIcon.svg",
+      "icon": "FastWindIcon",
+      "aliasOf": "FastWindIcon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "81caad3f2263ba5ed21f91090fe7ab436b144e492ac4cfb2c04ca34c6481b24c",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "0e32ab3a4378304f3fd1baf44741bfecae272d5ed9a98061293b1807f282bcc4"
+    },
+    {
+      "file": "icons/MoonAngledRainZapIcon.svg",
+      "icon": "MoonAngledRainZapIcon",
+      "aliasOf": "MoonAngledRainZapIcon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "768ba5d7c6ebc720d7e0b2097c65de5e8320cbf14dee4f65bf72892f11d3b8cf",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "6383405a4a91ebc79501e577340b2f26f78866be813d26af3142c47d98ee4ffb"
+    },
+    {
+      "file": "icons/MoonCloudAngledRainIcon.svg",
+      "icon": "MoonCloudAngledRainIcon",
+      "aliasOf": "MoonCloudAngledRainIcon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "b9dc44b5c227e8baa9b5998d69d775d63e1134a7b2bca411802b3f0530e1c8ec",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "b92eb4e25a9efbd0ddf93f099547381e4aff7aa82f14513ef3a2393e6244df8d"
+    },
+    {
+      "file": "icons/MoonCloudIcon.svg",
+      "icon": "MoonCloudIcon",
+      "aliasOf": "MoonCloudIcon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "84e2e56568aff88225734b3e938f445ffe245835560739a324d7b5c657ca0cab",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "d829464a871914bd671b812f926fa3218a6415fd6aa397d315ea14ab54c4db37"
+    },
+    {
+      "file": "icons/MoonCloudSnowIcon.svg",
+      "icon": "MoonCloudSnowIcon",
+      "aliasOf": "MoonCloudSnowIcon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "2cdb145e2882c69bf519c277a51be815799b8884c8c0742744f773fd89ad512d",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "bab62005c32bf2f09131d2a8ed9547c161e5d764f1b3ab621e68e228997a375f"
+    },
+    {
+      "file": "icons/MoonIcon.svg",
+      "icon": "MoonIcon",
+      "aliasOf": "MoonIcon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "19d6bd19e97b3c6fc49deea31eb62efe4610bdf31d29cb8e7c315e5f03894251",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "00b20d9142ab4235bbda9d2abe7b37ef07a60d1f6dbaf0e8e3073d7ae054fc7e"
+    },
+    {
+      "file": "icons/PlayCircle02Icon.svg",
+      "icon": "PlayCircle02Icon",
+      "aliasOf": "PlayCircle02Icon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "b9aa7d0112c006bde106e31be8f9f95d287b477535d6cab1df477d1f11df42de",
+      "renderProps": {
+        "size": 22,
+        "strokeWidth": 1.8,
+        "color": "#cdd6f4"
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "44b5c9316334875ac385f1f5f696e2fb118857a909fd5c01dc93a666eb88e586"
+    },
+    {
+      "file": "icons/SiTidal.svg",
+      "icon": "SiTidal",
+      "aliasOf": null,
+      "package": "@icons-pack/react-simple-icons",
+      "sourceFile": "icons/SiTidal.cjs",
+      "sourceSha256": "aff200895b7765d99c7ea082b9b7f440c76d485c31c85113f8ccbbb5af9062dd",
+      "definitionSha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8,
+        "color": "#cdd6f4"
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "edc256e352b9bb6376d685509f122c3b3e13d13ba7fdb58b8b010ab5cf490d93"
+    },
+    {
+      "file": "icons/SnowIcon.svg",
+      "icon": "SnowIcon",
+      "aliasOf": "SnowIcon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "2b7a9cec32deeac84da450c88e156f0697315e5228d0be8f058a935fdb3c3613",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "e1fac7c10bf7f7c326f80bfb22ed3acdd006b1e476ef86bcf687c20810114d48"
+    },
+    {
+      "file": "icons/SpotifyIcon.svg",
+      "icon": "SpotifyIcon",
+      "aliasOf": "SpotifyIcon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "f18b7296e904c95efa3b875a2caddb98b4d317597047e3440612fd6db73d257c",
+      "renderProps": {
+        "size": 22,
+        "strokeWidth": 1.8,
+        "color": "#a6e3a1"
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "4a1723119c9c0fe0eaba595892aca9249b22d12ccf094dd8b661077f680cf368"
+    },
+    {
+      "file": "icons/SunCloud02Icon.svg",
+      "icon": "SunCloud02Icon",
+      "aliasOf": "SunCloud02Icon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "5ed064ae5233cd6d2cf68ad5b2b49d90a41eb06439789ed37702e897f30a3414",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "f1c3a153396176788a04b43b19dfcd6e32bdf47eec0d208652465856d9db3e51"
+    },
+    {
+      "file": "icons/SunCloudAngledRainIcon.svg",
+      "icon": "SunCloudAngledRainIcon",
+      "aliasOf": "SunCloudAngledRain01Icon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "3b992b511e01324e65d0235f45589ff5090b6ba5f6d0ad7b4c282c486f3a436e",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "8e5e7a090b51cd5f8282e4c9e8c93caa45f9d0013a9f1121a7d4d37228b79066"
+    },
+    {
+      "file": "icons/SunCloudSnowIcon.svg",
+      "icon": "SunCloudSnowIcon",
+      "aliasOf": "SunCloudSnow01Icon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "1dabc272a0c486895abcc41d2015c32b41706a9463abda3c29ccfd5085c296c0",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "23f3ff01faa3b309b064db90e6e1d25242d3e6d47f1942df0ebdfcca215a7d35"
+    },
+    {
+      "file": "icons/SunIcon.svg",
+      "icon": "SunIcon",
+      "aliasOf": "Sun01Icon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "d435079b59edeea1e775ca5b325409075a3bb8dc015f687da910644358b6d920",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "c17f4939dce406b16b5e101216c576551e485f2f09c9a7758caa9dd99c230467"
+    },
+    {
+      "file": "icons/Time03Icon.svg",
+      "icon": "Time03Icon",
+      "aliasOf": "Time03Icon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "96d45a3dce8623cfde08ec09eab29a41dc117b6795125431eb9b493a5804b283",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "cf79aaae4f0630520e8dec71837b1bebcc4947736d83a5727f28f12deb580fa6"
+    },
+    {
+      "file": "icons/Vynil02Icon.svg",
+      "icon": "Vynil02Icon",
+      "aliasOf": "Vynil02Icon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "2ca334aff622e226d1ea487a6ea92e9e13e46c8526f29febddd58086b7271316",
+      "renderProps": {
+        "size": 22,
+        "strokeWidth": 1.8,
+        "color": "#89dceb"
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "6266d8813272a76a871606f0bc038647b4ce8667838a1e65cbc7e55150df57c0"
+    },
+    {
+      "file": "icons/Wifi01Icon.svg",
+      "icon": "Wifi01Icon",
+      "aliasOf": "Wifi01Icon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "4c476dbbf2edbf7993dffbfaa0613b2093230a7fa8961a10d1ea3988bbca497b",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "c68f880fd61010d5801f744ca727169e46bde18b9161628c6943e51d81870b46"
+    },
+    {
+      "file": "icons/WifiDisconnected04Icon.svg",
+      "icon": "WifiDisconnected04Icon",
+      "aliasOf": "WifiDisconnected04Icon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "555a8f8acde4ff6e567190e4a44e0c9b267188378d2a81d5de6b61cda642a87a",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "da82c1ee2549b0330a1572613daadaf8070689d60e7392d11f21aa21655ad04f"
+    },
+    {
+      "file": "icons/WifiFullSignalIcon.svg",
+      "icon": "WifiFullSignalIcon",
+      "aliasOf": "WifiFullSignalIcon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "5734469f20033a90612f33bb6a2291fe3b764d57abbb202f36a1812cebce977f",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "2f863a8e6d75879dda51913a91d08516a939e0b75e079460fbe53905573a6ca4"
+    },
+    {
+      "file": "icons/WifiLowSignalIcon.svg",
+      "icon": "WifiLowSignalIcon",
+      "aliasOf": "WifiLowSignalIcon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "9dbd4063de5b9cd692859be19a6be02b413bc89c272c6dc5d2bce89e771ff638",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "6c95b09b3055cfeec0f6611d16bf6f6d5f2e7761f2491a20b587408a808c632e"
+    },
+    {
+      "file": "icons/WifiMediumSignalIcon.svg",
+      "icon": "WifiMediumSignalIcon",
+      "aliasOf": "WifiMediumSignalIcon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "1c71219fee6b9a9e83f16e64877480cd6db3bfa5650a24e0322fcd1b8b7b3e54",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "ee82b715360ffec231a4602fdafe1c3437f7c2eb9ea9f855cc20c95e4a9de290"
+    },
+    {
+      "file": "icons/WifiOff02Icon.svg",
+      "icon": "WifiOff02Icon",
+      "aliasOf": "WifiOff02Icon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "ac2432990ee43b33946c760e4d27b81853fb473e39db320f45924c41af25a5bd",
+      "renderProps": {
+        "size": 18,
+        "strokeWidth": 1.8
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "e2194edd73e9d0474b933a060ddd387fdf523367ab19dbdb2189ea3d58cb3160"
+    },
+    {
+      "file": "icons/YoutubeIcon.svg",
+      "icon": "YoutubeIcon",
+      "aliasOf": "YoutubeIcon",
+      "package": "@hugeicons/core-free-icons",
+      "sourceFile": "dist/cjs/index.js",
+      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "definitionSha256": "3e437bc4f24be5e47b69ecd7975296cd9142ffa5998a9503071e1a4b85cfdfd3",
+      "renderProps": {
+        "size": 22,
+        "strokeWidth": 1.8,
+        "color": "#f38ba8"
+      },
+      "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component",
+      "sha256": "5ff2952f5addba400ef3128ae7e360064b781ed5c031f55e91e8739eea9223a0"
+    }
+  ],
+  "hugeiconsRepositoryComparison": {
+    "legacyVersion": "4.2.3",
+    "repositoryVersion": "4.4.0",
+    "identicalSourceByIcon": {
+      "BatteryChargingIcon": {
+        "identical": true,
+        "legacyAlias": "BatteryCharging01Icon",
+        "repositoryAlias": "BatteryCharging01Icon"
+      },
+      "BatteryEmptyIcon": {
+        "identical": true,
+        "legacyAlias": "BatteryEmptyIcon",
+        "repositoryAlias": "BatteryEmptyIcon"
+      },
+      "BatteryFullIcon": {
+        "identical": true,
+        "legacyAlias": "BatteryFullIcon",
+        "repositoryAlias": "BatteryFullIcon"
+      },
+      "BatteryLowIcon": {
+        "identical": true,
+        "legacyAlias": "BatteryLowIcon",
+        "repositoryAlias": "BatteryLowIcon"
+      },
+      "BatteryMedium02Icon": {
+        "identical": true,
+        "legacyAlias": "BatteryMedium02Icon",
+        "repositoryAlias": "BatteryMedium02Icon"
+      },
+      "BatteryMediumIcon": {
+        "identical": true,
+        "legacyAlias": "BatteryMedium01Icon",
+        "repositoryAlias": "BatteryMedium01Icon"
+      },
+      "CloudAngledRainIcon": {
+        "identical": true,
+        "legacyAlias": "CloudAngledRainIcon",
+        "repositoryAlias": "CloudAngledRainIcon"
+      },
+      "CloudAngledRainZapIcon": {
+        "identical": true,
+        "legacyAlias": "CloudAngledRainZapIcon",
+        "repositoryAlias": "CloudAngledRainZapIcon"
+      },
+      "CloudIcon": {
+        "identical": true,
+        "legacyAlias": "CloudIcon",
+        "repositoryAlias": "CloudIcon"
+      },
+      "CloudSlowWindIcon": {
+        "identical": true,
+        "legacyAlias": "CloudSlowWindIcon",
+        "repositoryAlias": "CloudSlowWindIcon"
+      },
+      "Coffee02Icon": {
+        "identical": true,
+        "legacyAlias": "Coffee02Icon",
+        "repositoryAlias": "Coffee02Icon"
+      },
+      "CpuChargeIcon": {
+        "identical": true,
+        "legacyAlias": "CpuChargeIcon",
+        "repositoryAlias": "CpuChargeIcon"
+      },
+      "CpuIcon": {
+        "identical": true,
+        "legacyAlias": "CpuIcon",
+        "repositoryAlias": "CpuIcon"
+      },
+      "FastWindIcon": {
+        "identical": true,
+        "legacyAlias": "FastWindIcon",
+        "repositoryAlias": "FastWindIcon"
+      },
+      "MoonAngledRainZapIcon": {
+        "identical": true,
+        "legacyAlias": "MoonAngledRainZapIcon",
+        "repositoryAlias": "MoonAngledRainZapIcon"
+      },
+      "MoonCloudAngledRainIcon": {
+        "identical": true,
+        "legacyAlias": "MoonCloudAngledRainIcon",
+        "repositoryAlias": "MoonCloudAngledRainIcon"
+      },
+      "MoonCloudIcon": {
+        "identical": true,
+        "legacyAlias": "MoonCloudIcon",
+        "repositoryAlias": "MoonCloudIcon"
+      },
+      "MoonCloudSnowIcon": {
+        "identical": true,
+        "legacyAlias": "MoonCloudSnowIcon",
+        "repositoryAlias": "MoonCloudSnowIcon"
+      },
+      "MoonIcon": {
+        "identical": true,
+        "legacyAlias": "MoonIcon",
+        "repositoryAlias": "MoonIcon"
+      },
+      "PlayCircle02Icon": {
+        "identical": true,
+        "legacyAlias": "PlayCircle02Icon",
+        "repositoryAlias": "PlayCircle02Icon"
+      },
+      "SnowIcon": {
+        "identical": true,
+        "legacyAlias": "SnowIcon",
+        "repositoryAlias": "SnowIcon"
+      },
+      "SpotifyIcon": {
+        "identical": true,
+        "legacyAlias": "SpotifyIcon",
+        "repositoryAlias": "SpotifyIcon"
+      },
+      "SunCloud02Icon": {
+        "identical": true,
+        "legacyAlias": "SunCloud02Icon",
+        "repositoryAlias": "SunCloud02Icon"
+      },
+      "SunCloudAngledRainIcon": {
+        "identical": true,
+        "legacyAlias": "SunCloudAngledRain01Icon",
+        "repositoryAlias": "SunCloudAngledRain01Icon"
+      },
+      "SunCloudSnowIcon": {
+        "identical": true,
+        "legacyAlias": "SunCloudSnow01Icon",
+        "repositoryAlias": "SunCloudSnow01Icon"
+      },
+      "SunIcon": {
+        "identical": true,
+        "legacyAlias": "Sun01Icon",
+        "repositoryAlias": "Sun01Icon"
+      },
+      "Time03Icon": {
+        "identical": true,
+        "legacyAlias": "Time03Icon",
+        "repositoryAlias": "Time03Icon"
+      },
+      "Vynil02Icon": {
+        "identical": true,
+        "legacyAlias": "Vynil02Icon",
+        "repositoryAlias": "Vynil02Icon"
+      },
+      "Wifi01Icon": {
+        "identical": true,
+        "legacyAlias": "Wifi01Icon",
+        "repositoryAlias": "Wifi01Icon"
+      },
+      "WifiDisconnected04Icon": {
+        "identical": true,
+        "legacyAlias": "WifiDisconnected04Icon",
+        "repositoryAlias": "WifiDisconnected04Icon"
+      },
+      "WifiFullSignalIcon": {
+        "identical": true,
+        "legacyAlias": "WifiFullSignalIcon",
+        "repositoryAlias": "WifiFullSignalIcon"
+      },
+      "WifiLowSignalIcon": {
+        "identical": true,
+        "legacyAlias": "WifiLowSignalIcon",
+        "repositoryAlias": "WifiLowSignalIcon"
+      },
+      "WifiMediumSignalIcon": {
+        "identical": true,
+        "legacyAlias": "WifiMediumSignalIcon",
+        "repositoryAlias": "WifiMediumSignalIcon"
+      },
+      "WifiOff02Icon": {
+        "identical": true,
+        "legacyAlias": "WifiOff02Icon",
+        "repositoryAlias": "WifiOff02Icon"
+      },
+      "YoutubeIcon": {
+        "identical": true,
+        "legacyAlias": "YoutubeIcon",
+        "repositoryAlias": "YoutubeIcon"
+      }
+    }
+  },
+  "outputs": [
+    {
+      "path": "fixtures/fixtures.json",
+      "sha256": "ea0ecc09c992d56cb1ad1510a295e383a3bfd759043e152d37550d08dbb2b19a"
+    },
+    {
+      "path": "icons/BatteryChargingIcon.svg",
+      "sha256": "723be8144a3eeb037a57277a280145f5d2d1bc18801ad0766d859f87c52a5039"
+    },
+    {
+      "path": "icons/BatteryEmptyIcon.svg",
+      "sha256": "69c8a52471cedb4f6994259850c48b2db50eb0f57dfaf001a2087e2727470bb0"
+    },
+    {
+      "path": "icons/BatteryFullIcon.svg",
+      "sha256": "f25b73c9853f52a355b36c9e845a852120384a048d7ef798cf89c4e3869af9c1"
+    },
+    {
+      "path": "icons/BatteryLowIcon.svg",
+      "sha256": "c9941822dcb1cbea5891b138a5d46b7d21bec834e00a8f3879c94225a64c7d73"
+    },
+    {
+      "path": "icons/BatteryMedium02Icon.svg",
+      "sha256": "28c067db96dd3e0caeea7a8ad216961e2cfa6ec62ebad00b418468743b52c12a"
+    },
+    {
+      "path": "icons/BatteryMediumIcon.svg",
+      "sha256": "f1a01ed9678d4a23bf3e5127e1bf4e56bf47c1ee14deeb7fc557d5a7e183f2e6"
+    },
+    {
+      "path": "icons/CloudAngledRainIcon.svg",
+      "sha256": "02c384716f72dfd13e595e7fcfd43548fce9398b7c4e2af3cec1f7c1e1c5260f"
+    },
+    {
+      "path": "icons/CloudAngledRainZapIcon.svg",
+      "sha256": "c7054d715159b005a6bd7108c79a932005fa15d8e6b3e75afbefe68ca74d930e"
+    },
+    {
+      "path": "icons/CloudIcon.svg",
+      "sha256": "46933647f78757857690b5e9609853801857b513d541dda14c5254fb2c1ec9fb"
+    },
+    {
+      "path": "icons/CloudSlowWindIcon.svg",
+      "sha256": "41b8020ce21b0a2ab6cb840cc9ec650b4c1fe165e374d8fa6727634ba5e03436"
+    },
+    {
+      "path": "icons/Coffee02Icon.active.svg",
+      "sha256": "ee4a6edeab2602747ebdcf8b13e9e68efdc1b0c1df59d7b00f530859c5636a0b"
+    },
+    {
+      "path": "icons/Coffee02Icon.inactive.svg",
+      "sha256": "6fb9b58ee7138c918f28531749014d5b1ce60f022b4ca68814808ad6069d6981"
+    },
+    {
+      "path": "icons/CpuChargeIcon.svg",
+      "sha256": "6ea2933b03cddada935c72da791c58e031c8587e44347731dc1218ff1f244d68"
+    },
+    {
+      "path": "icons/CpuIcon.svg",
+      "sha256": "f5be10200d4ff3fbd20f43f5f9091e94a7f560e2d04cbdbef7d9502186d582f1"
+    },
+    {
+      "path": "icons/FastWindIcon.svg",
+      "sha256": "0e32ab3a4378304f3fd1baf44741bfecae272d5ed9a98061293b1807f282bcc4"
+    },
+    {
+      "path": "icons/MoonAngledRainZapIcon.svg",
+      "sha256": "6383405a4a91ebc79501e577340b2f26f78866be813d26af3142c47d98ee4ffb"
+    },
+    {
+      "path": "icons/MoonCloudAngledRainIcon.svg",
+      "sha256": "b92eb4e25a9efbd0ddf93f099547381e4aff7aa82f14513ef3a2393e6244df8d"
+    },
+    {
+      "path": "icons/MoonCloudIcon.svg",
+      "sha256": "d829464a871914bd671b812f926fa3218a6415fd6aa397d315ea14ab54c4db37"
+    },
+    {
+      "path": "icons/MoonCloudSnowIcon.svg",
+      "sha256": "bab62005c32bf2f09131d2a8ed9547c161e5d764f1b3ab621e68e228997a375f"
+    },
+    {
+      "path": "icons/MoonIcon.svg",
+      "sha256": "00b20d9142ab4235bbda9d2abe7b37ef07a60d1f6dbaf0e8e3073d7ae054fc7e"
+    },
+    {
+      "path": "icons/PlayCircle02Icon.svg",
+      "sha256": "44b5c9316334875ac385f1f5f696e2fb118857a909fd5c01dc93a666eb88e586"
+    },
+    {
+      "path": "icons/SiTidal.svg",
+      "sha256": "edc256e352b9bb6376d685509f122c3b3e13d13ba7fdb58b8b010ab5cf490d93"
+    },
+    {
+      "path": "icons/SnowIcon.svg",
+      "sha256": "e1fac7c10bf7f7c326f80bfb22ed3acdd006b1e476ef86bcf687c20810114d48"
+    },
+    {
+      "path": "icons/SpotifyIcon.svg",
+      "sha256": "4a1723119c9c0fe0eaba595892aca9249b22d12ccf094dd8b661077f680cf368"
+    },
+    {
+      "path": "icons/SunCloud02Icon.svg",
+      "sha256": "f1c3a153396176788a04b43b19dfcd6e32bdf47eec0d208652465856d9db3e51"
+    },
+    {
+      "path": "icons/SunCloudAngledRainIcon.svg",
+      "sha256": "8e5e7a090b51cd5f8282e4c9e8c93caa45f9d0013a9f1121a7d4d37228b79066"
+    },
+    {
+      "path": "icons/SunCloudSnowIcon.svg",
+      "sha256": "23f3ff01faa3b309b064db90e6e1d25242d3e6d47f1942df0ebdfcca215a7d35"
+    },
+    {
+      "path": "icons/SunIcon.svg",
+      "sha256": "c17f4939dce406b16b5e101216c576551e485f2f09c9a7758caa9dd99c230467"
+    },
+    {
+      "path": "icons/Time03Icon.svg",
+      "sha256": "cf79aaae4f0630520e8dec71837b1bebcc4947736d83a5727f28f12deb580fa6"
+    },
+    {
+      "path": "icons/Vynil02Icon.svg",
+      "sha256": "6266d8813272a76a871606f0bc038647b4ce8667838a1e65cbc7e55150df57c0"
+    },
+    {
+      "path": "icons/Wifi01Icon.svg",
+      "sha256": "c68f880fd61010d5801f744ca727169e46bde18b9161628c6943e51d81870b46"
+    },
+    {
+      "path": "icons/WifiDisconnected04Icon.svg",
+      "sha256": "da82c1ee2549b0330a1572613daadaf8070689d60e7392d11f21aa21655ad04f"
+    },
+    {
+      "path": "icons/WifiFullSignalIcon.svg",
+      "sha256": "2f863a8e6d75879dda51913a91d08516a939e0b75e079460fbe53905573a6ca4"
+    },
+    {
+      "path": "icons/WifiLowSignalIcon.svg",
+      "sha256": "6c95b09b3055cfeec0f6611d16bf6f6d5f2e7761f2491a20b587408a808c632e"
+    },
+    {
+      "path": "icons/WifiMediumSignalIcon.svg",
+      "sha256": "ee82b715360ffec231a4602fdafe1c3437f7c2eb9ea9f855cc20c95e4a9de290"
+    },
+    {
+      "path": "icons/WifiOff02Icon.svg",
+      "sha256": "e2194edd73e9d0474b933a060ddd387fdf523367ab19dbdb2189ea3d58cb3160"
+    },
+    {
+      "path": "icons/YoutubeIcon.svg",
+      "sha256": "5ff2952f5addba400ef3128ae7e360064b781ed5c031f55e91e8739eea9223a0"
+    },
+    {
+      "path": "reference.css",
+      "sha256": "1e98add207433b5fc15061294c4339b399148201d0b0e6f3d488f2c3d50d6461"
+    }
+  ],
+  "extractionTool": {
+    "files": [
+      {
+        "path": "scripts/bar-reference/css.ts",
+        "sha256": "f116d8567a0348dc95a6bad4c6338d1c055e16c8cf9b47f741692bce98338098"
+      },
+      {
+        "path": "scripts/bar-reference/extract.ts",
+        "sha256": "a6a42f5384ccb203fbcdb24c70a6010debdfd35aceece1a3f4875f4fa92d9e4b"
+      },
+      {
+        "path": "scripts/bar-reference/loader.ts",
+        "sha256": "e2cd9f971ace585201c3a8d5f1664085d14dde211d2875b6e0a05eda10004ea6"
+      },
+      {
+        "path": "scripts/bar-reference/npm.ts",
+        "sha256": "1e632a69844719faaf0ee9e05a565fb05232cd02ee6201ca9a10e56acfb62749"
+      },
+      {
+        "path": "scripts/bar-reference/scenarios.ts",
+        "sha256": "71dca00412053ab6ccca2708d6f04c55975a94a85b61bd6e63a2227a7e16898d"
+      },
+      {
+        "path": "scripts/bar-reference/stubs.ts",
+        "sha256": "057741f194dbe534619a78cde0b16c62e7bf0c6e8f5ef792eef06af951845cac"
+      }
+    ],
+    "sha256": "234582b15148c45df02baf1adbde535f46749d4cae96730eb5b10384b82d9ea1"
+  },
+  "scenarios": [
+    "bar-default",
+    "bar-fade-initial",
+    "menu-bar-hidden",
+    "global-suspense",
+    "global-error",
+    "spaces-fallback",
+    "media-playing-spotify",
+    "media-paused",
+    "media-no-artist",
+    "media-youtube-edge",
+    "media-tidal",
+    "media-feishin",
+    "media-unknown-player",
+    "media-artwork-loaded",
+    "media-artwork-error",
+    "media-long-title",
+    "media-long-title-scrolling",
+    "battery-absent",
+    "battery-full",
+    "battery-unknown",
+    "battery-charging",
+    "battery-discharging-75",
+    "battery-discharging-50",
+    "battery-discharging-25",
+    "battery-empty",
+    "battery-label-loading",
+    "cpu-no-temperature",
+    "cpu-temperature",
+    "cpu-temperature-zero",
+    "cpu-threshold-84",
+    "cpu-threshold-85",
+    "cpu-hot",
+    "wifi-unknown",
+    "wifi-off",
+    "wifi-disconnected",
+    "wifi-missing-ssid",
+    "wifi-signal-full",
+    "wifi-signal-medium",
+    "wifi-signal-low",
+    "wifi-signal-weak",
+    "wifi-signal-unknown",
+    "wifi-long-ssid-scrolling",
+    "weather-loaded",
+    "weather-loading",
+    "weather-error",
+    "weather-unconfigured",
+    "keep-awake-pending",
+    "keep-awake-active",
+    "keep-awake-inactive",
+    "weather-icon-snow",
+    "weather-icon-snowShowersDay",
+    "weather-icon-snowShowersNight",
+    "weather-icon-thunder",
+    "weather-icon-thunderShowersDay",
+    "weather-icon-thunderShowersNight",
+    "weather-icon-rain",
+    "weather-icon-rainDay",
+    "weather-icon-rainNight",
+    "weather-icon-fog",
+    "weather-icon-windy",
+    "weather-icon-cloudy",
+    "weather-icon-partlyCloudyDay",
+    "weather-icon-partlyCloudyNight",
+    "weather-icon-clearDay",
+    "weather-icon-clearNight"
+  ],
+  "declaredStubs": [
+    "@/hooks",
+    "@/stores/WeatherStore",
+    "@/types",
+    "@/utils/queryClientDefaults",
+    "@linaria/core",
+    "@tanstack/react-query",
+    "@tauri-apps/api/core",
+    "_legacy/app/ui/renderer/bar/Spaces/Spaces.state.ts",
+    "_legacy/app/ui/renderer/bar/Spaces/components/AppList/index.ts",
+    "_legacy/app/ui/renderer/bar/Spaces/components/WorkspaceList/index.ts",
+    "motion/react",
+    "react",
+    "react-error-boundary"
+  ],
+  "handReconstructed": [
+    {
+      "piece": "Surface motion (motion/react)",
+      "detail": "motion is not installed. Surface renders the settled inline opacity:1 (opacity:0 for the bar-fade-initial fixture); the 0.275s ease fade itself is JS-driven and must be sampled by the parity runner."
+    },
+    {
+      "piece": "ErrorBoundary catch (react-error-boundary)",
+      "detail": "Error boundaries do not run in static rendering. The global-error fixture renders the pinned QueryErrorFallback directly; the boundary wrapper has no DOM of its own."
+    },
+    {
+      "piece": "ScrollingLabel measured state",
+      "detail": "start/end/distance come from layout measurement in a browser. The *-scrolling fixtures inject fixed values into the pinned component through a useState shim; the parity runner measures real values."
+    },
+    {
+      "piece": "Media artwork preload state",
+      "detail": "loadedArtwork is set by an Image() load effect. Fixtures inject the loaded (data URI) and failed (null) results. Artwork pixels are a synthetic generated PNG, not captured media."
+    },
+    {
+      "piece": "Data access boundary",
+      "detail": "React Query, Tauri invoke/events, the useTauri/useWidgetToggle/useMediaQuery hooks and the Weather store plumbing are replaced by fixture data (stubs.ts). Labels, colors, icon choice and markup are computed by the pinned sources."
+    },
+    {
+      "piece": "Spaces data hook and workspace/app lists",
+      "detail": "Spaces.state, AppList and WorkspaceList are stubbed (tiling absent). Spaces.tsx and its SpacesFallback run unchanged; Spaces/components styles are intentionally not extracted (strip is not ported)."
+    },
+    {
+      "piece": "Styles",
+      "detail": "Linaria is replaced by a template-collecting css/cx stub and a small flattener (css.ts). Stylis vendor-prefix duplicates are not generated. Class names are generated (lr-<Module>-<name>). Rule order follows legacy module evaluation order, which is how the legacy bundle ordered its CSS."
+    },
+    {
+      "piece": "Clock",
+      "detail": "The legacy formatter runs unchanged against a frozen Date in UTC."
+    },
+    {
+      "piece": "React runtime",
+      "detail": "Rendered with the repository react-dom/server (classic JSX transform); the legacy lockfile pins react 19.2.8."
+    }
+  ],
+  "environment": {
+    "extractionHost": {
+      "font": {
+        "family": "Maple Mono NF Medium",
+        "fullName": "Maple Mono NF Medium",
+        "version": "Version 7.900",
+        "fileName": "MapleMono-NF-Medium.ttf",
+        "sha256": "9d0a3002f27f3ecfbf8af8764ddce2fe41aa773a8edd9999ae68a9555405ed7b"
+      }
+    },
+    "parityRun": {
+      "font": {
+        "family": null,
+        "version": null,
+        "fileSha256": null
+      },
+      "os": null,
+      "browser": null,
+      "viewport": null,
+      "deviceScale": null,
+      "colorProfile": null,
+      "recordedBy": null
+    }
+  }
+}

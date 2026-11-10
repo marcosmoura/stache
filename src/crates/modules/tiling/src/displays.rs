@@ -7,7 +7,8 @@
 //! through [`TrackingRuntime::submit_displays`]. The module primes the feed
 //! (initial query and submission) before the action authority is published, so
 //! the first frame plan sees native topology. Tiling never applies a screen
-//! topology to the host registry; Bar owns that.
+//! topology to the host registry; the app's Bar-scoped topology feed owns that
+//! (`stache-app` `bar` module), and only while Bar runs.
 
 use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
 use std::thread::JoinHandle;

@@ -56,7 +56,7 @@ use stache_macos::{
 };
 use stache_sdk::{
     CancellationToken, ErrorCategory, LogLevel, Module, ModuleContext, ModuleDescriptor,
-    ModuleError, ModuleInvalidation, ModuleResult, Operation, ScopedLogger,
+    ModuleError, ModuleInvalidation, ModuleResult, Operation, ScopedLogger, StatePublisher,
 };
 
 use crate::config::KeepAwakeConfig;
@@ -366,6 +366,7 @@ impl Module for KeepAwakeModule {
             owner: self.owner.clone(),
             probe: Arc::clone(&self.probe),
             snapshot: self.snapshot.clone(),
+            states: ctx.state_publisher::<KeepAwakeRuntimeStatus>().ok(),
             signals: Arc::clone(&signals),
             logger: ctx.logger().clone(),
             cancellation: ctx.cancellation(),
@@ -503,6 +504,8 @@ struct Generation {
     owner: AssertionOwner,
     probe: Arc<dyn LockProbe>,
     snapshot: KeepAwakeSnapshot,
+    /// The typed published-state handle bound to this runtime generation.
+    states: Option<StatePublisher<KeepAwakeRuntimeStatus>>,
     signals: Arc<Signals>,
     logger: ScopedLogger,
     /// The SDK-owned lifecycle token for this runtime, observed but never
@@ -536,6 +539,7 @@ struct Policy {
 struct Gate<'a> {
     policy: MutexGuard<'a, Policy>,
     snapshot: &'a KeepAwakeSnapshot,
+    states: Option<&'a StatePublisher<KeepAwakeRuntimeStatus>>,
     settled: &'a Condvar,
     logs: Vec<LogLine>,
 }
@@ -569,7 +573,7 @@ impl Gate<'_> {
 
     /// Publishes the whole status while the gate still serializes transitions.
     fn publish(&self) {
-        self.snapshot.publish(KeepAwakeRuntimeStatus {
+        let status = KeepAwakeRuntimeStatus {
             assertion_state: self.policy.assertion,
             lock_state: self.policy.lock,
             observation: self.policy.observation,
@@ -582,7 +586,9 @@ impl Gate<'_> {
                     message: message.clone(),
                 })
                 .collect(),
-        });
+        };
+        self.snapshot.publish(status.clone());
+        self.snapshot.forward(self.states, &status);
         self.settled.notify_all();
     }
 
@@ -847,6 +853,7 @@ impl Generation {
         Gate {
             policy: lock(&self.policy),
             snapshot: &self.snapshot,
+            states: self.states.as_ref(),
             settled: &self.settled,
             logs: Vec::new(),
         }

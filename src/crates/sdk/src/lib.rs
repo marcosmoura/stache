@@ -50,6 +50,7 @@ pub mod screen_reservations;
 pub mod shutdown;
 pub mod status;
 pub mod threading;
+pub mod window_phases;
 pub mod windows;
 
 pub use cache_lease::{CacheLease, CacheLeaseError, LeaseClock, LeaseWait};
@@ -102,10 +103,11 @@ pub use status::{
 pub use threading::{
     CancelListener, CancellationToken, MainThreadExecutor, ThreadError, WorkerGroup, WorkerHandle,
 };
+pub use window_phases::{PhaseSnapshot, PhaseWait, WindowPhase, WindowPhases};
 pub use windows::{
     MAX_WINDOW_DIMENSION, MAX_WINDOW_KEY_LENGTH, OwnedWindow, SurfaceId, UnavailableWindows,
-    WindowBackend, WindowCapability, WindowError, WindowId, WindowKey, WindowKind, WindowRequest,
-    WindowSize,
+    WindowBackend, WindowCapability, WindowError, WindowFrame, WindowId, WindowKey, WindowKind,
+    WindowOrigin, WindowRequest, WindowSize, WindowWatch,
 };
 
 /// Locks a mutex and recovers the guard if a previous holder panicked.

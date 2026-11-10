@@ -346,6 +346,7 @@ mod tests {
             diagnostic: None,
             keybindings: None,
             tiling: None,
+            bar: None,
         }
     }
 

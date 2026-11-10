@@ -63,3 +63,15 @@ export const motion = {
   duration: '150ms',
   durationSlow: '400ms',
 } as const;
+
+/**
+ * Raw numeric motion values for JavaScript animation libraries, mirroring
+ * `motionRaw` in `_legacy/app/ui/design-system/motion.ts`. `durationSlow` is the
+ * actual 0.275 s the legacy Surface animation used, not the CSS `400ms` above.
+ */
+export const motionRaw = {
+  easing: '0.42, 0, 0.58, 1',
+  duration: 0.15,
+  durationSlow: 0.275,
+  durationSlower: 0.5,
+} as const;

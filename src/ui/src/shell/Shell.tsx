@@ -2,6 +2,7 @@ import type { ComponentType } from 'react';
 
 import * as styles from './Shell.styles';
 import { AccessibilityGuide } from './windows/AccessibilityGuide';
+import { Bar } from './windows/Bar';
 import { Placeholder } from './windows/Placeholder';
 import { TestWindow } from './windows/TestWindow';
 
@@ -10,6 +11,7 @@ const WINDOWS = {
   shell: Placeholder,
   test: TestWindow,
   access: AccessibilityGuide,
+  bar: Bar,
 } satisfies Record<string, ComponentType>;
 
 type Surface = keyof typeof WINDOWS;

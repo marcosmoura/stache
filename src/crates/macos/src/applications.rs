@@ -290,6 +290,25 @@ impl fmt::Display for ApplicationError {
 
 impl std::error::Error for ApplicationError {}
 
+/// A failed open request and whether it may already have been issued.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenFailure {
+    /// Why the request failed.
+    pub error: ApplicationError,
+    /// Whether the native request was issued before the failure. `false` means
+    /// it can never be issued; `true` means it was and may still complete.
+    pub issued: bool,
+}
+
+impl OpenFailure {
+    fn new(error: ApplicationError, request: &RequestCommit) -> Self {
+        Self {
+            error,
+            issued: !request.is_unissued(),
+        }
+    }
+}
+
 /// Identifies one open request for diagnostics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OpenCompletionContext {
@@ -1465,6 +1484,30 @@ impl ApplicationObservation {
     where
         F: FnOnce(OpenCompletion) + Send + 'static,
     {
+        self.open_tracked(accepted, path, completion).map_err(|failure| failure.error)
+    }
+
+    /// Like [`ApplicationObservation::open`], but a failure also reports whether
+    /// the native request may already have been issued.
+    ///
+    /// A timed-out acknowledgement is ambiguous in [`ApplicationError`]: the job
+    /// may never have issued, or may have issued without being acknowledged in
+    /// time. This variant abandons the request first and then reads the commit
+    /// state, so [`OpenFailure::issued`] is exact: `false` means the request can
+    /// never issue, `true` means it did and may still complete.
+    ///
+    /// # Errors
+    /// Returns an [`OpenFailure`] for a dispatch rejection, timeout, native
+    /// preparation failure or cancellation.
+    pub fn open_tracked<F>(
+        &self,
+        accepted: AcceptedActionToken,
+        path: &Path,
+        completion: F,
+    ) -> Result<OpenRequest, OpenFailure>
+    where
+        F: FnOnce(OpenCompletion) + Send + 'static,
+    {
         let request = Arc::new(RequestCommit::new(Instant::now() + self.state.budget));
         let ack = Arc::new(Ack::new());
         let job_ack = Arc::clone(&ack);
@@ -1492,17 +1535,20 @@ impl ApplicationObservation {
                 Box::new(move |result| completion_delivery.receive(result));
             job_ack.complete(backend.open(handle, &path, native, permit));
         });
-        self.state
-            .executor
-            .execute(job)
-            .map_err(|error| ApplicationError::Dispatch(error.to_string()))?;
+        self.state.executor.execute(job).map_err(|error| {
+            request.abandon();
+            OpenFailure::new(ApplicationError::Dispatch(error.to_string()), &request)
+        })?;
         match ack.wait(self.state.budget) {
-            AckWait::Ready(result) => result,
+            AckWait::Ready(result) => result.map_err(|error| OpenFailure::new(error, &request)),
             AckWait::TimedOut => {
                 request.abandon();
-                Err(ApplicationError::TimedOut)
+                Err(OpenFailure::new(ApplicationError::TimedOut, &request))
             }
-            AckWait::Cancelled => Err(ApplicationError::Cancelled),
+            AckWait::Cancelled => {
+                request.abandon();
+                Err(OpenFailure::new(ApplicationError::Cancelled, &request))
+            }
         }
     }
 

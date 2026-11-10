@@ -96,6 +96,10 @@ use crate::permissions::{
     PermissionHost, PermissionManager, PermissionPoll, PermissionTicker, PollSchedule,
     RefreshReport, RefreshTrigger, TickGate,
 };
+use crate::session_action::{
+    self, SESSION_WAIT, SessionAction, SessionActionOutcome, SessionControl, SessionJob,
+    SessionUnavailable,
+};
 use crate::shutdown::{
     HOST_WORKER, NativeSlot, SlotOutcome, StageReport, Teardown, TeardownCause, TeardownOutcome,
     TeardownStages,
@@ -310,6 +314,14 @@ pub trait ModuleFactory: Send + Sync {
         registry: &Registry,
         store: &ConfigStore,
     ) -> Result<Arc<dyn ModuleControl>, HostError>;
+
+    /// Hands the host registry to a factory whose component must apply a host
+    /// effect (the Bar-scoped screen-topology feed) before any module starts.
+    ///
+    /// Called once per factory, before `register`. A factory keeps only a
+    /// `Weak`, so the registry that owns its module never owns the registry
+    /// back. The default ignores it.
+    fn bind_registry(&self, _registry: &Arc<Registry>) {}
 
     /// Socket handlers this factory contributes to the host router.
     ///
@@ -584,7 +596,10 @@ impl ModuleFactory for KeepAwakeFactory {
         registry: &Registry,
         store: &ConfigStore,
     ) -> Result<Arc<dyn ModuleControl>, HostError> {
-        register_module(
+        let snapshot = self.snapshot.clone();
+        // The accepted watch labels each published-state envelope with the
+        // revision the registry accepted; it is installed before any start.
+        register_module_observed(
             registry,
             store,
             KeepAwakeModule::with_snapshot(
@@ -593,6 +608,10 @@ impl ModuleFactory for KeepAwakeFactory {
                 self.observation.clone(),
                 self.snapshot.clone(),
             ),
+            move |registry, handle| {
+                snapshot.install_accepted_watch(registry.accepted_watch(handle)?);
+                Ok(())
+            },
         )
     }
 
@@ -1135,6 +1154,8 @@ pub struct HostState(pub HostHandle);
 #[derive(Clone)]
 pub struct HostHandle {
     sender: Sender<HostCommand>,
+    /// The single in-flight session action slot (see [`crate::session_action`]).
+    session_slot: Arc<AtomicBool>,
     status: Arc<Mutex<HostStatus>>,
     teardown: Arc<Teardown>,
     finished: Arc<Finished>,
@@ -1168,6 +1189,40 @@ impl HostHandle {
 
     /// Requests a session-only resume.
     pub fn resume(&self, id: impl Into<String>) { self.send(HostCommand::Resume(id.into())); }
+
+    /// Pauses or resumes one module for this session and returns what the host
+    /// actually did, after the host runner executed it in command order.
+    ///
+    /// Reuses the module controls the tray uses; it never enables, disables,
+    /// retries or writes configuration. At most one request is in flight (a
+    /// second is `busy`), the wait is bounded and a shutdown wakes it. Call only
+    /// off the main thread.
+    #[must_use]
+    pub fn session_action(&self, module: &str, action: SessionAction) -> SessionActionOutcome {
+        if self
+            .session_slot
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return SessionActionOutcome::Busy;
+        }
+        let outcome = if self.shutdown_requested() {
+            SessionActionOutcome::Unavailable {
+                reason: SessionUnavailable::ShuttingDown,
+            }
+        } else {
+            let job = SessionJob::new(module, action);
+            if self.sender.send(HostCommand::Session(Arc::clone(&job))).is_err() {
+                SessionActionOutcome::Unavailable {
+                    reason: SessionUnavailable::NotRunning,
+                }
+            } else {
+                job.wait(SESSION_WAIT, || self.shutdown_requested() || self.is_finished())
+            }
+        };
+        self.session_slot.store(false, Ordering::SeqCst);
+        outcome
+    }
 
     /// Rechecks permissions after the application becomes active.
     pub fn refresh_permissions(&self) {
@@ -1266,12 +1321,19 @@ impl HostHandle {
     }
 }
 
+impl SessionControl for HostHandle {
+    fn session_action(&self, module: &str, action: SessionAction) -> SessionActionOutcome {
+        Self::session_action(self, module, action)
+    }
+}
+
 /// Creates the command handle over one coordinator and the not-yet-started driver.
 #[must_use]
 pub fn new_host(teardown: Arc<Teardown>) -> (HostHandle, HostDriver) {
     let (sender, receiver) = mpsc::channel();
     let handle = HostHandle {
         sender,
+        session_slot: Arc::new(AtomicBool::new(false)),
         status: Arc::new(Mutex::new(HostStatus::default())),
         teardown,
         finished: Arc::new(Finished {
@@ -1706,6 +1768,7 @@ enum HostCommand {
     Condition(String),
     Pause(String),
     Resume(String),
+    Session(Arc<SessionJob>),
     Retry(String),
     RefreshPermissions(RefreshTrigger),
     PermissionTick,
@@ -1904,6 +1967,7 @@ impl Runner {
                 HostCommand::SetEnabled { id, enabled } => self.set_enabled(&id, enabled),
                 HostCommand::Pause(id) => self.pause(&id),
                 HostCommand::Resume(id) => self.resume(&id),
+                HostCommand::Session(job) => self.session_action(&job),
                 HostCommand::Retry(id) => self.retry(&id),
                 HostCommand::RefreshPermissions(trigger) => {
                     self.refresh_permissions(trigger);
@@ -1973,6 +2037,7 @@ impl Runner {
         self.start_recovery();
         for factory in self.settings.factories.entries() {
             let id = factory.id();
+            factory.bind_registry(&self.registry);
             let control = factory.register(&self.registry, &self.store)?;
             if control.id() != id {
                 return Err(HostError::Thread(format!(
@@ -2224,6 +2289,25 @@ impl Runner {
             Err(error) => self.record_action_error(error.to_string()),
         }
         self.refresh_permissions(RefreshTrigger::Tick);
+    }
+
+    /// Executes one result-returning session request on the host runner, in
+    /// command order, through the same module controls as `pause`/`resume`.
+    fn session_action(&mut self, job: &SessionJob) {
+        if !job.begin() {
+            return;
+        }
+        let outcome =
+            session_action::execute(&self.registry, &self.controls, &job.module, job.action);
+        match outcome {
+            SessionActionOutcome::Applied => self.clear_action_error(),
+            SessionActionOutcome::NotApplied { .. } => self
+                .record_action_error(format!("module `{}` did not {:?}", job.module, job.action)),
+            _ => {}
+        }
+        // Publishes the new session state (the Bar and the tray read it).
+        self.refresh_permissions(RefreshTrigger::Tick);
+        job.finish(outcome);
     }
 
     fn retry(&mut self, id: &str) {
@@ -3221,7 +3305,7 @@ mod tests {
         );
         assert!(
             !ids.contains(&stache_bar::BarConfig::ID),
-            "Bar is configuration-only until its runtime part ships: no production factory"
+            "Bar is appended by the composition root (`lib.rs`), not by this base list"
         );
 
         for factory in factories.entries() {
@@ -4838,6 +4922,61 @@ mod tests {
         ModuleFactories::production(Arc::new(NoMainThread), AssertionOwner::system()).with(
             TilingFactory::production(Arc::new(NoMainThread), "com.example.stache"),
         )
+    }
+
+    /// The production list plus the production Bar factory, as `lib.rs`
+    /// composes them, over a main thread that runs nothing.
+    fn production_with_bar() -> ModuleFactories {
+        ModuleFactories::production(Arc::new(NoMainThread), AssertionOwner::system())
+            .with(crate::bar::BarFactory::production(Arc::new(NoMainThread)))
+    }
+
+    #[test]
+    fn the_production_composition_registers_bar_default_disabled_and_inert() {
+        let factories = production_with_bar();
+        assert_eq!(
+            factories.entries().last().map(|factory| factory.id()),
+            Some(stache_bar::BarConfig::ID),
+            "Bar is chained after the base list"
+        );
+        let root = tempfile::tempdir().expect("root");
+        let (mut runner, _receiver) = runner_over(
+            root.path(),
+            factories,
+            crate::catalog::catalog().expect("catalog"),
+            Arc::new(AllowAll),
+            None,
+        );
+        runner.start_recovery();
+        let entries: Vec<Arc<dyn ModuleFactory>> = runner.settings.factories.entries().to_vec();
+        for factory in entries {
+            let control = factory.register(&runner.registry, &runner.store).expect("register");
+            runner.controls.insert(factory.id().as_str().to_owned(), control);
+        }
+        let _ = runner.registry.start_all();
+        runner.publish();
+        let view = runner
+            .handle
+            .status()
+            .modules
+            .into_iter()
+            .find(|module| module.id == "bar")
+            .expect("bar is registered");
+        assert_eq!(view.state, crate::bindings::ModuleState::Disabled);
+        assert!(!view.enabled);
+        let bar = view.bar.expect("details");
+        assert_eq!(
+            bar.state,
+            stache_bar::BarRuntimeState::Inactive,
+            "nothing was started"
+        );
+        assert_eq!(
+            bar.panel,
+            stache_bar::BarPanelState::None,
+            "no panel was requested"
+        );
+        assert!(bar.frame.is_none() && bar.reservation.is_none());
+        let _ = runner.registry.shutdown();
     }
 
     #[test]

@@ -213,6 +213,42 @@ pub trait SettingsOpener: Send + Sync {
     /// # Errors
     /// Returns a user-facing failure description.
     fn open_accessibility_settings(&self) -> Result<(), String>;
+
+    /// Opens a fixed Bar target pane when `current` still holds at the main-thread
+    /// send. The default refuses: only hosts with System Settings override it.
+    fn open_pane(&self, _pane: SettingsPane, _current: PaneGuard) -> PaneOpen {
+        PaneOpen::Refused("System Settings is unavailable".to_owned())
+    }
+}
+
+/// The fixed System Settings panes a Bar click may open. There is no
+/// arbitrary-URL form.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingsPane {
+    /// The Battery pane.
+    Battery,
+    /// The Wi-Fi pane.
+    Wifi,
+}
+
+/// Rechecks, on the main thread right before the send, that the click is still
+/// authorized and belongs to the live Bar runtime generation.
+pub type PaneGuard = Arc<dyn Fn() -> bool + Send + Sync>;
+
+/// What happened to one pane-open request. "Opened" means `AppKit` accepted the
+/// URL, not that the pane is visible.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PaneOpen {
+    /// `AppKit` accepted the URL.
+    Opened,
+    /// The guard refused at the send, or the executor was stopped: nothing was sent.
+    NotIssued,
+    /// `AppKit` (or the URL) refused it.
+    Refused(String),
+    /// The main thread did not start the job in time; the job can never send.
+    TimedOutBeforeIssuance,
+    /// The send began but no result arrived inside the bound.
+    UncertainAfterIssuance,
 }
 
 /// An opener for hosts without System Settings, such as test fixtures.
@@ -242,7 +278,10 @@ pub struct SystemSettingsOpener {
     main_thread: Arc<dyn MainThreadExecutor>,
     open: Arc<OpenFn>,
     wait: Duration,
+    pane: Arc<PaneFn>,
 }
+
+type PaneFn = dyn Fn(SettingsPane) -> Result<(), String> + Send + Sync;
 
 impl SystemSettingsOpener {
     /// Creates an opener over the host main-thread executor.
@@ -262,7 +301,23 @@ impl SystemSettingsOpener {
             main_thread,
             open: Arc::new(open),
             wait,
+            pane: Arc::new(|pane| {
+                match pane {
+                    SettingsPane::Battery => stache_macos::settings::open_battery_settings(),
+                    SettingsPane::Wifi => stache_macos::settings::open_wifi_settings(),
+                }
+                .map_err(|error| error.to_string())
+            }),
         }
+    }
+
+    #[cfg(test)]
+    fn with_pane(
+        mut self,
+        pane: impl Fn(SettingsPane) -> Result<(), String> + Send + Sync + 'static,
+    ) -> Self {
+        self.pane = Arc::new(pane);
+        self
     }
 }
 
@@ -296,6 +351,52 @@ impl SettingsOpener for SystemSettingsOpener {
                 .unwrap_or_else(|_| Err("System Settings did not open in time".to_owned()));
         }
         Err("System Settings did not open in time".to_owned())
+    }
+
+    fn open_pane(&self, pane: SettingsPane, current: PaneGuard) -> PaneOpen {
+        self.run_pane(pane, current)
+    }
+}
+
+impl SystemSettingsOpener {
+    fn run_pane(&self, pane: SettingsPane, current: PaneGuard) -> PaneOpen {
+        let (sender, receiver) = mpsc::channel();
+        let claim = Arc::new(AtomicU8::new(PENDING));
+        let job_claim = Arc::clone(&claim);
+        let open = Arc::clone(&self.pane);
+        let queued = self.main_thread.execute(Box::new(move || {
+            // A job that runs after the waiter gave up must not open.
+            if job_claim
+                .compare_exchange(PENDING, CLAIMED, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+            {
+                return;
+            }
+            // Authorization and generation are revalidated at the send.
+            let result = if current() { Some(open(pane)) } else { None };
+            let _ = sender.send(result);
+        }));
+        if queued.is_err() {
+            return PaneOpen::NotIssued;
+        }
+        let settle = |result: Option<Result<(), String>>| match result {
+            None => PaneOpen::NotIssued,
+            Some(Ok(())) => PaneOpen::Opened,
+            Some(Err(message)) => PaneOpen::Refused(message),
+        };
+        if let Ok(result) = receiver.recv_timeout(self.wait) {
+            return settle(result);
+        }
+        if claim
+            .compare_exchange(PENDING, ABANDONED, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            return PaneOpen::TimedOutBeforeIssuance;
+        }
+        // The job claimed the send: give it one more bounded wait, never forever.
+        receiver
+            .recv_timeout(self.wait)
+            .map_or(PaneOpen::UncertainAfterIssuance, settle)
     }
 }
 
@@ -543,6 +644,113 @@ mod tests {
             });
         assert_eq!(opener.open_accessibility_settings(), Ok(()));
         assert_eq!(opens.load(Ordering::SeqCst), 1);
+    }
+
+    fn pane_opener(
+        main: &Arc<dyn MainThreadExecutor>,
+        wait: Duration,
+        log: Arc<std::sync::Mutex<Vec<SettingsPane>>>,
+        result: Result<(), String>,
+    ) -> SystemSettingsOpener {
+        SystemSettingsOpener::with_open(Arc::clone(main), wait, || Ok(())).with_pane(move |pane| {
+            log.lock().expect("log").push(pane);
+            result.clone()
+        })
+    }
+
+    #[test]
+    fn a_pane_open_sends_the_fixed_pane_only_while_the_guard_holds() {
+        let main = Arc::new(DeferredMain {
+            inline: true,
+            ..DeferredMain::default()
+        });
+        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let main: Arc<dyn MainThreadExecutor> = main;
+        let opener = pane_opener(&main, Duration::from_secs(5), Arc::clone(&log), Ok(()));
+        assert_eq!(
+            opener.open_pane(SettingsPane::Battery, Arc::new(|| true)),
+            PaneOpen::Opened
+        );
+        assert_eq!(
+            opener.open_pane(SettingsPane::Wifi, Arc::new(|| true)),
+            PaneOpen::Opened
+        );
+        assert_eq!(
+            opener.open_pane(SettingsPane::Wifi, Arc::new(|| false)),
+            PaneOpen::NotIssued,
+            "a failed guard at the send opens nothing"
+        );
+        assert_eq!(*log.lock().expect("log"), [
+            SettingsPane::Battery,
+            SettingsPane::Wifi
+        ]);
+    }
+
+    #[test]
+    fn a_rejected_pane_url_is_refused_with_the_reason() {
+        let main = Arc::new(DeferredMain {
+            inline: true,
+            ..DeferredMain::default()
+        });
+        let main: Arc<dyn MainThreadExecutor> = main;
+        let opener = pane_opener(
+            &main,
+            Duration::from_secs(5),
+            Arc::default(),
+            Err("macOS did not open System Settings".to_owned()),
+        );
+        assert_eq!(
+            opener.open_pane(SettingsPane::Battery, Arc::new(|| true)),
+            PaneOpen::Refused("macOS did not open System Settings".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_pane_job_that_never_starts_times_out_before_issuance_and_never_sends_late() {
+        let main = Arc::new(DeferredMain::default());
+        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let opener = pane_opener(
+            &(Arc::clone(&main) as Arc<dyn MainThreadExecutor>),
+            Duration::from_millis(20),
+            Arc::clone(&log),
+            Ok(()),
+        );
+        assert_eq!(
+            opener.open_pane(SettingsPane::Battery, Arc::new(|| true)),
+            PaneOpen::TimedOutBeforeIssuance
+        );
+        for job in main.jobs.lock().expect("jobs").drain(..) {
+            job();
+        }
+        assert!(
+            log.lock().expect("log").is_empty(),
+            "the abandoned job skips the send"
+        );
+    }
+
+    #[test]
+    fn a_pane_send_that_outlives_the_bound_is_uncertain_after_issuance() {
+        let opener = SystemSettingsOpener::with_open(
+            Arc::new(ThreadMain),
+            Duration::from_millis(30),
+            || Ok(()),
+        )
+        .with_pane(|_| {
+            std::thread::sleep(Duration::from_millis(300));
+            Ok(())
+        });
+        assert_eq!(
+            opener.open_pane(SettingsPane::Wifi, Arc::new(|| true)),
+            PaneOpen::UncertainAfterIssuance
+        );
+    }
+
+    #[test]
+    fn the_default_opener_refuses_panes() {
+        assert!(matches!(
+            UnavailableSettings.open_pane(SettingsPane::Battery, Arc::new(|| true)),
+            PaneOpen::Refused(_)
+        ));
     }
 
     #[test]

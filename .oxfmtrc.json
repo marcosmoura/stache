@@ -11,6 +11,11 @@
     "node_modules/**",
     "schemas/**",
     "src/crates/app/gen/**",
+    "src/crates/app/resources/**",
+    "src/ui/tests/bar-reference/fixtures/**",
+    "src/ui/tests/bar-reference/icons/**",
+    "src/ui/tests/bar-reference/manifest.json",
+    "src/ui/tests/bar-reference/reference.css",
     "target/**"
   ],
   "printWidth": 100,

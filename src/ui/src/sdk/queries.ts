@@ -2,8 +2,12 @@ import { useEffect } from 'react';
 
 import { useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 
+import { connectBarSnapshot } from './barFeed';
 import {
   APP_INFO_QUERY_KEY,
+  BAR_SNAPSHOT_QUERY_KEY,
+  readBarSnapshot,
+  type BarSnapshotOutcome,
   HOST_STATUS_QUERY_KEY,
   readAppInfo,
   readHostStatus,
@@ -43,4 +47,28 @@ export function useHostStatus(): UseQueryResult<HostStatus> {
   }, [queryClient]);
 
   return status;
+}
+
+/**
+ * Reads the Bar view from the query cache and keeps it updated from
+ * `bar-changed`. The cache is written only by the feed, which subscribes before
+ * it asks for the first snapshot and applies only a greater `sequence`.
+ */
+export function useBarSnapshot(): UseQueryResult<BarSnapshotOutcome> {
+  const queryClient = useQueryClient();
+  const snapshot = useQuery({
+    queryKey: BAR_SNAPSHOT_QUERY_KEY,
+    queryFn: readBarSnapshot,
+    enabled: false,
+    staleTime: Infinity,
+    retry: false,
+  });
+
+  useEffect(() => {
+    const feed = connectBarSnapshot({ client: queryClient });
+
+    return () => feed.dispose();
+  }, [queryClient]);
+
+  return snapshot;
 }

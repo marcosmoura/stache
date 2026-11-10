@@ -119,10 +119,13 @@ impl CommandRunner for NoCommands {
     fn run(&self, _: &[String], _: &stache_sdk::CancellationToken) -> Result<(), String> { Ok(()) }
 }
 
-struct QuietUi;
+/// Counts every host status publication, the signal the Bar bridge wakes on.
+struct CountingUi(Arc<AtomicUsize>);
 
-impl HostUi for QuietUi {
-    fn status(&self, _: &stache_app::bindings::HostStatus) {}
+impl HostUi for CountingUi {
+    fn status(&self, _: &stache_app::bindings::HostStatus) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 #[derive(Default)]
@@ -222,6 +225,7 @@ struct Harness {
     assertion: FakeAssertionBackend,
     probe: TestProbe,
     observation: FakeLockObservationBackend,
+    publications: Arc<AtomicUsize>,
 }
 
 impl Harness {
@@ -242,6 +246,7 @@ impl Harness {
             assertion,
             probe: TestProbe::new(probe),
             observation,
+            publications: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -281,7 +286,13 @@ impl Harness {
             settings: Arc::new(stache_app::access::UnavailableSettings),
         };
         let driver = self.driver.take().expect("driver");
-        driver.start(settings, services, Arc::new(QuietUi)).expect("start host");
+        driver
+            .start(
+                settings,
+                services,
+                Arc::new(CountingUi(Arc::clone(&self.publications))),
+            )
+            .expect("start host");
         self.teardown.start().expect("start the teardown coordinator");
     }
 
@@ -1308,4 +1319,187 @@ fn keep_awake_adds_no_cli_command_or_completion_entry() {
         audio |= name == "audio";
     }
     assert!(audio, "the existing audio command stays contributed");
+}
+
+// ------------------------------------------------- generic session actions
+//
+// `HostHandle::session_action` is the result-returning entry the Bar click
+// uses. It runs on the real host runner, in command order, over the same module
+// controls the tray uses.
+
+use stache_app::session_action::{SessionAction, SessionActionOutcome, SessionUnavailable};
+
+#[test]
+fn a_session_action_pauses_and_resumes_on_the_runner_and_publishes_the_status() {
+    let fixture = fixture();
+    fixture.write(GOOD);
+    let mut harness = Harness::new(&fixture, NativeLockState::Unlocked);
+    harness.start(&fixture);
+    harness.wait_ready();
+    harness.wait_status("active", |status| {
+        status.runtime.assertion_state == AssertionState::Active
+    });
+    let before = fixture.stamp();
+
+    let published = harness.publications.load(Ordering::SeqCst);
+    assert_eq!(
+        harness.handle.session_action("keepAwake", SessionAction::Pause),
+        SessionActionOutcome::Applied
+    );
+    // The applied result is the real state, not a queue acknowledgement.
+    let status = harness.status();
+    assert!(status.module.paused);
+    assert_eq!(status.module.state, ModuleState::Paused);
+    assert!(
+        harness.publications.load(Ordering::SeqCst) > published,
+        "the host status sink saw the change"
+    );
+    assert_eq!(fixture.stamp(), before, "no configuration write");
+
+    assert_eq!(
+        harness.handle.session_action("keepAwake", SessionAction::Resume),
+        SessionActionOutcome::Applied
+    );
+    harness.wait_status("resumed", |status| {
+        status.module.state == ModuleState::Running
+            && status.runtime.assertion_state == AssertionState::Active
+    });
+    assert_eq!(fixture.stamp(), before, "no configuration write");
+    harness.shutdown();
+}
+
+#[test]
+fn a_session_action_on_a_disabled_module_is_inert() {
+    let fixture = fixture();
+    fixture.write("enabled = false\n");
+    let mut harness = Harness::new(&fixture, NativeLockState::Unlocked);
+    harness.start(&fixture);
+    harness.wait_ready();
+    let before = fixture.stamp();
+    for action in [SessionAction::Pause, SessionAction::Resume] {
+        assert_eq!(
+            harness.handle.session_action("keepAwake", action),
+            SessionActionOutcome::Disabled
+        );
+    }
+    // An unregistered module is inert too.
+    assert_eq!(
+        harness.handle.session_action("nothing", SessionAction::Pause),
+        SessionActionOutcome::Disabled
+    );
+    let status = harness.status();
+    assert!(!status.module.enabled);
+    assert!(!status.module.paused);
+    assert_eq!(fixture.stamp(), before, "zero configuration writes");
+    assert!(harness.assertion.created().is_empty());
+    assert_eq!(harness.probe.calls(), 0);
+    harness.shutdown();
+}
+
+#[test]
+fn an_external_tray_pause_racing_a_click_is_never_inverted() {
+    let fixture = fixture();
+    fixture.write(GOOD);
+    let mut harness = Harness::new(&fixture, NativeLockState::Unlocked);
+    harness.start(&fixture);
+    harness.wait_ready();
+    harness.wait_status("active", |status| {
+        status.runtime.assertion_state == AssertionState::Active
+    });
+    // The tray's pause is queued first; the click based on "running" is stale.
+    harness.handle.pause("keepAwake");
+    assert_eq!(
+        harness.handle.session_action("keepAwake", SessionAction::Pause),
+        SessionActionOutcome::Stale
+    );
+    assert!(harness.status().module.paused, "the tray decision stands");
+    harness.handle.resume("keepAwake");
+    assert_eq!(
+        harness.handle.session_action("keepAwake", SessionAction::Resume),
+        SessionActionOutcome::Stale
+    );
+    assert!(!harness.status().module.paused, "the tray decision stands");
+    harness.shutdown();
+}
+
+#[test]
+fn a_failed_module_is_a_typed_non_success_without_a_retry() {
+    let fixture = fixture();
+    fixture.write(GOOD);
+    let mut harness = Harness::new(
+        &fixture,
+        NativeLockState::Unknown(LockUnknown::SessionDictionaryUnavailable),
+    );
+    harness.start(&fixture);
+    harness.wait_ready();
+    harness.wait_status("failed", |status| status.module.state == ModuleState::Failed);
+    assert_eq!(
+        harness.handle.session_action("keepAwake", SessionAction::Pause),
+        SessionActionOutcome::Unavailable {
+            reason: SessionUnavailable::Failed
+        }
+    );
+    assert!(harness.assertion.created().is_empty(), "no new acquisition");
+    assert_eq!(harness.status().module.state, ModuleState::Failed);
+    harness.shutdown();
+}
+
+#[test]
+fn shutdown_during_a_click_returns_uncertain_without_hanging() {
+    let fixture = fixture();
+    fixture.write(GOOD);
+    let mut harness = Harness::new(&fixture, NativeLockState::Unlocked);
+    harness.start(&fixture);
+    harness.wait_ready();
+    harness.wait_status("active", |status| {
+        status.runtime.assertion_state == AssertionState::Active
+    });
+    // The pause's lease release parks the host runner mid-click.
+    let release = harness.assertion.block_next_release();
+    let handle = harness.handle.clone();
+    let click =
+        std::thread::spawn(move || handle.session_action("keepAwake", SessionAction::Pause));
+    assert!(release.wait_entered(BARRIER));
+    let started = Instant::now();
+    harness.handle.request_shutdown();
+    let outcome = click.join().expect("click thread");
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "shutdown wakes the waiter"
+    );
+    assert_eq!(outcome, SessionActionOutcome::Uncertain);
+    // A request after the shutdown request is refused at once.
+    assert_eq!(
+        harness.handle.session_action("keepAwake", SessionAction::Resume),
+        SessionActionOutcome::Unavailable {
+            reason: SessionUnavailable::ShuttingDown
+        }
+    );
+    assert!(release.release());
+    harness.shutdown();
+}
+
+#[test]
+fn a_second_click_while_one_is_in_flight_is_busy_not_queued() {
+    let fixture = fixture();
+    fixture.write(GOOD);
+    let mut harness = Harness::new(&fixture, NativeLockState::Unlocked);
+    harness.start(&fixture);
+    harness.wait_ready();
+    harness.wait_status("active", |status| {
+        status.runtime.assertion_state == AssertionState::Active
+    });
+    let release = harness.assertion.block_next_release();
+    let handle = harness.handle.clone();
+    let first =
+        std::thread::spawn(move || handle.session_action("keepAwake", SessionAction::Pause));
+    assert!(release.wait_entered(BARRIER));
+    assert_eq!(
+        harness.handle.session_action("keepAwake", SessionAction::Pause),
+        SessionActionOutcome::Busy
+    );
+    assert!(release.release());
+    assert_eq!(first.join().expect("first click"), SessionActionOutcome::Applied);
+    assert!(harness.status().module.paused);
+    harness.shutdown();
 }

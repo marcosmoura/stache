@@ -230,6 +230,94 @@ are capped at **8 per second**, a Mach send at 0.5 s, a helper CLI child at 2 s
 those. Waits are cancellation-wakeable and no lock is held across a send or a
 sleep. The achieved rate and JankyBorders' own load are **unverified**.
 
+## Bar system providers (part 05)
+
+Deterministic bounds (tested on a fake clock, no real sleeping): a disabled,
+paused, zero-size or panel-less Bar owns **zero** provider threads, timers,
+children and reads. An active Bar owns three worker threads (CPU, battery,
+Wi-Fi), each with one owned schedule: CPU every 2 s after a 250 ms warm-up,
+battery every 30 s while charging and 120 s otherwise, Wi-Fi at most every 5 s.
+A sample never overlaps itself and a stall causes one late sample, never a
+catch-up burst. The CPU temperature is a native SMC read (no child process);
+a sample re-reads an all-invalid key group at most 3 more times and repeats the
+last valid value for at most 3 samples. The Wi-Fi `ipconfig` child (1.5 s
+deadline, 256 KiB cap) runs once per Wi-Fi sample by default (SSID path on; `STACHE_BAR_WIFI_SSID_SUMMARY=0` turns it off for diagnostics).
+
+**Measurement procedure (script ready, run pending; needs separate approval,
+release builds only).** The method is the foundation tool above plus module
+toggling, implemented by `scripts/measure-bar.ts`:
+
+1. Build one release `.app`; never a debug build, never the legacy app.
+2. Fix the conditions across all trials: same hardware and power state (note
+   battery vs AC), same Bar `height`/`padding`, same display widths, no other
+   foreground work, identical warmup (at least 10 s) and sample duration (at
+   least 60 s).
+3. Alternate **Bar off** (`bar.toml` `enabled = false`) and **Bar on**
+   (`enabled = true`) in an isolated `HOME`, at least 5 launches each, order
+   alternated to cancel drift. Record host CPU % (average and peak) and idle
+   wakeups per second for each launch.
+4. Report all raw samples, the run-to-run noise envelope of the Bar-off trials
+   and the module-on minus module-off delta with its spread. The budget is "no
+   statistically distinguishable regression beyond the recorded noise
+   envelope"; publish the samples and method before calling it met.
+5. The SSID path is on by default, so the series above is the default series.
+   Add a separate series labelled "SSID off" (`STACHE_BAR_WIFI_SSID_SUMMARY=0`)
+   as a comparison, never mixed with the default.
+6. A legacy comparison needs an independently supplied legacy measurement that
+   isolates Bar; without one the relative budget stays **unverified**, never
+   passed, and legacy automation is not launched to obtain it.
+
+Until the run, the SMC read cost and the CoreWLAN read cost are **unverified**.
+
+### Running the Bar measurement
+
+```sh
+bun run measure:bar -- --help        # reads no process state
+bun run measure:bar -- --app "target/release/bundle/macos/Stache Next.app"
+bun run measure:bar -- --app "target/release/bundle/macos/Stache Next.app" --ssid-off   # "SSID off" series
+```
+
+Preconditions the script checks or explains:
+
+- **Accessibility.** The launch gate holds every module, Bar included, unless the
+  exact release `.app` being measured is trusted for Accessibility. Grant it for
+  that path first (System Settings > Privacy & Security > Accessibility). The
+  script reads `core.status` over the isolated control socket; `access.state`
+  must be `open` in both arms. A gated launch is reported as an **invalid trial**
+  (never a sample) with a message naming the `.app` path, and the run stops.
+- **Bar actually started.** The control socket has no Bar status method, so the
+  "on" arm also needs a host-owned window of the configured Bar height (read
+  with `list-windows.swift`: owner pid, bounds, layer; no Screen Recording
+  permission) and the "off" arm must own no window. Module `Running` and panel
+  `Loaded` are therefore **inferred**, not read. Either failure marks the trial
+  invalid; three invalid trials stop the run.
+- A release `.app` only (a debug path or a bare executable is refused), and no
+  Stache Next or legacy Stache process running (refused, never terminated).
+- An idle machine: a 10 s whole-machine CPU pre-flight (the foundation
+  `sampleIdle` over the process table) refuses above `--max-busy-cpu`. CPU is
+  summed over processes with 100% per core; the default is 15% of total capacity
+  (150 on a 10-core Mac), because a normal idle desktop (WindowServer, audio and
+  HID drivers, an editor) already sums to over half a core.
+
+Procedure: `--launches` (default and minimum 5) valid launches per arm, alternating
+off/on and on/off pairs, each in its own isolated temporary root with a `bar.toml`
+(`enabled = false|true`, the same `height`/`padding`), a 10 s minimum warmup after
+readiness and a 60 s minimum sample. Per launch it records host CPU average and
+peak (peak over 5 s intervals), tree CPU and idle wakeups per second (`top -l 2`,
+summed over the host tree). Signals go only to the child the script spawned, through
+the foundation tool's owned-tree shutdown; nothing is stopped by name.
+
+Output: `docs/specs/2026-11-03-bar/measurements/<UTC timestamp>/report.md` and
+`samples.json`, written even for a failed or interrupted run with every raw sample,
+invalid trial and the process-tree snapshots. The report gives the Bar-off
+envelope (mean, stdev, min, max), the Bar-on figures and the on minus off delta with
+its standard error. It never declares the budget met. Exit codes: `0` completed and
+clean, `1` failed or incomplete, `2` usage, `130` interrupted.
+
+The SSID path is on by default, so the default series is the one above; run
+`--ssid-off` for the separate labelled comparison. The run needs a per-run user
+approval and is not part of any automated check.
+
 ## Animation measurement method
 
 **Status: unverified. No approved native run has been recorded.** Every number

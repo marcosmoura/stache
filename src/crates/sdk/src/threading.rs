@@ -69,6 +69,10 @@ impl CancellationToken {
         }
     }
 
+    /// Whether `other` is a clone of this very token.
+    #[must_use]
+    pub fn same_as(&self, other: &Self) -> bool { Arc::ptr_eq(&self.inner, &other.inner) }
+
     /// Whether cancellation has been requested.
     #[must_use]
     pub fn is_cancelled(&self) -> bool { *lock(&self.inner.cancelled) }

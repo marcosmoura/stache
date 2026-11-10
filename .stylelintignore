@@ -8,3 +8,4 @@ _legacy/**
 target/**
 src/ui/dist/**
 src/ui/coverage/**
+src/ui/tests/bar-reference/reference.css

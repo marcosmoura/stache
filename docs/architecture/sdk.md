@@ -210,8 +210,11 @@ same watch to factory socket handlers.
 
 `stache_sdk::published_state` lets one module publish a typed latest-state value
 that other modules and the app read. It is a generic contract: the SDK imports no
-module crate, and no real provider ships yet (Bar part 08 adapts Keep Awake;
-`keepAwake.status` and `KeepAwakeSnapshot` are unchanged).
+module crate. Keep Awake is the first production provider (schema `keepAwakeStatus`
+v1 over its own `KeepAwakeRuntimeStatus`, registered by `app::published_state::state_schemas`);
+`keepAwake.status` and `KeepAwakeSnapshot` are unchanged. Bar observes it optionally
+(`observes`) and the app projects it into the Bar view; no module imports another
+module's crate.
 
 - **Schema contract.** A provider type implements `PublishedState`
   (`SCHEMA = StateSchema { name, version }`). The app registers one contract per
@@ -333,13 +336,90 @@ A module that sets `ModuleDescriptor::reserves_screen` (default `false`, like
   observable change (an identical replacement or a repeated remove does not).
   Insets are measured inward from the full logical display bounds.
 - **Consumer facts.** The host applies topology (`Registry::apply_screen_topology`),
-  not modules; nothing applies it until Bar part 03, so the snapshot lists no
-  displays and consumers treat every display as zero-reserved. Reservations have
-  no reconfigure hold, so an owner stages reservations only after observing its
-  accepted revision. Reservations staged during `Module::start` are visible
-  immediately (there is no start hold, unlike published state) and are removed if
-  the start fails, so consumers must not treat a start-time reservation as a
-  confirmed running owner.
+  not modules. The app's Bar-scoped topology feed (below) is the only caller, and
+  only while Bar runs: with Bar off the snapshot lists no displays and consumers
+  treat every display as zero-reserved; with Bar running it lists every attached
+  display. Reservations have no reconfigure hold, so an owner stages reservations
+  only after observing its accepted revision. Reservations staged during
+  `Module::start` are visible immediately (there is no start hold, unlike
+  published state) and are removed if the start fails, so consumers must not
+  treat a start-time reservation as a confirmed running owner.
+- **Bar-scoped topology feed (Bar part 03, `stache-app` `bar.rs`).** The feed is a
+  `stache_bar::TopologyLease` that the Bar module obtains from the
+  `stache_bar::TopologySource` seam (so `stache-bar` never depends on the app) in
+  `Module::start` and ends in `stop` or on any failed start; dropping it ends it
+  too. Beginning it observes `DisplayControl::observe_topology` (the callback only
+  records a coalesced `TopologyHint` and wakes the `stache-bar-displays` worker),
+  queries the layout once (a bounded main-thread job) and applies the first
+  topology. The worker re-queries per hint, applies a NEW monotonic generation only
+  when the set of display IDs changed (the generation counter lives in the source,
+  so it stays monotonic across Bar runs) and publishes a `TopologyReading` (layout,
+  primary, applied generation, error) that Bar follows. `end()` applies the EMPTY
+  topology FIRST, then removes the observer and joins the worker within
+  `FEED_JOIN`; a stuck removal or join returns "still owed" and the lease stays
+  owned for an exact retry (the module's `stop` returns an error so the registry
+  retries it). A failed display query publishes an explicit "unavailable" reading
+  (Bar clears its panel and reservation) and retries every `QUERY_RETRY`. The
+  registry reaches the feed through `ModuleFactory::bind_registry` (a `Weak`, so a
+  module never owns the registry). A numeric display ID that disappears and returns
+  inside one coalesced notification looks unchanged; a real unplug/replug produces
+  a notification per step, so an intermediate topology omits the ID.
+- **Bar producer (part 03, `stache-bar` `runtime.rs`).** `BarModule` declares
+  `reserves_screen: true` and the `bar` surface. It stages ONE reservation, a
+  constant top inset `height + padding`, on the primary display (`NSScreen.screens[0]`,
+  never `mainScreen`) while a panel exists, named against the topology generation
+  of its latest reading; a stale generation or unknown display re-reads the feed and
+  retries once per topology change, never in a loop. Zero size (`height: 0` or a
+  computed width `<= 0`), no primary and every end of the generation (stop, pause,
+  disable, failure) clear it. `start` and `reconfigure` never wait for the page:
+  they queue the open, stage the reservation and return, so a page that never
+  loads cannot hold the registry's global lifecycle gate. Bar's own
+  `stache-bar-panel` worker observes the load off-main with no lock held, bounded
+  by `PANEL_LOAD_DEADLINE` (10 s), woken by cancellation or any new convergence,
+  and rechecks the exact run and window before it commits. A load failure,
+  timeout or create failure after `start` returned closes the exact window,
+  clears the reservation and publishes `panel: failed` with a typed detail; Bar
+  stays `Running` and the topology feed stays applied (every display listed, zero
+  host inset). The worker retries with a fresh exact window after 2 s, 10 s and
+  30 s (`PANEL_RETRY_BACKOFF`), then stays failed until the next convergence
+  trigger (accepted config change, topology or primary change) or a pause/resume,
+  each of which retries immediately. Only synchronous failures (no reservations
+  capability, feed begin, converge error, worker spawn) fail `start`; a
+  `reconfigure` that enters the panel state is accepted and follows the same path
+  (an inexpressible frame is still rejected at preflight). The production factory
+  is NOT chained into `lib.rs` yet (part 04).
+- **Bar menu-bar observation and data bridge (part 03 slice c, `stache-bar`
+  `menubar.rs`, `stache_macos::menu_bar`, `stache-app` `bar_bridge.rs`).** The
+  published `menu` (`visible`, `hidden`, `unknown` plus a reason) follows the
+  legacy watcher: `visible` means the system menu bar is on screen, which is where
+  the legacy UI slid the Bar away (`menuHidden` was true when the menu bar was
+  visible). Observation (one `stache-bar-menu` worker and one native observer)
+  exists only while Bar runs with a panel; disabled, paused, zero size, no
+  primary display and a failed panel own none. The worker subscribes to the
+  native notifications first, seeds with one sample, re-samples on every coalesced
+  hint, polls every 100 ms **only while auto-hide is on or unknown** (the pointer
+  entering the menu-bar row posts nothing and the auto-hide preference has no
+  usable notification) and sleeps otherwise, and retries a failed sample or
+  observer registration every 2 s (polling meanwhile). Only a changed
+  `(state, reason)` is published, so a persistent failure is one diagnostic. Stop
+  sets the exact stop flag, removes the observer, joins within 2 s; a stuck join or
+  removal reports `cleanupPending` and is retried, and callbacks after stop are
+  ignored. The reservation stays `height + padding` in every menu state; the menu
+  only changes the published view. Limits: the `CGWindowList` layer-25 fallback
+  cannot tell the menu bar from other layer-25 windows and window names need
+  Screen Recording; real notification delivery is unverified.
+  The host bridge reads the Bar runtime's published status cell (short cell lock
+  only; no module, registry or native lock and no native call on a read) and
+  projects it to the `BarView` DTO. `generation`, `sequence` and `configRevision`
+  are exact `u64`s sent as decimal strings. The `sequence` never resets, also across
+  generations, and alone orders views and events: the UI subscribes to the
+  `BarChanged` event first, then calls `bar_snapshot`, and applies a snapshot or
+  event only if its sequence is numerically greater than the held one
+  (`sequence_is_newer`). A worker (`stache-bar-bridge`, alive only while Bar runs
+  or a change is pending) turns the cell's change flag into events: bursts
+  coalesce into the newest view, a gap of more than 64 sequences or an earlier
+  failed emission becomes `resnapshot: true` with no view. Events go to the live
+  Bar label only. The bridge is managed detached until part 04 chains the factory.
 - **Native projection.** `stache_app::display::sdk_display_id` converts a
   `stache_macos::desktop::DisplayId` into the SDK `DisplayId` (a plain function:
   the orphan rule blocks `From`). It is the one projection Tiling 05 and Bar 03
@@ -470,8 +550,34 @@ declares `surfaces: &'static [SurfaceId]`; `ctx.windows()` returns a
 cancellation token. `request` accepts a `WindowRequest` with an owner-local key, a
 declared surface, validated logical dimensions (1..=8192) and a kind. Surface
 spellings must be ASCII letters, digits, `-` or `_`, so a surface cannot add a
-query parameter. Only `WindowKind::Standard` has native semantics; `Launcher` and
-`NonActivatingPanel` return `WindowError::UnsupportedKind`.
+query parameter. `WindowKind::Standard` and `WindowKind::NonActivatingPanel` have
+native semantics; `Launcher` returns `WindowError::UnsupportedKind`. A panel
+request must carry `WindowRequest::origin` (logical top-left, `WindowOrigin`) and
+a `Standard` request must not (`WindowError::InvalidPlacement`); the size
+validation is shared and unchanged. No production module requests a panel yet;
+only host surface `bar` can be a panel (see [UI](ui.md)). Natively Tauri keeps
+the window and webview (hidden window) and the webview is displayed inside a
+`stache-macos` non-activating `NSPanel`; the panel is unhosted before any close.
+
+`OwnedWindow::reposition(WindowFrame)` (backed by `WindowBackend::reposition(owner,
+window, frame)`) updates the frame of that exact live window; it is refused for a
+released handle, a stopped session or a window of another owner. It only queues
+native work, like open.
+
+Queue acceptance is not creation. A backend may expose a `WindowPhases` tracker
+(`WindowBackend::phases`); the owner reads `OwnedWindow::phase()` (a
+`PhaseSnapshot` of `WindowPhase::{Requested, Created, Loaded, Failed(reason),
+Closing, Closed}` plus a revision) and calls `wait_phase_change(after_revision,
+timeout, &cancel)` from a worker. The read and wait share one lock and every
+cancellation listener takes it before notifying, so a change or cancellation
+between read and wait is never lost; session stop or the caller token ends the
+wait with `PhaseWait::Cancelled`, and no session gate is held while waiting. Phases
+only move forward and `Failed`/`Closed` are terminal, so a late callback cannot
+resurrect a closed or failed window. A backend without a tracker never reports
+more than `Requested`. `OwnedWindow::watch()` returns a cloneable, lease-free
+`WindowWatch` (`id`, `phase`, `wait_change`) that keeps reading the tracker after
+the session ended, so an owner can observe the close acknowledgement of a window
+it already released (Bar reports unacknowledged closes as `cleanupPending`).
 
 The host supplies a `WindowBackend` at `Registry::new`. It opens or focuses the
 window for an owner/key pair and returns a `WindowId`. Each runtime owns one
@@ -816,6 +922,37 @@ original arguments (see [ipc.md](ipc.md)).
   poll quantum. Overflow, timeout and cancellation are typed outcomes; truncated output
   is never a success, and a timeout never implies the command did not act.
 
+- **Line stream** (`open_line_stream`, `commands/stream.rs`): one owned child with piped
+  nonblocking stdout/stderr and no stdin, pulled with `LineStream::next_event`. Stdout is
+  split into lines as bytes and decoded once complete (UTF-8 split across reads is safe;
+  invalid UTF-8 is `InvalidUtf8`). A line is accepted up to `StreamLimits::line_cap`
+  (default 1 MiB, at most 64 MiB, the cap itself is accepted); a longer one is never
+  buffered past the cap, yields one `LineTooLong` and is discarded to the next newline;
+  an unterminated tail at EOF is `Unterminated`. Stderr keeps only the last
+  `STDERR_TAIL_BYTES` (8 KiB) plus a dropped-byte count, is always drained and is drained
+  at most 64 KiB per pull so it cannot starve stdout or cancellation.
+  **Overflow policy: backpressure, not a queue.** There is no producer thread; stdout is
+  read only when the consumer pulls, the OS pipe is the bounded buffer, a slow consumer
+  blocks the child's writes and no line is dropped (the media consumer coalesces
+  snapshots itself). Cancellation wins over queued lines.
+  **Idle wakeups and cancel latency.** A silent real child wakes the stream **zero** times.
+  An idle pull blocks in `poll(2)` with no timeout on the child's stdout, its stderr and a
+  private self-pipe (`ChildProcess::wait_readable`). The first idle wait registers a
+  `CancellationToken::on_cancel` listener that writes one byte to the pipe, so cancelling
+  wakes `next_event` at once; output and the child's exit (pipe hang-up) wake it too.
+  `LineStream::idle_wakeups` counts returned waits. If the pipe cannot be created, or for
+  fakes without descriptors, the wait is bounded and follows the `Clock::wait` schedule
+  that starts at `POLL_QUANTUM` (10 ms) and doubles up to `IDLE_CEILING` (250 ms).
+  `stop` stays bounded by the clock (`term_grace`, `CANCEL_CLEANUP`).
+  `LineStream::stop` sends `SIGTERM` to the exact child pid (`ChildProcess::terminate`,
+  never to an already reaped child), waits `term_grace` (default 2 s), sends `SIGKILL`,
+  waits `CANCEL_CLEANUP` and reports `Exited`, `Killed` or `ReapTimeout` truthfully;
+  `ReapTimeout` hands the handle and slot to the reaper like captured runs. Dropping an
+  unstopped stream kills the child and retains it if unreaped. No process group is
+  created: the only user, the media adapter, runs in-process under perl with no
+  descendants (verified 2026-11-10), so owning the exact child is sufficient and a group
+  signal would only add a pid-reuse hazard.
+
 A `SpawnGate` is consulted immediately before process creation so a stale generation,
 revision or cancellation cannot issue a later step. Cancellation kills only the directly
 owned child, polls every 10 ms (`POLL_QUANTUM`) for 2 s (`CANCEL_CLEANUP`), then moves the
@@ -824,6 +961,13 @@ exact handle to the executor's own reaper. The executor owns 64 retained-child s
 exhaustion refuses new children instead of dropping a handle. The executor starts no
 thread: retained children are re-signalled and swept on the next use or `sweep()`, and
 a `Retained` outcome never proves termination.
+
+The Bar system providers (only the gated Wi-Fi `ipconfig` summary; the CPU temperature is a
+native SMC read, not a child) are
+the first module consumers of `run_captured_prepared`: they build a `PreparedCommand` from a
+fixed executable and a fixed argument vector (no shell, no `split_command`), use the
+worker's stop token as both the cancellation and the `SpawnGate`, and share the injected
+`Clock` with their fake-time schedules. They add no capture wrapper of their own.
 
 ## Currently shown vs planned
 

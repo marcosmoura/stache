@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-bar-session-action"
+description = "Enables the bar_session_action command without any pre-configured scope."
+commands.allow = ["bar_session_action"]
+
+[[permission]]
+identifier = "deny-bar-session-action"
+description = "Denies the bar_session_action command without any pre-configured scope."
+commands.deny = ["bar_session_action"]

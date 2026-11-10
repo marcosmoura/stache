@@ -125,3 +125,42 @@ test('the access surface renders the guidance and reads host status', async () =
   expect(invoke).toHaveBeenCalledWith('host_status');
   expect(document.body.textContent).not.toContain('Host test surface');
 });
+
+test('the bar surface renders the Bar, reads only the Bar snapshot and leaves other surfaces alone', async () => {
+  vi.mocked(invoke).mockImplementation((async (command: string) => {
+    if (command === 'bar_snapshot') {
+      return {
+        kind: 'unavailable',
+        reason: 'disabled',
+        detail: null,
+        generation: '1',
+        sequence: '1',
+      };
+    }
+
+    throw new Error(`Unexpected command: ${command}`);
+  }) as never);
+
+  const screen = await render(
+    <QueryClientProvider client={client()}>
+      <Shell search="?surface=bar" />
+    </QueryClientProvider>,
+  );
+
+  await expect.poll(() => document.documentElement.dataset.surface).toBe('bar');
+  await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('bar_snapshot'));
+  expect(screen.container.querySelector('[data-testid="status-container"]')).not.toBeNull();
+  expect(invoke).not.toHaveBeenCalledWith('host_status');
+  expect(document.body.textContent).not.toContain('Host test surface');
+  expect(document.body.textContent).not.toContain('Unknown surface');
+});
+
+test('the other surfaces never carry the Bar document marker', async () => {
+  await render(
+    <QueryClientProvider client={client()}>
+      <Shell search="?surface=test" />
+    </QueryClientProvider>,
+  );
+
+  expect(document.documentElement.dataset.surface).toBeUndefined();
+});

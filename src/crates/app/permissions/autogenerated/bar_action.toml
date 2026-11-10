@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-bar-action"
+description = "Enables the bar_action command without any pre-configured scope."
+commands.allow = ["bar_action"]
+
+[[permission]]
+identifier = "deny-bar-action"
+description = "Denies the bar_action command without any pre-configured scope."
+commands.deny = ["bar_action"]

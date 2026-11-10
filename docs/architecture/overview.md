@@ -478,6 +478,17 @@ fake-proven only; construction starts nothing and sends no AX message.
   `Arc<TilingSnapshot>` values; native reads run on the effect worker (calling only the backend's
   `track`, `refresh`, `untrack` and `snapshot`) and return as tagged completions. It never waits on the
   main thread, calls `act`, or mutates a window, and it adds no SDK, IPC or CLI surface.
+- **Bar module (parts 03-08).** `stache-bar` holds the `BarModule`/`BarRuntime` (`module.rs`,
+  `runtime.rs`), the pure primary-display frame math (`window.rs`), the typed `BarRuntimeStatus`
+  (`status.rs`), the host seam (`topology.rs`), the menu-bar observation (`menubar.rs`), the
+  providers (`providers/`, including media) and the weather resolver (`weather/`). `stache-app`
+  `bar.rs` holds `BarFactory` (`project_status`, `begin_shutdown`/`finish_shutdown`) and the
+  Bar-scoped topology feed (see [SDK](sdk.md#screen-reservations-and-display-identity)), with the
+  data bridge (`bar_bridge.rs`), fixed actions (`bar_actions.rs`) and the Keep Awake projection
+  (`bar_keep_awake.rs`) beside it. `lib.rs` chains `BarFactory::production_with_media` next to
+  Tiling, **default disabled** and inert at construction, with the bridge attached; the `bar` UI
+  route and the `bar-window` capability exist. `ModuleStatusView.bar` carries the runtime status.
+  See [Bar](../features/bar.md).
 - **Tiling module (parts 05-06).** `stache-tiling` `module.rs`/`status.rs` add the `Module`
   implementation (`TilingModule`, `TilingRuntime`) and `TilingFactory` in `stache-app` `host.rs`.
   `lib.rs` appends `TilingFactory::production` to the production composition **default disabled**
@@ -489,7 +500,7 @@ fake-proven only; construction starts nothing and sends no AX message.
   `DisplayControl::observe_topology` observer whose callback only records a pure hint; the
   `stache-tiling-displays` worker queries the layout off the callback and calls `submit_displays`,
   and the initial layout reaches the actor before the authority is published. Tiling never calls
-  `Registry::apply_screen_topology`; Bar owns it. Reconfigure flips only after the same revision is
+  `Registry::apply_screen_topology`; the app's Bar-scoped topology feed owns it, only while Bar runs. Reconfigure flips only after the same revision is
   observed through the accepted watch. Stop seals first and then drains, restores runtime-hidden
   applications (the owned ledger), stops the watcher, the display feed, the backend epoch, the actor
   and the worker with finite waits, retaining a quarantine for any owed stage (a failed display

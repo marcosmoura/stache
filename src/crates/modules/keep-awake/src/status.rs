@@ -12,10 +12,13 @@
 //! response is therefore an observation, not one globally atomic snapshot
 //! across those cells.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
+use stache_sdk::{AcceptedWatch, PublishedState, StatePublisher, StateSchema};
+
+use crate::config::KeepAwakeConfig;
 
 /// Ownership state of the Keep Awake power assertion.
 ///
@@ -115,6 +118,18 @@ pub struct KeepAwakeRuntimeStatus {
     pub conditions: Vec<KeepAwakeCondition>,
 }
 
+/// Keep Awake owns the published-state contract of its runtime observation.
+///
+/// The application registers this original type as the codec for
+/// [`KeepAwakeConfig::ID`]; no other crate duplicates it. Incompatible payload
+/// changes bump the version.
+impl PublishedState for KeepAwakeRuntimeStatus {
+    const SCHEMA: StateSchema = StateSchema {
+        name: "keepAwakeStatus",
+        version: 1,
+    };
+}
+
 /// Clonable read-only source of the published runtime status.
 ///
 /// Clones share one cell, so every reader observes the runtime's latest
@@ -123,6 +138,10 @@ pub struct KeepAwakeRuntimeStatus {
 #[derive(Clone, Debug, Default)]
 pub struct KeepAwakeSnapshot {
     status: Arc<Mutex<KeepAwakeRuntimeStatus>>,
+    /// The accepted-configuration watch the host installs at registration. The
+    /// published-state revision label is read from it, so a payload never
+    /// claims a revision the registry has not accepted.
+    accepted: Arc<OnceLock<AcceptedWatch<KeepAwakeConfig>>>,
 }
 
 impl KeepAwakeSnapshot {
@@ -132,9 +151,34 @@ impl KeepAwakeSnapshot {
         self.status.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
     }
 
+    /// Installs the typed accepted-configuration watch. Set once at
+    /// registration, before the registry starts modules; later calls are
+    /// ignored.
+    pub fn install_accepted_watch(&self, watch: AcceptedWatch<KeepAwakeConfig>) {
+        let _ = self.accepted.set(watch);
+    }
+
     /// Replaces the published status as one coherent observation.
     pub(crate) fn publish(&self, status: KeepAwakeRuntimeStatus) {
         *self.status.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = status;
+    }
+
+    /// Forwards `status` to one generation's state publisher.
+    ///
+    /// The revision label is the latest accepted revision the installed watch
+    /// shows. Without a watch, a publisher or an accepted configuration nothing
+    /// is published. A rejected write means the generation already ended: its
+    /// tombstone stands and a late write can never reach a successor.
+    pub(crate) fn forward(
+        &self,
+        publisher: Option<&StatePublisher<KeepAwakeRuntimeStatus>>,
+        status: &KeepAwakeRuntimeStatus,
+    ) {
+        let Some(publisher) = publisher else { return };
+        let Some(accepted) = self.accepted.get().and_then(AcceptedWatch::read) else {
+            return;
+        };
+        let _ = publisher.publish(accepted.revision, status);
     }
 }
 

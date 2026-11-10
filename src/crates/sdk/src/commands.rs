@@ -23,7 +23,7 @@
 //! outcome never proves termination.
 
 use std::ffi::OsString;
-use std::os::fd::OwnedFd;
+use std::os::fd::{BorrowedFd, OwnedFd};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -34,8 +34,14 @@ use std::{fmt, io, thread};
 use crate::lock;
 use crate::threading::CancellationToken;
 
+mod stream;
 #[cfg(test)]
 mod tests;
+
+pub use stream::{
+    DEFAULT_LINE_CAP, DEFAULT_TERM_GRACE, LineStream, MAX_LINE_CAP, STDERR_TAIL_BYTES, StopOutcome,
+    StreamEvent, StreamLimits, StreamLimitsError, StreamOpenError,
+};
 
 /// Longest interval between cancellation and exit checks.
 pub const POLL_QUANTUM: Duration = Duration::from_millis(10);
@@ -497,6 +503,33 @@ pub trait ChildProcess: Send {
     /// Returns the OS failure.
     fn kill(&mut self) -> io::Result<()>;
 
+    /// Asks only this child to terminate (SIGTERM for real processes).
+    ///
+    /// The default kills, for implementations without a gentler signal. A child
+    /// that has already exited is left alone, so a recycled pid is never
+    /// signalled.
+    ///
+    /// # Errors
+    /// Returns the OS failure.
+    fn terminate(&mut self) -> io::Result<()> { self.kill() }
+
+    /// Blocks until standard output or standard error (when asked for) is
+    /// readable or hung up, `wake` becomes readable, or `timeout` elapses.
+    /// With no `timeout` the wait is unbounded: only readiness or `wake` ends it.
+    ///
+    /// Returns `Some(true)` when woken by readiness, `Some(false)` on timeout
+    /// and `None` when this child has no waitable descriptors (fakes), in which
+    /// case the caller falls back to [`Clock::wait`].
+    fn wait_readable(
+        &mut self,
+        _stdout: bool,
+        _stderr: bool,
+        _wake: Option<BorrowedFd<'_>>,
+        _timeout: Option<Duration>,
+    ) -> Option<bool> {
+        None
+    }
+
     /// Reads available standard output without blocking.
     ///
     /// `Ok(0)` is end of stream and [`io::ErrorKind::WouldBlock`] means no data
@@ -627,6 +660,45 @@ impl ChildProcess for OsChild {
     fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> { self.child.try_wait() }
 
     fn kill(&mut self) -> io::Result<()> { self.child.kill() }
+
+    fn terminate(&mut self) -> io::Result<()> {
+        // `std` caches the status once reaped, so this never loses it, and a
+        // reaped child is never signalled (its pid may be recycled).
+        if self.child.try_wait()?.is_some() {
+            return Ok(());
+        }
+        let pid = rustix::process::Pid::from_child(&self.child);
+        Ok(rustix::process::kill_process(
+            pid,
+            rustix::process::Signal::TERM,
+        )?)
+    }
+
+    fn wait_readable(
+        &mut self,
+        stdout: bool,
+        stderr: bool,
+        wake: Option<BorrowedFd<'_>>,
+        timeout: Option<Duration>,
+    ) -> Option<bool> {
+        use rustix::event::{PollFd, PollFlags, Timespec, poll};
+        let mut fds = Vec::with_capacity(3);
+        if let Some(fd) = &wake {
+            fds.push(PollFd::new(fd, PollFlags::IN));
+        }
+        if stdout && let Some(fd) = &self.stdout {
+            fds.push(PollFd::new(fd, PollFlags::IN));
+        }
+        if stderr && let Some(fd) = &self.stderr {
+            fds.push(PollFd::new(fd, PollFlags::IN));
+        }
+        let limit = timeout.map(|timeout| Timespec {
+            tv_sec: i64::try_from(timeout.as_secs()).unwrap_or(i64::MAX),
+            tv_nsec: i64::from(timeout.subsec_nanos()),
+        });
+        // An interrupted poll reports "woken" so the caller re-checks at once.
+        Some(poll(&mut fds, limit.as_ref()).map_or(true, |ready| ready > 0))
+    }
 
     fn read_stdout(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         read_fd(self.stdout.as_ref(), buffer)

@@ -20,6 +20,13 @@ use objc2_foundation::{NSString, NSURL};
 pub const ACCESSIBILITY_SETTINGS_URL: &str =
     "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
 
+/// The Battery pane, opened by the Bar battery click.
+pub const BATTERY_SETTINGS_URL: &str =
+    "x-apple.systempreferences:com.apple.Battery-Settings.extension";
+
+/// The Wi-Fi pane, opened by the Bar Wi-Fi click.
+pub const WIFI_SETTINGS_URL: &str = "x-apple.systempreferences:com.apple.wifi-settings-extension";
+
 /// Why System Settings could not be opened.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SettingsError {
@@ -43,6 +50,16 @@ impl fmt::Display for SettingsError {
 
 impl std::error::Error for SettingsError {}
 
+fn open_fixed(url: &'static str) -> Result<(), SettingsError> {
+    let _main = MainThreadMarker::new().ok_or(SettingsError::NotMainThread)?;
+    let url = NSURL::URLWithString(&NSString::from_str(url)).ok_or(SettingsError::InvalidUrl)?;
+    if NSWorkspace::sharedWorkspace().openURL(&url) {
+        Ok(())
+    } else {
+        Err(SettingsError::Rejected)
+    }
+}
+
 /// Opens the Accessibility pane of System Settings.
 ///
 /// Must be called on the main thread.
@@ -51,15 +68,24 @@ impl std::error::Error for SettingsError {}
 /// Returns [`SettingsError`] when called off the main thread, when the URL is
 /// invalid or when `AppKit` answers `false`.
 pub fn open_accessibility_settings() -> Result<(), SettingsError> {
-    let _main = MainThreadMarker::new().ok_or(SettingsError::NotMainThread)?;
-    let url = NSURL::URLWithString(&NSString::from_str(ACCESSIBILITY_SETTINGS_URL))
-        .ok_or(SettingsError::InvalidUrl)?;
-    if NSWorkspace::sharedWorkspace().openURL(&url) {
-        Ok(())
-    } else {
-        Err(SettingsError::Rejected)
-    }
+    open_fixed(ACCESSIBILITY_SETTINGS_URL)
 }
+
+/// Opens the Battery pane of System Settings. The URL is a fixed constant.
+///
+/// Must be called on the main thread.
+///
+/// # Errors
+/// As [`open_accessibility_settings`].
+pub fn open_battery_settings() -> Result<(), SettingsError> { open_fixed(BATTERY_SETTINGS_URL) }
+
+/// Opens the Wi-Fi pane of System Settings. The URL is a fixed constant.
+///
+/// Must be called on the main thread.
+///
+/// # Errors
+/// As [`open_accessibility_settings`].
+pub fn open_wifi_settings() -> Result<(), SettingsError> { open_fixed(WIFI_SETTINGS_URL) }
 
 #[cfg(test)]
 mod tests {
@@ -69,5 +95,25 @@ mod tests {
     fn an_off_main_call_is_refused_without_opening_anything() {
         let result = std::thread::spawn(open_accessibility_settings).join().expect("thread");
         assert_eq!(result, Err(SettingsError::NotMainThread));
+    }
+
+    #[test]
+    fn the_bar_pane_calls_are_refused_off_main_and_the_urls_are_fixed() {
+        assert_eq!(
+            std::thread::spawn(open_battery_settings).join().expect("thread"),
+            Err(SettingsError::NotMainThread)
+        );
+        assert_eq!(
+            std::thread::spawn(open_wifi_settings).join().expect("thread"),
+            Err(SettingsError::NotMainThread)
+        );
+        assert_eq!(
+            BATTERY_SETTINGS_URL,
+            "x-apple.systempreferences:com.apple.Battery-Settings.extension"
+        );
+        assert_eq!(
+            WIFI_SETTINGS_URL,
+            "x-apple.systempreferences:com.apple.wifi-settings-extension"
+        );
     }
 }

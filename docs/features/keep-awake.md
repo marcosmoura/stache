@@ -35,7 +35,12 @@ never infers consent from Bar.
 The generic configuration-backed tray **Enable/Disable** and session
 **Pause/Resume** are the only controls. There is no dedicated window, Settings
 screen, CLI command, TCC permission or webview. Keep Awake is independent of
-Bar; a future Bar may consume its status but never owns the assertion.
+Bar; Bar consumes its status and its indicator click sends the same session
+Pause/Resume through the generic `bar_session_action` command (executed by the
+host runner on the existing module controls; a disabled Keep Awake makes the
+click inert, never Enable, a configuration edit or a new Keep Awake endpoint,
+and a failed or release-pending one is a typed non-success). Bar never owns the
+assertion. See [Bar](bar.md#keep-awake-session-click).
 Construction and `configure` acquire nothing; registration starts no assertion,
 observer, worker or timer.
 
@@ -128,7 +133,26 @@ publishes `observerUnavailable` and retries on the next lifecycle start or
 resume; the warning clears only after a successful install. No recurring
 reinstaller exists.
 
+## Published state
+
+Keep Awake is the first production provider of the SDK published-state channel
+([SDK](../architecture/sdk.md#published-state-and-observation)). It owns the schema
+identity: provider `keepAwake`, schema `keepAwakeStatus`, version `1`, and the
+payload is the original `KeepAwakeRuntimeStatus` (no second DTO anywhere). The app
+registers that type as the codec (`published_state::state_schemas`) before any
+module registers. The module obtains a `StatePublisher` in `start` and publishes the
+whole status on every runtime change under its policy gate, labelled with the latest
+accepted revision read from the accepted-configuration watch the factory installs on
+`KeepAwakeSnapshot`; the first publication during `start` is held until the start
+succeeds. The registry tombstones the cell on stop, pause, disable and failure
+before any cleanup wait, so the channel never shows stale active data; the module's
+own status (and `keepAwake.status`) still reports `releasePending` truthfully.
+Bar consumes it only through the app projection ([Bar](bar.md#keep-awake-indicator-data)).
+
 ## Status contract
+
+`keepAwake.status` output is byte-identical to before the module published state
+(a golden test pins the serialized bytes); publishing added no field.
 
 `keepAwake.status` is the only new socket method; it uses the existing router
 and server. The app owns the envelope and handler:

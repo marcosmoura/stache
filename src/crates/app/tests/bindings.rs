@@ -145,3 +145,41 @@ fn app_info_is_static_identity_data() {
     assert_eq!(info.identifier, "com.marcosmoura.stache.next");
     assert_eq!(info.version, env!("CARGO_PKG_VERSION"));
 }
+
+#[test]
+fn the_session_action_command_is_generated_with_closed_actions_and_concrete_outcomes() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let path = directory.path().join("bindings.gen.ts");
+    stache_app::bindings::builder()
+        .export(Typescript::default(), &path)
+        .expect("export bindings");
+    let bindings = std::fs::read_to_string(&path).expect("read bindings");
+    assert!(
+        bindings.contains(
+            "barSessionAction: (module: string, action: SessionAction) => \
+             __TAURI_INVOKE<SessionActionOutcome>(\"bar_session_action\", { module, action })"
+        ),
+        "the generated command carries exactly a module id and a closed action"
+    );
+    assert!(bindings.contains("export type SessionAction ="));
+    assert!(bindings.contains("\"pause\" |"));
+    assert!(bindings.contains("\"resume\";"));
+    for forbidden in ["\"enable\"", "\"disable\"", "\"retry\""] {
+        assert!(
+            !bindings.contains(forbidden),
+            "the action enum is closed: {forbidden}"
+        );
+    }
+    for kind in [
+        "\"applied\"",
+        "\"notApplied\"",
+        "\"stale\"",
+        "\"disabled\"",
+        "\"unavailable\"",
+        "\"busy\"",
+        "\"uncertain\"",
+        "\"unauthorized\"",
+    ] {
+        assert!(bindings.contains(kind), "outcome kind {kind} is exported");
+    }
+}

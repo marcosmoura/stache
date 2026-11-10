@@ -244,6 +244,7 @@ struct FakeState {
     paths_by_bundle_id: Mutex<BTreeMap<String, Option<PathBuf>>>,
     observe_barrier: Mutex<Option<Arc<FakeBarrier>>>,
     open_barrier: Mutex<Option<Arc<FakeBarrier>>>,
+    open_after_issue_barrier: Mutex<Option<Arc<FakeBarrier>>>,
     terminate_barrier: Mutex<Option<Arc<FakeBarrier>>>,
     terminate_issuance_barrier: Mutex<Option<Arc<FakeBarrier>>>,
     terminate_after_issue_barrier: Mutex<Option<Arc<FakeBarrier>>>,
@@ -467,6 +468,16 @@ impl FakeApplicationBackend {
     pub fn block_next_open(&self) -> Arc<FakeBarrier> {
         let barrier = Arc::new(FakeBarrier::default());
         *lock(&self.state.open_barrier) = Some(Arc::clone(&barrier));
+        barrier
+    }
+
+    /// Parks the next open after the request was issued and before the backend
+    /// returns. The request is irreversible here; an acknowledgement timeout
+    /// reaches the caller as an issued failure.
+    #[must_use]
+    pub fn block_next_open_after_issue(&self) -> Arc<FakeBarrier> {
+        let barrier = Arc::new(FakeBarrier::default());
+        *lock(&self.state.open_after_issue_barrier) = Some(Arc::clone(&barrier));
         barrier
     }
 
@@ -1805,6 +1816,10 @@ impl ApplicationBackend for FakeApplicationBackend {
         }) else {
             return Ok(OpenRequest::Stale);
         };
+        let after = lock(&self.state.open_after_issue_barrier).take();
+        if let Some(barrier) = after {
+            barrier.enter();
+        }
         Ok(OpenRequest::Issued)
     }
 }

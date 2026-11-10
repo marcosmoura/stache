@@ -13,15 +13,22 @@
     "macOSPrivateApi": true,
     "windows": [],
     "security": {
-      "csp": "default-src 'self'; object-src 'none'; base-uri 'none'; connect-src ipc: http://ipc.localhost; style-src 'self' 'unsafe-inline'",
-      "devCsp": "default-src 'self'; object-src 'none'; base-uri 'none'; connect-src ipc: http://ipc.localhost http://localhost:1420 ws://localhost:1420; style-src 'self' 'unsafe-inline'",
-      "capabilities": ["test-window", "access-window"]
+      "csp": "default-src 'self'; object-src 'none'; base-uri 'none'; connect-src ipc: http://ipc.localhost https://weather.visualcrossing.com https://api.open-meteo.com https://geocoding-api.open-meteo.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:",
+      "devCsp": "default-src 'self'; object-src 'none'; base-uri 'none'; connect-src ipc: http://ipc.localhost https://weather.visualcrossing.com https://api.open-meteo.com https://geocoding-api.open-meteo.com http://localhost:1420 ws://localhost:1420; style-src 'self' 'unsafe-inline'; img-src 'self' data:",
+      "capabilities": ["test-window", "access-window", "bar-window"]
     }
   },
   "bundle": {
     "active": true,
     "targets": ["app"],
+    "resources": {
+      "resources/media-control/": "media-control/"
+    },
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns"],
-    "macOS": { "minimumSystemVersion": "26.0", "signingIdentity": "-" }
+    "macOS": {
+      "minimumSystemVersion": "26.0",
+      "signingIdentity": "-",
+      "entitlements": "Entitlements.plist"
+    }
   }
 }

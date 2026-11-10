@@ -24,10 +24,51 @@ export const commands = {
 	openAccessibilitySettings: () => __TAURI_INVOKE<void>("open_accessibility_settings"),
 	/**  Quits through the shared shutdown coordinator, like the tray row. */
 	quitApp: () => __TAURI_INVOKE<void>("quit_app"),
+	/**
+	 *  Returns the Bar view to the Bar window that called.
+	 *
+	 *  `window` is the actual calling webview window injected by Tauri; the
+	 *  bridge authorizes its label against the live Bar panel, never an argument.
+	 *  Reads published cells only and never blocks.
+	 */
+	barSnapshot: () => __TAURI_INVOKE<BarSnapshotOutcome_Serialize>("bar_snapshot"),
+	/**
+	 *  Runs one fixed Bar click action for the Bar window that called.
+	 *
+	 *  `action` is a closed enum; the host maps it to a fixed target and accepts no
+	 *  name, path, URL or argument. `window` is the actual calling webview window
+	 *  injected by Tauri; the bridge authorizes its label against the live Bar
+	 *  panel. The blocking native sequence runs on the blocking pool (never the
+	 *  main thread) and is bounded; a click while one is in flight is `busy`.
+	 */
+	barAction: (action: BarAction) => __TAURI_INVOKE<BarActionOutcome_Serialize>("bar_action", { action }),
+	/**
+	 *  Resolves the weather inputs (provider, key, location) for the Bar window
+	 *  that called.
+	 *
+	 *  `window` is the actual calling webview window injected by Tauri; the bridge
+	 *  authorizes its label against the live Bar panel. The response carries the
+	 *  API key and coordinates and exists nowhere else. The location read and the
+	 *  env-file read run on the blocking pool (never the main thread), bounded.
+	 */
+	barWeather: () => __TAURI_INVOKE<BarWeatherOutcome_Serialize>("bar_weather"),
+	barMediaArtwork: (id: string) => __TAURI_INVOKE<BarArtworkOutcome_Serialize>("bar_media_artwork", { id }),
+	/**
+	 *  Pauses or resumes one module for this session, for the Bar window that
+	 *  called.
+	 *
+	 *  `module` is validated strictly (only `keepAwake` is authorized for the Bar
+	 *  capability) and `action` is a closed enum (`pause` | `resume`), so no other
+	 *  action can even deserialize. The host decides from the current session
+	 *  metadata at execution time and returns what actually happened; see
+	 *  [`crate::session_action`]. The wait runs on the blocking pool, bounded.
+	 */
+	barSessionAction: (module: string, action: SessionAction) => __TAURI_INVOKE<SessionActionOutcome>("bar_session_action", { module, action }),
 };
 
 /** Events */
 export const events = {
+	barChanged: makeEvent<BarChanged_Serialize, BarChanged_Deserialize>("bar-changed"),
 	statusChanged: makeEvent<StatusChanged_Serialize, StatusChanged_Deserialize>("status-changed"),
 };
 
@@ -92,6 +133,49 @@ export type AnimationConfig_Serialize = {
 	/**  Easing function for animations. */
 	easing: EasingType,
 };
+
+/**
+ *  A redacted, actionable note about the key file. It names the path, never a
+ *  value.
+ */
+export type ApiKeyDiagnostic = ApiKeyDiagnostic_Serialize | ApiKeyDiagnostic_Deserialize;
+
+/**
+ *  A redacted, actionable note about the key file. It names the path, never a
+ *  value.
+ */
+export type ApiKeyDiagnostic_Deserialize = {
+	/**  What went wrong. */
+	problem: ApiKeyProblem,
+	/**  The resolved path, when one could be resolved. */
+	path?: string | null,
+};
+
+/**
+ *  A redacted, actionable note about the key file. It names the path, never a
+ *  value.
+ */
+export type ApiKeyDiagnostic_Serialize = {
+	/**  What went wrong. */
+	problem: ApiKeyProblem,
+	/**  The resolved path, when one could be resolved. */
+	path: string | null,
+};
+
+/**  Why no key came out of the configured file. */
+export type ApiKeyProblem =
+/**  `api_keys` starts with `~` but no home directory is known. */
+"unresolvable" |
+/**  The file does not exist. */
+"missing" |
+/**  The path is not a regular file (or a symlink to one). */
+"notAFile" |
+/**  The file exists but could not be read (permissions, I/O error). */
+"unreadable" |
+/**  The file is larger than [`MAX_ENV_FILE_BYTES`]. */
+"tooLarge" |
+/**  The file was read but has no non-empty `VISUAL_CROSSING_API_KEY`. */
+"keyAbsent";
 
 /**  Application identity shown by the test window. */
 export type AppInfo = {
@@ -222,12 +306,201 @@ export type AudioListParams_Serialize = {
 	kind: AudioListKind,
 };
 
-/**  Status bar configuration (inert: nothing consumes it yet). */
+/**  The Bar components that can be clicked. */
+export type BarAction =
+/**  Opens Activity Monitor. */
+"cpu" |
+/**  Opens Calendar. */
+"clock" |
+/**  Opens the Battery pane of System Settings. */
+"battery" |
+/**  Opens the Wi-Fi pane of System Settings. */
+"wifi" |
+/**  Opens Weather. */
+"weather" |
+/**
+ *  Opens the player of the currently published media (see the module
+ *  docs); the UI sends no identifier.
+ */
+"media";
+
+/**  The typed result of `bar_action`. */
+export type BarActionOutcome = BarActionOutcome_Serialize | BarActionOutcome_Deserialize;
+
+/**  The typed result of `bar_action`. */
+export type BarActionOutcome_Deserialize =
+/**
+ *  The request was issued and macOS reported it done. This is not proof
+ *  that a window is visible.
+ */
+{ kind: "completed" } |
+/**
+ *  The Bar was no longer current (stopped, restarted or its panel
+ *  replaced) before the request was sent; nothing was sent.
+ */
+{ kind: "stale" } |
+/**
+ *  The click was cancelled before issuance (for example a rejected
+ *  dispatch); nothing was sent.
+ */
+{ kind: "notIssued" } |
+/**
+ *  The click has no target: a media click while no media is published or
+ *  the player is not one of the four known ones. Nothing was launched.
+ */
+{ kind: "notAttempted" } |
+/**  macOS or the adapter refused the request. */
+{ kind: "refused";
+/**  A short diagnostic; not for display. */
+detail: string } |
+/**  The target application is not installed. */
+{ kind: "notInstalled" } |
+/**
+ *  An acknowledgement did not arrive before the request could issue;
+ *  nothing was sent and nothing will be.
+ */
+{ kind: "timedOutBeforeIssuance" } |
+/**
+ *  The request was issued but no confirmation arrived inside the bound. It
+ *  may still complete; it is never retried automatically.
+ */
+{ kind: "uncertainAfterIssuance" } |
+/**  Another action is in flight; this click was dropped, not queued. */
+{ kind: "busy" } |
+/**  The calling window may not trigger actions. */
+{ kind: "unauthorized" } |
+/**  The Bar is not running. */
+{ kind: "unavailable";
+/**  Why. */
+reason: BarUnavailableReason;
+/**  The failure detail, if any. */
+detail?: string | null };
+
+/**  The typed result of `bar_action`. */
+export type BarActionOutcome_Serialize =
+/**
+ *  The request was issued and macOS reported it done. This is not proof
+ *  that a window is visible.
+ */
+{ kind: "completed" } |
+/**
+ *  The Bar was no longer current (stopped, restarted or its panel
+ *  replaced) before the request was sent; nothing was sent.
+ */
+{ kind: "stale" } |
+/**
+ *  The click was cancelled before issuance (for example a rejected
+ *  dispatch); nothing was sent.
+ */
+{ kind: "notIssued" } |
+/**
+ *  The click has no target: a media click while no media is published or
+ *  the player is not one of the four known ones. Nothing was launched.
+ */
+{ kind: "notAttempted" } |
+/**  macOS or the adapter refused the request. */
+{ kind: "refused";
+/**  A short diagnostic; not for display. */
+detail: string } |
+/**  The target application is not installed. */
+{ kind: "notInstalled" } |
+/**
+ *  An acknowledgement did not arrive before the request could issue;
+ *  nothing was sent and nothing will be.
+ */
+{ kind: "timedOutBeforeIssuance" } |
+/**
+ *  The request was issued but no confirmation arrived inside the bound. It
+ *  may still complete; it is never retried automatically.
+ */
+{ kind: "uncertainAfterIssuance" } |
+/**  Another action is in flight; this click was dropped, not queued. */
+{ kind: "busy" } |
+/**  The calling window may not trigger actions. */
+{ kind: "unauthorized" } |
+/**  The Bar is not running. */
+{ kind: "unavailable";
+/**  Why. */
+reason: BarUnavailableReason;
+/**  The failure detail, if any. */
+detail: string | null };
+
+/**  The typed answer of `bar_media_artwork`. */
+export type BarArtworkOutcome = BarArtworkOutcome_Serialize | BarArtworkOutcome_Deserialize;
+
+/**  The typed answer of `bar_media_artwork`. */
+export type BarArtworkOutcome_Deserialize =
+/**
+ *  The artwork: base64 text of a 128x128 PNG (the UI builds the
+ *  `data:image/png;base64,` URL).
+ */
+{ kind: "ready";
+/**  The base64 PNG. */
+artwork: string } |
+/**  No such artwork (unknown, evicted, or not a valid id). */
+{ kind: "missing" } |
+/**  The calling window may not read artwork. */
+{ kind: "unauthorized" } |
+/**  The Bar is not running, has no panel, or has no artwork store. */
+{ kind: "unavailable";
+/**  Why. */
+reason: BarUnavailableReason;
+/**  The failure detail, if any. */
+detail?: string | null };
+
+/**  The typed answer of `bar_media_artwork`. */
+export type BarArtworkOutcome_Serialize =
+/**
+ *  The artwork: base64 text of a 128x128 PNG (the UI builds the
+ *  `data:image/png;base64,` URL).
+ */
+{ kind: "ready";
+/**  The base64 PNG. */
+artwork: string } |
+/**  No such artwork (unknown, evicted, or not a valid id). */
+{ kind: "missing" } |
+/**  The calling window may not read artwork. */
+{ kind: "unauthorized" } |
+/**  The Bar is not running, has no panel, or has no artwork store. */
+{ kind: "unavailable";
+/**  Why. */
+reason: BarUnavailableReason;
+/**  The failure detail, if any. */
+detail: string | null };
+
+/**  Emitted to the Bar window when the view changed. */
+export type BarChanged = BarChanged_Serialize | BarChanged_Deserialize;
+
+/**  Emitted to the Bar window when the view changed. */
+export type BarChanged_Deserialize = {
+	/**  The runtime generation, as a decimal string. */
+	generation: string,
+	/**  The change sequence, as a decimal string. Apply only if newer. */
+	sequence: string,
+	/**  Take a fresh `bar_snapshot`; `outcome` is absent. */
+	resnapshot: boolean,
+	/**  The new state: `available` or `unavailable`, never `unauthorized`. */
+	outcome?: BarSnapshotOutcome_Deserialize | null,
+};
+
+/**  Emitted to the Bar window when the view changed. */
+export type BarChanged_Serialize = {
+	/**  The runtime generation, as a decimal string. */
+	generation: string,
+	/**  The change sequence, as a decimal string. Apply only if newer. */
+	sequence: string,
+	/**  Take a fresh `bar_snapshot`; `outcome` is absent. */
+	resnapshot: boolean,
+	/**  The new state: `available` or `unavailable`, never `unauthorized`. */
+	outcome: BarSnapshotOutcome_Serialize | null,
+};
+
+/**  Status bar configuration (the Bar module reads it; default disabled). */
 export type BarConfig = BarConfig_Serialize | BarConfig_Deserialize;
 
-/**  Status bar configuration (inert: nothing consumes it yet). */
+/**  Status bar configuration (the Bar module reads it; default disabled). */
 export type BarConfig_Deserialize = {
-	/**  Whether the status bar is enabled. Validates today but starts nothing. */
+	/**  Whether the status bar is enabled. */
 	enabled?: boolean,
 	/**  Height of the status bar in pixels. Zero is preserved, not replaced. */
 	height?: number,
@@ -237,9 +510,9 @@ export type BarConfig_Deserialize = {
 	weather?: WeatherConfig_Deserialize,
 };
 
-/**  Status bar configuration (inert: nothing consumes it yet). */
+/**  Status bar configuration (the Bar module reads it; default disabled). */
 export type BarConfig_Serialize = {
-	/**  Whether the status bar is enabled. Validates today but starts nothing. */
+	/**  Whether the status bar is enabled. */
 	enabled: boolean,
 	/**  Height of the status bar in pixels. Zero is preserved, not replaced. */
 	height: number,
@@ -247,6 +520,479 @@ export type BarConfig_Serialize = {
 	padding: number,
 	/**  Weather status bar configuration. */
 	weather: WeatherConfig_Serialize,
+};
+
+/**  The panel frame in logical points, top-left origin of the primary display. */
+export type BarFrameView = {
+	/**  Left edge. */
+	x: number,
+	/**  Top edge. */
+	y: number,
+	/**  Width. */
+	width: number,
+	/**  Height. */
+	height: number,
+};
+
+/**  What the panel is doing. */
+export type BarPanelState =
+/**  No panel and no reason to have one (inactive). */
+"none" |
+/**  `height: 0` or a computed width `<= 0`: no panel, by design. */
+"noPanelZeroSize" |
+/**  The host reports no primary display (or could not read the displays). */
+"noPrimaryDisplay" |
+/**  The host queue accepted the open; no native window exists yet. */
+"requested" |
+/**  The native window exists; its page has not loaded. */
+"created" |
+/**  The page loaded. */
+"loaded" |
+/**  Creation, page load or the wait failed; see `detail`. */
+"failed";
+
+/**  The screen reservation currently staged. */
+export type BarReservationView = {
+	/**  The reserved display (`CGDirectDisplayID`). */
+	display: number,
+	/**  The constant top inset, `height + padding`, in points. */
+	top: number,
+};
+
+/**  Where the Bar runtime is in its lifecycle. */
+export type BarRuntimeState =
+/**  Nothing is installed, spawned or owned. */
+"inactive" |
+/**  A start is in progress. */
+"starting" |
+/**  The runtime is on. */
+"running" |
+/**  A stop is in progress. */
+"stopping" |
+/**  The last start failed; nothing is owned. */
+"failed" |
+/**
+ *  Stopped, but a closed panel is not acknowledged or the topology feed
+ *  still owes cleanup. The exact identities stay owned.
+ */
+"cleanupPending";
+
+/**  The runtime observation published to the host. */
+export type BarRuntimeStatus = BarRuntimeStatus_Serialize | BarRuntimeStatus_Deserialize;
+
+/**  The runtime observation published to the host. */
+export type BarRuntimeStatus_Deserialize = {
+	/**  Lifecycle position. */
+	state: BarRuntimeState,
+	/**  Panel position. */
+	panel: BarPanelState,
+	/**  The accepted configuration revision as a decimal string. */
+	configRevision: string,
+	/**  The panel frame; present only while a panel exists. */
+	frame?: BarFrameView | null,
+	/**  The staged reservation; present only while a panel exists. */
+	reservation?: BarReservationView | null,
+	/**  The display topology generation the frame was computed against. */
+	topologyGeneration?: string | null,
+	/**  Native window identities whose close is queued but not acknowledged. */
+	cleanupPending: string[],
+	/**  The last failure or degraded condition. */
+	detail?: string | null,
+	/**
+	 *  Typed provider conditions (CPU, battery, Wi-Fi), outside the Bar
+	 *  visuals; deduplicated, one per provider at most.
+	 */
+	providers: ProviderDiagnostic[],
+	/**
+	 *  The last weather location result and key-file condition (enums and a
+	 *  path only; never a coordinate or key). Changing it never changes the
+	 *  Bar view or its sequence.
+	 */
+	weather: WeatherStatus_Deserialize,
+	/**
+	 *  The media adapter condition (`running`, `restarting`, `unavailable`, with
+	 *  a sanitized reason and stderr tail); `None` when no media worker runs.
+	 *  Never carries artwork bytes.
+	 */
+	media?: MediaStatus_Deserialize | null,
+};
+
+/**  The runtime observation published to the host. */
+export type BarRuntimeStatus_Serialize = {
+	/**  Lifecycle position. */
+	state: BarRuntimeState,
+	/**  Panel position. */
+	panel: BarPanelState,
+	/**  The accepted configuration revision as a decimal string. */
+	configRevision: string,
+	/**  The panel frame; present only while a panel exists. */
+	frame: BarFrameView | null,
+	/**  The staged reservation; present only while a panel exists. */
+	reservation: BarReservationView | null,
+	/**  The display topology generation the frame was computed against. */
+	topologyGeneration: string | null,
+	/**  Native window identities whose close is queued but not acknowledged. */
+	cleanupPending: string[],
+	/**  The last failure or degraded condition. */
+	detail: string | null,
+	/**
+	 *  Typed provider conditions (CPU, battery, Wi-Fi), outside the Bar
+	 *  visuals; deduplicated, one per provider at most.
+	 */
+	providers: ProviderDiagnostic[],
+	/**
+	 *  The last weather location result and key-file condition (enums and a
+	 *  path only; never a coordinate or key). Changing it never changes the
+	 *  Bar view or its sequence.
+	 */
+	weather: WeatherStatus_Serialize,
+	/**
+	 *  The media adapter condition (`running`, `restarting`, `unavailable`, with
+	 *  a sanitized reason and stderr tail); `None` when no media worker runs.
+	 *  Never carries artwork bytes.
+	 */
+	media: MediaStatus_Serialize | null,
+};
+
+/**  The typed answer of `bar_snapshot` (and the payload of [`BarChanged`]). */
+export type BarSnapshotOutcome = BarSnapshotOutcome_Serialize | BarSnapshotOutcome_Deserialize;
+
+/**  The typed answer of `bar_snapshot` (and the payload of [`BarChanged`]). */
+export type BarSnapshotOutcome_Deserialize =
+/**  The Bar is running; this is its view. */
+{ kind: "available";
+/**  The view. */
+view: BarView_Deserialize } |
+/**  The Bar is not running; nothing stale is returned. */
+{ kind: "unavailable";
+/**  Why. */
+reason: BarUnavailableReason;
+/**  The failure detail, if any. */
+detail?: string | null;
+/**  The runtime generation, as a decimal string. */
+generation: string;
+/**  The change sequence, as a decimal string. */
+sequence: string } |
+/**  The calling window may not read this feed. */
+{ kind: "unauthorized" };
+
+/**  The typed answer of `bar_snapshot` (and the payload of [`BarChanged`]). */
+export type BarSnapshotOutcome_Serialize =
+/**  The Bar is running; this is its view. */
+{ kind: "available";
+/**  The view. */
+view: BarView_Serialize } |
+/**  The Bar is not running; nothing stale is returned. */
+{ kind: "unavailable";
+/**  Why. */
+reason: BarUnavailableReason;
+/**  The failure detail, if any. */
+detail: string | null;
+/**  The runtime generation, as a decimal string. */
+generation: string;
+/**  The change sequence, as a decimal string. */
+sequence: string } |
+/**  The calling window may not read this feed. */
+{ kind: "unauthorized" };
+
+/**  Why the Bar is not serving data. */
+export type BarUnavailableReason =
+/**  The module is disabled in `bar.toml`. */
+"disabled" |
+/**  The module is paused for this session. */
+"paused" |
+/**  The Accessibility launch gate (or another permission) holds it. */
+"waitingForPermission" |
+/**  The module or its panel failed. */
+"failed" |
+/**  A start is in progress. */
+"starting" |
+/**  A stop is in progress. */
+"stopping" |
+/**  Stopped, never started, or not registered. */
+"stopped" |
+/**  A prerequisite is missing. */
+"unavailable";
+
+/**  What the Bar UI renders from. */
+export type BarView = BarView_Serialize | BarView_Deserialize;
+
+/**  What the Bar UI renders from. */
+export type BarView_Deserialize = {
+	/**  The runtime generation as an exact decimal string. */
+	generation: string,
+	/**
+	 *  The monotonic change sequence as an exact decimal string. Never parse
+	 *  it into a `number`.
+	 */
+	sequence: string,
+	/**
+	 *  The accepted configuration revision as an exact decimal string; empty
+	 *  before the first acceptance.
+	 */
+	configRevision: string,
+	/**  What the panel is doing. */
+	panel: BarPanelState,
+	/**
+	 *  Whether the system menu bar is on screen. `visible` slides the Bar
+	 *  away (legacy `menuHidden` is true here); see the adapter docs.
+	 */
+	menu: MenuBarObservation_Deserialize,
+	/**  The panel frame in logical points; present only while a panel exists. */
+	frame?: BarFrameView | null,
+	/**  The accepted `height` in points. */
+	height: number,
+	/**  The accepted `padding` in points. */
+	padding: number,
+	/**  The last failure or degraded condition. */
+	detail?: string | null,
+	/**  The CPU reading; absent until the first sample. */
+	cpu?: CpuReading_Deserialize | null,
+	/**
+	 *  The battery reading; absent without a battery or before the first
+	 *  sample (the component is hidden either way).
+	 */
+	battery?: BatteryReading | null,
+	/**  The Wi-Fi reading; absent until the first sample. */
+	wifi?: WifiReading_Deserialize | null,
+	/**
+	 *  The playing media; absent when nothing plays, the adapter is
+	 *  unavailable or restarting. The artwork is an id, never bytes.
+	 */
+	media?: MediaReading_Deserialize | null,
+	/**
+	 *  A decimal-string counter that changes when a location consent decision
+	 *  arrives after a weather read timed out; the weather hook refetches on
+	 *  every change. No coordinate, key or decision is carried.
+	 */
+	weatherEpoch: string,
+	/**
+	 *  Keep Awake as the Bar renders it, or `null` until the first observation
+	 *  resolves (the legacy loading branch: nothing is drawn). `active` is true
+	 *  only for a confirmed adopted active assertion; every other state is
+	 *  `active: false`. `paused` and `enabled` are the host session facts for
+	 *  the click, never derived from the colour.
+	 */
+	keepAwake?: KeepAwakeIndicator | null,
+};
+
+/**  What the Bar UI renders from. */
+export type BarView_Serialize = {
+	/**  The runtime generation as an exact decimal string. */
+	generation: string,
+	/**
+	 *  The monotonic change sequence as an exact decimal string. Never parse
+	 *  it into a `number`.
+	 */
+	sequence: string,
+	/**
+	 *  The accepted configuration revision as an exact decimal string; empty
+	 *  before the first acceptance.
+	 */
+	configRevision: string,
+	/**  What the panel is doing. */
+	panel: BarPanelState,
+	/**
+	 *  Whether the system menu bar is on screen. `visible` slides the Bar
+	 *  away (legacy `menuHidden` is true here); see the adapter docs.
+	 */
+	menu: MenuBarObservation_Serialize,
+	/**  The panel frame in logical points; present only while a panel exists. */
+	frame: BarFrameView | null,
+	/**  The accepted `height` in points. */
+	height: number,
+	/**  The accepted `padding` in points. */
+	padding: number,
+	/**  The last failure or degraded condition. */
+	detail: string | null,
+	/**  The CPU reading; absent until the first sample. */
+	cpu: CpuReading_Serialize | null,
+	/**
+	 *  The battery reading; absent without a battery or before the first
+	 *  sample (the component is hidden either way).
+	 */
+	battery: BatteryReading | null,
+	/**  The Wi-Fi reading; absent until the first sample. */
+	wifi: WifiReading_Serialize | null,
+	/**
+	 *  The playing media; absent when nothing plays, the adapter is
+	 *  unavailable or restarting. The artwork is an id, never bytes.
+	 */
+	media: MediaReading_Serialize | null,
+	/**
+	 *  A decimal-string counter that changes when a location consent decision
+	 *  arrives after a weather read timed out; the weather hook refetches on
+	 *  every change. No coordinate, key or decision is carried.
+	 */
+	weatherEpoch: string,
+	/**
+	 *  Keep Awake as the Bar renders it, or `null` until the first observation
+	 *  resolves (the legacy loading branch: nothing is drawn). `active` is true
+	 *  only for a confirmed adopted active assertion; every other state is
+	 *  `active: false`. `paused` and `enabled` are the host session facts for
+	 *  the click, never derived from the colour.
+	 */
+	keepAwake: KeepAwakeIndicator | null,
+};
+
+/**
+ *  Everything one weather refresh needs. Carries a secret and coordinates:
+ *  returned only to the authorized Bar window, never persisted or broadcast.
+ */
+export type BarWeather = BarWeather_Serialize | BarWeather_Deserialize;
+
+/**  Where the weather location comes from. */
+export type BarWeatherLocation =
+/**  A native `CoreLocation` fix. */
+{ source: "coreLocation";
+/**  Latitude in degrees. */
+latitude: number | null;
+/**  Longitude in degrees. */
+longitude: number | null;
+/**  macOS delivered an approximate fix. */
+reducedAccuracy: boolean } |
+/**
+ *  The trimmed `weather.default_location` text. The UI parses coordinates
+ *  or geocodes a city name, as legacy did.
+ */
+{ source: "defaultLocation";
+/**  The configured text. */
+query: string } |
+/**  No fix and `default_location` is empty. */
+{ source: "none" };
+
+/**
+ *  The typed answer of `bar_weather`. `ready` carries a secret and
+ *  coordinates: it goes to the authorized Bar window only.
+ */
+export type BarWeatherOutcome = BarWeatherOutcome_Serialize | BarWeatherOutcome_Deserialize;
+
+/**
+ *  The typed answer of `bar_weather`. `ready` carries a secret and
+ *  coordinates: it goes to the authorized Bar window only.
+ */
+export type BarWeatherOutcome_Deserialize =
+/**  The weather inputs for the currently accepted configuration. */
+{ kind: "ready";
+/**  The key, location and configured provider. */
+weather: BarWeather_Deserialize } |
+/**  Bar is not serving weather; nothing was read. */
+{ kind: "unavailable";
+/**  Why. */
+reason: BarUnavailableReason;
+/**  The failure detail, if any. */
+detail?: string | null } |
+/**  The calling window may not read weather. */
+{ kind: "unauthorized" } |
+/**  Bar stopped, restarted or was reconfigured during the read; call again. */
+{ kind: "stale" };
+
+/**
+ *  The typed answer of `bar_weather`. `ready` carries a secret and
+ *  coordinates: it goes to the authorized Bar window only.
+ */
+export type BarWeatherOutcome_Serialize =
+/**  The weather inputs for the currently accepted configuration. */
+{ kind: "ready";
+/**  The key, location and configured provider. */
+weather: BarWeather_Serialize } |
+/**  Bar is not serving weather; nothing was read. */
+{ kind: "unavailable";
+/**  Why. */
+reason: BarUnavailableReason;
+/**  The failure detail, if any. */
+detail: string | null } |
+/**  The calling window may not read weather. */
+{ kind: "unauthorized" } |
+/**  Bar stopped, restarted or was reconfigured during the read; call again. */
+{ kind: "stale" };
+
+/**  The configured provider mode (not the resolved one). */
+export type BarWeatherProvider =
+/**  Visual Crossing when the key is non-empty, otherwise Open Meteo. */
+"auto" |
+/**  Visual Crossing only (unconfigured without a key). */
+"visualCrossing" |
+/**  Open Meteo only. */
+"openMeteo";
+
+/**
+ *  Everything one weather refresh needs. Carries a secret and coordinates:
+ *  returned only to the authorized Bar window, never persisted or broadcast.
+ */
+export type BarWeather_Deserialize = {
+	/**
+	 *  The accepted configuration revision this was computed for, as a decimal
+	 *  string.
+	 */
+	configRevision: string,
+	/**  The configured provider mode. */
+	provider: BarWeatherProvider,
+	/**
+	 *  The trimmed Visual Crossing key; `None` when missing, empty, unreadable
+	 *  or not needed (`openMeteo` never reads the file).
+	 */
+	apiKey?: string | null,
+	/**  The location. */
+	location: BarWeatherLocation,
+	/**
+	 *  Minutes between automatic refreshes, from the same accepted
+	 *  configuration as `config_revision`. Not secret.
+	 */
+	refreshIntervalMinutes: number,
+};
+
+/**
+ *  Everything one weather refresh needs. Carries a secret and coordinates:
+ *  returned only to the authorized Bar window, never persisted or broadcast.
+ */
+export type BarWeather_Serialize = {
+	/**
+	 *  The accepted configuration revision this was computed for, as a decimal
+	 *  string.
+	 */
+	configRevision: string,
+	/**  The configured provider mode. */
+	provider: BarWeatherProvider,
+	/**
+	 *  The trimmed Visual Crossing key; `None` when missing, empty, unreadable
+	 *  or not needed (`openMeteo` never reads the file).
+	 */
+	apiKey: string | null,
+	/**  The location. */
+	location: BarWeatherLocation,
+	/**
+	 *  Minutes between automatic refreshes, from the same accepted
+	 *  configuration as `config_revision`. Not secret.
+	 */
+	refreshIntervalMinutes: number,
+};
+
+/**
+ *  The charge state, spelled as legacy `BatteryState` (the UI compares these
+ *  exact strings).
+ */
+export type BatteryChargeState =
+/**  Not known. */
+"Unknown" |
+/**  Charging. */
+"Charging" |
+/**  Discharging. */
+"Discharging" |
+/**  Empty. */
+"Empty" |
+/**  Full. */
+"Full";
+
+/**
+ *  A battery reading. There is no battery reading when the machine has no
+ *  battery; the UI then hides the component.
+ */
+export type BatteryReading = {
+	/**  The charge, 0 to 100. */
+	percentage: number,
+	/**  The charge state. */
+	state: BatteryChargeState,
 };
 
 /**  How a binding is delivered. */
@@ -519,6 +1265,31 @@ export type ConfigFileView_Serialize = {
 	diagnostic: string | null,
 	/**  Unknown keys in an otherwise valid file. */
 	warnings: string[],
+};
+
+/**  A CPU reading, the shape the legacy UI rendered. */
+export type CpuReading = CpuReading_Serialize | CpuReading_Deserialize;
+
+/**  A CPU reading, the shape the legacy UI rendered. */
+export type CpuReading_Deserialize = {
+	/**  The rounded usage, 0 to 100. */
+	usage: number,
+	/**
+	 *  The rounded temperature in degrees Celsius; `None` when no source could
+	 *  supply a valid one. Unknown stays unknown.
+	 */
+	temperature?: number | null,
+};
+
+/**  A CPU reading, the shape the legacy UI rendered. */
+export type CpuReading_Serialize = {
+	/**  The rounded usage, 0 to 100. */
+	usage: number,
+	/**
+	 *  The rounded temperature in degrees Celsius; `None` when no source could
+	 *  supply a valid one. Unknown stays unknown.
+	 */
+	temperature: number | null,
 };
 
 /**  A dimension that is either pixels (`1440`) or a percentage (`"50%"`). */
@@ -869,6 +1640,19 @@ export type KeepAwakeConfig_Serialize = {
 };
 
 /**
+ *  What the Bar renders for Keep Awake, plus the non-visual session facts the
+ *  click needs.
+ */
+export type KeepAwakeIndicator = {
+	/**  Whether a confirmed adopted assertion is held (the green filled icon). */
+	active: boolean,
+	/**  The host session pause flag of the Keep Awake module. */
+	paused: boolean,
+	/**  The accepted `enabled` flag of the Keep Awake module. */
+	enabled: boolean,
+};
+
+/**
  *  The module's published runtime observation.
  *
  *  The fields are sampled together under one short lock. Envelope data such as
@@ -1042,6 +1826,27 @@ export type LayoutType =
 /**  Windows move and resize freely. */
 "floating";
 
+/**  The last location result, as a bare reason. Never a coordinate. */
+export type LocationDiagnostic =
+/**  A fix was delivered. */
+"located" |
+/**  The user denied Location access. */
+"denied" |
+/**  Location access is restricted. */
+"restricted" |
+/**  Location Services are off. */
+"servicesDisabled" |
+/**  The consent decision stayed undetermined until the timeout. */
+"notDeterminedTimeout" |
+/**  No fix arrived in time. */
+"timeout" |
+/**  `CoreLocation` reported an error or an unusable fix. */
+"error" |
+/**  The main bundle has no location usage description. */
+"noUsageDescription" |
+/**  `CoreLocation` is not available to this caller. */
+"unavailable";
+
 /**  How the runtime learns about lock changes. */
 export type LockObservation =
 /**  No observation is installed. */
@@ -1142,6 +1947,88 @@ export type MatchStrategy =
 /**  Case-sensitive regular expression. */
 "regex";
 
+/**  What the Bar shows for the playing media. The artwork is an id, never bytes. */
+export type MediaReading = MediaReading_Serialize | MediaReading_Deserialize;
+
+/**  What the Bar shows for the playing media. The artwork is an id, never bytes. */
+export type MediaReading_Deserialize = {
+	/**  The track title (never empty). */
+	title: string,
+	/**  The artist; empty when the player supplies none. */
+	artist: string,
+	/**  The album. */
+	album?: string | null,
+	/**  The player's bundle identifier; empty when unknown. */
+	bundleIdentifier: string,
+	/**  The media type reported by the player. */
+	mediaType?: string | null,
+	/**  Whether the media is playing (otherwise the UI shows `Paused: `). */
+	playing: boolean,
+	/**
+	 *  The id of the 128x128 PNG artwork: 64 lowercase hex digits. Fetch the
+	 *  bytes with `bar_media_artwork`. `None` while decoding or when the
+	 *  current state carries no usable artwork.
+	 */
+	artworkId?: string | null,
+};
+
+/**  What the Bar shows for the playing media. The artwork is an id, never bytes. */
+export type MediaReading_Serialize = {
+	/**  The track title (never empty). */
+	title: string,
+	/**  The artist; empty when the player supplies none. */
+	artist: string,
+	/**  The album. */
+	album: string | null,
+	/**  The player's bundle identifier; empty when unknown. */
+	bundleIdentifier: string,
+	/**  The media type reported by the player. */
+	mediaType: string | null,
+	/**  Whether the media is playing (otherwise the UI shows `Paused: `). */
+	playing: boolean,
+	/**
+	 *  The id of the 128x128 PNG artwork: 64 lowercase hex digits. Fetch the
+	 *  bytes with `bar_media_artwork`. `None` while decoding or when the
+	 *  current state carries no usable artwork.
+	 */
+	artworkId: string | null,
+};
+
+/**  Whether the adapter is delivering. */
+export type MediaRunState =
+/**  The adapter child is running. */
+"running" |
+/**  The adapter ended and is being restarted; media is hidden. */
+"restarting" |
+/**
+ *  The adapter cannot be used (resources, architecture or repeated
+ *  failure); media is hidden and Bar stays running.
+ */
+"unavailable";
+
+/**  The typed media condition shown in `BarRuntimeStatus` (never in the view). */
+export type MediaStatus = MediaStatus_Serialize | MediaStatus_Deserialize;
+
+/**  The typed media condition shown in `BarRuntimeStatus` (never in the view). */
+export type MediaStatus_Deserialize = {
+	/**  The state. */
+	state: MediaRunState,
+	/**  Why it is not running. */
+	reason?: string | null,
+	/**  The sanitized, bounded tail of the adapter's stderr from the last run. */
+	stderrTail?: string | null,
+};
+
+/**  The typed media condition shown in `BarRuntimeStatus` (never in the view). */
+export type MediaStatus_Serialize = {
+	/**  The state. */
+	state: MediaRunState,
+	/**  Why it is not running. */
+	reason: string | null,
+	/**  The sanitized, bounded tail of the adapter's stderr from the last run. */
+	stderrTail: string | null,
+};
+
 /**
  *  Summon the frontmost application's menu bar at the cursor.
  *
@@ -1216,6 +2103,49 @@ export type MenuAnywhereMouseButton =
  */
 "middle_click";
 
+/**  The menu-bar observation published with the Bar view. */
+export type MenuBarObservation = MenuBarObservation_Serialize | MenuBarObservation_Deserialize;
+
+/**  The menu-bar observation published with the Bar view. */
+export type MenuBarObservation_Deserialize = {
+	/**  The state. */
+	state: MenuBarState,
+	/**
+	 *  Why the state is unknown or degraded (held from an earlier sample,
+	 *  estimated from the window list); `None` when read directly.
+	 */
+	reason?: string | null,
+};
+
+/**  The menu-bar observation published with the Bar view. */
+export type MenuBarObservation_Serialize = {
+	/**  The state. */
+	state: MenuBarState,
+	/**
+	 *  Why the state is unknown or degraded (held from an earlier sample,
+	 *  estimated from the window list); `None` when read directly.
+	 */
+	reason: string | null,
+};
+
+/**
+ *  Whether the system menu bar is on screen.
+ *
+ *  Legacy named the flag `menuHidden` but it was true when the menu bar was
+ *  VISIBLE (`Bar.state.ts:6-17`): a visible menu bar slides the Bar away
+ *  (`translateY(100%)`, `opacity: 0`). This type names what it is.
+ */
+export type MenuBarState =
+/**  The menu bar is shown (always, or revealed by auto-hide). */
+"visible" |
+/**  The menu bar is hidden (auto-hidden). */
+"hidden" |
+/**
+ *  Nothing could be read, or the observation is not running. Legacy
+ *  rendered this as "menu bar not visible" (the Bar shown); the UI decides.
+ */
+"unknown";
+
 /**  Observed lifecycle state of one module, without SDK-only payloads. */
 export type ModuleState =
 /**  Configured but not started. */
@@ -1284,6 +2214,16 @@ export type ModuleStatusView_Deserialize = {
 	 *  module.
 	 */
 	tiling?: TilingRuntimeStatus_Deserialize | null,
+	/**
+	 *  Bar runtime details, present only on the `bar` module.
+	 *
+	 *  Published by the module's lifecycle: the truthful native panel phase
+	 *  (requested, created, loaded, failed), the zero-size and no-primary
+	 *  states, the staged reservation and frame, and any close the host has
+	 *  not acknowledged. It never replaces `diagnostic` and is absent from the
+	 *  wire for every other module.
+	 */
+	bar?: BarRuntimeStatus_Deserialize | null,
 };
 
 /**
@@ -1329,6 +2269,16 @@ export type ModuleStatusView_Serialize = {
 	 *  module.
 	 */
 	tiling?: TilingRuntimeStatus_Serialize,
+	/**
+	 *  Bar runtime details, present only on the `bar` module.
+	 *
+	 *  Published by the module's lifecycle: the truthful native panel phase
+	 *  (requested, created, loaded, failed), the zero-size and no-primary
+	 *  states, the staged reservation and frame, and any close the host has
+	 *  not acknowledged. It never replaces `diagnostic` and is absent from the
+	 *  wire for every other module.
+	 */
+	bar?: BarRuntimeStatus_Serialize,
 };
 
 /**  Automatic Apple Music and iTunes blocking. */
@@ -1357,6 +2307,23 @@ export type NoTunesConfig_Serialize = {
 	 */
 	target_app?: string,
 };
+
+/**  A typed provider condition shown outside the Bar visuals (module status). */
+export type ProviderDiagnostic = {
+	/**  The provider. */
+	provider: ProviderKind,
+	/**  What is degraded; free of untrusted tool output. */
+	message: string,
+};
+
+/**  Which provider. */
+export type ProviderKind =
+/**  CPU usage and temperature. */
+"cpu" |
+/**  The battery. */
+"battery" |
+/**  Wi-Fi. */
+"wifi";
 
 /**  Automatic audio-device selection. */
 export type ProxyAudioConfig = ProxyAudioConfig_Serialize | ProxyAudioConfig_Deserialize;
@@ -1465,6 +2432,64 @@ export type ScreenGapsConfig_Serialize = {
 	/**  Gaps from display edges. */
 	outer: GapValue,
 };
+
+/**  A session action. Closed: anything else cannot even deserialize. */
+export type SessionAction =
+/**  Pauses a module that is not paused. */
+"pause" |
+/**  Resumes a paused, enabled module. */
+"resume";
+
+/**  The typed result of a session action. */
+export type SessionActionOutcome =
+/**  The host applied the action and the published session state shows it. */
+{ kind: "applied" } |
+/**  The host tried and the action did not take effect. */
+{ kind: "notApplied";
+/**  Why. */
+reason: SessionNotApplied } |
+/**  The host state no longer matches what the request was based on. */
+{ kind: "stale" } |
+/**  The module is disabled or absent; the click is inert. */
+{ kind: "disabled" } |
+/**  The host did not attempt the action. */
+{ kind: "unavailable";
+/**  Why. */
+reason: SessionUnavailable } |
+/**  Another request is in flight; this one was dropped, not queued. */
+{ kind: "busy" } |
+/**  The host started the request but did not confirm it (shutdown, timeout). */
+{ kind: "uncertain" } |
+/**  The calling window may not request this action. */
+{ kind: "unauthorized" };
+
+/**  Why the host tried an action and it did not take effect. */
+export type SessionNotApplied =
+/**
+ *  The lifecycle refused or failed the transition (for example a stop that
+ *  did not complete). The module keeps whatever state it reached.
+ */
+"refused" |
+/**
+ *  The transition returned success but the published session state does not
+ *  show it.
+ */
+"notReflected";
+
+/**  Why the host did not attempt an action. */
+export type SessionUnavailable =
+/**  The module is failed; there is no retry here. */
+"failed" |
+/**  A prerequisite is missing. */
+"unavailable" |
+/**  The module waits for a permission. */
+"waitingForPermission" |
+/**  A release is pending or ambiguous; nothing is retried or acquired. */
+"releasePending" |
+/**  The host is shutting down. */
+"shuttingDown" |
+/**  The Bar or the host handle is not running. */
+"notRunning";
 
 /**  Startup commands, accepted as one string or an ordered list. */
 export type StartupCommands =
@@ -1973,10 +2998,27 @@ export type WeatherConfig_Deserialize = {
 	 */
 	api_keys?: string,
 	/**
-	 *  Default location for weather data when geolocation fails.
-	 *  Can be a city name, address, or coordinates.
+	 *  Default location for weather data, used when native macOS Location is
+	 *  unavailable, denied or times out. Can be a city name, address, or
+	 *  coordinates.
 	 */
 	default_location?: string,
+	/**
+	 *  Whether weather asks macOS for a precise location.
+	 *
+	 *  `false` (the default) requests an approximate, kilometer-level location
+	 *  and accepts the approximate-location choice the user made in macOS
+	 *  Location settings. `true` requests the best accuracy and, only when macOS
+	 *  reports approximate access and the app bundle declares a purpose, asks at
+	 *  most once per run for temporary full accuracy. Neither setting re-asks
+	 *  for Location access once macOS has recorded a decision.
+	 */
+	precise_location?: boolean,
+	/**
+	 *  Minutes between automatic weather refreshes, from 5 to 1440 (24 hours).
+	 *  Applies after a configuration reload without restarting Bar.
+	 */
+	refresh_interval?: number,
 };
 
 /**  Weather settings for the status bar. */
@@ -1994,10 +3036,27 @@ export type WeatherConfig_Serialize = {
 	 */
 	api_keys: string,
 	/**
-	 *  Default location for weather data when geolocation fails.
-	 *  Can be a city name, address, or coordinates.
+	 *  Default location for weather data, used when native macOS Location is
+	 *  unavailable, denied or times out. Can be a city name, address, or
+	 *  coordinates.
 	 */
 	default_location: string,
+	/**
+	 *  Whether weather asks macOS for a precise location.
+	 *
+	 *  `false` (the default) requests an approximate, kilometer-level location
+	 *  and accepts the approximate-location choice the user made in macOS
+	 *  Location settings. `true` requests the best accuracy and, only when macOS
+	 *  reports approximate access and the app bundle declares a purpose, asks at
+	 *  most once per run for temporary full accuracy. Neither setting re-asks
+	 *  for Location access once macOS has recorded a decision.
+	 */
+	precise_location: boolean,
+	/**
+	 *  Minutes between automatic weather refreshes, from 5 to 1440 (24 hours).
+	 *  Applies after a configuration reload without restarting Bar.
+	 */
+	refresh_interval: number,
 };
 
 /**  Weather data provider. */
@@ -2008,6 +3067,74 @@ export type WeatherProvider =
 "visual_crossing" |
 /**  Use Open Meteo (free, no API key required). */
 "open_meteo";
+
+/**
+ *  The weather conditions published with the Bar runtime status (host status,
+ *  tray). Enums and a path only: no coordinate, no key, no Bar visuals.
+ */
+export type WeatherStatus = WeatherStatus_Serialize | WeatherStatus_Deserialize;
+
+/**
+ *  The weather conditions published with the Bar runtime status (host status,
+ *  tray). Enums and a path only: no coordinate, no key, no Bar visuals.
+ */
+export type WeatherStatus_Deserialize = {
+	/**  The result of the last location read of this run. */
+	location?: LocationDiagnostic | null,
+	/**  Why the last key read produced no key. */
+	apiKey?: ApiKeyDiagnostic_Deserialize | null,
+};
+
+/**
+ *  The weather conditions published with the Bar runtime status (host status,
+ *  tray). Enums and a path only: no coordinate, no key, no Bar visuals.
+ */
+export type WeatherStatus_Serialize = {
+	/**  The result of the last location read of this run. */
+	location: LocationDiagnostic | null,
+	/**  Why the last key read produced no key. */
+	apiKey: ApiKeyDiagnostic_Serialize | null,
+};
+
+/**  A Wi-Fi reading, the shape the legacy UI rendered. */
+export type WifiReading = WifiReading_Serialize | WifiReading_Deserialize;
+
+/**  A Wi-Fi reading, the shape the legacy UI rendered. */
+export type WifiReading_Deserialize = {
+	/**  The status. */
+	status: WifiStatus,
+	/**
+	 *  The network name; `None` unless the gated summary path supplied one.
+	 *  A missing name never implies disconnected.
+	 */
+	networkName?: string | null,
+	/**  The RSSI in dBm, only for a connected interface. */
+	signalStrength?: number | null,
+};
+
+/**  A Wi-Fi reading, the shape the legacy UI rendered. */
+export type WifiReading_Serialize = {
+	/**  The status. */
+	status: WifiStatus,
+	/**
+	 *  The network name; `None` unless the gated summary path supplied one.
+	 *  A missing name never implies disconnected.
+	 */
+	networkName: string | null,
+	/**  The RSSI in dBm, only for a connected interface. */
+	signalStrength: number | null,
+};
+
+/**  The status, spelled as legacy `WifiStatus` (the UI compares these strings). */
+export type WifiStatus =
+/**  Nothing is known; the component is hidden. */
+"Unknown" |
+/**  The radio is off. */
+"Off" |
+/**  The radio is on without a network. */
+"Disconnected" |
+/**  Associated with a network. */
+"Connected";
 
 /**
  *  A window matching rule; every specified field must match (AND).

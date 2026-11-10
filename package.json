@@ -18,19 +18,24 @@
     "format": "oxfmt --disable-nested-config && cargo fmt --all",
     "format:check": "oxfmt --disable-nested-config --check && cargo fmt --all -- --check",
     "measure": "bun scripts/measure-foundation.ts",
-    "test": "bun run test:ui && bun run test:scripts && bun run test:native",
-    "test:ui": "vitest run",
+    "measure:bar": "bun scripts/measure-bar.ts",
+    "test": "bun run test:ui && bun run test:parity && bun run test:scripts && bun run test:native",
+    "test:ui": "vitest run --project ui",
+    "test:parity": "vitest run --project bar-parity-1x --project bar-parity-2x",
     "test:scripts": "vitest run --config vitest.scripts.config.ts",
-    "test:ui:coverage": "vitest run --coverage",
+    "test:ui:coverage": "vitest run --coverage --project ui",
     "test:native": "cargo nextest run --workspace --features stache-app/dev-tools"
   },
   "dependencies": {
     "@hugeicons/core-free-icons": "4.4.0",
     "@hugeicons/react": "1.1.10",
+    "@icons-pack/react-simple-icons": "13.15.1",
     "@tanstack/react-query": "5.105.3",
     "@tauri-apps/api": "2.12.4",
+    "motion": "13.1.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
+    "react-error-boundary": "6.1.3",
     "zustand": "5.0.16"
   },
   "devDependencies": {

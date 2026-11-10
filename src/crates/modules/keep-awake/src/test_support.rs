@@ -18,7 +18,7 @@ use stache_macos::{
 use stache_sdk::{
     CancellationToken, EventBus, LogRecord, Logger, MainThreadExecutor, ModuleHandle, ModuleStatus,
     Permission, PermissionError, PermissionProvider, PermissionStatus, Registry, RegistryError,
-    ReloadReport,
+    ReloadReport, StateObserver, StateSchemas,
 };
 
 use crate::KeepAwakeModule;
@@ -158,6 +158,8 @@ impl LockProbe for Probe {
 
 /// One registered module over deterministic fakes.
 pub struct Harness {
+    /// A read-only observer of the published-state channel.
+    pub states: StateObserver,
     pub registry: Arc<Registry>,
     pub handle: ModuleHandle<KeepAwakeConfig>,
     pub backend: FakeAssertionBackend,
@@ -193,7 +195,13 @@ impl Harness {
         let owner = AssertionOwner::new(Arc::new(backend.clone()));
         let snapshot = KeepAwakeSnapshot::default();
         let captured = Arc::new(CaptureLogger::default());
-        let registry = Arc::new(registry(Arc::clone(&captured) as Arc<dyn Logger>));
+        let registry = Arc::new(
+            registry(Arc::clone(&captured) as Arc<dyn Logger>)
+                .with_state_schemas(
+                    &StateSchemas::new().with::<KeepAwakeRuntimeStatus>(KeepAwakeConfig::ID),
+                )
+                .expect("the schema registers before the module"),
+        );
         let signals = Arc::new(Mutex::new(Vec::new()));
         let tokens = Arc::new(Mutex::new(Vec::new()));
         let module = KeepAwakeModule::with_snapshot(
@@ -208,7 +216,10 @@ impl Harness {
         let handle = registry
             .register(module, KeepAwakeConfig { enabled })
             .expect("register keepAwake");
+        snapshot.install_accepted_watch(registry.accepted_watch(handle).expect("accepted watch"));
+        let states = registry.observe_state(KeepAwakeConfig::ID);
         Self {
+            states,
             registry,
             handle,
             backend,

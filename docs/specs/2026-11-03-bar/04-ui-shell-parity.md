@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 04 — Static UI and visual-parity gate
@@ -8,7 +8,7 @@ Read when porting the Bar surface after 03 and separate approval. **No visual ch
 
 ## Scope
 
-Add the `src/ui/src/shell/windows/Bar/` window with component directories for Media, Status, Clock, Cpu, Battery, KeepAwake, Wifi, Weather under it; each owns implementation, `.styles.tsx`, colocated tests and `index.ts`. Shared primitives go in `src/ui/src/shell/components/` with the same directory convention. Support/fixtures only in `src/ui/tests`. Extend the `Shell` window router (add a `bar` entry to the `WINDOWS` table in `src/ui/src/shell/Shell.tsx`, next to the Accessibility gate's `access` surface), the existing `src/ui/src/sdk/{client,queries,statusFeed}.ts`, a new app `capabilities/bar.json` plus the `tauri.conf.json` capability list, and production factory registration (`ModuleFactories::production` in `app/src/host.rs` and the `.with(...)` chain in `app/src/lib.rs`). Static fixtures/read-only unavailable data work before later providers; never invoke unimplemented commands. This part activates the config-disabled-by-default factory only after the route and capability exist.
+Add the `src/ui/src/shell/windows/Bar/` window with component directories for Media, Status, Clock, Cpu, Battery, KeepAwake, Wifi, Weather under it; each owns implementation, `.styles.tsx`, colocated tests and `index.ts`. Shared primitives go in `src/ui/src/shell/components/` (created by this part) with the same directory convention. Support/fixtures only in `src/ui/tests`. Extend the `Shell` window router (add a `bar` entry to the `WINDOWS` table in `src/ui/src/shell/Shell.tsx`, next to the Accessibility gate's `access` surface), the existing `src/ui/src/sdk/{client,queries,statusFeed}.ts`, a new `src/crates/app/capabilities/bar.json` plus the `security.capabilities` list (`src/crates/app/tauri.conf.json:18`), and production factory registration (a `BarFactory` modeled on `TilingFactory`, `app/src/host.rs:667`, chained in `app/src/lib.rs:453-471` next to Tiling, default-disabled and inert at construction). Static fixtures/read-only unavailable data work before later providers; never invoke unimplemented commands. This part activates the config-disabled-by-default factory only after the route and capability exist.
 
 ## Requirements
 
@@ -41,10 +41,10 @@ Reference manifest additionally records SHA-256 of extracted markup/styles/icons
 
 ## Acceptance criteria
 
-- [ ] BAR-04-01: Static surface, component structure and scoped primitives compile with only generated contracts; factory activates only with implemented route/capability and disabled owns no webview.
-- [ ] BAR-04-02: Independent legacy reference provenance is verified; exact pixel/computed-style/geometry/icon/animation parity matrix passes with no unapproved deviation.
-- [ ] BAR-04-03: Tiling-absent slot, the legacy Spaces Suspense "Loading..." fallback (or a recorded unreachable-state justification), centered media, status order, all empty/error/hover states and breakpoint behavior match sources without affecting existing UI.
-- [ ] BAR-04-04: Query feed races/disposal/authorization pass; UI/feature/testing docs accurately distinguish static surface from later providers and native gates.
+- [x] BAR-04-01: Static surface, component structure and scoped primitives compile with only generated contracts; factory activates only with implemented route/capability and disabled owns no webview.
+- [x] BAR-04-02: Independent legacy reference provenance is verified; exact pixel/computed-style/geometry/icon/animation parity matrix passes with no unapproved deviation.
+- [x] BAR-04-03: Tiling-absent slot, the legacy Spaces Suspense "Loading..." fallback (or a recorded unreachable-state justification), centered media, status order, all empty/error/hover states and breakpoint behavior match sources without affecting existing UI.
+- [x] BAR-04-04: Query feed races/disposal/authorization pass; UI/feature/testing docs accurately distinguish static surface from later providers and native gates.
 
 ## Tests
 
@@ -55,3 +55,11 @@ Pixel screenshots require exact equality in the pinned environment; no blanket t
 ## Notes
 
 No test launches legacy app/build/automation or native Bar. Missing approved baseline/font/native gate is **blocked/unverified**, never a pass. Any visual deviation, even an apparent improvement or dependency-induced icon change, requires approval before acceptance. Later parts extend this same gate; they do not reset baselines.
+
+Completion record (2026-11-10):
+
+- Reference path: option 1. Provenance (pinned `e0b4648`, six verified objects, legacy-lock icon packages with integrity, rendered by running the pinned legacy components) and the harness accounting in `src/ui/tests/bar-parity` (reference `<html lang="en">`, ignored Stylis-only `-webkit-box-align/-pack`, normalized hashed keyframe name, React's two CPU text nodes, legacy scroll measurement re-applied on the reference layout, forced relayout before capture) approved by the user. The `motion` fade mid-samples use a 5e-4 numeric bound against the exact legacy bezier (approved); pixels and geometry are exact.
+- Matrix: 65 scenarios, panel viewports 1416/2536 (padding 12), 1412/2532 (padding 14), 2035/2036/2037, heights 28/32, scale 1 and 2, reduced motion, hover/active, hide/reveal samples, scrolling labels, negative perturbations; all pixel-identical with no new-UI change. Runs as `bun run test:parity` (user decision: separate from `test:ui`).
+- `SpacesFallback` is ported and tested but unreachable in production: no Bar data source suspends until Tiling–Bar part 10.
+- Live run (user-observed, macOS 27.0, `bun run tauri:dev`, migrated test config, Bar 28/14): the bar renders on the built-in display, the clock matches legacy, menu-bar auto-hide hides and reveals the bar (closes part 03's live menu-bar item), Tiling places windows at y = 56 (42 reservation + 14 gap). Click actions are part 05.
+- Live investigation (2026-11-10, user-approved runs A–E with temporary diagnostics, since removed): Bar is not implicated in three issues seen during the live check. (1) PosterBoard crash reports (`-[PRPosterDescriptor _initWithPath:]` assertion during its wallpaper store setup) also occurred with no Stache running. (2) Tiling's stop fails with Bar off as well: its restore reports `still owes an unhide (AXHidden write accepted but not confirmed by readback)`. (3) Bursts of identical `NSApplicationDidChangeScreenParametersNotification` re-reads (435 and 1136 in two long sessions) did not reproduce in 3-minute idle runs with Bar off or on; with Bar on, Bar refreshed its topology once and never repositioned. Items 2 and 3 are Tiling follow-ups outside this branch.

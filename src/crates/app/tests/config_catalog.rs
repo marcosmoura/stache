@@ -508,7 +508,12 @@ fn keep_awake_migration_always_emits_the_disabled_default() {
                     toml_value(&fs::read_to_string(destination.join("bar.toml")).expect("bar"));
                 assert_eq!(
                     bar,
-                    serde_json::json!({ "enabled": label == "enabled", "height": 28, "padding": 12 }),
+                    serde_json::json!({
+                        "enabled": label == "enabled",
+                        "height": 28,
+                        "padding": 12,
+                        "weather": { "precise_location": false, "refresh_interval": 20 },
+                    }),
                     "{label}: omitted dimensions are materialized"
                 );
             }

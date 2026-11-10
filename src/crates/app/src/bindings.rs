@@ -10,7 +10,11 @@
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use stache_bar::{BarConfig, WeatherConfig, WeatherProvider};
+use stache_bar::{
+    BarConfig, BarFrameView, BarPanelState, BarReservationView, BarRuntimeState, BarRuntimeStatus,
+    BatteryChargeState, BatteryReading, CpuReading, MenuBarObservation, MenuBarState,
+    ProviderDiagnostic, ProviderKind, WeatherConfig, WeatherProvider, WifiReading, WifiStatus,
+};
 use stache_hold_to_quit::CommandQuitConfig;
 use stache_keep_awake::{
     AssertionState, KeepAwakeCondition, KeepAwakeConditionKind, KeepAwakeConfig,
@@ -35,6 +39,11 @@ use stache_wallpapers::{
 };
 use tauri_specta::{Builder, collect_commands, collect_events};
 
+use crate::bar_actions::{BarAction, BarActionOutcome};
+use crate::bar_bridge::{
+    BarArtworkOutcome, BarChanged, BarSnapshotOutcome, BarUnavailableReason, BarView,
+    BarWeatherOutcome,
+};
 use crate::host::HostState;
 pub use crate::keep_awake::KeepAwakeStatus;
 
@@ -135,6 +144,15 @@ pub struct ModuleStatusView {
     /// module.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tiling: Option<TilingRuntimeStatus>,
+    /// Bar runtime details, present only on the `bar` module.
+    ///
+    /// Published by the module's lifecycle: the truthful native panel phase
+    /// (requested, created, loaded, failed), the zero-size and no-primary
+    /// states, the staged reservation and frame, and any close the host has
+    /// not acknowledged. It never replaces `diagnostic` and is absent from the
+    /// wire for every other module.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bar: Option<BarRuntimeStatus>,
 }
 
 impl ModuleStatusView {
@@ -151,6 +169,7 @@ impl ModuleStatusView {
             diagnostic: snapshot.diagnostic.as_ref().map(|value| value.message.clone()),
             keybindings: None,
             tiling: None,
+            bar: None,
         }
     }
 }
@@ -334,15 +353,44 @@ pub fn builder() -> Builder<tauri::Wry> {
             host_status,
             request_accessibility,
             open_accessibility_settings,
-            quit_app
+            quit_app,
+            crate::bar_bridge::bar_snapshot,
+            crate::bar_bridge::bar_action,
+            crate::bar_bridge::bar_weather,
+            crate::bar_bridge::bar_media_artwork,
+            crate::bar_bridge::bar_session_action
         ])
-        .events(collect_events![StatusChanged])
+        .events(collect_events![StatusChanged, BarChanged])
         .typ::<AccessView>()
         .typ::<AccessState>()
         .typ::<GlobalConfig>()
         .typ::<BarConfig>()
         .typ::<WeatherConfig>()
         .typ::<WeatherProvider>()
+        .typ::<BarRuntimeStatus>()
+        .typ::<BarRuntimeState>()
+        .typ::<BarPanelState>()
+        .typ::<BarFrameView>()
+        .typ::<BarReservationView>()
+        .typ::<BarView>()
+        .typ::<BarSnapshotOutcome>()
+        .typ::<BarAction>()
+        .typ::<BarActionOutcome>()
+        .typ::<BarWeatherOutcome>()
+        .typ::<BarArtworkOutcome>()
+        .typ::<stache_bar::MediaReading>()
+        .typ::<stache_bar::MediaStatus>()
+        .typ::<stache_bar::MediaRunState>()
+        .typ::<BarUnavailableReason>()
+        .typ::<MenuBarObservation>()
+        .typ::<MenuBarState>()
+        .typ::<CpuReading>()
+        .typ::<BatteryReading>()
+        .typ::<BatteryChargeState>()
+        .typ::<WifiReading>()
+        .typ::<WifiStatus>()
+        .typ::<ProviderDiagnostic>()
+        .typ::<ProviderKind>()
         .typ::<CommandQuitConfig>()
         .typ::<KeepAwakeConfig>()
         .typ::<KeepAwakeStatus>()

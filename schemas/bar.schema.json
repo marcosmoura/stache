@@ -2,11 +2,11 @@
   "$id": "https://raw.githubusercontent.com/marcosmoura/stache/main/schemas/bar.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "BarConfig",
-  "description": "Status bar configuration (inert: nothing consumes it yet).",
+  "description": "Status bar configuration (the Bar module reads it; default disabled).",
   "type": "object",
   "properties": {
     "enabled": {
-      "description": "Whether the status bar is enabled. Validates today but starts nothing.",
+      "description": "Whether the status bar is enabled.",
       "type": "boolean",
       "default": false
     },
@@ -32,7 +32,9 @@
       "default": {
         "api_keys": "",
         "default_location": "",
-        "provider": "auto"
+        "precise_location": false,
+        "provider": "auto",
+        "refresh_interval": 20
       }
     }
   },
@@ -47,14 +49,27 @@
           "default": ""
         },
         "default_location": {
-          "description": "Default location for weather data when geolocation fails.\nCan be a city name, address, or coordinates.",
+          "description": "Default location for weather data, used when native macOS Location is\nunavailable, denied or times out. Can be a city name, address, or\ncoordinates.",
           "type": "string",
           "default": ""
+        },
+        "precise_location": {
+          "description": "Whether weather asks macOS for a precise location.\n\n`false` (the default) requests an approximate, kilometer-level location\nand accepts the approximate-location choice the user made in macOS\nLocation settings. `true` requests the best accuracy and, only when macOS\nreports approximate access and the app bundle declares a purpose, asks at\nmost once per run for temporary full accuracy. Neither setting re-asks\nfor Location access once macOS has recorded a decision.",
+          "type": "boolean",
+          "default": false
         },
         "provider": {
           "description": "Weather data provider.",
           "$ref": "#/$defs/WeatherProvider",
           "default": "auto"
+        },
+        "refresh_interval": {
+          "description": "Minutes between automatic weather refreshes, from 5 to 1440 (24 hours).\nApplies after a configuration reload without restarting Bar.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 20,
+          "maximum": 1440,
+          "minimum": 5
         }
       }
     },

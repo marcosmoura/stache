@@ -258,6 +258,7 @@ fn the_wire_envelope_round_trips_every_assertion_state() {
                 diagnostic: Some("held".to_owned()),
                 keybindings: None,
                 tiling: None,
+                bar: None,
             },
             runtime: KeepAwakeRuntimeStatus {
                 assertion_state: state,
@@ -462,4 +463,87 @@ fn the_generic_context_feeds_proxy_audio_without_mutating_published_state() {
         "building handlers and reading the context publishes nothing"
     );
     assert!(context.diagnostic(KeepAwakeConfig::ID).is_none());
+}
+
+/// Byte-for-byte golden of the `keepAwake.status` response (BAR-08-05).
+///
+/// The strings were captured from the code before Keep Awake began publishing
+/// through the SDK channel. They pin field order, names, enum spellings and
+/// absence of any new field, so the socket output cannot drift.
+#[test]
+fn golden_status_bytes_are_unchanged_for_representative_states() {
+    fn view(
+        state: ModuleState,
+        enabled: bool,
+        paused: bool,
+        diagnostic: Option<&str>,
+    ) -> ModuleStatusView {
+        ModuleStatusView {
+            id: "keepAwake".to_owned(),
+            state,
+            enabled,
+            paused,
+            revision: "9007199254740993".to_owned(),
+            detail: None,
+            diagnostic: diagnostic.map(str::to_owned),
+            keybindings: None,
+            tiling: None,
+            bar: None,
+        }
+    }
+    let cases: Vec<(KeepAwakeStatus, &str)> = vec![
+        (
+            KeepAwakeStatus {
+                module: view(ModuleState::Disabled, false, false, None),
+                runtime: KeepAwakeRuntimeStatus::default(),
+            },
+            r#"{"module":{"id":"keepAwake","state":"disabled","enabled":false,"paused":false,"revision":"9007199254740993","detail":null,"diagnostic":null},"runtime":{"assertionState":"inactive","lockState":"unknown","observation":"inactive","conditions":[]}}"#,
+        ),
+        (
+            KeepAwakeStatus {
+                module: view(ModuleState::Running, true, false, None),
+                runtime: KeepAwakeRuntimeStatus {
+                    assertion_state: AssertionState::Active,
+                    lock_state: LockState::Unlocked,
+                    observation: LockObservation::NotificationsAndPolling,
+                    conditions: Vec::new(),
+                },
+            },
+            r#"{"module":{"id":"keepAwake","state":"running","enabled":true,"paused":false,"revision":"9007199254740993","detail":null,"diagnostic":null},"runtime":{"assertionState":"active","lockState":"unlocked","observation":"notificationsAndPolling","conditions":[]}}"#,
+        ),
+        (
+            KeepAwakeStatus {
+                module: view(ModuleState::Running, true, false, Some("bad bool")),
+                runtime: KeepAwakeRuntimeStatus {
+                    assertion_state: AssertionState::Acquiring,
+                    lock_state: LockState::Unknown,
+                    observation: LockObservation::PollingFallback,
+                    conditions: vec![KeepAwakeCondition {
+                        kind: KeepAwakeConditionKind::ObserverUnavailable,
+                        message: "polling".to_owned(),
+                    }],
+                },
+            },
+            r#"{"module":{"id":"keepAwake","state":"running","enabled":true,"paused":false,"revision":"9007199254740993","detail":null,"diagnostic":"bad bool"},"runtime":{"assertionState":"acquiring","lockState":"unknown","observation":"pollingFallback","conditions":[{"kind":"observerUnavailable","message":"polling"}]}}"#,
+        ),
+        (
+            KeepAwakeStatus {
+                module: view(ModuleState::Paused, true, true, None),
+                runtime: KeepAwakeRuntimeStatus {
+                    assertion_state: AssertionState::ReleasePending,
+                    lock_state: LockState::Locked,
+                    observation: LockObservation::Inactive,
+                    conditions: vec![KeepAwakeCondition {
+                        kind: KeepAwakeConditionKind::AssertionReleaseFailed,
+                        message: "release failed".to_owned(),
+                    }],
+                },
+            },
+            r#"{"module":{"id":"keepAwake","state":"paused","enabled":true,"paused":true,"revision":"9007199254740993","detail":null,"diagnostic":null},"runtime":{"assertionState":"releasePending","lockState":"locked","observation":"inactive","conditions":[{"kind":"assertionReleaseFailed","message":"release failed"}]}}"#,
+        ),
+    ];
+    for (status, golden) in cases {
+        let bytes = serde_json::to_string(&status).expect("encode");
+        assert_eq!(bytes, golden);
+    }
 }

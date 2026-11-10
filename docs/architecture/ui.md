@@ -15,17 +15,20 @@ src/ui/src/
   sdk/                  generated bindings, client wrappers, status feed, tokens
   shell/
     Shell.tsx           window router: maps each `?surface=` value to one window
-    components/         reusable UI shared by windows (created with the first shared component)
+    components/         reusable UI shared by windows (Surface, Button, Stack, Icon,
+                        ScrollingLabel, QueryErrorFallback: legacy Bar primitives)
+    hooks/, utils/      useMediaQuery, useDisableRightClick, the laptop media query
     windows/            one directory per window surface
       AccessibilityGuide/
+      Bar/              the status bar: Media, Status, Clock, Cpu, Battery, KeepAwake,
+                        Wifi, Weather, Spaces, each with .styles.tsx, tests and index.ts
       Placeholder/      development fallback for the `shell` surface
       TestWindow/
 ```
 
 Each directory holds the component, its `.styles.tsx`, a colocated test and an
-`index.ts`. A new window (for example the Bar) gets its own `windows/<Name>/`
-directory and a route in `Shell`; pieces used by more than one window move to
-`components/`.
+`index.ts`. A new window gets its own `windows/<Name>/` directory and a route in
+`Shell`; pieces used by more than one window move to `components/`.
 
 ## Versions
 
@@ -174,9 +177,68 @@ tray's **Open Test Window** action is the only launch path that creates a webvie
   Module stop (including a failed start) releases every window owned by that
   module. Repeated requests share one lease; the last released handle closes the
   native window.
-- `WindowKind::Launcher` and `WindowKind::NonActivatingPanel` return
-  `WindowError::UnsupportedKind` until a tool spec defines their native
-  semantics. A module may only request a surface declared in its descriptor.
+- `WindowKind::Launcher` returns `WindowError::UnsupportedKind` until a tool spec
+  defines its native semantics. A module may only request a surface declared in
+  its descriptor.
+- `WindowKind::NonActivatingPanel` is landed for surface `bar` only; `bar` is
+  admitted only as a panel, and `test`/`access` stay `Standard`-only. Bar's
+  production factory is chained next to Tiling in `lib.rs` (default disabled,
+  inert until `enabled = true`) and requests it; the `bar` route and the
+  `bar-window` capability exist. A panel request must carry an explicit
+  logical `origin` (a `Standard` request must not); size validation is the
+  shared one. `stache-bar-<n>` is built undecorated, transparent, shadowless,
+  not resizable, hidden at build, unfocused and unfocusable, accept-first-mouse,
+  all Spaces, dark theme, not closable/minimizable/maximizable, drag-drop off,
+  at the requested position and size. It **never** goes through Standard's
+  `show()` + `set_focus()`. Tauri owns the window and the webview and keeps its
+  window hidden forever; right after the build the `stache-macos` panel host
+  (`panel.rs`, main thread only) creates a native `NSPanel` with
+  `Borderless | NonactivatingPanel` **at init**, moves the webview into it, and
+  configures dark appearance, `canJoinAllSpaces | stationary` (never
+  `fullScreenAuxiliary`), the hover tracking area and `BelowNormalWindowLevel`
+  (last), then orders it front without activating the app. No class of a Tauri
+  or AppKit object is changed (a class swap broke KVO and crashed on close;
+  see the live evidence in [testing](../guides/testing.md)). Hosted state lives
+  in a main-thread registry keyed by label. `unhost` (webview back into Tauri's
+  window, panel closed) runs before every Tauri close of the window; a
+  `Destroyed` event for a still-hosted label only drops the state. Reposition
+  updates Tauri's hidden window and then mirrors its frame onto the panel.
+  Focus on a panel is a no-op. The hosting was verified live on macOS 27.0
+  (2026-11-09, committed host `377512b`: no activation on click, hover while
+  another app is active, below normal windows, clean close; see the
+  [part 03 evidence](../specs/2026-11-03-bar/03-panel-window.md)). No private SkyLight
+  call is used.
+- **Bar data bridge authorization (slice c).** `bar_snapshot` takes the actual
+  calling `WebviewWindow` injected by Tauri; its label must be the live window held
+  by owner `bar` (`stache-bar-<digits>`). The test, access, shell and any forged or
+  stale Bar label get the typed `{"kind":"unauthorized"}`. A Bar-shaped label while
+  Bar is not running gets `{"kind":"unavailable","reason":...}` (`disabled`,
+  `paused`, `waitingForPermission`, `failed`, `starting`, `stopping`, `stopped`,
+  `unavailable`) with `generation`/`sequence`, immediately and without stale data.
+  The UI renders `menu.state === "visible"` as the Bar slid away (translateY(100%),
+  opacity 0, as legacy `menuHidden` true). The `bar-window`
+  capability (`capabilities/bar.json`, label `stache-bar-*`) grants only
+  `allow-bar-snapshot`, `allow-bar-action`, `allow-bar-weather`, `allow-bar-media-artwork` and `allow-bar-session-action` (all five commands
+  are ACL-gated in the app manifest, and each also authorizes the calling label
+  itself),
+  `core:event:allow-listen` and `core:event:allow-unlisten`. `bar_action` takes a
+  closed `BarAction` enum only (part 05 slice b); the CPU, Clock, Battery, Wi-Fi and Weather
+  buttons call it through `barClick` (`Bar.actions.ts`) and render nothing for its
+  outcome. `bar_weather` returns the weather inputs (including the API key and
+  coordinates) to this window only (part 06 slice B); the Weather hook consumes it (slice C). `bar_session_action` pauses/resumes `keepAwake` only (the Keep Awake button calls it through `keepAwakeClick`; the outcome renders nothing). `bar_media_artwork` returns the 128x128 artwork PNG (base64) for an `artworkId` of `BarView.media` (part 07 slice B; `useMediaArtwork` consumes it, slice C). No close,
+  drag, filesystem, shell, opener, HTTP or plugin permission is granted, and
+  `app.security.capabilities` lists `bar-window` explicitly.
+- `OwnedWindow::reposition(WindowFrame)` moves and resizes the exact live window
+  of that owner and session on the main thread; a stale handle, another owner or
+  a closed window is refused and a queued move is dropped if a close wins.
+- Lifecycle phases are tracked in `stache_sdk::WindowPhases` and read through
+  `OwnedWindow::phase()` / `wait_phase_change()`: `Requested` (queue accepted
+  only), `Created` (native build returned), `Loaded` (page finished), `Failed`
+  (create error, with reason; a page-load failure is only reported through the
+  host `WindowEvents::page_failed` hook, because Tauri exposes no load-failure
+  event), `Closing` and `Closed` (the `Destroyed` event). Phases never move
+  backwards, so a late created/loaded callback after a close or failure is
+  ignored.
 
 `src/crates/app/capabilities/test-window.json` grants the test labels only
 `core:event:allow-listen`, `core:event:allow-unlisten` and
@@ -268,9 +330,9 @@ The host status lives only in the React Query cache:
   `Number()` or any other numeric conversion.
 
 `Shell` accepts only `shell` (the default when `surface` is absent),
-`test` and `access`. An unknown or empty `surface` value renders a local fallback
+`test`, `access` and `bar`. An unknown or empty `surface` value renders a local fallback
 and calls no native command, so only `index.html?surface=test` and
-`?surface=access` read host data.
+`?surface=access` read host data, and `?surface=bar` reads only `bar_snapshot`, `bar_weather` and `bar_media_artwork` and, on a click, calls `bar_action` or `bar_session_action`.
 `TestWindow` shows loading, unavailable, host-ready and empty module/config
 states; module runtime detail and rejected-configuration diagnostics use
 separate labels, as do file diagnostics and warnings. It is a read-only status
@@ -282,3 +344,63 @@ QueryClient render helper live under `src/ui/tests/`. The generated wrappers are
 exercised with module mocks at the `@tauri-apps/api/core` and
 `@tauri-apps/api/event` boundary; the router and UI suites run against the real
 WebKit browser.
+
+## Bar window
+
+`windows/Bar/` is the legacy Bar UI ported value-for-value (see the
+[Bar feature](../features/bar.md)); nothing in it is redesigned.
+
+- **Primitives** live in `shell/components/` (Surface, Button, Stack, Icon,
+  ScrollingLabel, QueryErrorFallback) with the legacy styles. Surface animates in with
+  the `motion` library at the actual `motionRaw.durationSlow` (0.275 s, exported from
+  `sdk/tokens.ts`; the CSS `durationSlow` stays `400ms`). Style declaration order is
+  kept: the Button stylesheet is evaluated before Surface's (the `QueryErrorFallback`
+  import in `Bar.tsx` comes first), so `Surface as={Button}` keeps its crust rest
+  background and the Button hover wins; do not reorder those imports.
+- **Root rules.** `Bar.root.css` holds the legacy `main.css` rules scoped to
+  `html[data-surface='bar']` with `:where()` so every selector keeps its legacy
+  specificity. `Bar` sets and removes the attribute (layout effect); other surfaces
+  never carry it. The font stack is `'Maple Mono NF', 'SF Mono', monospace`, system
+  installed, never bundled.
+- **Menu state** comes from the host bridge. `useBarSnapshot` (`sdk/queries.ts`) keeps
+  the canonical `BarSnapshotOutcome` in React Query; `connectBarSnapshot`
+  (`sdk/barFeed.ts`) subscribes to the generated `events.barChanged` **before** it calls
+  `commands.barSnapshot()`, applies a snapshot or event only if its `sequence` is a
+  numerically greater `BigInt` than the held one (a stale initial snapshot after a newer
+  event is discarded), refetches on `resnapshot: true`, keeps `unauthorized` only while
+  nothing with a sequence is held, records subscription/snapshot failures in the query
+  error state and unlistens a late subscription at once under StrictMode. The Bar slides
+  away (`translateY(100%)`, opacity 0, 150 ms ease) only for an `available` view with
+  `menu.state === "visible"`; every other outcome keeps it shown, like legacy's initial
+  `false`. Zustand is not used: the Bar has no UI-local state beyond component state.
+- **Data seam.** Provider-backed items read `useBarData()` (`Bar.data.ts`, a React
+  context that is `null` when nothing was supplied). In production `Bar` renders
+  `barDataFromOutcome(snapshot)`: the CPU, battery and Wi-Fi readings of the generated
+  `BarView` (part 05 slice a) mapped value-for-value onto the seam shape, each absent
+  until its provider has a reading (so each item renders the legacy unresolved branch)
+  and all absent for an `unavailable`/`unauthorized` answer; nothing is fabricated.
+  Weather is the exception that is not in the snapshot: `BridgeBarData` (`Bar.tsx`)
+  adds `useBarWeather(configRevision)` (`Weather/Weather.query.ts`, a React Query hook
+  keyed `['bar','weather',revision]`) to the bridge data, only when no explicit fixture
+  data is supplied. It calls `bar_weather`, then fetches Visual Crossing or Open Meteo
+  from the webview (the secret key and coordinates stay in the `queryFn` closure, never
+  in keys, storage, zustand or logs), refreshes every `weather.refresh_interval` minutes (default 20) and on reconnect
+  and aborts on unmount. See [Bar](../features/bar.md#weather-ui).
+  Media comes from `BarView.media` (artwork fetched by id with `bar_media_artwork` through
+  `useMediaArtwork`, retained like legacy; click is `bar_action('media')`, see
+  [Bar](../features/bar.md#media-ui)); Keep Awake comes from `BarView.keepAwake` (part 08;
+  click is `bar_session_action`, see [Bar](../features/bar.md#keep-awake-indicator)). Tests
+  and the parity gate supply fixtures from `src/ui/tests/barFixtures.ts` through
+  `BarDataProvider`, which always wins over the bridge. Parts 05-08 replace a field's
+  source and never the styles. The Clock is UI-local and live. No Bar item calls a
+  command that does not exist; Media's click is wired (slice C).
+- **Spaces.** The empty first-slot `<div />` (tiling absent) keeps Media and Status in
+  place. The legacy `Loading...` fallback is ported (`SpacesFallback`) but unreachable:
+  no Bar data source can suspend, so the Suspense boundary never shows it.
+- **Error boundary.** `Bar` keeps legacy's `ErrorBoundary` with `QueryErrorFallback`
+  and `Suspense fallback={null}`; Retry only resets the boundary.
+- The packaged CSP is `default-src 'self'` with `connect-src ipc: http://ipc.localhost`
+  plus exactly the three weather hosts (`weather.visualcrossing.com`,
+  `api.open-meteo.com`, `geocoding-api.open-meteo.com`); the dev CSP adds the Vite
+  origins. Both add `img-src 'self' data:` for the media artwork `data:` URLs
+  (see [Bar CSP](../features/bar.md#content-security-policy)).

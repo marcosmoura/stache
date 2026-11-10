@@ -56,14 +56,16 @@ there is no `$schema` data key.
 
 `bar.toml` is registered for configuration, schema, template and migration
 only (`enabled` default `false`, `height` 28, `padding` 12, and `weather` with
-`provider` `auto`|`visual_crossing`|`open_meteo`, `api_keys` and `default_location`).
-Bar has no runtime, window, provider or command: no factory is registered, so
-`enabled = true` validates but nothing runs. Dimensions keep the legacy `u16`
+`provider` `auto`|`visual_crossing`|`open_meteo`, `api_keys`, `default_location` and
+`precise_location` (default `false`) and `refresh_interval` (integer minutes, default 20, accepted 5 to 1440; out-of-range or wrong-typed values are rejected at `weather.refresh_interval`; migration writes 20).
+The Bar runtime, panel and data commands are documented in [bar.md](../features/bar.md);
+this page covers only the configuration contract. Dimensions keep the legacy `u16`
 range and an explicit `0` is preserved, never replaced or clamped; feasibility
 is a later runtime concern. `WeatherConfig::api_keys_path` trims `api_keys`,
 expands injected `~`/`~/`, resolves anything else under the configuration
 directory and never expands shell or environment syntax or uses the process
-working directory. Nothing reads the env file. See [bar.md](../features/bar.md).
+working directory. The Bar weather path reads `VISUAL_CROSSING_API_KEY` from that file on each
+`bar_weather` call (no watcher). See [bar.md](../features/bar.md).
 
 `notunes.toml` is registered for configuration, schema, template and migration,
 and backs the shipped blocker runtime: enabling it installs application
