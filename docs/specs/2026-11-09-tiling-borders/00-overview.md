@@ -12,11 +12,11 @@ Draw `tiling.borders` with Stache's own overlay windows instead of the external 
 
 ## Problem (current code)
 
-Cited from `fix/tiling-fixes` (worktree `.worktrees/tiling-fixes`), which merges before this spec starts. Paths are under `src/crates/`.
+Cited from `main` at `ff84e3b` (2026-11-10; `fix/tiling-fixes` landed as `ba51f20`, the tiling-animation spec as `29348fc`). Paths are under `src/crates/`.
 
-- Part 09 drives an external service: `macos/src/borders/` (Mach `mach.rs`, CLI `cli.rs`, `transport.rs`) and the runner `modules/tiling/src/borders/runtime.rs` (thread `stache-tiling-borders`, 8 fps cap, epochs). The host composes it in `app/src/host.rs:749–762`.
+- Part 09 drives an external service: `macos/src/borders/` (Mach `mach.rs`, CLI `cli.rs`, `transport.rs`) and the runner `modules/tiling/src/borders/runtime.rs` (thread `stache-tiling-borders`, 8 fps cap, epochs). The host composes it in `app/src/host.rs:753–766`.
 - Policy is pure and reusable: `modules/tiling/src/borders/policy.rs` (`parse_color`, `state_settings`, `focused_state`, `blacklist`, `AnimationPlan`/`PingPong`, gradient angle buckets `gradient_to_janky`). Config: `config/borders.rs` (`BordersConfig`, `BorderStateConfig`, `BorderStyle`, `BorderAnimationConfig`) and `config/color.rs`.
-- The actor feeds borders only the focused window's layout and floating flag (`actor/mod.rs:967–1013`, `border_focus`). JankyBorders then tracks every window itself through private SkyLight notifications, independently of Tiling's hide/unhide (`visibility.rs`, effects `HideApp`/`UnhideApp` at `actor/mod.rs:298–305`) and frame writes (`actor/frames.rs:167`, `animation/worker.rs:60–72`).
+- The actor feeds borders only the focused window's layout and floating flag (`publish_if_changed`, `actor/mod.rs:1044–1063`; `border_focus` at `actor/mod.rs:1079`). JankyBorders then tracks every window itself through private SkyLight notifications, independently of Tiling's hide/unhide (`visibility.rs`, effects `HideApp`/`UnhideApp` at `actor/mod.rs:314–321`) and frame writes (direct `FrameControl::submit_direct`, `actor/frames.rs:225`; animated per-tick batches `Animator::send` → `AnimationSink::submit_batch`, `animation/worker.rs:653–700`, `:165`; both through the gated `FrameControl::request`, `actor/frames.rs:171`).
 - Today's effective rendering: one width for every border (the active state's width, `focus_command`), the per-layout and floating override colors only the focused window, unfocused windows use `unfocused`, gradients use two diagonal directions only, and gradient animation sends up to 8 color frames per second over Mach.
 
 ## Non-goals
@@ -78,9 +78,9 @@ Studied by the spec writer on 2026-11-09 for approach only (decision 5). JankyBo
 
 ## Sequencing
 
-Starts only after `fix/tiling-fixes` merges into `main`; rebase and re-check the cited lines first. Order: 01 → 02 → 03 → 04 → 05 → 06 → 07 → 08. Parts 01–07 build the engine behind the compile-time feature `native-borders` on `stache-tiling` and `stache-app` (off by default; used by tests and approved native checks), so production keeps JankyBorders. Part 08 adds the approved config fields (no inert field ships earlier), flips production and removes part 09 code.
+`fix/tiling-fixes` has merged (`ba51f20`) and the cited lines were re-checked against `main` at `ff84e3b`. Order: 01 → 02 → 03 → 04 → 05 → 06 → 07 → 08. Parts 01–07 build the engine behind the compile-time feature `native-borders` on `stache-macos`, `stache-tiling` and `stache-app` (off by default; the Tiling and app features enable the macOS one; used by tests and approved native checks), so production keeps JankyBorders. Part 08 adds the approved config fields (no inert field ships earlier), flips production and removes part 09 code.
 
-Coordinate with the [animation spec](../2026-11-09-tiling-animation/00-overview.md): borders consume the same frame events. Part 04 defines a `BorderFrames` seam fed from the frame write path that exists when it lands (synchronous `AnimationSink::write` today; animation part 02's per-tick batches later); whichever spec lands second adapts the seam. Part 06 and animation part 03 share one display-link adapter (`macos/src/display_link.rs`): whichever lands first owns it.
+Coordinate with the [animation spec](../2026-11-09-tiling-animation/00-overview.md): borders consume the same frame events. Animation part 02 has shipped, so part 04's `BorderFrames` seam is fed from its frame pipeline: direct writes through `FrameControl::submit_direct` (`actor/frames.rs:225`) and animated per-tick batches from `Animator::send` (`animation/worker.rs:653–700`) with their acknowledgements (`on_ack`/`frame_answered`, `animation/worker.rs:705`, `:750`). Animation part 03 has shipped the shared display-link adapter (`macos/src/display_link.rs`, `FrameClock`/`FrameClockFactory`); part 06 reuses it and adds no second adapter.
 
 The [merge gate](../../workflow.md#merge-gate) blocks merging while any part is not `done`. Acceptance IDs `TB-NN-MM` have exactly one owning part.
 
