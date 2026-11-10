@@ -4,7 +4,7 @@ status: draft
 
 # 01 — Per-application AX owner shards
 
-Read when implementing after `fix/tiling-fixes` has merged and after separate approval. Paths are under `src/crates/`. This part changes threading only; window behavior, outcomes and Tiling state are unchanged.
+Read when implementing after separate approval (`fix/tiling-fixes` merged as `ba51f20`). Paths are under `src/crates/`. This part changes threading only; window behavior, outcomes and Tiling state are unchanged.
 
 ## Scope
 

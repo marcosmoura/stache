@@ -10,7 +10,7 @@ Read when implementing after part 01 and separate approval. Paths are under `src
 
 `modules/tiling/src/animation/{worker.rs,control.rs,mod.rs,tests.rs}`, `modules/tiling/src/actor/{frames.rs,mod.rs}`, `modules/tiling/src/backend.rs` (new submit-style frame method on `WindowBackend` and its fake), `macos/src/windows/{commands.rs,core.rs,adapter.rs,issuance.rs}`. Pure planning in `state/frames.rs` is unchanged except where completion handling needs the new outcome fields.
 
-Today the stepper writes each window serially and waits for each reply (`animation/worker.rs:198–231`, `actor/frames.rs:167–212`), and each reply includes a readback (`macos/src/windows/core.rs:1079–1090`) that the stepper keeps as `confirmed` (`worker.rs:262–271`).
+Today the stepper writes each window serially and waits for each reply (`animation/worker.rs:198–231`, `actor/frames.rs:167–212`), and each reply includes a readback (`act`, `macos/src/windows/core.rs:1259–1264`) that the stepper keeps as `confirmed` (`worker.rs:262–271`).
 
 ## Requirements
 

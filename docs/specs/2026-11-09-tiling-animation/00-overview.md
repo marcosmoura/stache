@@ -12,14 +12,14 @@ Make opt-in Tiling animations smooth on real applications without Screen Recordi
 
 ## Problem (current code)
 
-Cited from `fix/tiling-fixes` (worktree `.worktrees/tiling-fixes`), which merges before this spec starts. Paths are under `src/crates/`.
+Cited from `main` after `fix/tiling-fixes` merged as `ba51f20` (re-checked 2026-11-10 at `3195740`). Paths are under `src/crates/`.
 
-- One animation thread (`stache-tiling-animation`, `modules/tiling/src/animation/worker.rs:381`) steps every window serially in `Animator::tick` (`worker.rs:198–231`); each `AnimationSink::write` (`animation/control.rs:46–55`) is a synchronous `FrameControl::execute` → `WindowBackend::act` (`actor/frames.rs:167–212`) that hops to the **single** `stache-tiling-ax-owner` thread (`backend.rs:31`, `macos/src/windows/adapter.rs:362`) and waits for its reply. A slow application delays every other window's frames.
-- On the owner, every action first re-lists `AXWindows` to revalidate membership (`macos/src/windows/core.rs:869–920`), then writes position **and** size (`macos/src/ax/window.rs:424–443`) and reads the frame back (`core.rs:1079–1090`) before replying. That is at least five AX round trips per window per frame, and the size write makes the application relayout and repaint on every frame.
+- One animation thread (`stache-tiling-animation`, `modules/tiling/src/animation/worker.rs:382`) steps every window serially in `Animator::tick` (`worker.rs:198–231`); each `AnimationSink::write` (`animation/control.rs:46–55`) is a synchronous `FrameControl::execute` → `WindowBackend::act` (`actor/frames.rs:167–212`) that hops to the **single** `stache-tiling-ax-owner` thread (`backend.rs:31`, `macos/src/windows/adapter.rs:197–199`) and waits for its reply. A slow application delays every other window's frames.
+- On the owner, every action first re-lists `AXWindows` to revalidate membership (`validate`, `macos/src/windows/core.rs:1040–1093`), then writes position **and** size (`macos/src/ax/window.rs:424–443`) and reads the frame back (`act`, `core.rs:1259–1264`) before replying. That is at least five AX round trips per window per frame, and the size write makes the application relayout and repaint on every frame.
 - Applications with `AXEnhancedUserInterface` on animate each write themselves and lag about 250 ms; nothing in the tree reads or clears it.
 - Pacing is a `Condvar` timeout at the clamped display refresh (`modules/tiling/src/events/geometry.rs:24–35`), not a display clock, so frames drift against vsync.
 
-Workspace switches already never animate (`state/frames.rs:610–636`, the `revealed` set); this spec keeps that.
+Workspace switches already never animate (`state/frames.rs:619–622`, the `revealed` set); this spec keeps that.
 
 ## Non-goals
 
@@ -36,7 +36,7 @@ Approved by the user on 2026-11-09.
 1. Build the Rift-style AX pipeline: per-application AX threads, latest-frame-wins per-window mailboxes, per-application frame batches, no per-frame readback, display-link pacing, position-only interactive frames and a batch-scoped Enhanced UI suppression lease. No Screen Recording, snapshot proxy or SIP-requiring API.
 2. Minimal private SkyLight APIs are allowed behind compile gates and approved native checks, with a public fallback, under the same policy as `_AXUIElementGetWindow` (`macos/src/ax/window_id.rs:1–19`: runtime `dlsym`, explicit capability, nothing else disabled when absent).
 3. When the smooth path is unavailable, or an application cannot keep up, its windows are placed instantly (one final write) and status shows a diagnostic. Never janky stepping.
-4. Workspace switches never animate (already on `fix/tiling-fixes`; keep).
+4. Workspace switches never animate (already on `main` since `ba51f20`; keep).
 5. Animations stay opt-in (`animations.enabled`, default off); duration and easing configuration are unchanged.
 6. The [Tiling decisions](../2026-11-03-tiling/00-overview.md#decisions) 5–9 apply unchanged to every part: exact-token, generation, accepted-revision and plan-sequence authority checked at the native send; logical invalidation stays atomic; Applied/Partial/Uncertain outcomes stay truthful; stop seals, drains issued frames **before** owned restore, and quarantines what it cannot clean up. Owner confinement stays: no AX on main, AX objects stay `!Send` on the thread that created them (`macos/src/ax/mod.rs:10–15`), hops are bounded, no thread is detached, no lock is held across a native call, every queue is bounded and A–B–A histories never mark a successor applied.
 
@@ -76,7 +76,7 @@ Research by the orchestrator, 2026-11-09; not re-verified while writing this spe
 
 ## Sequencing
 
-Starts only after `fix/tiling-fixes` merges into `main`; rebase this branch on that `main` and re-check the cited lines first. Order: 01 → 02 → 03 → 04 → 05 → 06. Part 04 depends only on 01–02 and may run before 03 if approved; part 05 is optional and may be skipped (its fallback is the shipped behavior). Part 06 runs last because its fallback policy consumes the metrics and leases of the earlier parts. Each part compiles, tests and commits alone and leaves animations working (or explicitly instant). The [merge gate](../../workflow.md#merge-gate) blocks merging while any part is not `done`; a skipped part 05 needs an explicit user decision recorded in this overview before merge.
+Starts after `fix/tiling-fixes` merged into `main` (`ba51f20`); the cited lines were re-checked against `main` on 2026-11-10. Order: 01 → 02 → 03 → 04 → 05 → 06. Part 04 depends only on 01–02 and may run before 03 if approved; part 05 is optional and may be skipped (its fallback is the shipped behavior). Part 06 runs last because its fallback policy consumes the metrics and leases of the earlier parts. Each part compiles, tests and commits alone and leaves animations working (or explicitly instant). The [merge gate](../../workflow.md#merge-gate) blocks merging while any part is not `done`; a skipped part 05 needs an explicit user decision recorded in this overview before merge.
 
 Acceptance IDs `TA-NN-MM` have exactly one owning part.
 

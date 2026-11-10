@@ -10,7 +10,7 @@ Read when implementing after part 02 and separate approval. Paths are under `src
 
 New `macos/src/display_link.rs` (or `macos/src/displays/`, next to the existing display adapters) with a fake; `modules/tiling/src/animation/{worker.rs,transition.rs,mod.rs,tests.rs}`; `modules/tiling/src/outcome.rs` only if `FrameComponents` needs a per-frame variant. Easing, spring and duration rules (`animation/{easing,spring}.rs`, `AnimationSettings`) are unchanged.
 
-Today pacing is a `Condvar` timeout of `flush_period(refresh_hz)` (`modules/tiling/src/events/geometry.rs:24–35`) and every frame writes the full `components` the plan asked for (`actor/mod.rs:224–247`), so a move with a size change resizes on every frame.
+Today pacing is a `Condvar` timeout of `flush_period(refresh_hz)` (`modules/tiling/src/events/geometry.rs:24–35`) and every frame writes the full `components` the plan asked for (`Effect::WriteFrame`, `actor/mod.rs:252–295`), so a move with a size change resizes on every frame.
 
 ## Requirements
 

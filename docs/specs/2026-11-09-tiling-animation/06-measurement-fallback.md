@@ -21,7 +21,7 @@ Read when implementing after parts 01–04 (and 05, unless skipped) and separate
 - **Mid-animation switch.** When an application crosses into fallback during an animation, each of its running windows receives one final exact write at the next tick; no further intermediate frames.
 - **Scope of fallback.** Sticky for the exact application instance for the runtime epoch. A relaunch (new instance), a configuration reload that turns animations off and on, or a Tiling restart clears it. It never affects other applications, never changes configuration and never disables animations globally.
 - **No fighting.** After the final write and settle readback of a plan, no further write for that plan. A readback different from the target is reported as today and never retried.
-- Workspace switches, reveals and drag stay non-animated (decision 4); the planner's `revealed` rule (`state/frames.rs:610–636`) is unchanged.
+- Workspace switches, reveals and drag stay non-animated (decision 4); the planner's `revealed` rule (`state/frames.rs:619–622`) is unchanged.
 
 ## Native measurement (approved run)
 
