@@ -64,6 +64,7 @@ fn apply(state: &mut TilingState, input: Input, fx: &mut Vec<Effect>) {
                 focus_application(state, application);
                 let tracked = state.apps.get(&application).is_some_and(|r| r.tracked);
                 if let (true, Some(stamp)) = (tracked, state.stamp) {
+                    state.pending_focus.inflight.insert(application);
                     fx.push(Effect::ReadFocus { stamp, application });
                 }
             } else if state.stamp.is_some() && state.reconcile.probed.insert(application) {
@@ -704,8 +705,13 @@ fn ingest(
         return;
     }
     // The application that was frontmost before any window was known takes the
-    // focus with its first window (startup has no focus notification).
-    if state.focus.window.is_none() && state.active_application == Some(application) {
+    // focus with its first window (startup has no focus notification). During
+    // the startup listing it also takes it from another application's window:
+    // that focus can only be a default (first window of the default workspace),
+    // and the frontmost application is the system's own answer.
+    let held = state.focus.window.and_then(|held| state.windows.get(&held));
+    let unclaimed = held.is_none_or(|held| !live && held.application != application);
+    if unclaimed && state.active_application == Some(application) {
         on_focused(state, token);
     }
     if live {
@@ -759,6 +765,7 @@ fn issue_focus_reads(state: &mut TilingState, fx: &mut Vec<Effect>) {
     let Some(stamp) = state.stamp else { return };
     for application in reads {
         if state.apps.get(&application).is_some_and(|record| record.tracked) {
+            state.pending_focus.inflight.insert(application);
             fx.push(Effect::ReadFocus { stamp, application });
         }
     }
@@ -1287,8 +1294,15 @@ fn settle(state: &mut TilingState, fx: &mut Vec<Effect>) {
     pump_tracks(state, fx);
     schedule_reconcile(state, fx);
     state.diagnostics.overloaded = state.reconcile.consecutive_overflows >= OVERLOAD_THRESHOLD;
-    if state.phase() == super::Phase::Complete {
+    if state.phase() == super::Phase::Complete && !state.completed_once {
         state.completed_once = true;
+        // Startup guessed the focus from the listing order. Every window is
+        // known now, so the frontmost application's real focused window decides
+        // (and its workspace becomes the visible one) before anything is hidden.
+        if let Some(application) = state.active_application {
+            state.pending_focus.reads.insert(application);
+            issue_focus_reads(state, fx);
+        }
     }
     frames::plan_and_issue(state, fx);
 }
@@ -1358,6 +1372,7 @@ fn completion(state: &mut TilingState, result: CompletionResult) {
         // switch a workspace on activation. Ignored once another application is
         // frontmost, or when the answer is unknown (never a guess).
         CompletionResult::Focus(application, outcome) => {
+            state.pending_focus.inflight.remove(&application);
             if let FocusOutcome::Resolved(token) = outcome
                 && state.active_application == Some(application)
                 && state.windows.get(&token).is_some_and(|w| {
@@ -1425,7 +1440,10 @@ fn rejected(state: &mut TilingState, effect: &Effect) {
                 crate::outcome::NotAttemptedReason::QueueFull,
             );
         }
-        Effect::ReadFocus { .. } => state.diagnostics.snapshot_refusals += 1,
+        Effect::ReadFocus { application, .. } => {
+            state.pending_focus.inflight.remove(&application);
+            state.diagnostics.snapshot_refusals += 1;
+        }
         Effect::Snapshot { window, .. } => {
             state.diagnostics.snapshot_refusals += 1;
             // The read will never come: the gesture decides with what it knows.

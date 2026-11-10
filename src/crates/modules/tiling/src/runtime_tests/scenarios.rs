@@ -146,6 +146,23 @@ struct Desktop {
     /// The application the system activates when the frontmost one is hidden
     /// (macOS picks the next one in its own order), if any.
     successor: Option<usize>,
+    /// Whether Code has a second window, the one it reports as focused.
+    second_code: bool,
+}
+
+/// The order the startup inputs reach the actor in (see [`Desktop::boot_in`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Order {
+    /// Everything is submitted before the first window is listed.
+    Listed,
+    /// As [`Order::Listed`], and Code's focused window is its second one.
+    SecondWindowFocused,
+    /// The display layout arrives after the windows.
+    DisplaysLast,
+    /// Frame writes are enabled after the windows are listed.
+    WritesLast,
+    /// The frontmost application is reported after the windows are listed.
+    ActivationLast,
 }
 
 impl Desktop {
@@ -156,6 +173,16 @@ impl Desktop {
     }
 
     fn boot_with(delivery: Delivery, frontmost: usize, hub: bool, animations: bool) -> Self {
+        Self::boot_ordered(delivery, frontmost, hub, animations, None)
+    }
+
+    fn boot_ordered(
+        delivery: Delivery,
+        frontmost: usize,
+        hub: bool,
+        animations: bool,
+        order: Option<Order>,
+    ) -> Self {
         let writes = Arc::new(Mutex::new(Vec::new()));
         let lists = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let native = Arc::new(Native::new(Duration::from_millis(500)));
@@ -213,7 +240,12 @@ impl Desktop {
             focus_scripted: std::collections::BTreeSet::new(),
             frontmost,
             successor: None,
+            second_code: false,
         };
+        if let Some(order) = order {
+            desktop.boot_in(order);
+            return desktop;
+        }
         desktop.rig.start();
         // The activation watch reports the frontmost application at once.
         desktop.submit(Input::Activated(desktop.ids[frontmost]));
@@ -230,6 +262,63 @@ impl Desktop {
         desktop.submit(Input::FrameWrites(true));
         desktop.settle();
         desktop
+    }
+
+    /// Starts in one of the orders the real runtime can deliver its inputs in.
+    /// The runtime starts listing, then installs the application watches (which
+    /// report the frontmost application), then submits the configuration and
+    /// enables frame writes, while applications are tracked and their windows
+    /// listed on other threads: only the relative order of those inputs is fixed.
+    fn boot_in(&mut self, order: Order) {
+        let front = self.ids[self.frontmost];
+        let config = Input::Config {
+            revision: 1,
+            config: user_config(self.animations),
+        };
+        let displays = Input::Displays(Arc::new(super::one_display()));
+        let stamp = self.rig.feed.stamp;
+        self.rig.gate.publish(stamp.registry, 1);
+        // Whatever Stache hides, the system activates something else.
+        self.successor = Some(if self.frontmost == GHOSTTY {
+            CHROME
+        } else {
+            GHOSTTY
+        });
+        let queue = |desk: &Self, input: Input| desk.rig.ingress.submit(input).expect("input");
+        queue(self, Input::Start(stamp));
+        if order != Order::DisplaysLast {
+            queue(self, displays.clone());
+        }
+        match order {
+            Order::Listed | Order::SecondWindowFocused => {
+                queue(self, Input::Activated(front));
+                queue(self, config);
+                queue(self, Input::FrameWrites(true));
+                self.second_code = order == Order::SecondWindowFocused;
+                self.enumerate();
+            }
+            Order::DisplaysLast => {
+                queue(self, Input::Activated(front));
+                queue(self, config);
+                queue(self, Input::FrameWrites(true));
+                self.enumerate();
+                queue(self, displays);
+            }
+            Order::WritesLast => {
+                queue(self, Input::Activated(front));
+                queue(self, config);
+                self.enumerate();
+                queue(self, Input::FrameWrites(true));
+            }
+            Order::ActivationLast => {
+                queue(self, config);
+                self.enumerate();
+                // Queued together: the focus read answers after the writes are on.
+                queue(self, Input::Activated(front));
+                queue(self, Input::FrameWrites(true));
+            }
+        }
+        self.settle();
     }
 
     fn submit(&mut self, input: Input) {
@@ -304,6 +393,11 @@ impl Desktop {
         self.window(CHROME, "New Tab");
         if self.hub {
             self.window(DEVICE_HUB, "Device Hub");
+        }
+        if self.second_code {
+            // The window the user is really on is not the first one listed.
+            let second = self.window(CODE, "notes");
+            self.app_focuses(CODE, second);
         }
         // Not tileable: a 1x1 utility window, a Finder info popup, a sheet.
         self.window_with(
@@ -1466,4 +1560,66 @@ fn a_focus_for_a_window_that_is_never_adopted_is_dropped() {
     desk.settle();
     assert_eq!(desk.snap().focus.window, Some(first));
     assert_eq!(finder_order(&desk), vec![first]);
+}
+
+// ------------------------------------------------ startup keeps the user's focus
+
+/// The window focused when Stache starts stays focused: Stache never hides the
+/// frontmost application while it works out which workspace is visible (the
+/// system would activate another application, and an unhide never gives the
+/// focus back), in whatever order the startup inputs arrive.
+#[test]
+fn startup_never_takes_the_focus_from_the_frontmost_app() {
+    let workspaces = [
+        (GHOSTTY, "terminal", 1),
+        (CODE, "coding", 2),
+        (SPOTIFY, "music", 3),
+        (CHROME, "browser", 5),
+    ];
+    for order in [
+        Order::Listed,
+        Order::DisplaysLast,
+        Order::WritesLast,
+        Order::ActivationLast,
+    ] {
+        for (front, workspace, serial) in workspaces {
+            let desk = Desktop::boot_ordered(Delivery::Immediate, front, true, false, Some(order));
+            let case = format!("{order:?}, {} frontmost", APPS[front].1);
+            let hidden =
+                desk.native.backend.visibility_requests().iter().any(|(key, operation)| {
+                    *operation == VisibilityOperation::Hide && *key == desk.keys[front]
+                });
+            assert!(!hidden, "{case}: the frontmost application was hidden");
+            assert_eq!(
+                desk.frontmost, front,
+                "{case}: the system activated another application"
+            );
+            assert!(desk.shown[front], "{case}");
+            assert_eq!(desk.visible_workspace(), workspace, "{case}");
+            assert_eq!(
+                desk.snap().focus.window,
+                Some(desk.token(front, serial)),
+                "{case}"
+            );
+            assert!(desk.written(desk.token(front, serial)), "{case}: laid out");
+            // The other workspaces are still hidden once the focus is decided.
+            let other = if front == SPOTIFY { CODE } else { SPOTIFY };
+            assert!(!desk.shown[other], "{case}: {} is hidden", APPS[other].1);
+        }
+    }
+}
+
+#[test]
+fn startup_focuses_the_window_the_frontmost_app_reports_not_the_first_listed() {
+    let desk = Desktop::boot_ordered(
+        Delivery::Immediate,
+        CODE,
+        false,
+        false,
+        Some(Order::SecondWindowFocused),
+    );
+    let second = desk.token(CODE, 6);
+    assert_eq!(desk.workspace_of(second), "coding");
+    assert_eq!(desk.snap().focus.window, Some(second));
+    assert_eq!(desk.frontmost, CODE);
 }

@@ -352,7 +352,7 @@ pub fn visibility_requirement(state: &TilingState) -> VisibilityRequirement {
         }
         out.apps.push(AppVisibility {
             application,
-            hide_wanted: !needed,
+            hide_wanted: !needed && !focus_undecided(state, application),
             displays: entry.displays.into_iter().collect(),
             externally_hidden: state.apps.get(&application).is_some_and(|app| app.hidden),
             needed_by,
@@ -360,6 +360,17 @@ pub fn visibility_requirement(state: &TilingState) -> VisibilityRequirement {
         });
     }
     out
+}
+
+/// Whether `application` is the frontmost one and its focused window is not
+/// decided yet: startup is still listing windows, or its focused-window read
+/// has not answered. Hiding it now would make the system activate another
+/// application, and the window the user was on would lose the focus for good
+/// (an unhide never activates), although the answer may be about to make its
+/// workspace the visible one.
+fn focus_undecided(state: &TilingState, application: ApplicationId) -> bool {
+    state.active_application == Some(application)
+        && (!state.completed_once || state.pending_focus.inflight.contains(&application))
 }
 
 // -------------------------------------------------------------------- reload

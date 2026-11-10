@@ -860,6 +860,10 @@ pub struct PendingFocus {
     /// Frontmost applications whose real focused window is read at the end of
     /// the transition (after a window was adopted or an app-level focus event).
     pub reads: BTreeSet<ApplicationId>,
+    /// Applications whose focused-window read was issued and has not answered.
+    /// The frontmost one is not hidden meanwhile: the answer may make its
+    /// workspace the visible one, and a hide would take the system focus away.
+    pub inflight: BTreeSet<ApplicationId>,
 }
 
 /// Transitions a buffered focus notification stays valid for.
