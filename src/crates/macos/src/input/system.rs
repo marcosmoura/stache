@@ -206,7 +206,8 @@ impl NativeInput for SystemInput {
             TapKind::ListenOnly => CGEventTapOptions::ListenOnly,
         };
         // SAFETY: `tap_callback` has the exact `CGEventTapCallBack`
-        // signature and contains every panic. `user_info` points into the boxed
+        // signature and contains every panic (unwind-enabled builds only; release aborts).
+        // `user_info` points into the boxed
         // context stored in `parts`, which lives until `teardown` has
         // invalidated the port and removed the source on this same thread, and
         // it is never mutated while shared.
@@ -329,7 +330,8 @@ unsafe extern "C-unwind" fn tap_callback(
     let context = unsafe { &*user_info.cast::<CallbackContext>() };
     // SAFETY: CoreGraphics passes a valid event that lives for this call.
     let event = unsafe { event.as_ref() };
-    // Fail open: a contained panic passes the event through.
+    // Fail open: a contained panic passes the event through (unwind-enabled builds only; release
+    // aborts).
     match catch_unwind(AssertUnwindSafe(|| route(context, event_type, event))) {
         Ok(true) => ptr::null_mut(),
         Ok(false) | Err(_) => passthrough,

@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 04 — Release panic semantics

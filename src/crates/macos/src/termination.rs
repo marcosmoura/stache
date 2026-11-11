@@ -201,7 +201,8 @@ fn install_on_class(class: &AnyClass) -> Result<(), TerminateError> {
 ///
 /// It asks the registered callback for one plain answer. It holds no policy,
 /// runs no teardown and never waits, so it is safe on the main thread while
-/// `AppKit` owns the terminate decision. A panic is contained and answers
+/// `AppKit` owns the terminate decision. A panic is contained (unwind-enabled builds only; release
+/// aborts) and answers
 /// [`TerminateAnswer::Later`] before it can unwind into Objective-C dispatch.
 unsafe extern "C-unwind" fn should_terminate(
     _delegate: *mut AnyObject,

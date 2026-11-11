@@ -1507,7 +1507,7 @@ impl FactoryHooks {
     fn name(factory: &dyn ModuleFactory) -> String { format!("factory:{}", factory.id().as_str()) }
 
     /// Runs every begin hook once, containing a panic instead of losing the
-    /// coordinator thread.
+    /// coordinator thread (unwind-enabled builds only; release aborts).
     fn begin(&self) {
         if self.begun.swap(true, Ordering::SeqCst) {
             return;

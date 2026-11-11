@@ -45,7 +45,8 @@ impl ActivationObserver {
     /// Returns `None` when called off the main thread; the caller must hold the
     /// returned guard across the event loop. The callback runs on the thread
     /// that posts the notification, normally the main thread, and a panic is
-    /// contained before it can unwind through the Objective-C block boundary.
+    /// contained before it can unwind through the Objective-C block boundary
+    /// (unwind-enabled builds only; release aborts).
     #[must_use]
     pub fn install(notify: impl Fn() + Send + Sync + 'static) -> Option<Self> {
         let _main = MainThreadMarker::new()?;

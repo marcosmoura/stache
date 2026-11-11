@@ -1,7 +1,8 @@
 //! The selected-keyboard-input-source change observer.
 //!
 //! A distributed notification is delivery-at-best: the callback ignores the
-//! payload, contains panics and only calls the supplied hint closure, which the
+//! payload, contains panics (unwind-enabled builds only; release aborts) and only calls the
+//! supplied hint closure, which the
 //! hotkey owner turns into a coalesced refresh request. It never queries the
 //! layout, registers a hotkey or waits. The observer object is `!Send`
 //! (`MainThreadOnly`), so it lives in the main-owned native layer and is removed
@@ -37,7 +38,8 @@ define_class!(
     struct LayoutObserverObject;
 
     impl LayoutObserverObject {
-        /// Ignores the payload, contains panics and only signals.
+        /// Ignores the payload, contains panics (unwind-enabled builds only; release aborts) and
+        /// only signals.
         #[unsafe(method(stacheKeyboardInputSourceChanged:))]
         fn input_source_changed(&self, _notification: &NSNotification) {
             let hint = Arc::clone(&self.ivars().hint);

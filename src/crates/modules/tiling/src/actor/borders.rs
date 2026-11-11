@@ -11,7 +11,8 @@
 //! # Stopping
 //!
 //! Disabling the borders (a reload), the end of the actor and a panic in the
-//! engine all run the same ordered retire: stop the live-follow owner, stop the
+//! engine (unwind-enabled builds only; release aborts) all run the same ordered retire: stop the
+//! live-follow owner, stop the
 //! Spaces owner (typed outcomes), retire the engine's handle ledger, ask the
 //! control to `release_all` and record the ticket in the shared
 //! [`BorderLifecycle`]. The actor never waits for the main thread: the stop (off
@@ -92,7 +93,7 @@ impl BorderSide {
 
     /// Runs `f` unless the engine already failed; a panic turns the borders off
     /// (owners stopped, overlays released) and is reported, never propagated: the
-    /// Tiling state machine keeps running.
+    /// Tiling state machine keeps running (unwind-enabled builds only; release aborts).
     fn guarded<R>(&mut self, default: R, f: impl FnOnce(&mut Self) -> R) -> R {
         if self.fault.is_some() {
             return default;

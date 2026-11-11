@@ -405,7 +405,8 @@ impl MenuBarBackend for SystemMenuBarBackend {
             for (center, name) in names {
                 let notify = Arc::clone(&notify);
                 let block = RcBlock::new(move |_notification: NonNull<NSNotification>| {
-                    // Contain panics; only enqueue. No query, no wait.
+                    // Contain panics (unwind-enabled builds only; release aborts); only enqueue. No
+                    // query, no wait.
                     let _ = catch_unwind(AssertUnwindSafe(|| notify()));
                 });
                 let block: &DynBlock<dyn Fn(NonNull<NSNotification>)> = &block;

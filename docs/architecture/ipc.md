@@ -406,7 +406,10 @@ and timed-out requests are closed or answered with a typed error; none panic.
 Finished handlers publish their thread ID to a bounded completion channel before
 releasing capacity. Reaping joins only those IDs, never an arbitrary active
 handler; retained handles remain within the connection limit.
-A drop guard releases capacity even on panic; handler panics become wire errors.
+In unwinding (debug and test) builds a drop guard releases capacity on a panic and
+a handler panic becomes a `Handler` wire error; the release build aborts the
+process instead, and the client sees the connection close
+([Release panics](sdk.md#release-panics)).
 Stop updates its predicate under the same mutex used by waiting acquisitions.
 Bounded shutdown joins the accept thread only when it and every handler permit
 finished inside the bound; otherwise it detaches them and still removes the owned

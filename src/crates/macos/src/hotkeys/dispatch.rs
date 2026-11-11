@@ -38,7 +38,8 @@ pub(super) type Routes = HashMap<u32, Route>;
 pub(super) fn dispatcher(routes: Rc<RefCell<Routes>>, shared: Arc<Shared>) -> Dispatch {
     Rc::new(move |event| {
         // A panic anywhere below must not unwind into Carbon. Forwarding is the
-        // safe answer: an undecidable event is never dispatched.
+        // safe answer: an undecidable event is never dispatched (unwind-enabled builds only;
+        // release aborts).
         catch_unwind(AssertUnwindSafe(|| decide(event, &routes, &shared)))
             .unwrap_or(Disposition::Forward)
     })

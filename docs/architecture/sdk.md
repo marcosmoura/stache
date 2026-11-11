@@ -768,6 +768,41 @@ Fakes (`FakeClock`, `FakeBackend`, `CapacityWork`) live in `input::testing`, bui
 under `cfg(test)` or the `testing` feature. The macOS owner implementing
 `InputBackend` is described in [overview.md](overview.md#shared-input-owner).
 
+### Release panics
+
+The release profile sets `panic = "abort"` (workspace `Cargo.toml`, pinned by
+`release_profile_aborts_on_panic` in `src/crates/app/tests/host_policy.rs`). Every
+`catch_unwind` guard in `src/crates` contains a panic only in unwinding (debug and
+test) builds; in release any panic ends the process at once, and no `Drop`, stop
+or teardown runs. The guards stay because tests prove containment with them and
+because unwinding across `extern "C"` is undefined behavior. A release panic
+leaves behind:
+
+- **Caps Lock remap.** A Caps Lock to F18 mapping stays applied until the next
+  desktop start, whose startup recovery restores it from the journal
+  ([keybindings.md](../features/keybindings.md),
+  [overview.md](overview.md#caps-lock-remap-ownership-and-startup-recovery)).
+- **Applications Tiling hid** stay hidden. The visibility ledger is runtime
+  memory only, and no startup path unhides them.
+- **`AXEnhancedUserInterface` leases** are not restored: the attribute stays off
+  for that application until it relaunches; no journal is kept
+  ([tiling.md](../features/tiling.md)).
+- **Control socket and `server.lock`.** The kernel releases the `flock` on
+  `server.lock` with the process. The socket file stays; the next server start
+  probes it, gets `ConnectionRefused` and removes it ([ipc.md](ipc.md#endpoint-safety)).
+- **Child processes.** The Bar media `perl` adapter and keybinding-spawned
+  commands are plain `std::process::Command` children with no process group or
+  parent-death signal, so they are reparented to `launchd` and keep running. The
+  media adapter has no stdin and writes only when now-playing changes; whether
+  its next write to the closed stdout pipe ends it (`SIGPIPE`/`EPIPE`) is
+  **unverified**.
+- **Keep Awake power assertions** are released by the system at process exit;
+  this is the OS boundary, not a measured release ([keep-awake.md](../features/keep-awake.md)).
+- **Border overlays** and other Stache windows are removed by the window server
+  with the process ([tiling.md](../features/tiling.md#borders)).
+- **`stache wallpaper generate-all`** on a terminal leaves the cursor hidden: the
+  cursor is restored only after the worker join, which an abort skips.
+
 ## Events
 
 `EventBus::publish` is non-blocking and never calls subscriber code. Each
