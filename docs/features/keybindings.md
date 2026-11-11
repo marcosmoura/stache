@@ -18,6 +18,8 @@ newly needs it is accepted and waits;
 a trusted but failed tap is a start failure, not a missing permission. Granting starts it; revoking
 stops all Caps activity and restores the mapping.
 
+**Trust.** Bindings run as the user; see the configuration [trust model](../architecture/config.md#trust-model).
+
 **Registration is honest.** One bad shortcut spelling is skipped with a diagnostic; a duplicate (after
 alias normalization) is replaced by the later one in lexical order. A chord another application owns,
 an unsupported key or a failed Caps start is reported per binding. The module runs with the exact active

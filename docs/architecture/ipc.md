@@ -417,6 +417,13 @@ endpoint creation. Failed socket-mode or timeout setup closes that connection.
 These checks protect against foreign users and cooperating startup races, not
 arbitrary malicious same-UID path mutation between filesystem checks and use.
 
+Any process of the same user can call every socket method, including
+`tiling query windows` (which returns window titles) and the window and
+workspace mutations. There is deliberately no peer-credential check: the `0600`
+socket in a `0700` directory already excludes other users, and a same-user
+process could edit the configuration, which is code, anyway. See the
+[trust model](config.md#trust-model).
+
 ## Identity paths
 
 `AppPaths` is shared by client and server and derived from an injected

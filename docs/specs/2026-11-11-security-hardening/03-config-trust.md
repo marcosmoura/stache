@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 03 — Configuration trust model and warnings

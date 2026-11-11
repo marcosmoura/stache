@@ -2129,6 +2129,7 @@ impl Runner {
             self.log_warn(format!("global configuration is invalid: {diagnostic}"));
         }
         self.log_stale_config_hint();
+        self.log_config_trust_warnings();
         // The first nonprompting Accessibility check runs before any module
         // starts. It publishes nothing; the registry's own per-slot check still
         // guards every start, so a racing grant or revocation cannot start a
@@ -2745,6 +2746,18 @@ impl Runner {
         self.log_warn(hints.join("; "));
     }
 
+    /// Logs one record listing every configuration path someone else can
+    /// write. Called once from `start`; never refuses a file.
+    fn log_config_trust_warnings(&self) {
+        let warnings =
+            stache_sdk::config::inspect_catalog_trust(self.store.catalog(), &self.settings.config);
+        if warnings.is_empty() {
+            return;
+        }
+        let lines: Vec<String> = warnings.iter().map(ToString::to_string).collect();
+        self.log_warn(lines.join("; "));
+    }
+
     fn log_warn(&self, message: String) { self.log(stache_sdk::LogLevel::Warn, message); }
 
     fn log(&self, level: stache_sdk::LogLevel, message: String) {
@@ -3083,6 +3096,63 @@ mod tests {
             files: std::collections::BTreeSet::default(),
         });
         assert_eq!(hints(&capture).len(), 1, "reloads never repeat the hint");
+        runner.finish(true);
+    }
+
+    #[test]
+    fn config_trust_warnings_are_logged_once_at_startup_and_not_on_reload() {
+        use std::os::unix::fs::PermissionsExt;
+        let start_with = |mode: u32| {
+            let root = tempfile::tempdir().expect("root");
+            let config = root.path().join("config");
+            std::fs::create_dir_all(&config).expect("config dir");
+            std::fs::set_permissions(&config, std::fs::Permissions::from_mode(mode))
+                .expect("chmod");
+            let mut catalog = ConfigCatalog::new();
+            catalog
+                .register::<stache_sdk::GlobalConfig>(stache_sdk::GlobalConfig::ID)
+                .expect("global");
+            let (mut runner, receiver) = runner_over(
+                root.path(),
+                ModuleFactories::new(),
+                catalog,
+                Arc::new(AllowAll),
+                None,
+            );
+            let capture = Arc::new(CaptureLogger::default());
+            runner.services.logger = capture.clone();
+            runner.start().expect("start");
+            (root, config, runner, receiver, capture)
+        };
+        let trust = |capture: &CaptureLogger| -> Vec<(stache_sdk::LogLevel, String)> {
+            capture
+                .0
+                .lock()
+                .expect("records")
+                .iter()
+                .filter(|record| record.message.contains("#trust-model"))
+                .map(|record| (record.level, record.message.clone()))
+                .collect()
+        };
+
+        let (_root, _config, runner, _receiver, capture) = start_with(0o755);
+        assert!(trust(&capture).is_empty(), "clean configuration logs nothing");
+        runner.finish(true);
+
+        let (_root, config, mut runner, _receiver, capture) = start_with(0o775);
+        let owner = stache_sdk::config::current_owner();
+        assert_eq!(trust(&capture), vec![(
+            stache_sdk::LogLevel::Warn,
+            format!(
+                "warning: {} is group-writable (mode 0775, owner uid {owner}); Stache runs commands from its configuration, see docs/architecture/config.md#trust-model",
+                std::fs::canonicalize(&config).expect("canonical").display()
+            )
+        )]);
+        runner.apply_config(&ChangeSet {
+            rescan: true,
+            files: std::collections::BTreeSet::default(),
+        });
+        assert_eq!(trust(&capture).len(), 1, "reloads never repeat the warning");
         runner.finish(true);
     }
 
