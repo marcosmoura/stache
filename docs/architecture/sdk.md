@@ -212,8 +212,10 @@ same watch to factory socket handlers.
 that other modules and the app read. It is a generic contract: the SDK imports no
 module crate. Keep Awake is the first production provider (schema `keepAwakeStatus`
 v1 over its own `KeepAwakeRuntimeStatus`, registered by `app::published_state::state_schemas`);
-`keepAwake.status` and `KeepAwakeSnapshot` are unchanged. Bar observes it optionally
-(`observes`) and the app projects it into the Bar view; no module imports another
+`keepAwake.status` and `KeepAwakeSnapshot` are unchanged. Tiling publishes schema
+`tilingState` v1 over its own `TilingPublishedState` (registered the same way). Bar
+observes Keep Awake and Tiling optionally (`observes`) and the app projects both into
+the Bar view (`bar_keep_awake.rs`, `bar_tiling.rs`); no module imports another
 module's crate.
 
 - **Schema contract.** A provider type implements `PublishedState`

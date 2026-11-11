@@ -9,6 +9,7 @@ import {
   PNG_PIXEL,
   availableOutcome,
   barData,
+  tilingStrip,
   unavailableOutcome,
 } from '../../../../tests/barFixtures';
 import { jsonResponse, OM_HOST, omBody, onHost, stubFetch } from '../../../../tests/weatherFetch';
@@ -176,7 +177,8 @@ describe('barDataFromOutcome', () => {
   });
 
   test('keeps each unresolved provider absent and maps present readings value for value', () => {
-    expect(barDataFromOutcome(availableOutcome())).toEqual(ABSENT_BAR_DATA);
+    // `tiling: null` is the unresolved strip (`spaces: null`), which renders like absent.
+    expect(barDataFromOutcome(availableOutcome())).toEqual({ ...ABSENT_BAR_DATA, spaces: null });
 
     const data = barDataFromOutcome(
       availableOutcome({
@@ -550,5 +552,108 @@ describe('Media from the bridge', () => {
     await expect.poll(() => mediaText(screen.container)).toContain('Song - Band');
     await screen.getByTestId('media-container').click();
     expect(vi.mocked(invoke)).toHaveBeenCalledWith('bar_action', { action: 'media' });
+  });
+});
+
+describe('Tiling strip from the bridge', () => {
+  function workspaceCount(container: HTMLElement) {
+    return container.querySelectorAll('[data-testid="spaces-container"] > div:first-child button')
+      .length;
+  }
+
+  test('maps BarView.tiling: null stays unresolved, otherwise the legacy-shaped strip', () => {
+    expect(barDataFromOutcome(availableOutcome()).spaces).toBeNull();
+    expect(barDataFromOutcome(availableOutcome({ tiling: { kind: 'loading' } })).spaces).toEqual({
+      kind: 'loading',
+    });
+    expect(barDataFromOutcome(unavailableOutcome('2')).spaces).toBeUndefined();
+    expect(barDataFromOutcome(availableOutcome({ tiling: tilingStrip() })).spaces).toMatchObject({
+      kind: 'available',
+      generation: '3',
+      sequence: '7',
+    });
+  });
+
+  test('a newer BarChanged updates the strip and an older one is ignored', async () => {
+    snapshotIs(availableOutcome({ sequence: '5', tiling: tilingStrip() }));
+
+    const screen = await renderBridgeBar();
+
+    await expect.poll(() => workspaceCount(screen.container)).toBe(2);
+
+    const handler = vi.mocked(listen).mock.calls.at(-1)?.[1] as Handler;
+    const three = tilingStrip({
+      sequence: '8',
+      workspaces: [
+        { name: 'terminal', focused: true },
+        { name: 'coding', focused: false },
+        { name: 'music', focused: false },
+      ],
+    });
+
+    handler({
+      payload: {
+        generation: '1',
+        sequence: '6',
+        resnapshot: false,
+        outcome: availableOutcome({ sequence: '6', tiling: three }),
+      },
+    });
+
+    await expect.poll(() => workspaceCount(screen.container)).toBe(3);
+
+    handler({
+      payload: {
+        generation: '1',
+        sequence: '4',
+        resnapshot: false,
+        outcome: availableOutcome({ sequence: '4', tiling: { kind: 'absent' } }),
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(workspaceCount(screen.container)).toBe(3);
+
+    handler({
+      payload: {
+        generation: '1',
+        sequence: '7',
+        resnapshot: false,
+        outcome: availableOutcome({ sequence: '7', tiling: { kind: 'absent' } }),
+      },
+    });
+
+    await expect
+      .poll(() => screen.container.querySelector('[data-testid="spaces-container"]'))
+      .toBeNull();
+  });
+
+  test('a strip click from the bridge sends the rendered Tiling generation and sequence', async () => {
+    vi.mocked(invoke).mockImplementation((async (command: string) => {
+      if (command === 'bar_snapshot') {
+        return availableOutcome({ sequence: '5', tiling: tilingStrip() });
+      }
+
+      if (command === 'bar_tiling_action') {
+        return { kind: 'applied' };
+      }
+
+      throw new Error(`Unexpected command: ${command}`);
+    }) as never);
+
+    const screen = await renderBridgeBar();
+
+    await expect.poll(() => workspaceCount(screen.container)).toBe(2);
+    screen.container
+      .querySelector<HTMLButtonElement>('[data-testid="spaces-container"] button')
+      ?.click();
+
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith('bar_tiling_action', {
+      request: {
+        generation: '3',
+        sequence: '7',
+        action: { kind: 'focusWorkspace', name: 'terminal' },
+      },
+    });
   });
 });

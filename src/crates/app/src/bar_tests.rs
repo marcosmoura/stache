@@ -640,6 +640,11 @@ impl Rig {
         Self::build(file, layout, SHORT_LOAD, NEVER_RETRY)
     }
 
+    /// A rig whose registry carries `input` as the shared input service.
+    fn with_input(file: Option<&str>, input: Arc<stache_sdk::InputService>) -> Self {
+        Self::build_with(file, both(), SHORT_LOAD, NEVER_RETRY, None, Some(input))
+    }
+
     /// A rig whose failed panels retry after `backoff`.
     fn retrying(file: Option<&str>, backoff: [Duration; 3]) -> Self {
         Self::build(file, both(), SHORT_LOAD, backoff)
@@ -656,7 +661,7 @@ impl Rig {
         load: Duration,
         backoff: [Duration; 3],
     ) -> Self {
-        Self::build_with(file, layout, load, backoff, None)
+        Self::build_with(file, layout, load, backoff, None, None)
     }
 
     #[allow(clippy::too_many_lines)] // One linear wiring of the whole host rig.
@@ -666,6 +671,7 @@ impl Rig {
         load: Duration,
         backoff: [Duration; 3],
         media: Option<&Arc<MediaFakes>>,
+        input: Option<Arc<stache_sdk::InputService>>,
     ) -> Self {
         let root = tempfile::tempdir().expect("root");
         std::fs::create_dir_all(root.path().join("config")).expect("config directory");
@@ -681,21 +687,23 @@ impl Rig {
         let _ = host.windows.set(Arc::downgrade(&windows));
         let trust = Arc::new(Trust(AtomicBool::new(true)));
         let logs = Arc::new(CapturedLogs::default());
-        let registry = Arc::new(
-            Registry::new(
-                Arc::clone(&logs) as Arc<dyn Logger>,
-                Arc::new(EventBus::new()),
-                Arc::clone(&main) as Arc<dyn MainThreadExecutor>,
-                Arc::clone(&trust) as Arc<dyn PermissionProvider>,
-                registry_windows,
-            )
-            .with_baseline_requirements(vec![PermissionRequirement::user_only(
-                Permission::Accessibility,
-            )])
-            .expect("baseline")
-            .with_state_schemas(&crate::published_state::state_schemas())
-            .expect("the production schemas register before any module"),
-        );
+        let mut registry = Registry::new(
+            Arc::clone(&logs) as Arc<dyn Logger>,
+            Arc::new(EventBus::new()),
+            Arc::clone(&main) as Arc<dyn MainThreadExecutor>,
+            Arc::clone(&trust) as Arc<dyn PermissionProvider>,
+            registry_windows,
+        )
+        .with_baseline_requirements(vec![PermissionRequirement::user_only(
+            Permission::Accessibility,
+        )])
+        .expect("baseline")
+        .with_state_schemas(&crate::published_state::state_schemas())
+        .expect("the production schemas register before any module");
+        if let Some(input) = input {
+            registry = registry.with_input_service(input);
+        }
+        let registry = Arc::new(registry);
         let store = Arc::new(ConfigStore::new(
             Arc::clone(&registry),
             crate::catalog::catalog().expect("catalog"),
@@ -3229,7 +3237,7 @@ fn playing(bundle: &str, with_art: bool) -> AdapterRun {
 
 impl Rig {
     fn with_media(file: Option<&str>, fakes: &Arc<MediaFakes>) -> Self {
-        Self::build_with(file, both(), SHORT_LOAD, NEVER_RETRY, Some(fakes))
+        Self::build_with(file, both(), SHORT_LOAD, NEVER_RETRY, Some(fakes), None)
     }
 
     fn media_state(&self) -> Option<MediaRunState> { self.bar().media.map(|media| media.state) }
@@ -4313,3 +4321,6 @@ fn the_keep_awake_watcher_has_no_timer_and_wakes_on_host_changes() {
     });
     assert!(rig.bridge.finish_shutdown());
 }
+
+#[path = "bar_tiling_e2e.rs"]
+mod tiling_e2e;

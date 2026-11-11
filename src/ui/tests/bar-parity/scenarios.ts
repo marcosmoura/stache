@@ -1,16 +1,18 @@
 /**
- * Maps each of the reference's 65 scenarios (`bar-reference/manifest.json` `scenarios`) to the data
+ * Maps each of the reference's 89 scenarios (`bar-reference/manifest.json` `scenarios`) to the data
  * the new Bar receives through the static fixture seam (`BarDataProvider`).
  *
  * The values restate the synthetic data the reference scenarios chose (`scripts/bar-reference/
  * scenarios.ts`); they are inputs, never readings. The coverage test fails when the reference gains
  * or loses a scenario that has no mapping here.
  */
+import type { TilingStripView_Serialize } from '../../src/sdk/bindings.gen';
 import type { BarData } from '../../src/shell/windows/Bar/Bar.data';
 import type { BatteryReading } from '../../src/shell/windows/Bar/Battery/Battery.types';
 import type { MediaPayload } from '../../src/shell/windows/Bar/Media/Media.types';
+import { spacesFromTiling } from '../../src/shell/windows/Bar/Spaces/Spaces.data';
 import type { WifiInfo } from '../../src/shell/windows/Bar/Wifi/Wifi.types';
-import { barData } from '../barFixtures';
+import { barData, tilingStrip } from '../barFixtures';
 
 /** How the new Bar is mounted for the scenario. */
 export type ParityMode =
@@ -18,9 +20,7 @@ export type ParityMode =
   /** A child throws: the root ErrorBoundary renders `QueryErrorFallback`. */
   | 'error'
   /** A child suspends: the root Suspense (fallback null) renders nothing. */
-  | 'suspense'
-  /** Spaces is suspended: `SpacesFallback` fills the first slot. */
-  | 'spaces-fallback';
+  | 'suspense';
 
 export interface ParityScenario {
   name: string;
@@ -134,7 +134,8 @@ export function buildScenarios(artworkBase64: string): ParityScenario[] {
     withData('menu-bar-hidden', {}, { menu: 'visible' }),
     { name: 'global-suspense', data: suspended(), mode: 'suspense', menu: 'hidden' },
     { name: 'global-error', data: throwing(), mode: 'error', menu: 'hidden' },
-    withData('spaces-fallback', {}, { mode: 'spaces-fallback' }),
+    // Legacy's suspended tiling queries are Tiling's `loading` state, through the real mapping.
+    withData('spaces-fallback', { spaces: spacesFromTiling({ kind: 'loading' }) }),
 
     withData('media-playing-spotify', { media: media(SPOTIFY) }),
     withData('media-paused', { media: media(SPOTIFY, { playing: false }) }),
@@ -207,5 +208,159 @@ export function buildScenarios(artworkBase64: string): ParityScenario[] {
         },
       }),
     ),
+
+    ...stripScenarios(),
   ];
+}
+
+// -- Tiling strip: the reference's synthetic Tiling answers as `BarView.tiling`, mapped by the real
+// `spacesFromTiling` bridge mapping. Window keys restate the reference's window ids (101, 102, ...).
+
+const STRIP_WORKSPACES = [
+  'terminal',
+  'coding',
+  'browser',
+  'music',
+  'design',
+  'communication',
+  'guitar',
+  'misc',
+  'files',
+  'tasks',
+];
+
+/** Legacy app map keys, the seven approved additions and one unknown name (reference order). */
+export const STRIP_APP_NAMES = [
+  'Ableton Live',
+  'Activity Monitor',
+  'App Store',
+  'Archetype Gojira X',
+  'Archetype John Mayer X',
+  'Archetype Nolly X',
+  'Audio MIDI Setup',
+  'Fortin Nameless Suite X',
+  'Microsoft Edge Dev',
+  'Proton Drive',
+  'Proton Pass',
+  'Proton VPN',
+  'Soldano SLO100 X',
+  '\u200EWhatsApp',
+  'Zed Preview',
+  'Bloom',
+  'Code',
+  'Dia',
+  'Discord',
+  'Feishin',
+  'Figma',
+  'Finder',
+  'Ghostty',
+  'Reminders',
+  'Safari',
+  'Settings',
+  'Slack',
+  'Spotify',
+  'TIDAL',
+  'Transmission',
+  'WhatsApp',
+  'Zoom',
+  'Zed',
+  'Aside',
+  'Herdr',
+  'DeviceHub',
+  'AIOStreams',
+  'Nuvio',
+  'FigCraft',
+  'Synthetic Unknown App',
+];
+
+const STRIP_LONG_TITLE = 'A deliberately long synthetic window title that is cut.ts';
+const STRIP_UNICODE_TITLE = 'Ünïcødé façade — 文件 — a long synthetic window title.md';
+
+type WindowSpec = [appName: string, title: string];
+
+/** `BarData.spaces` for a Tiling state, through the real `spacesFromTiling`. */
+export function stripData(
+  workspaces: readonly string[],
+  focusedWorkspace: string | null,
+  windows: readonly WindowSpec[] = [],
+  focusedIndex: number | null = null,
+): Partial<BarData> {
+  const apps = windows.map(([appName, title], index) => ({
+    key: String(101 + index),
+    appName,
+    title,
+  }));
+  const view: TilingStripView_Serialize = tilingStrip({
+    workspaces: workspaces.map((name) => ({ name, focused: name === focusedWorkspace })),
+    focusedWorkspace,
+    apps,
+    focusedApp: focusedIndex === null ? null : (apps[focusedIndex] ?? null),
+  });
+
+  return { spaces: spacesFromTiling(view) };
+}
+
+const ALL_WORKSPACES = [...STRIP_WORKSPACES].reverse();
+
+export const FOCUS_APPS: WindowSpec[] = [
+  ['Ghostty', 'zsh'],
+  ['Code', 'main.ts'],
+  ['Safari', 'Start Page'],
+];
+const DUPLICATES: WindowSpec[] = [
+  ['Code', STRIP_LONG_TITLE],
+  ['Code', STRIP_UNICODE_TITLE],
+  ['Code', ''],
+  ['Safari', 'Start Page'],
+];
+
+function stripScenarios(): ParityScenario[] {
+  const scenarios: ParityScenario[] = [
+    withData('spaces-workspaces-no-focus', stripData(ALL_WORKSPACES, null)),
+    ...STRIP_WORKSPACES.map((name) =>
+      withData(`spaces-workspace-focused-${name}`, stripData(ALL_WORKSPACES, name)),
+    ),
+    withData(
+      'spaces-unknown-workspace',
+      stripData(['workspace-2', 'coding', 'terminal', 'workspace-1'], 'workspace-1'),
+    ),
+  ];
+
+  for (let start = 0; start < STRIP_APP_NAMES.length; start += 10) {
+    const names = STRIP_APP_NAMES.slice(start, start + 10);
+
+    scenarios.push(
+      withData(
+        `spaces-app-icons-${start / 10 + 1}`,
+        stripData(
+          ['terminal'],
+          'terminal',
+          names.map((name) => [name, 'Window']),
+        ),
+      ),
+    );
+  }
+
+  scenarios.push(
+    withData('spaces-app-focused', stripData(['coding', 'terminal'], 'coding', FOCUS_APPS, 1)),
+    withData(
+      'spaces-two-apps',
+      stripData(['coding', 'terminal'], 'coding', FOCUS_APPS.slice(0, 2), 1),
+    ),
+    withData('spaces-duplicate-titles', stripData(['coding', 'terminal'], 'coding', DUPLICATES, 0)),
+    withData(
+      'spaces-duplicate-unicode',
+      stripData(['coding', 'terminal'], 'coding', DUPLICATES, 1),
+    ),
+    withData('spaces-duplicate-no-focus', stripData(['coding', 'terminal'], 'coding', DUPLICATES)),
+    // Legacy "not enabled" is Tiling `absent`.
+    withData('spaces-absent', { spaces: spacesFromTiling({ kind: 'absent' }) }),
+    withData('spaces-empty', stripData([], null)),
+    withData('spaces-with-media', {
+      ...stripData(['coding', 'terminal'], 'coding', FOCUS_APPS, 1),
+      media: media(SPOTIFY),
+    }),
+  );
+
+  return scenarios;
 }

@@ -11,17 +11,20 @@ use serde::Serialize;
 use serde_json::Value;
 use stache_keep_awake::{KeepAwakeConfig, KeepAwakeRuntimeStatus};
 use stache_sdk::{StateEnvelope, StateReading, StateSchemas, StateUnavailableReason};
+use stache_tiling::{TilingConfig, TilingPublishedState};
 
 /// The provider schema contracts the application registers before any module.
 ///
-/// Keep Awake is the first production provider: its original
-/// [`KeepAwakeRuntimeStatus`] DTO is the codec for `keepAwake`, so the registry
-/// only accepts that type from that module and consumers decode it with
-/// [`StateEnvelope::decode`]. Adding a provider means adding one `with` here;
+/// Keep Awake's original [`KeepAwakeRuntimeStatus`] DTO is the codec for
+/// `keepAwake` and Tiling's [`TilingPublishedState`] the codec for `tiling`, so
+/// the registry only accepts each type from its module and consumers decode it
+/// with [`StateEnvelope::decode`]. Adding a provider means adding one `with` here;
 /// the SDK and the observing modules never import the provider's crate.
 #[must_use]
 pub fn state_schemas() -> StateSchemas {
-    StateSchemas::new().with::<KeepAwakeRuntimeStatus>(KeepAwakeConfig::ID)
+    StateSchemas::new()
+        .with::<KeepAwakeRuntimeStatus>(KeepAwakeConfig::ID)
+        .with::<TilingPublishedState>(TilingConfig::ID)
 }
 
 /// One published envelope with its numbers as exact decimal strings.
@@ -519,6 +522,191 @@ mod tests {
         fn reconfigure(&mut self, _: &FakeConfig, _: &ModuleContext) -> ModuleResult<()> { Ok(()) }
 
         fn stop(&mut self, _: &ModuleContext) -> ModuleResult<()> { Ok(()) }
+    }
+
+    /// A stand-in module registered under Tiling's identifier, publishing the
+    /// original Tiling DTO without the real runtime. It keeps every
+    /// generation's publisher so a test can write late from an old one.
+    struct TilingStub {
+        publishers: Arc<Mutex<Vec<StatePublisher<TilingPublishedState>>>>,
+        fail_start: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    fn tiling_state(title: &str) -> TilingPublishedState {
+        TilingPublishedState {
+            workspaces: vec![stache_tiling::PublishedWorkspace {
+                name: "coding".to_owned(),
+                screen: "1".to_owned(),
+                screen_name: None,
+                visible: true,
+                focused: true,
+                order: 0,
+            }],
+            windows: vec![stache_tiling::PublishedWindow {
+                key: "18446744073709551617".to_owned(),
+                app_name: "Zed".to_owned(),
+                title: title.to_owned(),
+                workspace: Some("coding".to_owned()),
+                minimized: false,
+                hidden: false,
+                tab_active: true,
+            }],
+            focus: stache_tiling::PublishedFocus {
+                workspace: Some("coding".to_owned()),
+                window: Some("18446744073709551617".to_owned()),
+            },
+        }
+    }
+
+    impl Module for TilingStub {
+        type Config = FakeConfig;
+
+        fn descriptor(&self) -> ModuleDescriptor {
+            ModuleDescriptor {
+                id: TilingConfig::ID,
+                provides: &[],
+                requires: &[],
+                permissions: &[],
+                executables: &[],
+                surfaces: &[],
+                observes: &[],
+                reserves_screen: false,
+            }
+        }
+
+        fn configure(&mut self, _: &FakeConfig, _: &ModuleContext) -> ModuleResult<()> { Ok(()) }
+
+        fn start(&mut self, ctx: &ModuleContext) -> ModuleResult<()> {
+            let publisher = ctx.state_publisher::<TilingPublishedState>().expect("registered");
+            let _ = publisher.publish(1, &tiling_state("first")).expect("publish");
+            self.publishers.lock().expect("lock").push(publisher);
+            if self.fail_start.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(stache_sdk::ModuleError::new(
+                    TilingConfig::ID,
+                    stache_sdk::Operation::Start,
+                    stache_sdk::ErrorCategory::Platform,
+                    "injected",
+                ));
+            }
+            Ok(())
+        }
+
+        fn reconfigure(&mut self, _: &FakeConfig, _: &ModuleContext) -> ModuleResult<()> { Ok(()) }
+
+        fn stop(&mut self, _: &ModuleContext) -> ModuleResult<()> { Ok(()) }
+    }
+
+    fn keep_awake_stub() -> KeepAwakeStub {
+        KeepAwakeStub {
+            status: KeepAwakeRuntimeStatus::default(),
+            wrong_type: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    #[test]
+    fn tiling_registers_its_own_dto_and_a_consumer_decodes_it() {
+        let registry = production_registry();
+        let observer = registry.observe_state(TilingConfig::ID);
+        assert_eq!(observer.read().state, StateReading::Absent);
+        let publishers = Arc::new(Mutex::new(Vec::new()));
+        let handle = registry
+            .register(
+                TilingStub {
+                    publishers: Arc::clone(&publishers),
+                    fail_start: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                },
+                FakeConfig,
+            )
+            .expect("register");
+        registry.start_all().expect("start");
+
+        let reading = observer.read().state;
+        let StateReading::Available(envelope) = &reading else {
+            panic!("expected an available state");
+        };
+        assert_eq!(envelope.schema.provider, TilingConfig::ID);
+        assert_eq!(envelope.schema.name, "tilingState");
+        assert_eq!(envelope.schema.version, 1);
+        assert_eq!(envelope.sequence, 1);
+        assert_eq!(
+            envelope.decode::<TilingPublishedState>(TilingConfig::ID).expect("decode"),
+            tiling_state("first")
+        );
+        let json = serde_json::to_value(PublishedStateView::from(&reading)).expect("encode");
+        assert_eq!(json["envelope"]["schema"], "tilingState");
+        assert_eq!(
+            json["envelope"]["payload"]["windows"][0]["key"],
+            "18446744073709551617"
+        );
+        assert_eq!(json["envelope"]["payload"]["windows"][0]["tabActive"], true);
+        let old = envelope.generation;
+
+        // Stop: an exact-generation tombstone; the old handle's late write is
+        // rejected and never reaches the successor.
+        registry.set_enabled(handle, false).expect("disable");
+        let StateReading::Unavailable(tombstone) = observer.read().state else {
+            panic!("expected a tombstone");
+        };
+        assert_eq!(tombstone.generation, Some(old));
+        let late = publishers.lock().expect("lock")[0].clone();
+        assert!(matches!(
+            late.publish(1, &tiling_state("late")),
+            Err(stache_sdk::StateError::Stale { .. })
+        ));
+        registry.set_enabled(handle, true).expect("enable");
+        let StateReading::Available(successor) = observer.read().state else {
+            panic!("expected the successor state");
+        };
+        assert!(successor.generation > old);
+        assert_eq!(successor.sequence, 1, "the sequence restarts");
+        assert!(late.publish(1, &tiling_state("late")).is_err());
+        assert_eq!(
+            successor.decode::<TilingPublishedState>(TilingConfig::ID).expect("decode"),
+            tiling_state("first")
+        );
+        assert_eq!(observer.read().state, StateReading::Available(successor));
+    }
+
+    #[test]
+    fn a_failed_tiling_start_tombstones_only_tiling_and_keep_awake_still_publishes() {
+        let registry = production_registry();
+        registry.register(keep_awake_stub(), FakeConfig).expect("keep awake");
+        registry
+            .register(
+                TilingStub {
+                    publishers: Arc::new(Mutex::new(Vec::new())),
+                    fail_start: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                },
+                FakeConfig,
+            )
+            .expect("tiling");
+        let _ = registry.start_all();
+        assert!(matches!(
+            registry.observe_state(TilingConfig::ID).read().state,
+            StateReading::Unavailable(stache_sdk::StateUnavailable {
+                reason: StateUnavailableReason::Ended(stache_sdk::RuntimeEnd::Failed),
+                generation: Some(_),
+            })
+        ));
+        assert!(matches!(
+            registry.observe_state(KeepAwakeConfig::ID).read().state,
+            StateReading::Available(_)
+        ));
+    }
+
+    #[test]
+    fn keep_awake_publishes_without_tiling() {
+        let registry = production_registry();
+        registry.register(keep_awake_stub(), FakeConfig).expect("keep awake");
+        registry.start_all().expect("start");
+        assert_eq!(
+            registry.observe_state(TilingConfig::ID).read().state,
+            StateReading::Absent
+        );
+        assert!(matches!(
+            registry.observe_state(KeepAwakeConfig::ID).read().state,
+            StateReading::Available(_)
+        ));
     }
 
     #[test]

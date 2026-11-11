@@ -1,23 +1,14 @@
-import { Suspense } from 'react';
-
 import { Stack } from '../../../components/Stack';
 import { Surface } from '../../../components/Surface';
 
+import { AppList } from './components/AppList';
+import { WorkspaceList } from './components/WorkspaceList';
+import { useSpaces } from './Spaces.state';
 import * as styles from './Spaces.styles';
 
 /**
- * Tiling is not part of the Bar yet (no workspace or app strip), so legacy's
- * "tiling absent" branch is the only one: the empty slot that keeps the grid's
- * first column in place so Media and Status do not move.
- */
-function SpacesContent() {
-  return <div />;
-}
-
-/**
- * Legacy shown this while its tiling queries were suspended. No Bar data source
- * can suspend today, so it is unreachable in production; it is kept
- * value-identical for the tiling integration and rendered directly by tests.
+ * Legacy shown this while its tiling queries were suspended; it now shows while
+ * Tiling runs and has not published its first state (`BarView.tiling` `loading`).
  */
 export function SpacesFallback() {
   return (
@@ -27,10 +18,39 @@ export function SpacesFallback() {
   );
 }
 
+/**
+ * The Tiling strip. Unresolved, absent or empty Tiling keeps legacy's empty
+ * `<div />` so the grid's first column stays in place and Media/Status do not move.
+ */
 export function Spaces() {
+  const {
+    isEnabled,
+    isLoading,
+    workspaces,
+    focusedApp,
+    focusedWorkspace,
+    apps,
+    onSpaceClick,
+    onAppClick,
+  } = useSpaces();
+
+  if (isLoading) {
+    return <SpacesFallback />;
+  }
+
+  if (!isEnabled || !workspaces.length) {
+    return <div />;
+  }
+
   return (
-    <Suspense fallback={<SpacesFallback />}>
-      <SpacesContent />
-    </Suspense>
+    <Stack data-testid="spaces-container">
+      <WorkspaceList
+        workspaces={workspaces}
+        focusedWorkspace={focusedWorkspace}
+        onSpaceClick={onSpaceClick}
+      />
+
+      <AppList apps={apps} focusedApp={focusedApp} onAppClick={onAppClick} />
+    </Stack>
   );
 }

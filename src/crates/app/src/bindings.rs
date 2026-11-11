@@ -358,7 +358,8 @@ pub fn builder() -> Builder<tauri::Wry> {
             crate::bar_bridge::bar_action,
             crate::bar_bridge::bar_weather,
             crate::bar_bridge::bar_media_artwork,
-            crate::bar_bridge::bar_session_action
+            crate::bar_bridge::bar_session_action,
+            crate::bar_bridge::bar_tiling_action
         ])
         .events(collect_events![StatusChanged, BarChanged])
         .typ::<AccessView>()

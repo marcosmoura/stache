@@ -16,16 +16,20 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import * as React from 'react';
 import { createElement, type ComponentType, type ElementType } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import * as jsxRuntime from 'react/jsx-runtime';
 
 import { flattenCss, serializeRules } from './css.ts';
 import { LegacyLoader, evaluateCommonJs } from './loader.ts';
 import {
   IconPackages,
   aliasTarget,
+  bunLockIntegrity,
   LEGACY_ICON_PACKAGES,
   lockIntegrity,
+  STRIP_HUGEICONS_PACKAGE,
   type PackageSpec,
 } from './npm.ts';
 import { FROZEN_CLOCK_LABEL, buildScenarios, contextFor, baseContext } from './scenarios.ts';
@@ -40,6 +44,24 @@ const TOOL_DIRECTORY = path.join(REPOSITORY_ROOT, 'scripts/bar-reference');
 const PINNED_COMMIT = 'e0b4648ed22891d3ba29abf3d8fa8f56f949c657';
 const LEGACY_UI = '_legacy/app/ui';
 const LOCKFILE = '_legacy/pnpm-lock.yaml';
+const REPOSITORY_LOCKFILE = 'bun.lock';
+const SPACES = `${LEGACY_UI}/renderer/bar/Spaces`;
+const STRIP_DECISION = 'user decision 2026-11-10';
+const UNKNOWN_WORKSPACE_DECISION = 'orchestrator decision 2026-11-10, reported to user';
+
+/**
+ * Approved app-map additions (user decision 2026-11-10), keyed by the exact `CFBundleName`. Not in
+ * legacy: overlaid onto the pinned `getAppIcon` (see `HAND_RECONSTRUCTED`).
+ */
+const APP_MAP_ADDITIONS: Readonly<Record<string, string>> = {
+  Zed: 'CodeSquareIcon',
+  Aside: 'AiBrowserIcon',
+  Herdr: 'CommandLineIcon',
+  DeviceHub: 'SmartPhone01Icon',
+  AIOStreams: 'PlayListIcon',
+  Nuvio: 'Tv01Icon',
+  FigCraft: 'PaintBoardIcon',
+};
 
 /** Object table from `docs/specs/2026-11-03-bar/04-ui-shell-parity.md`. */
 const PINNED_OBJECTS = [
@@ -190,6 +212,7 @@ async function main(): Promise<void> {
   const lockfile = readBlob(lockBlob);
 
   const packages = new IconPackages();
+  const stripPackages = new IconPackages();
 
   try {
     const specs: (PackageSpec & { integrity: string })[] = LEGACY_ICON_PACKAGES.map((spec) => ({
@@ -200,6 +223,30 @@ async function main(): Promise<void> {
     for (const spec of specs) {
       await packages.download(spec, spec.integrity);
     }
+
+    const repositoryLock = readFileSync(path.join(REPOSITORY_ROOT, REPOSITORY_LOCKFILE), 'utf8');
+    const stripIntegrity = bunLockIntegrity(repositoryLock, STRIP_HUGEICONS_PACKAGE);
+
+    await stripPackages.download(STRIP_HUGEICONS_PACKAGE, stripIntegrity);
+
+    const stripCore = stripPackages.hugeiconsCore();
+    const legacyCore = packages.hugeiconsCore();
+    const simple = packages.simpleIcons();
+    /** `@icons-pack/react-simple-icons` names the strip (Spaces sources) reads. */
+    const stripSimple = new Set<string>();
+    const stripSimpleIcons = new Proxy(
+      {},
+      {
+        get: (_target, property) => {
+          if (typeof property === 'string') {
+            stripSimple.add(property);
+          }
+
+          return (simple as Record<string | symbol, unknown>)[property];
+        },
+      },
+    );
+    const isStrip = (importer: string) => importer.startsWith(`${SPACES}/`);
 
     const cssRules: CssRule[] = [];
     const context = baseContext();
@@ -230,8 +277,42 @@ async function main(): Promise<void> {
       pathStubs,
       externals: {
         '@hugeicons/react': () => packages.hugeiconsReact(),
-        '@hugeicons/core-free-icons': () => packages.hugeiconsCore(),
-        '@icons-pack/react-simple-icons': () => packages.simpleIcons(),
+        '@hugeicons/core-free-icons': (importer) => (isStrip(importer) ? stripCore : legacyCore),
+        '@icons-pack/react-simple-icons': (importer) =>
+          isStrip(importer) ? stripSimpleIcons : simple,
+      },
+      moduleOverlays: {
+        // Approved app-map additions (not in legacy): looked up before the pinned map.
+        [`${SPACES}/Spaces.constants.ts`]: (pinned) => {
+          const additions = Object.fromEntries(
+            Object.entries(APP_MAP_ADDITIONS).map(([app, icon]) => [app, stripCore[icon]]),
+          );
+          const getAppIcon = pinned.getAppIcon as (name: string) => unknown;
+
+          return {
+            ...pinned,
+            getAppIcon: (name: string) => {
+              const trimmed = name.trim();
+
+              return Object.hasOwn(additions, trimmed) ? additions[trimmed] : getAppIcon(name);
+            },
+          };
+        },
+      },
+      importOverlays: {
+        // Approved deviation: an unknown workspace renders its button and indicator without the
+        // Icon element (legacy passed `undefined` to Icon and lost the whole Bar).
+        [`${SPACES}/components/Workspace/Workspace.tsx`]: {
+          '@/components/Icon': (pinned) => {
+            const PinnedIcon = pinned.Icon as ElementType;
+
+            return {
+              ...pinned,
+              Icon: (props: { icon?: unknown }) =>
+                props.icon === undefined ? null : createElement(PinnedIcon, props),
+            };
+          },
+        },
       },
     });
 
@@ -243,6 +324,10 @@ async function main(): Promise<void> {
     };
     const iconModule = loader.load(`${LEGACY_UI}/components/Icon/index.ts`) as {
       Icon: ElementType;
+    };
+    const spacesState = loader.load(`${SPACES}/Spaces.state.ts`) as {
+      fetchWorkspacesData: () => Promise<unknown>;
+      fetchAppsData: () => Promise<unknown>;
     };
     const colors = (
       loader.load(`${LEGACY_UI}/design-system/colors.ts`) as {
@@ -271,6 +356,11 @@ async function main(): Promise<void> {
 
       for (const compact of [false, true]) {
         assign(context, contextFor(scenario.patch, compact));
+
+        // The pinned fetchers sort and map the synthetic `invoke` answers (rejecting = Tiling
+        // not running), unless the scenario fixes the query itself (suspended).
+        context.queries.tiling_workspace_data ??= await spacesState.fetchWorkspacesData();
+        context.queries.tiling_workspace_apps ??= await spacesState.fetchAppsData();
         const element = scenario.patch.errorFallback
           ? createElement(fallbackModule.QueryErrorFallback)
           : createElement(barModule.Bar);
@@ -413,7 +503,10 @@ async function main(): Promise<void> {
         .map((entry) => path.posix.basename(entry.file, '.cjs')),
     ]);
     const tableIcons = new Set(iconSpecs.map((spec) => spec.icon));
-    const missing = [...usedIconNames].filter((name) => !tableIcons.has(name));
+    // Simple icons read only by the strip are tabled with the strip icons below.
+    const missing = [...usedIconNames].filter(
+      (name) => !tableIcons.has(name) && !stripSimple.has(name),
+    );
     const unused = [...tableIcons].filter((name) => !usedIconNames.has(name));
 
     if (missing.length > 0 || unused.length > 0) {
@@ -422,7 +515,10 @@ async function main(): Promise<void> {
       );
     }
 
-    const coreBundle = packages.usedFiles.find((entry) => entry.file === 'dist/cjs/index.js');
+    const coreBundle = packages.usedFiles.find(
+      (entry) =>
+        entry.packageName === '@hugeicons/core-free-icons' && entry.file === 'dist/cjs/index.js',
+    );
     const icons: Record<string, string> = {};
     const iconRecords = iconSpecs.map((spec) => {
       const definition = (spec.library === 'hugeicons' ? heroIcons : simpleIcons)[spec.icon];
@@ -456,6 +552,92 @@ async function main(): Promise<void> {
         renderProps: { size: 18, strokeWidth: 1.8, ...spec.props },
         renderedBy: '_legacy/app/ui/components/Icon/Icon.tsx + legacy icon package component',
         sha256: sha256(icons[`${spec.file}.svg`]),
+      };
+    });
+
+    // -- Strip icons (Spaces): hugeicons 4.4.0 (user decision 2026-11-10), simple-icons 13.15.1 ----
+    const stripCoreBundle = stripPackages.usedFiles.find(
+      (entry) => entry.file === 'dist/cjs/index.js',
+    );
+    const stripCoreSource = readStripCoreSource(stripPackages);
+    const stripSpecs = [
+      ...[...stripPackages.usedHugeicons.keys()].sort().map((icon) => ({
+        icon,
+        library: 'hugeicons' as const,
+      })),
+      ...[...stripSimple].sort().map((icon) => ({ icon, library: 'simple' as const })),
+    ];
+
+    for (const icon of [...Object.values(APP_MAP_ADDITIONS), 'DashboardCircleIcon']) {
+      if (!stripPackages.usedHugeicons.has(icon)) {
+        throw new Error(`Strip icon ${icon} was not read by the strip`);
+      }
+    }
+
+    const legacyDefinitions = packages.peekHugeicons();
+    const repositoryReact = repositoryHugeiconsReact();
+    const legacyReact = packages.hugeiconsReact();
+    const stripGlyphChanges: Record<string, string> = {};
+    const stripWrapperDifferences: string[] = [];
+    const stripRecords = stripSpecs.map(({ icon, library }) => {
+      const isHuge = library === 'hugeicons';
+      const definition = isHuge ? stripCore[icon] : (simple as Record<string, unknown>)[icon];
+      const file = `Spaces.${icon}`;
+      const svg = render(createElement(iconModule.Icon, { icon: definition }));
+
+      if (!svg.startsWith('<svg')) {
+        throw new Error(`Icon ${file} did not render an <svg>`);
+      }
+
+      icons[`${file}.svg`] = `${svg}\n`;
+
+      if (isHuge) {
+        const before = legacyDefinitions[icon];
+
+        if (before === undefined) {
+          stripGlyphChanges[icon] = 'absent in 4.2.3';
+        } else if (JSON.stringify(before) !== JSON.stringify(definition)) {
+          stripGlyphChanges[icon] = 'glyph data differs';
+        }
+
+        // Same props as the legacy Icon passes; only the wrapper package differs.
+        const props = { icon: definition, size: 18, strokeWidth: 1.8 };
+        const legacySvg = render(createElement(legacyReact.HugeiconsIcon as ElementType, props));
+        const repositorySvg = render(
+          createElement(repositoryReact.HugeiconsIcon as ElementType, props),
+        );
+
+        if (legacySvg !== repositorySvg) {
+          stripWrapperDifferences.push(icon);
+        }
+      }
+
+      const sourceFile = isHuge ? 'dist/cjs/index.js' : `icons/${icon}.cjs`;
+      const packageName = isHuge ? '@hugeicons/core-free-icons' : '@icons-pack/react-simple-icons';
+      const source = isHuge
+        ? stripCoreBundle
+        : packages.usedFiles.find(
+            (entry) => entry.packageName === packageName && entry.file === sourceFile,
+          );
+
+      return {
+        file: `icons/${file}.svg`,
+        icon,
+        aliasOf: isHuge ? aliasTarget(stripCoreSource, icon) : null,
+        package: packageName,
+        packageVersion: isHuge ? STRIP_HUGEICONS_PACKAGE.version : '13.15.1',
+        provenance: isHuge
+          ? `${STRIP_DECISION}: strip glyphs from the repository version`
+          : 'legacy lockfile',
+        sourceFile,
+        sourceSha256: source?.sha256 ?? null,
+        definitionSha256: sha256(
+          JSON.stringify(definition, (_k, v: unknown) => (typeof v === 'function' ? undefined : v)),
+        ),
+        renderProps: { size: 18, strokeWidth: 1.8 },
+        renderedBy:
+          '_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1',
+        sha256: sha256(icons[`${file}.svg`]),
       };
     });
 
@@ -526,6 +708,26 @@ async function main(): Promise<void> {
         }),
       ),
       icons: iconRecords.sort((a, b) => a.file.localeCompare(b.file)),
+      stripIcons: {
+        provenance: STRIP_DECISION,
+        note: 'Tiling strip (Spaces) icons. hugeicons glyphs come from the repository version (4.4.0), downloaded from the registry and sha512-checked against the repository bun.lock; @hugeicons/react stays at the legacy 1.1.9 and simple-icons at the legacy 13.15.1. The non-strip Bar icons above keep the legacy 4.2.3.',
+        package: {
+          ...stripPackages.records[0],
+          integritySource: REPOSITORY_LOCKFILE,
+          lockfileSha256: sha256(repositoryLock),
+          filesRead: stripPackages.usedFiles
+            .sort((a, b) => a.file.localeCompare(b.file))
+            .map(({ file, sha256: hash }) => ({ file, sha256: hash })),
+        },
+        appMapAdditions: { provenance: STRIP_DECISION, entries: APP_MAP_ADDITIONS },
+        glyphChangesFrom4_2_3: stripGlyphChanges,
+        wrapperComparison: {
+          legacy: '@hugeicons/react 1.1.9',
+          repository: `@hugeicons/react ${repositoryReactVersion()}`,
+          differingIcons: stripWrapperDifferences,
+        },
+        icons: stripRecords.sort((a, b) => a.file.localeCompare(b.file)),
+      },
       hugeiconsRepositoryComparison: {
         legacyVersion: '4.2.3',
         repositoryVersion: repoPackage.version,
@@ -583,9 +785,65 @@ async function main(): Promise<void> {
     console.log(
       `hugeicons 4.2.3 vs ${repoPackage.version}: differing icons: ${differing.join(', ') || 'none'}`,
     );
+    console.log(
+      `Strip icons: ${stripRecords.length}; glyphs changed since 4.2.3: ${
+        Object.entries(stripGlyphChanges)
+          .map(([icon, change]) => `${icon} (${change})`)
+          .join(', ') || 'none'
+      }; @hugeicons/react 1.1.9 vs repository render differences: ${
+        stripWrapperDifferences.join(', ') || 'none'
+      }`,
+    );
   } finally {
     packages.dispose();
+    stripPackages.dispose();
   }
+}
+
+function readStripCoreSource(stripPackages: IconPackages): string {
+  return (
+    IconPackages.readFileFrom(
+      stripPackages.root('@hugeicons/core-free-icons'),
+      'dist/cjs/index.js',
+    ) ?? ''
+  );
+}
+
+const REPOSITORY_HUGEICONS_REACT = path.join(REPOSITORY_ROOT, 'node_modules/@hugeicons/react');
+
+function repositoryReactVersion(): string {
+  return (
+    JSON.parse(readFileSync(path.join(REPOSITORY_HUGEICONS_REACT, 'package.json'), 'utf8')) as {
+      version: string;
+    }
+  ).version;
+}
+
+/** The repository's installed `@hugeicons/react` (comparison only; never used for the reference). */
+function repositoryHugeiconsReact(): Record<string, unknown> {
+  const load = (file: string): unknown =>
+    evaluateCommonJs(readFileSync(file, 'utf8'), (specifier) => {
+      if (specifier === 'react') {
+        return { ...React, default: React };
+      }
+
+      if (specifier === 'react/jsx-runtime') {
+        return jsxRuntime;
+      }
+
+      if (specifier.startsWith('./')) {
+        return load(
+          path.join(path.dirname(file), specifier.endsWith('.js') ? specifier : `${specifier}.js`),
+        );
+      }
+
+      throw new Error(`@hugeicons/react: unexpected require("${specifier}")`);
+    });
+
+  return load(path.join(REPOSITORY_HUGEICONS_REACT, 'dist/cjs/index.js')) as Record<
+    string,
+    unknown
+  >;
 }
 
 /** Pieces that are not produced by running the pinned sources unchanged. Keep this list short. */
@@ -594,6 +852,11 @@ const HAND_RECONSTRUCTED = [
     piece: 'Surface motion (motion/react)',
     detail:
       'motion is not installed. Surface renders the settled inline opacity:1 (opacity:0 for the bar-fade-initial fixture); the 0.275s ease fade itself is JS-driven and must be sampled by the parity runner.',
+  },
+  {
+    piece: 'Strip motion (motion/react AnimatePresence, LayoutGroup, motion.div)',
+    detail:
+      'Rendered settled: presence and layout groups render their children, a motion.div with an animate target carries it as inline style (App reveal: width:auto;opacity:1), the workspace indicator (layoutId, no animate) keeps its own style. The app reveal/exit (width 0<->auto, opacity 0<->1, duration max(0.15, length*0.15/15) s, legacy ease) and the indicator layout spring (bounce 0, duration motionRaw.durationSlower) are JS-driven and sampled by the parity runner against models built from the pinned constants.',
   },
   {
     piece: 'ErrorBoundary catch (react-error-boundary)',
@@ -616,9 +879,21 @@ const HAND_RECONSTRUCTED = [
       'React Query, Tauri invoke/events, the useTauri/useWidgetToggle/useMediaQuery hooks and the Weather store plumbing are replaced by fixture data (stubs.ts). Labels, colors, icon choice and markup are computed by the pinned sources.',
   },
   {
-    piece: 'Spaces data hook and workspace/app lists',
+    piece: 'Tiling strip data boundary (Spaces.state)',
     detail:
-      'Spaces.state, AppList and WorkspaceList are stubbed (tiling absent). Spaces.tsx and its SpacesFallback run unchanged; Spaces/components styles are intentionally not extracted (strip is not ported).',
+      "The pinned Spaces.state.ts runs: fetchWorkspacesData/fetchAppsData sort and map synthetic invoke answers (get_tiling_*; rejected when the scenario has no Tiling) and useSpaces derives display names, the 40/25 truncation and the laptop focused-only reduction. Only its I/O is replaced: useSuspenseQuery returns the fetchers' resolved results (or suspends for spaces-fallback), useMediaQuery is the fixture breakpoint, Tauri events are inert, and isEnabled (useState(false), set by is_tiling_enabled/INITIALIZED in effects) is the fixture's enabled flag. The App/AppList/Workspace/WorkspaceList components, constants and styles run pinned.",
+  },
+  {
+    piece: 'Approved app-map additions (overlay, not in legacy)',
+    detail: `${STRIP_DECISION}: Zed -> CodeSquareIcon, Aside -> AiBrowserIcon, Herdr -> CommandLineIcon, DeviceHub -> SmartPhone01Icon, AIOStreams -> PlayListIcon, Nuvio -> Tv01Icon, FigCraft -> PaintBoardIcon. Overlaid onto the pinned Spaces.constants getAppIcon (an addition is looked up on the trimmed name first; every other name goes through the pinned map and its DashboardCircleIcon fallback).`,
+  },
+  {
+    piece: 'Unknown workspace without an icon (overlay, approved deviation)',
+    detail: `${UNKNOWN_WORKSPACE_DECISION}: legacy Workspace passes workspaceIcons[name] = undefined to Icon for a name outside the map and the Bar is lost to the error fallback. For the Workspace.tsx importer only, Icon renders nothing when icon is undefined, so the pinned Workspace draws its button and indicator without an icon.`,
+  },
+  {
+    piece: 'Strip icon package version',
+    detail: `${STRIP_DECISION}: the strip's @hugeicons/core-free-icons glyphs come from 4.4.0 (the repository version; integrity from the repository bun.lock), not legacy 4.2.3. @hugeicons/react stays at the legacy 1.1.9 and simple-icons at 13.15.1. Glyphs changed since 4.2.3 are listed in stripIcons.glyphChangesFrom4_2_3.`,
   },
   {
     piece: 'Styles',

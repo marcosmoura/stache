@@ -183,3 +183,42 @@ fn the_session_action_command_is_generated_with_closed_actions_and_concrete_outc
         assert!(bindings.contains(kind), "outcome kind {kind} is exported");
     }
 }
+
+#[test]
+fn the_tiling_action_command_is_generated_with_a_closed_target_and_concrete_outcomes() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let path = directory.path().join("bindings.gen.ts");
+    stache_app::bindings::builder()
+        .export(Typescript::default(), &path)
+        .expect("export bindings");
+    let bindings = std::fs::read_to_string(&path).expect("read bindings");
+    assert!(
+        bindings.contains(
+            "barTilingAction: (request: BarTilingRequest) => \
+             __TAURI_INVOKE<BarTilingOutcome>(\"bar_tiling_action\", { request })"
+        ),
+        "the generated command carries exactly one strict request"
+    );
+    assert!(bindings.contains("export type BarTilingTarget ="));
+    assert!(bindings.contains("kind: \"focusWorkspace\""));
+    assert!(bindings.contains("kind: \"focusWindow\""));
+    assert!(bindings.contains("tiling: TilingStripView"));
+    for kind in [
+        "\"applied\"",
+        "\"noOp\"",
+        "\"stale\"",
+        "\"unavailable\"",
+        "\"busy\"",
+        "\"uncertain\"",
+        "\"refused\"",
+        "\"failed\"",
+        "\"invalid\"",
+        "\"unauthorized\"",
+        "\"barNotRunning\"",
+        "\"absent\"",
+        "\"loading\"",
+        "\"available\"",
+    ] {
+        assert!(bindings.contains(kind), "missing {kind}");
+    }
+}

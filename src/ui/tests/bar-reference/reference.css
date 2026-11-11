@@ -311,6 +311,56 @@ body {
   column-gap: 2px;
 }
 
+/* App.app <- _legacy/app/ui/renderer/bar/Spaces/components/App/App.styles.ts */
+.lr-App-app {
+  display: grid;
+  grid-auto-flow: column;
+  column-gap: 6px;
+  align-items: center;
+  height: 100%;
+  padding: 0 10px;
+  opacity: 0.68;
+  transition: 150ms cubic-bezier(0.42, 0, 0.58, 1);
+  transition-property: background-color, opacity;
+}
+
+/* App.appFocused <- _legacy/app/ui/renderer/bar/Spaces/components/App/App.styles.ts */
+.lr-App-appFocused {
+  opacity: 1;
+  background-color: #11111b;
+}
+
+/* App.appLabel <- _legacy/app/ui/renderer/bar/Spaces/components/App/App.styles.ts */
+.lr-App-appLabel {
+  overflow: hidden;
+  display: inline-block;
+  white-space: nowrap;
+}
+
+/* Workspace.workspace <- _legacy/app/ui/renderer/bar/Spaces/components/Workspace/Workspace.styles.ts */
+.lr-Workspace-workspace {
+  position: relative;
+  z-index: 1;
+  padding: 0 10px;
+  background-color: transparent;
+}
+
+/* Workspace.workspaceIndicator <- _legacy/app/ui/renderer/bar/Spaces/components/Workspace/Workspace.styles.ts */
+.lr-Workspace-workspaceIndicator {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  border-radius: 12px;
+  background-color: #45475a;
+}
+
+/* WorkspaceList.workspaces <- _legacy/app/ui/renderer/bar/Spaces/components/WorkspaceList/WorkspaceList.styles.ts */
+.lr-WorkspaceList-workspaces {
+  display: grid;
+  grid-auto-flow: column;
+  align-items: center;
+}
+
 /* Spaces.fallback <- _legacy/app/ui/renderer/bar/Spaces/Spaces.styles.ts */
 .lr-Spaces-fallback {
   display: inline-flex;

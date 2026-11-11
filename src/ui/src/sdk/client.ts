@@ -7,6 +7,8 @@ import {
   type BarArtworkOutcome,
   type BarChanged,
   type BarSnapshotOutcome,
+  type BarTilingOutcome,
+  type BarTilingRequest,
   type BarWeatherOutcome,
   type HostStatus,
   type SessionAction,
@@ -97,6 +99,15 @@ export function readBarWeather(): Promise<BarWeatherOutcome> {
  */
 export function runBarAction(action: BarAction): Promise<BarActionOutcome> {
   return commands.barAction(action);
+}
+
+/**
+ * Asks Tiling, through the host, to focus a workspace or window the strip
+ * rendered. The request carries the rendered generation and sequence; the
+ * typed outcome is diagnostic only.
+ */
+export function runBarTilingAction(request: BarTilingRequest): Promise<BarTilingOutcome> {
+  return commands.barTilingAction(request);
 }
 
 /**

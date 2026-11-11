@@ -9,7 +9,8 @@ fn main() {
     }
     // The Accessibility guidance commands are ACL-gated: the `access-window`
     // capability grants them to `stache-access-*` and no other window.
-    // `bar_snapshot`, `bar_action`, `bar_weather`, `bar_media_artwork` and `bar_session_action` are gated too: only the
+    // `bar_snapshot`, `bar_action`, `bar_weather`, `bar_media_artwork`,
+    // `bar_session_action` and `bar_tiling_action` are gated too: only the
     // `bar-window` capability (`stache-bar-*`) grants them, on top of their own
     // caller-label check.
     // Read-only `app_info` and `host_status` stay available to every host window.
@@ -23,6 +24,7 @@ fn main() {
             "bar_weather",
             "bar_media_artwork",
             "bar_session_action",
+            "bar_tiling_action",
         ]),
     ))
     .expect("failed to run the Tauri build script");

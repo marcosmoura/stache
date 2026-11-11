@@ -502,6 +502,8 @@ pub struct Engine {
     visibility: Option<Arc<VisibilityControl>>,
     borders: Option<Arc<BordersControl>>,
     animation: Option<Arc<AnimationControl>>,
+    /// The generation's published-state point; `None` publishes nothing.
+    published: Option<crate::published::Publication>,
     last_admission: crate::events::AdmissionStats,
     /// The drag gesture being timed and when it is abandoned.
     gesture_watch: Option<(u64, Instant)>,
@@ -575,6 +577,7 @@ impl Engine {
             visibility: None,
             borders: None,
             animation: None,
+            published: None,
             last_admission: crate::events::AdmissionStats::default(),
             gesture_watch: None,
             released_hidden: BTreeSet::new(),
@@ -617,6 +620,15 @@ impl Engine {
     /// values after each published change; it never blocks on it.
     pub fn set_borders_control(&mut self, borders: Arc<BordersControl>) {
         self.borders = Some(borders);
+    }
+
+    /// Forwards each published snapshot's display projection to `publisher`
+    /// when the projection changed.
+    pub fn set_state_publisher(
+        &mut self,
+        publisher: stache_sdk::StatePublisher<crate::published::TilingPublishedState>,
+    ) {
+        self.published = Some(crate::published::Publication::new(publisher));
     }
 
     /// The published snapshot cell.
@@ -1059,10 +1071,16 @@ impl Engine {
             borders.observe(focus);
         }
         self.cell.publish(snapshot);
+        // After the swap, so every key the published state names already
+        // resolves against the runtime snapshot.
+        if let Some(published) = &mut self.published {
+            published.observe(&self.cell.load());
+        }
     }
 
     /// After a panic the state is gone: keep the last safe snapshot, mark health
-    /// failed and require a restart.
+    /// failed and require a restart. Nothing is forwarded to the published
+    /// state: its last value stands until the registry ends the generation.
     fn fail_panicked(&mut self) {
         let mut snapshot = (*self.cell.load()).clone();
         snapshot.health = Health::Failed(HealthFault::Panicked);

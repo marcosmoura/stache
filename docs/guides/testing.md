@@ -77,6 +77,8 @@ Keep Awake published state (Bar part 08 slice A): the keep-awake suite decodes t
 
 Keep Awake session click (Bar part 08 slice B) is fake-backed; no real assertion or lock change. `session_action_tests.rs` pins the exact serde wire forms of every outcome, the closed `pause | resume` enum (`enable`/`disable`/`retry` do not deserialize), the Bar capability policy (`keepAwake` Pause/Resume only) and the job waiter (finish, shutdown cancelling a queued job, `uncertain` for a started one, bounded timeouts). `tests/keep_awake_host.rs` runs `HostHandle::session_action` on the real host runner over the Keep Awake fakes: pause/resume applied with the host status sink seeing the change and zero configuration writes, a disabled module inert (zero writes, no native activity), an external tray pause racing a click never inverted, a failed module typed `unavailable` with no acquisition, a second click while one is in flight `busy`, and a shutdown during a click (the release parked) returning `uncertain` without hanging. `bar_tests.rs` (28/14, two displays, Tiling 14/10) clicks through the real bridge: pause then resume with the pushed `BarChanged` (`{active:false,paused:true}` then active), running-but-locked, disabled/absent inert, failed, release pending (no retry), repeated and external-pause stale clicks, authorization of every invalid label, module and the stale label, Bar not running, registry shutdown, and a watcher with zero idle wake-ups that wakes through the host status sink. `tests/bindings.rs` pins the generated `barSessionAction` command and `host_policy.rs` the exact capability set. WebKit: `Bar.actions.test.tsx` asserts the click sends only the fixed module and the observed action and that every outcome, a rejection included, leaves the DOM unchanged; `Bar.bridge.test.tsx` covers the session mapping and a bridge-view click. The pixel-parity gate is unchanged.
 
+Tiling–Bar integration (part 10) is fake-backed; no real window, AX call, activation or panel. `bar_tiling_tests.rs` table-tests the projection and the `bar_tiling_action` validation. `src/crates/app/src/bar_tiling_e2e.rs` (a child module of `bar_tests.rs`) runs the **real** Tiling module (`TilingFactory`, its actor and its `TilingFocus` path) next to the real Bar in one registry over `FakeWindowBackend` (echoed frame writes), `FakeApplicationBackend`, a two-display fake (built-in 1512x982 plus a 2560x1440 external, menu bar auto-hidden) and the fake panel host, with `bar.toml` 28/14 and `tiling.toml` gaps 14/10. It asserts Tiling's planned frames and the `BarView.tiling` / `BarChanged` the UI receives: the strip contents and click round trips, minimized/hidden windows and silent frame-only activity, loading before the first publication, paused/disabled/failed Tiling as `absent` while Bar and Keep Awake keep updating, the reservation lifecycle (constant while slid hidden, held while loading, released by a failed panel, exact-generation tombstones, stale releases), click authorization and revalidation, busy and stuck clicks ending `uncertain` at shutdown, the watcher lifecycle, and the final integration gates: rejected `tiling.toml` files keeping the strip and revision with ordered A–B–A accepted edits, inert late clicks and writes after shutdown, Hold-to-Quit > MenuAnywhere > Keybindings at the host priorities over a fake shared input service with Tiling listen-only, noTunes' separate application observation, and Keep Awake disable/enable plus Bar pause/resume recovering the strip with a strictly increasing `BarChanged` sequence. Native clicks, focus and live geometry stay **unverified**.
+
 Published state and screen reservations (`stache_sdk` `published_state/tests.rs`,
 `screen_reservations/tests.rs`) use scripted fake modules (`on_start`, `on_reconfigure`,
 `on_stop`) and channels as barriers instead of sleeps: a blocked `reconfigure` plays the
@@ -851,7 +853,7 @@ case renders two documents and takes two screenshots. Browser commands for the g
 (`display - 2 * padding` wide, Bar height tall). The test page viewport is set to the same width because the
 Bar's JS media query (`useMediaQuery`) reads the page. The new Bar is the real `Bar` through the static fixture
 seam (`BarDataProvider`), the real Linaria and `Bar.root.css` styles, inside the production document shell
-(`index.html` and `main.css`); the Tauri bridge is mocked. Media artwork-by-id, retained artwork, stale ids and the media click are covered outside the gate by `Media.artwork.test.tsx`, `Bar.bridge.test.tsx` and `Bar.actions.test.tsx`; fixtures never run those hooks, so the gate is unaffected. Scenario data for all 65 reference scenarios is in
+(`index.html` and `main.css`); the Tauri bridge is mocked. Media artwork-by-id, retained artwork, stale ids and the media click are covered outside the gate by `Media.artwork.test.tsx`, `Bar.bridge.test.tsx` and `Bar.actions.test.tsx`; fixtures never run those hooks, so the gate is unaffected. Scenario data for all 89 reference scenarios is in
 `bar-parity/scenarios.ts` (a test fails if the sets differ). Frozen: `Date` (the Clock reads
 `Tue Nov 10 14:05:09` from local fields, so the time zone does not matter), locale `en-US`, dark colour scheme,
 finite animations finished or paused at a stated time, the scrolling label paused at a stated point of its cycle,
@@ -866,13 +868,39 @@ two iframes must be byte-identical PNGs. The only things not compared are listed
 
 **Matrix.** Panel viewports for a 1440 laptop and a 2560 external display at padding 12 (1416, 2536) and 14
 (1412, 2532); heights 28 and 32; the breakpoint triple at CSS viewports 2035/2036/2037 (display = viewport + 24).
-All 65 scenarios run at 1416, 2536 and the breakpoint triple, an 18-scenario subset at the other sizes; device
+All 89 scenarios run at 1416, 2536 and the breakpoint triple, a 21-scenario subset at the other sizes; device
 scale 1 and 2. Also: the full subset under reduced motion at both sizes plus an instant slide; hover and
 active on all seven clickable-looking items; the menu slide away and back sampled at t=0, midpoint (75 ms) and
 end (150 ms) with transition property/duration/easing compared; scrolling labels at the start and the
 middle of the cycle; the Surface fade at 0, 137, 138 and 275 ms against the legacy curve (`cubic-bezier(0.42, 0,
 0.58, 1)`, `motionRaw.durationSlow` 0.275 s, not the CSS `400ms`) with the settled end state compared pixel for
 pixel; the font check; reference provenance; and determinism (the same render twice is pixel-identical).
+
+**Tiling strip (10c-2).** 24 scenarios cover the strip (`spaces-*`, plus `spaces-fallback`): every workspace icon
+with each one focused and none focused, an unknown workspace (sorted last, focused, no icon), every app-map icon
+(32 legacy keys including U+200E WhatsApp and Microsoft Edge Dev, the three simple-icons, the seven approved
+additions and the unknown-app fallback, ten per scenario), a focused app, duplicate names with a long and a
+Unicode title (40 + `...` wide; laptop widths reduce to the focused app), duplicates without focus, the app-exit
+end state, Tiling absent, enabled with zero workspaces, the strip beside media, and `loading` (the reference's
+suspended queries; the new Bar renders it from `BarData.spaces` `loading` through `spacesFromTiling`, no module
+mock). The new side is fed `BarView.tiling` through the real `spacesFromTiling`. Hover and active are compared
+on every workspace and app button of `spaces-app-focused` at 1416 and 2536 (each must change the legacy render).
+Motion, driven by the frozen clock at 2536: the app reveal (`spaces-duplicate-titles`, width 0 and opacity 0 at
+t=0; at the midpoint of the shortest reveal every app's opacity, and each unfocused app's width, follows the
+legacy curve with the length-scaled duration `max(0.15, length * 0.15 / 15)` s; the end is pixel-identical to
+the reference); the app exit (the leaving app stays exactly the legacy duration, then the Bar equals
+`spaces-two-apps`); and the workspace-indicator layout spring (`bounce: 0`, `motionRaw.durationSlower` 0.5 s)
+from terminal to tasks: at t=0 the new indicator sits on the old one, at 50/125/250 ms its rect follows the
+critically damped spring `1 - e^(-wt)(1 + wt)` with `e^(-w*0.5)(1 + w*0.5) = 0.001`, and the end is
+pixel-identical. The strip is also in the reduced-motion subset (legacy has no `MotionConfig`, so motion ignores
+the preference on both sides).
+
+**Approved by the user 2026-11-11 (strip motion bounds).** The reveal opacity mid-samples reuse the approved 5e-4 Surface
+fade bound; the reveal width and indicator-rect mid-samples allow `1/64 px` (one WebKit layout unit) plus 5e-4 of
+the full width or travel. Static scenarios and every t=0/end sample are exact. Not modelled: motion's crossfade
+opacity between the two shared-layout indicators, and the app exit curve: motion 13.1.0 (also legacy's
+lockfile version) collapses the leaving app's width on the first frame and keeps opacity 1 until removal, so
+only the presence window and the end state are compared. Existing tolerances are unchanged.
 
 **Environment record.** `bar-parity/run-record.1x.json` and `run-record.2x.json` hold the parity-run record
 (not the reference manifest): installed Maple Mono NF Medium file name, version, SHA-256 and measured metrics,
@@ -885,9 +913,13 @@ is ever used. The font must advance 7.8 px per glyph at 13px/500, equal to `hmtx
 measure differently from the fallback stack.
 
 **Negative tests** perturb the new render (font family, font size, padding +1 px, gap +1 px, one icon path, the
-media `translateX`, a colour) and tamper copies of the manifest, a fixture, an icon and the harness
-(`verifyReference` fails); each must be reported by the matching comparison category and, for visual
-perturbations, by the screenshot.
+media `translateX`, a colour; on the strip: a workspace icon path, one app glyph swapped for another, the label
+font, app padding +1 px and column-gap +1 px) and tamper copies of the manifest, a fixture, an icon, a strip
+icon, a strip source hash and the harness (`verifyReference` fails); each must be reported by the matching
+comparison category and, for visual perturbations, by the screenshot. `scripts/bar-reference/provenance.test.ts`
+(`bun run test:scripts`) checks the strip provenance the shared verifier does not know: the 4.4.0 strip package
+integrity against the repository `bun.lock`, the user-decision records, each strip icon's output hash and that
+every strip source is pinned by the `renderer/bar` tree, and fails on tampered copies of each.
 
 **Reference notes.** The reference is data, so the gate accounts for these differences between its static
 markup and the live legacy DOM (reported for review, never edited): the page shell lacks `<html lang="en">`; JSX

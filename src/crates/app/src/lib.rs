@@ -12,6 +12,7 @@ pub mod bar;
 pub mod bar_actions;
 pub mod bar_bridge;
 pub mod bar_keep_awake;
+pub mod bar_tiling;
 pub mod bindings;
 pub mod caps_recovery;
 pub mod catalog;
@@ -115,7 +116,8 @@ struct AppUi {
 
 impl HostUi for AppUi {
     fn status(&self, status: &HostStatus) {
-        // Signal only: the bridge worker re-samples the Keep Awake projection.
+        // Signal only: the bridge worker re-samples the Keep Awake and Tiling
+        // projections.
         self.bar.host_changed();
         let _ = self.app.emit(StatusChanged::NAME, StatusChanged { status: status.clone() });
         let app = self.app.clone();
@@ -530,17 +532,18 @@ fn run_with(
                     config_paths.directory().to_path_buf(),
                 ));
             bar.attach_bridge(&bar_bridge);
+            // Tiling is registered default disabled. Its construction is inert;
+            // the module's own `enabled` setting starts it. The Bar strip click
+            // uses its typed exact-focus path; neither crate imports the other.
+            let tiling =
+                TilingFactory::production(Arc::clone(&main_thread), &app.config().identifier);
+            bar_bridge.set_tiling_focus(tiling.focus());
             let factories =
                 ModuleFactories::production(Arc::clone(&main_thread), setup_power_owner)
                     .with(wallpapers)
                     .with(KeybindingsFactory::new(keybindings_runtime))
                     .with(HoldToQuitFactory::new(hold_to_quit_runtime))
-                    // Tiling is registered default disabled. Its construction is
-                    // inert; the module's own `enabled` setting starts it.
-                    .with(TilingFactory::production(
-                        Arc::clone(&main_thread),
-                        &app.config().identifier,
-                    ))
+                    .with(tiling)
                     // Bar is registered default disabled. Its construction is
                     // inert (no window, worker or topology feed); the module's
                     // own `enabled` setting starts it.

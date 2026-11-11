@@ -100,6 +100,8 @@ pub struct TrackingOptions {
     /// Creates the per-display frame clocks that pace animations. `None` uses
     /// the system display link; tests inject a fake.
     pub frame_clocks: Option<Arc<dyn stache_macos::FrameClockFactory>>,
+    /// This generation's `tilingState` publisher. `None` publishes nothing.
+    pub published: Option<stache_sdk::StatePublisher<crate::published::TilingPublishedState>>,
 }
 
 impl std::fmt::Debug for TrackingOptions {
@@ -130,6 +132,7 @@ impl TrackingOptions {
             borders_sink: None,
             logger: None,
             frame_clocks: None,
+            published: None,
         }
     }
 
@@ -350,6 +353,9 @@ impl TrackingRuntime {
         engine.set_logger(options.logger.clone(), origin);
         visibility.set_logger(options.logger.clone(), origin);
         engine.set_borders_control(Arc::clone(&borders));
+        if let Some(publisher) = options.published.clone() {
+            engine.set_state_publisher(publisher);
+        }
         if let Some(hook) = hook {
             engine.set_turn_hook(hook);
         }

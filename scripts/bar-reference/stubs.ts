@@ -23,12 +23,26 @@ export interface WeatherFixture {
   isConfigured: boolean;
 }
 
+/** Synthetic Tiling state answered by the `invoke` boundary (`get_tiling_*` commands). */
+export interface TilingFixture {
+  /** `is_tiling_enabled` / `INITIALIZED`: the hook's `isEnabled` state. */
+  enabled: boolean;
+  /** Workspace names in the order Tiling reports them (legacy sorts them). */
+  workspaces: string[];
+  focusedWorkspace: string | null;
+  /** Windows of the focused workspace, in Tiling order. */
+  windows: { id: number; appName: string; title: string }[];
+  /** `id` of the focused window, or `null`. */
+  focusedWindow: number | null;
+}
+
 /** Mutable per-render input shared by all stubs. */
 export interface RenderContext {
   compact: boolean;
   queries: Record<string, unknown>;
   weather: WeatherFixture;
-  spaces: 'empty' | 'suspend';
+  /** `null`: Tiling is not running, every `get_tiling_*` invoke rejects (legacy: empty defaults). */
+  tiling: TilingFixture | null;
   /** Opacity motion has committed on `Surface` (1 once the 0.275s fade has finished). */
   surfaceOpacity: 0 | 1;
   /** `useState` result for the Media artwork preloader; `undefined` keeps the real hook. */
@@ -122,6 +136,23 @@ export function createStubs(
       return { data: readQuery(context, key, suspend) };
     };
 
+  const invokeFixture = (command: string): Promise<unknown> => {
+    const tiling = context.tiling;
+    const focused = tiling?.windows.find((window) => window.id === tiling.focusedWindow) ?? null;
+    const answers: Record<string, unknown> = tiling
+      ? {
+          get_tiling_workspaces: tiling.workspaces.map((name) => ({ name })),
+          get_tiling_focused_workspace: tiling.focusedWorkspace,
+          get_tiling_current_workspace_windows: tiling.windows,
+          get_tiling_focused_window: focused,
+        }
+      : {};
+
+    return command in answers
+      ? Promise.resolve(answers[command])
+      : Promise.reject(new Error('invoke is not available in the reference'));
+  };
+
   const reactShim = {
     ...React,
     default: React,
@@ -142,21 +173,54 @@ export function createStubs(
     },
   };
 
-  function opacityStyle(style: React.CSSProperties | undefined): React.CSSProperties {
-    return { ...style, opacity: context.surfaceOpacity };
+  // `useSpaces` keeps `isEnabled` in `useState(false)`, flipped by `is_tiling_enabled` or the
+  // `INITIALIZED` event in effects that static rendering never runs: the fixture decides it.
+  const spacesStateReactShim = {
+    ...reactShim,
+    useState(initial: unknown) {
+      if (initial === false) {
+        return [context.tiling?.enabled ?? false, noop];
+      }
+
+      return reactShim.useState(initial);
+    },
+  };
+
+  /**
+   * Settled motion: the `animate` target as inline style (`initial` while the Surface fade is at its
+   * first frame). Elements without `animate` (the workspace indicator) keep their own style.
+   */
+  function settledStyle(
+    style: React.CSSProperties | undefined,
+    initial: unknown,
+    animate: unknown,
+  ): React.CSSProperties | undefined {
+    if (animate === undefined) {
+      return style;
+    }
+
+    const target = context.surfaceOpacity === 0 ? initial : animate;
+
+    return { ...style, ...(target as React.CSSProperties) };
   }
+
+  type MotionProps = Record<string, unknown> & { style?: React.CSSProperties };
+
+  const motionlessProps = ({
+    initial,
+    animate,
+    transition: _transition,
+    exit: _exit,
+    layoutId: _layoutId,
+    style,
+    ...rest
+  }: MotionProps) => ({ ...rest, style: settledStyle(style, initial, animate) });
 
   const motionProxy = new Proxy(
     {
       create: (Component: React.ElementType) =>
-        function MotionWrapped({
-          initial: _initial,
-          animate: _animate,
-          transition: _transition,
-          style,
-          ...rest
-        }: Record<string, unknown> & { style?: React.CSSProperties }) {
-          return React.createElement(Component, { ...rest, style: opacityStyle(style) });
+        function MotionWrapped(props: MotionProps) {
+          return React.createElement(Component, motionlessProps(props));
         },
     } as Record<string, unknown>,
     {
@@ -169,14 +233,8 @@ export function createStubs(
           return undefined;
         }
 
-        return function MotionElement({
-          initial: _initial,
-          animate: _animate,
-          transition: _transition,
-          style,
-          ...rest
-        }: Record<string, unknown> & { style?: React.CSSProperties }) {
-          return React.createElement(property, { ...rest, style: opacityStyle(style) });
+        return function MotionElement(props: MotionProps) {
+          return React.createElement(property, motionlessProps(props));
         };
       },
     },
@@ -194,7 +252,10 @@ export function createStubs(
 
   return {
     stubs: {
-      react: () => reactShim,
+      react: (importer: string) =>
+        importer.endsWith('/renderer/bar/Spaces/Spaces.state.ts')
+          ? spacesStateReactShim
+          : reactShim,
       '@linaria/core': (importer: string) => ({
         cx: (...args: unknown[]) => args.filter((arg) => typeof arg === 'string' && arg).join(' '),
         css: createCss(importer, options.getSource, options.cssRules),
@@ -213,10 +274,15 @@ export function createStubs(
         useErrorBoundary: () => ({ resetBoundary: noop }),
       }),
       '@tauri-apps/api/core': () => ({
-        invoke: () => Promise.reject(new Error('invoke is not available in the reference')),
+        invoke: invokeFixture,
       }),
       '@tauri-apps/api/event': () => ({ listen: () => Promise.resolve(noop) }),
-      'motion/react': () => ({ motion: motionProxy }),
+      'motion/react': () => ({
+        motion: motionProxy,
+        // Settled: presence and layout groups render their children (no enter/exit in progress).
+        AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
+        LayoutGroup: ({ children }: { children: React.ReactNode }) => children,
+      }),
       '@/types': () => eventNames,
       '@/utils/queryClientDefaults': () => ({ queryClientDefaults: {} }),
       '@/hooks': () => ({
@@ -238,29 +304,7 @@ export function createStubs(
         useWeatherStore: () => context.weather,
       }),
     } satisfies Record<string, (importer: string) => unknown>,
-    pathStubs: {
-      '_legacy/app/ui/renderer/bar/Spaces/Spaces.state.ts': {
-        useSpaces: () => {
-          if (context.spaces === 'suspend') {
-            throw pending();
-          }
-
-          return {
-            isEnabled: false,
-            workspaces: [],
-            apps: [],
-            focusedApp: null,
-            focusedWorkspace: null,
-            onSpaceClick: noop,
-            onAppClick: noop,
-          };
-        },
-      },
-      '_legacy/app/ui/renderer/bar/Spaces/components/AppList/index.ts': { AppList: () => null },
-      '_legacy/app/ui/renderer/bar/Spaces/components/WorkspaceList/index.ts': {
-        WorkspaceList: () => null,
-      },
-    } as Record<string, unknown>,
+    pathStubs: {} as Record<string, unknown>,
   };
 }
 

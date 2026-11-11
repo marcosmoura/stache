@@ -484,8 +484,10 @@ fake-proven only; construction starts nothing and sends no AX message.
   providers (`providers/`, including media) and the weather resolver (`weather/`). `stache-app`
   `bar.rs` holds `BarFactory` (`project_status`, `begin_shutdown`/`finish_shutdown`) and the
   Bar-scoped topology feed (see [SDK](sdk.md#screen-reservations-and-display-identity)), with the
-  data bridge (`bar_bridge.rs`), fixed actions (`bar_actions.rs`) and the Keep Awake projection
-  (`bar_keep_awake.rs`) beside it. `lib.rs` chains `BarFactory::production_with_media` next to
+  data bridge (`bar_bridge.rs`), fixed actions (`bar_actions.rs`), the Keep Awake projection
+  (`bar_keep_awake.rs`) and the Tiling strip projection and `bar_tiling_action` click
+  (`bar_tiling.rs`, over Tiling's published `tilingState`; no crate or config import between
+  Bar and Tiling) beside it. `lib.rs` chains `BarFactory::production_with_media` next to
   Tiling, **default disabled** and inert at construction, with the bridge attached; the `bar` UI
   route and the `bar-window` capability exist. `ModuleStatusView.bar` carries the runtime status.
   See [Bar](../features/bar.md).

@@ -550,9 +550,11 @@ impl ModuleFactory for BarFactory {
 
     fn bind_registry(&self, registry: &Arc<Registry>) {
         let _ = self.registry.set(Arc::downgrade(registry));
-        // The optional Keep Awake projection observes the same registry.
+        // The optional Keep Awake and Tiling projections observe the same
+        // registry.
         if let Some(bridge) = self.bridge.get() {
             bridge.bind_keep_awake(registry);
+            bridge.bind_tiling(registry);
         }
     }
 

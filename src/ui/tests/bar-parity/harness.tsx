@@ -19,13 +19,13 @@ import { commands, page } from 'vitest/browser';
 import mainCss from '../../main.css?raw';
 import type { BarChanged } from '../../src/sdk/bindings.gen';
 import { Bar } from '../../src/shell/windows/Bar';
+import type { BarData } from '../../src/shell/windows/Bar/Bar.data';
 import { BarDataProvider } from '../../src/shell/windows/Bar/BarDataProvider';
 import { mountReference, type MountedReference } from '../bar-reference/render';
 import { availableOutcome } from '../barFixtures';
 
 import { captureDocument, type Capture } from './capture';
 import type { ParityScenario } from './scenarios';
-import { spaces } from './spacesFlag';
 
 export interface FrameConfig {
   /** Panel viewport width: `display - 2 * padding`, or the breakpoint width itself. */
@@ -55,6 +55,8 @@ export interface Rendered {
 export interface NewRendered extends Rendered {
   /** Emits a `bar-changed` event moving the menu bar to `state`. */
   emitMenu: (state: 'hidden' | 'visible') => void;
+  /** Re-renders the same Bar with new fixture data (a later Tiling state, for transitions). */
+  rerender: (data: BarData) => void;
 }
 
 const frames = () => document.querySelectorAll('iframe[data-parity]');
@@ -306,7 +308,6 @@ export async function renderNew(
   options: { settle?: boolean } = {},
 ): Promise<NewRendered> {
   mockTauri(scenario.menu);
-  spaces.fallback = scenario.mode === 'spaces-fallback';
 
   const frame = document.createElement('iframe');
 
@@ -334,15 +335,19 @@ export async function renderNew(
   const root = createRoot(container);
   const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-  flushSync(() => {
-    root.render(
-      <QueryClientProvider client={client}>
-        <BarDataProvider data={scenario.data}>
-          <Bar />
-        </BarDataProvider>
-      </QueryClientProvider>,
-    );
-  });
+  const draw = (data: BarData) => {
+    flushSync(() => {
+      root.render(
+        <QueryClientProvider client={client}>
+          <BarDataProvider data={data}>
+            <Bar />
+          </BarDataProvider>
+        </QueryClientProvider>,
+      );
+    });
+  };
+
+  draw(scenario.data);
 
   // The Bar's own hook marks the document it runs in (here the test page). Production runs in the
   // frame's document, so mirror the marker the hook set rather than hard-coding it.
@@ -359,6 +364,7 @@ export async function renderNew(
     frame,
     document: frameDocument,
     container,
+    rerender: draw,
     emitMenu: (state) => {
       const handler = handlers.change;
 

@@ -64,6 +64,17 @@ export const commands = {
 	 *  [`crate::session_action`]. The wait runs on the blocking pool, bounded.
 	 */
 	barSessionAction: (module: string, action: SessionAction) => __TAURI_INVOKE<SessionActionOutcome>("bar_session_action", { module, action }),
+	/**
+	 *  Focuses a Tiling workspace or window for the Bar window that called.
+	 *
+	 *  `request` is strict: a closed `action` enum (`focusWorkspace{name}` |
+	 *  `focusWindow{window}`), the rendered Tiling `generation` and `sequence` as
+	 *  exact decimal strings, and no other field. `window` is the actual calling
+	 *  webview window injected by Tauri; the bridge authorizes its label against
+	 *  the live Bar panel. The bounded wait runs on the blocking pool. No outcome
+	 *  produces UI; the strip changes only through the next `BarChanged`.
+	 */
+	barTilingAction: (request: BarTilingRequest) => __TAURI_INVOKE<BarTilingOutcome>("bar_tiling_action", { request }),
 };
 
 /** Events */
@@ -695,6 +706,87 @@ sequence: string } |
 /**  The calling window may not read this feed. */
 { kind: "unauthorized" };
 
+/**
+ *  The typed answer of `bar_tiling_action`. No outcome produces UI; the strip
+ *  changes only through the next `BarChanged`.
+ */
+export type BarTilingOutcome =
+/**  Tiling admitted the focus and changed its desired state. */
+{ kind: "applied" } |
+/**  Admitted; the target was already focused. */
+{ kind: "noOp" } |
+/**
+ *  The rendered generation, sequence, window or workspace is no longer
+ *  current. Nothing was sent (or Tiling refused it as unknown).
+ */
+{ kind: "stale" } |
+/**  Nothing was attempted. */
+{ kind: "unavailable";
+/**  Why. */
+reason: BarTilingUnavailable } |
+/**
+ *  Another Tiling action is in flight, or its queue is full. Nothing was
+ *  sent; a click never queues.
+ */
+{ kind: "busy" } |
+/**
+ *  Sent, but the wait for Tiling's record ended first (deadline, actor
+ *  failure or shutdown). Never retried.
+ */
+{ kind: "uncertain" } |
+/**  Tiling refused the focus for another reason. */
+{ kind: "refused" } |
+/**  Tiling's mailbox is closed or the admission budget was spent. */
+{ kind: "failed" } |
+/**  The generation or sequence is not an exact decimal `u64`. */
+{ kind: "invalid" } |
+/**  The calling window may not click. */
+{ kind: "unauthorized" };
+
+/**
+ *  One strip click: the target plus the Tiling generation and sequence the
+ *  strip rendered it from.
+ */
+export type BarTilingRequest = {
+	/**  The rendered `tiling.generation`, an exact decimal string. */
+	generation: string,
+	/**  The rendered `tiling.sequence`, an exact decimal string. */
+	sequence: string,
+	/**  What to focus. */
+	action: BarTilingTarget,
+};
+
+/**
+ *  What a click asks Tiling to focus. A closed enum: nothing else
+ *  deserializes.
+ */
+export type BarTilingTarget =
+/**  Focus the workspace with this exact name. */
+{ kind: "focusWorkspace";
+/**  The workspace name as rendered. */
+name: string } |
+/**  Focus the window with this rendered opaque key. */
+{ kind: "focusWindow";
+/**  The window key as rendered (a decimal string). */
+window: string };
+
+/**  Why a click was not attempted. */
+export type BarTilingUnavailable =
+/**  The Bar module is not running. */
+"barNotRunning" |
+/**  Tiling is not registered, not started or not running. */
+"notRunning" |
+/**  Tiling is disabled. */
+"disabled" |
+/**  Tiling is paused for this session. */
+"paused" |
+/**  A Tiling stop or quarantined cleanup is pending. */
+"cleanupPending" |
+/**  Host shutdown began. */
+"shuttingDown" |
+/**  Tiling runs but its actor reports failed health. */
+"unhealthy";
+
 /**  Why the Bar is not serving data. */
 export type BarUnavailableReason =
 /**  The module is disabled in `bar.toml`. */
@@ -774,6 +866,12 @@ export type BarView_Deserialize = {
 	 *  the click, never derived from the colour.
 	 */
 	keepAwake?: KeepAwakeIndicator | null,
+	/**
+	 *  The Tiling strip data, or `null` until the first observation resolves;
+	 *  once resolved it never returns to `null`. `absent`, `loading` or
+	 *  `available` (see [`crate::bar_tiling`]).
+	 */
+	tiling?: TilingStripView_Deserialize | null,
 };
 
 /**  What the Bar UI renders from. */
@@ -833,6 +931,12 @@ export type BarView_Serialize = {
 	 *  the click, never derived from the colour.
 	 */
 	keepAwake: KeepAwakeIndicator | null,
+	/**
+	 *  The Tiling strip data, or `null` until the first observation resolves;
+	 *  once resolved it never returns to `null`. `absent`, `loading` or
+	 *  `available` (see [`crate::bar_tiling`]).
+	 */
+	tiling: TilingStripView_Serialize | null,
 };
 
 /**
@@ -2513,6 +2617,27 @@ export type StatusChanged_Serialize = {
 	status: HostStatus_Serialize,
 };
 
+/**  One application window of the strip. */
+export type StripApp = {
+	/**
+	 *  The opaque per-generation window key (a decimal string); the click
+	 *  echoes it back.
+	 */
+	key: string,
+	/**  The owning application's name (empty when unknown). */
+	appName: string,
+	/**  The window title, unmodified. */
+	title: string,
+};
+
+/**  One workspace of the strip. */
+export type StripWorkspace = {
+	/**  The configured name. */
+	name: string,
+	/**  The globally focused workspace. */
+	focused: boolean,
+};
+
 /**  The shared tap as this module needs it. */
 export type TapState =
 /**  No Caps binding is accepted, so no tap is used. */
@@ -2681,6 +2806,57 @@ export type TilingRuntimeStatus_Serialize = {
 	 */
 	visibilityConflicts: number,
 };
+
+/**  What the Bar strip renders for Tiling. */
+export type TilingStripView = TilingStripView_Serialize | TilingStripView_Deserialize;
+
+/**  What the Bar strip renders for Tiling. */
+export type TilingStripView_Deserialize =
+/**  No usable Tiling state: the empty slot. */
+{ kind: "absent" } |
+/**  Tiling runs and has not published its first state yet. */
+{ kind: "loading" } |
+/**  The current published state. */
+{ kind: "available";
+/**  The Tiling runtime generation, as a decimal string. */
+generation: string;
+/**
+ *  The published sequence within that generation, as a decimal
+ *  string.
+ */
+sequence: string;
+/**  Every workspace, in Tiling's order. */
+workspaces: StripWorkspace[];
+/**  The visible, active-tab windows of the focused workspace. */
+apps: StripApp[];
+/**  The focused window, from any workspace. */
+focusedApp?: StripApp | null;
+/**  The focused workspace name. */
+focusedWorkspace?: string | null };
+
+/**  What the Bar strip renders for Tiling. */
+export type TilingStripView_Serialize =
+/**  No usable Tiling state: the empty slot. */
+{ kind: "absent" } |
+/**  Tiling runs and has not published its first state yet. */
+{ kind: "loading" } |
+/**  The current published state. */
+{ kind: "available";
+/**  The Tiling runtime generation, as a decimal string. */
+generation: string;
+/**
+ *  The published sequence within that generation, as a decimal
+ *  string.
+ */
+sequence: string;
+/**  Every workspace, in Tiling's order. */
+workspaces: StripWorkspace[];
+/**  The visible, active-tab windows of the focused workspace. */
+apps: StripApp[];
+/**  The focused window, from any workspace. */
+focusedApp: StripApp | null;
+/**  The focused workspace name. */
+focusedWorkspace: string | null };
 
 /**  Wallpaper cycling mode. */
 export type WallpaperMode =

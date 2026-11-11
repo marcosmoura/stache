@@ -28,6 +28,30 @@ export const LEGACY_ICON_PACKAGES: readonly PackageSpec[] = [
   { name: '@icons-pack/react-simple-icons', version: '13.15.1' },
 ];
 
+/**
+ * The strip's hugeicons glyphs come from the repository version (user decision 2026-11-10), not the
+ * legacy 4.2.3. Its integrity is read from the repository `bun.lock`.
+ */
+export const STRIP_HUGEICONS_PACKAGE: PackageSpec = {
+  name: '@hugeicons/core-free-icons',
+  version: '4.4.0',
+};
+
+/** Integrity of `spec` in a Bun text lockfile (`"name": ["name@version", "", {...}, "sha512-..."]`). */
+export function bunLockIntegrity(lockfile: string, spec: PackageSpec): string {
+  const escaped = `${spec.name}@${spec.version}`.replace(/[/@.]/g, '\\$&');
+  const match = new RegExp(
+    `^ {4}"[^"]+": \\["${escaped}", [^\\n]*"(sha512-[^"]+)"\\],?$`,
+    'm',
+  ).exec(lockfile);
+
+  if (!match) {
+    throw new Error(`${spec.name}@${spec.version} is not in the repository bun.lock`);
+  }
+
+  return match[1];
+}
+
 export interface PackageRecord extends PackageSpec {
   integrity: string;
   registryUrl: string;
@@ -225,6 +249,24 @@ export class IconPackages {
         },
       },
     );
+  }
+
+  /** Unpacked root of a downloaded package. */
+  root(packageName: string): string {
+    const root = this.directories.get(packageName);
+
+    if (!root) {
+      throw new Error(`Package not downloaded: ${packageName}`);
+    }
+
+    return root;
+  }
+
+  /** Every `@hugeicons/core-free-icons` export, without recording usage (comparisons only). */
+  peekHugeicons(): Record<string, unknown> {
+    return evaluateCommonJs(this.read('@hugeicons/core-free-icons', 'dist/cjs/index.js'), () => {
+      throw new Error('unexpected require');
+    }) as Record<string, unknown>;
   }
 
   /** Lazily loads one `@icons-pack/react-simple-icons` component. */

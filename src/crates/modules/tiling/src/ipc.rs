@@ -313,7 +313,26 @@ enum LaneStop {
     Shutdown,
 }
 
+/// The serialization lane shared by every typed action path of one service.
+///
+/// The socket handler and the Bar's exact focus share it, so an intent record
+/// is unambiguously the one its waiter submitted. Cheap to clone.
+#[derive(Clone, Default)]
+pub struct ActionLane(Arc<Lane>);
+
 impl Lane {
+    /// Takes the lane only if it is free right now: never queues.
+    fn try_acquire(&self) -> Option<LaneGuard<'_>> {
+        {
+            let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+            if *held {
+                return None;
+            }
+            *held = true;
+        }
+        Some(LaneGuard(self))
+    }
+
     fn acquire(
         &self,
         deadline: &Deadline,
@@ -392,7 +411,7 @@ pub struct TilingIpc {
     status: TilingStatusSource,
     cancel: CancellationToken,
     timing: IpcTiming,
-    lane: Lane,
+    lane: ActionLane,
     lifecycle_busy: Arc<AtomicBool>,
     lifecycle_thread: Arc<LifecycleThread>,
 }
@@ -425,10 +444,18 @@ impl TilingIpc {
             status,
             cancel,
             timing,
-            lane: Lane::default(),
+            lane: ActionLane::default(),
             lifecycle_busy: Arc::new(AtomicBool::new(false)),
             lifecycle_thread: Arc::new(LifecycleThread::default()),
         }
+    }
+
+    /// Shares `lane` with another typed action path of the same service (the
+    /// Bar's [`TilingFocus`]), so their intents never interleave.
+    #[must_use]
+    pub fn with_lane(mut self, lane: ActionLane) -> Self {
+        self.lane = lane;
+        self
     }
 
     /// The retained lifecycle worker, for the host to join at shutdown.
@@ -642,12 +669,13 @@ impl TilingIpc {
     fn run_actions(&self, operation: OperationKind, steps: &[Step]) -> HandlerResult<Value> {
         let deadline = Deadline::after(self.timing.budget);
         self.require_running()?;
-        let _lane = self.lane.acquire(&deadline, &self.cancel, self.timing.poll).map_err(
-            |stop| match stop {
-                LaneStop::Timeout => HandlerError::handler(body::timed_out(self.timing.budget)),
-                LaneStop::Shutdown => HandlerError::unavailable(body::SHUTTING_DOWN),
-            },
-        )?;
+        let _lane =
+            self.lane.0.acquire(&deadline, &self.cancel, self.timing.poll).map_err(|stop| {
+                match stop {
+                    LaneStop::Timeout => HandlerError::handler(body::timed_out(self.timing.budget)),
+                    LaneStop::Shutdown => HandlerError::unavailable(body::SHUTTING_DOWN),
+                }
+            })?;
         let mut done: Vec<ActionEvidence> = Vec::with_capacity(steps.len());
         for (index, step) in steps.iter().enumerate() {
             if self.cancel.is_cancelled() {
@@ -704,40 +732,75 @@ impl TilingIpc {
         before: &TilingSnapshot,
         deadline: &Deadline,
     ) -> HandlerResult<Admission> {
-        let baseline = recorded(before);
-        let wait_end = deadline.remaining().min(self.timing.hop);
-        if wait_end.is_zero() {
-            return Err(HandlerError::handler(body::timed_out(self.timing.budget)));
+        admit_intent(
+            self.actor.as_ref(),
+            &self.cancel,
+            self.timing,
+            intent,
+            before,
+            deadline,
+        )
+        .map_err(|refusal| match refusal {
+            Refusal::Budget => HandlerError::handler(body::timed_out(self.timing.budget)),
+            Refusal::NotRunning => HandlerError::unavailable(body::NOT_INITIALIZED),
+            Refusal::Closed => HandlerError::handler(body::SEND_FAILED),
+            Refusal::Full => HandlerError::handler(body::OVERFLOW),
+        })
+    }
+}
+
+/// Why an intent was never offered.
+enum Refusal {
+    /// The deadline left no room for a wait.
+    Budget,
+    /// No live runtime.
+    NotRunning,
+    /// The mailbox is closed.
+    Closed,
+    /// The bounded queue is full.
+    Full,
+}
+
+/// Offers one intent and waits (one hop, within `deadline`) for its record.
+fn admit_intent(
+    actor: &dyn ActorPort,
+    cancel: &CancellationToken,
+    timing: IpcTiming,
+    intent: &Intent,
+    before: &TilingSnapshot,
+    deadline: &Deadline,
+) -> Result<Admission, Refusal> {
+    let baseline = recorded(before);
+    let wait_end = deadline.remaining().min(timing.hop);
+    if wait_end.is_zero() {
+        return Err(Refusal::Budget);
+    }
+    match actor.submit(intent.clone()) {
+        Ok(()) => {}
+        Err(SubmitFailure::NotRunning) => return Err(Refusal::NotRunning),
+        Err(SubmitFailure::Closed) => return Err(Refusal::Closed),
+        Err(SubmitFailure::Full) => return Err(Refusal::Full),
+    }
+    let end = Instant::now().checked_add(wait_end).unwrap_or_else(Instant::now);
+    loop {
+        let Some(snapshot) = actor.snapshot() else {
+            return Ok(Admission::Unconfirmed("actorClosed"));
+        };
+        if snapshot.health != Health::Healthy {
+            return Ok(Admission::Unconfirmed("actorFailed"));
         }
-        match self.actor.submit(intent.clone()) {
-            Ok(()) => {}
-            Err(SubmitFailure::NotRunning) => {
-                return Err(HandlerError::unavailable(body::NOT_INITIALIZED));
-            }
-            Err(SubmitFailure::Closed) => return Err(HandlerError::handler(body::SEND_FAILED)),
-            Err(SubmitFailure::Full) => return Err(HandlerError::handler(body::OVERFLOW)),
+        if recorded(&snapshot) > baseline
+            && let Some(record) = &snapshot.last_intent
+            && record.intent == *intent
+        {
+            return Ok(Admission::Recorded(record.clone()));
         }
-        let end = Instant::now().checked_add(wait_end).unwrap_or_else(Instant::now);
-        loop {
-            let Some(snapshot) = self.actor.snapshot() else {
-                return Ok(Admission::Unconfirmed("actorClosed"));
-            };
-            if snapshot.health != Health::Healthy {
-                return Ok(Admission::Unconfirmed("actorFailed"));
-            }
-            if recorded(&snapshot) > baseline
-                && let Some(record) = &snapshot.last_intent
-                && record.intent == *intent
-            {
-                return Ok(Admission::Recorded(record.clone()));
-            }
-            let left = end.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                return Ok(Admission::Unconfirmed("noAcknowledgement"));
-            }
-            if self.cancel.wait(left.min(self.timing.poll)) {
-                return Ok(Admission::Unconfirmed("shutdown"));
-            }
+        let left = end.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Ok(Admission::Unconfirmed("noAcknowledgement"));
+        }
+        if cancel.wait(left.min(timing.poll)) {
+            return Ok(Admission::Unconfirmed("shutdown"));
         }
     }
 }
@@ -797,6 +860,193 @@ fn zero_argument_params(params: Value) -> HandlerResult<()> {
         other => other,
     };
     decode_params::<()>(params)
+}
+
+// ---------------------------------------------------------- exact focus
+
+/// One exact focus request from a host surface (the Bar strip).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExactFocus {
+    /// Focus the workspace with this exact name.
+    Workspace(String),
+    /// Focus the window this opaque published key names (see
+    /// [`crate::published::resolve_window_key`]).
+    Window(String),
+}
+
+/// Why an exact focus was not attempted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FocusUnavailable {
+    /// Not registered, not started, not running or not initialized yet.
+    NotRunning,
+    /// The accepted configuration disables Tiling.
+    Disabled,
+    /// Paused for this session.
+    Paused,
+    /// A stop is in progress or its cleanup is quarantined.
+    CleanupPending,
+    /// Host shutdown began.
+    ShuttingDown,
+    /// Running, but the actor reports failed health.
+    Unhealthy,
+}
+
+/// What became of one exact focus request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExactFocusOutcome {
+    /// The actor admitted it and changed desired state.
+    Applied,
+    /// Admitted; the target was already focused (or nothing was to do).
+    NoOp,
+    /// The workspace or window no longer exists (resolved at issuance or
+    /// refused by the actor as unknown).
+    Stale,
+    /// Nothing was attempted.
+    Unavailable(FocusUnavailable),
+    /// Another action holds the lane, or the actor's queue is full. Nothing
+    /// was sent.
+    Busy,
+    /// Sent, but its record was not observed (deadline, actor failure or
+    /// shutdown). Never retried.
+    Uncertain,
+    /// The actor refused it for another reason (geometry, display).
+    Refused,
+    /// The actor's mailbox is closed or the budget was spent before sending.
+    Failed,
+}
+
+/// The published registry facts of the Tiling module.
+pub type ModuleSource = Arc<dyn Fn() -> Option<ModuleSnapshot> + Send + Sync>;
+
+/// The typed exact-focus path of one Tiling service.
+///
+/// It shares the socket handler's availability rules, lane, bounded record wait,
+/// cancellation and outcome settling, and submits only
+/// [`Intent::FocusWorkspace`] or [`Intent::FocusWindow`] with an exact
+/// [`FocusTarget::Window`] token. It never queues behind another action (a held
+/// lane is `busy`), never pauses, resumes, enables or reconfigures anything.
+pub struct TilingFocus {
+    actor: Arc<dyn ActorPort>,
+    module: ModuleSource,
+    status: TilingStatusSource,
+    cancel: CancellationToken,
+    timing: IpcTiming,
+    lane: ActionLane,
+}
+
+impl TilingFocus {
+    /// A focus path over the runtime's actor port, the module's registry
+    /// facts, its status source, the host shutdown token and a shared lane.
+    #[must_use]
+    pub fn new(
+        actor: Arc<dyn ActorPort>,
+        module: ModuleSource,
+        status: TilingStatusSource,
+        cancel: CancellationToken,
+        timing: IpcTiming,
+        lane: ActionLane,
+    ) -> Self {
+        Self {
+            actor,
+            module,
+            status,
+            cancel,
+            timing,
+            lane,
+        }
+    }
+
+    /// Whether a live runtime reports healthy right now. Cheap: one snapshot
+    /// cell load, no lock the actor takes.
+    #[must_use]
+    pub fn healthy(&self) -> bool {
+        self.actor.snapshot().is_some_and(|snapshot| snapshot.health == Health::Healthy)
+    }
+
+    /// The exact current window `key` names in the live runtime snapshot.
+    #[must_use]
+    pub fn resolve(&self, key: &str) -> Option<WindowInstance> {
+        self.actor
+            .snapshot()
+            .and_then(|snapshot| crate::published::resolve_window_key(&snapshot, key))
+    }
+
+    /// Why a focus would not be attempted right now, from the same registry
+    /// and runtime facts the socket handler uses; `None` when Tiling serves.
+    /// Reads published state only.
+    #[must_use]
+    pub fn unavailable(&self) -> Option<FocusUnavailable> {
+        if self.cancel.is_cancelled() {
+            return Some(FocusUnavailable::ShuttingDown);
+        }
+        match availability((self.module)().as_ref(), self.status.read().state) {
+            Availability::Running => None,
+            Availability::Disabled => Some(FocusUnavailable::Disabled),
+            Availability::Paused => Some(FocusUnavailable::Paused),
+            Availability::CleanupPending => Some(FocusUnavailable::CleanupPending),
+            Availability::NotInitialized | Availability::NotRunning => {
+                Some(FocusUnavailable::NotRunning)
+            }
+        }
+    }
+
+    /// Focuses `target` and waits (bounded) for the actor's record.
+    #[must_use]
+    pub fn focus(&self, target: &ExactFocus) -> ExactFocusOutcome {
+        if let Some(reason) = self.unavailable() {
+            return ExactFocusOutcome::Unavailable(reason);
+        }
+        let Some(_lane) = self.lane.0.try_acquire() else {
+            return ExactFocusOutcome::Busy;
+        };
+        let deadline = Deadline::after(self.timing.budget);
+        let Some(snapshot) = self.actor.snapshot() else {
+            return ExactFocusOutcome::Unavailable(FocusUnavailable::NotRunning);
+        };
+        if snapshot.health != Health::Healthy {
+            return ExactFocusOutcome::Unavailable(FocusUnavailable::Unhealthy);
+        }
+        if snapshot.phase == Phase::Initializing {
+            return ExactFocusOutcome::Unavailable(FocusUnavailable::NotRunning);
+        }
+        let intent = match target {
+            ExactFocus::Workspace(name) => {
+                if !snapshot.workspaces.iter().any(|workspace| workspace.name == *name) {
+                    return ExactFocusOutcome::Stale;
+                }
+                Intent::FocusWorkspace(name.clone())
+            }
+            ExactFocus::Window(key) => {
+                let Some(token) = crate::published::resolve_window_key(&snapshot, key) else {
+                    return ExactFocusOutcome::Stale;
+                };
+                Intent::FocusWindow(FocusTarget::Window(token))
+            }
+        };
+        match admit_intent(
+            self.actor.as_ref(),
+            &self.cancel,
+            self.timing,
+            &intent,
+            &snapshot,
+            &deadline,
+        ) {
+            Err(Refusal::NotRunning) => {
+                ExactFocusOutcome::Unavailable(FocusUnavailable::NotRunning)
+            }
+            Err(Refusal::Full) => ExactFocusOutcome::Busy,
+            Err(Refusal::Closed | Refusal::Budget) => ExactFocusOutcome::Failed,
+            Ok(Admission::Unconfirmed(_)) => ExactFocusOutcome::Uncertain,
+            Ok(Admission::Recorded(record)) => match record.outcome {
+                IntentOutcome::Applied => ExactFocusOutcome::Applied,
+                IntentOutcome::NoOp(_) => ExactFocusOutcome::NoOp,
+                IntentOutcome::Rejected(
+                    IntentRejection::UnknownWorkspace | IntentRejection::UnknownWindow,
+                ) => ExactFocusOutcome::Stale,
+                IntentOutcome::Rejected(_) => ExactFocusOutcome::Refused,
+            },
+        }
+    }
 }
 
 // ------------------------------------------------------------- planning

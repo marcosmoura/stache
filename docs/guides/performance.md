@@ -230,6 +230,14 @@ are capped at **8 per second**, a Mach send at 0.5 s, a helper CLI child at 2 s
 those. Waits are cancellation-wakeable and no lock is held across a send or a
 sleep. The achieved rate and JankyBorders' own load are **unverified**.
 
+## Tiling strip in the Bar (Tiling–Bar part 10)
+
+The Bar's Tiling projection adds one watcher thread, started with the Bar, that
+waits on Tiling's published-state cell with no timeout and joins at shutdown; it
+adds **no timer or poll**. Tiling publishes only when its display DTO changes, so
+frame-only activity causes no wake-up (tested). Post-part `bun run measure:bar`
+([report](../specs/2026-11-03-bar/measurements/2026-11-11T00-25-13-045Z/report.md)): +0.58 % of one core and +0.44 idle wakeups/s Bar on−off (2026-11-11, matching the 2026-11-10 baseline +0.59 %/+0.39/s; one off trial was quit from the tray, so the tool marks the run failed with 4 valid off launches; accepted by the user).
+
 ## Bar system providers (part 05)
 
 Deterministic bounds (tested on a fake clock, no real sleeping): a disabled,

@@ -242,6 +242,8 @@ struct Setup {
     listen_only_refused: bool,
     /// The `JankyBorders` authority (fakes only).
     borders: Option<crate::borders::BordersParts>,
+    /// Register the `tilingState` schema, as the app does.
+    schemas: bool,
 }
 
 impl Default for Setup {
@@ -261,6 +263,7 @@ impl Default for Setup {
             input: true,
             listen_only_refused: false,
             borders: None,
+            schemas: false,
         }
     }
 }
@@ -343,6 +346,14 @@ impl Host {
         if let Some(input) = &input {
             registry = registry.with_input_service(Arc::clone(&input.service));
         }
+        if setup.schemas {
+            registry = registry
+                .with_state_schemas(
+                    &stache_sdk::StateSchemas::new()
+                        .with::<crate::published::TilingPublishedState>(TilingConfig::ID),
+                )
+                .expect("schemas");
+        }
         let registry = Arc::new(registry);
         let handle = registry.register(runtime.module(), enabled()).expect("register");
         runtime.install_accepted_watch(registry.accepted_watch(handle).expect("watch"));
@@ -417,7 +428,10 @@ fn applied() -> WindowActionOutcome {
 
 /// Feeds one tracked window to a started host and waits for the phase to
 /// complete. Returns the window.
-fn feed_window(host: &Host) -> WindowInstance {
+fn feed_window(host: &Host) -> WindowInstance { feed_window_with(host).0 }
+
+/// [`feed_window`], also returning the feed for later events.
+fn feed_window_with(host: &Host) -> (WindowInstance, Feed) {
     let runtime = host.runtime.tracking().expect("running");
     let mut feed = Feed::new(runtime.epoch().value());
     feed.adapter = host.backend.adapter();
@@ -440,7 +454,7 @@ fn feed_window(host: &Host) -> WindowInstance {
         truncated: false,
     })));
     wait_until("complete", || runtime.snapshot().phase == Phase::Complete);
-    token
+    (token, feed)
 }
 
 /// Drives one window to a held native send on a started host.
@@ -2399,5 +2413,178 @@ mod borders {
             1
         );
         rig.host.disable();
+    }
+}
+
+// ------------------------------------------------------------- TI-10-01 (10a)
+
+mod published_state {
+    use stache_sdk::{RuntimeEnd, StateEnvelope, StateReading, StateUnavailableReason};
+
+    use super::*;
+    use crate::published::{TilingPublishedState, resolve_window_key, window_key};
+
+    fn published_host() -> Host {
+        Host::with(Setup {
+            schemas: true,
+            ..Setup::default()
+        })
+    }
+
+    fn reading(host: &Host) -> StateReading {
+        host.registry.observe_state(TilingConfig::ID).read().state
+    }
+
+    fn envelope(host: &Host) -> Option<StateEnvelope> {
+        match reading(host) {
+            StateReading::Available(envelope) => Some(envelope),
+            _ => None,
+        }
+    }
+
+    fn decode(envelope: &StateEnvelope) -> TilingPublishedState {
+        envelope.decode::<TilingPublishedState>(TilingConfig::ID).expect("decode")
+    }
+
+    fn ended(host: &Host, generation: u64) -> RuntimeEnd {
+        match reading(host) {
+            StateReading::Unavailable(unavailable) => {
+                assert_eq!(unavailable.generation, Some(generation), "exact generation");
+                match unavailable.reason {
+                    StateUnavailableReason::Ended(end) => end,
+                    other => panic!("not a tombstone: {other:?}"),
+                }
+            }
+            other => panic!("expected a tombstone: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_runtime_publishes_tiling_state_with_the_accepted_revision() {
+        let host = published_host();
+        host.registry.start_all().expect("start");
+        let (token, mut feed) = feed_window_with(&host);
+        wait_until("published window", || {
+            envelope(&host).is_some_and(|envelope| decode(&envelope).windows.len() == 1)
+        });
+        let first = envelope(&host).expect("available");
+        assert_eq!(first.provider, TilingConfig::ID);
+        assert_eq!(first.schema.provider, TilingConfig::ID);
+        assert_eq!(first.schema.name, "tilingState");
+        assert_eq!(first.schema.version, 1);
+        assert_eq!(first.revision, host.revision(), "the accepted revision");
+        let state = decode(&first);
+        assert_eq!(state.windows[0].key, window_key(token));
+        assert_eq!(state.windows[0].title, "w");
+        assert_eq!(state.windows[0].app_name, "A");
+        assert!(!state.workspaces.is_empty());
+        let runtime = host.runtime.tracking().expect("running");
+        assert_eq!(
+            resolve_window_key(&runtime.snapshot(), &state.windows[0].key),
+            Some(token)
+        );
+
+        // Geometry and admission churn: the actor turns, nothing is published.
+        let sink = host.backend.sink().expect("sink");
+        let before = runtime.snapshot().sequence;
+        for n in 0..5_u8 {
+            let mut moved = snapshot(token, "w", 1);
+            moved.frame = FrameRead {
+                position: AxReading::Value(AxPoint { x: f64::from(n) * 7.0, y: 30.0 }),
+                size: AxReading::Value(AxSize { width: 500.0, height: 400.0 }),
+            };
+            host.backend.script_snapshot(
+                token,
+                stache_macos::windows::SnapshotOutcome::Snapshot(Box::new(moved)),
+            );
+            assert!(sink.push(feed.event(WindowEventKind::Window {
+                window: token,
+                change: stache_macos::windows::WindowChange::Moved,
+            })));
+        }
+        wait_until("moves applied", || {
+            runtime.snapshot().sequence > before && host.backend.snapshot_reads(token) >= 1
+        });
+        std::thread::sleep(Duration::from_millis(30));
+        let after = envelope(&host).expect("available");
+        assert_eq!(
+            after.sequence, first.sequence,
+            "frame-only changes do not publish: {} -> {}",
+            first.payload, after.payload
+        );
+        assert_eq!(after.generation, first.generation);
+
+        // A title change is a projection change and publishes once.
+        host.backend.script_snapshot(
+            token,
+            stache_macos::windows::SnapshotOutcome::Snapshot(Box::new(snapshot(
+                token,
+                "renamed ✓",
+                1,
+            ))),
+        );
+        assert!(sink.push(feed.event(WindowEventKind::Window {
+            window: token,
+            change: stache_macos::windows::WindowChange::TitleChanged,
+        })));
+        wait_until("renamed", || {
+            envelope(&host)
+                .is_some_and(|envelope| decode(&envelope).windows[0].title == "renamed ✓")
+        });
+        assert_eq!(envelope(&host).expect("available").sequence, first.sequence + 1);
+        host.disable();
+    }
+
+    #[test]
+    fn disable_pause_and_failure_leave_exact_generation_tombstones() {
+        let host = published_host();
+        host.registry.start_all().expect("start");
+        feed_window(&host);
+        wait_until("published", || envelope(&host).is_some());
+        let first = envelope(&host).expect("available").generation;
+        host.disable();
+        assert_eq!(ended(&host, first), RuntimeEnd::Disabled);
+
+        // A successor starts a new generation whose sequence restarts.
+        host.enable();
+        assert_eq!(host.status(), ModuleStatus::Running);
+        wait_until("successor published", || {
+            envelope(&host).is_some_and(|envelope| envelope.generation != first)
+        });
+        let second = envelope(&host).expect("available");
+        assert!(second.generation > first);
+
+        host.registry.pause(host.handle).expect("pause");
+        assert_eq!(ended(&host, second.generation), RuntimeEnd::Paused);
+        host.registry.resume(host.handle).expect("resume");
+        host.disable();
+    }
+
+    #[test]
+    fn a_failed_stop_leaves_a_tombstone_and_no_fabricated_state() {
+        let host = published_host();
+        host.registry.start_all().expect("start");
+        let hold = hold_one_send(&host);
+        wait_until("published", || envelope(&host).is_some());
+        let generation = envelope(&host).expect("available").generation;
+        host.disable();
+        assert!(matches!(host.status(), ModuleStatus::Failed(_)));
+        let end = ended(&host, generation);
+        assert!(
+            matches!(end, RuntimeEnd::Disabled | RuntimeEnd::Failed),
+            "{end:?}"
+        );
+        hold.release();
+        host.enable();
+        host.disable();
+    }
+
+    #[test]
+    fn without_a_registered_schema_tiling_runs_and_publishes_nothing() {
+        let host = Host::started();
+        feed_window(&host);
+        assert_eq!(host.status(), ModuleStatus::Running);
+        assert_eq!(reading(&host), StateReading::Absent);
+        host.disable();
     }
 }

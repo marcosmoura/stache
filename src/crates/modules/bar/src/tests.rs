@@ -524,18 +524,22 @@ fn construction_and_a_disabled_module_own_nothing() {
 }
 
 #[test]
-fn bar_observes_keep_awake_optionally_and_never_depends_on_its_crate() {
+fn bar_observes_keep_awake_and_tiling_optionally_and_never_depends_on_their_crates() {
     let h = Harness::new(Native::Auto, config(28, 14), vec![builtin()]);
     let descriptors = h.registry.descriptors();
     let descriptor = descriptors
         .iter()
         .find(|descriptor| descriptor.id == BarConfig::ID)
         .expect("bar descriptor");
-    assert_eq!(descriptor.observes, &[crate::KEEP_AWAKE_PROVIDER]);
+    assert_eq!(descriptor.observes, &[
+        crate::KEEP_AWAKE_PROVIDER,
+        crate::TILING_PROVIDER
+    ]);
     assert_eq!(crate::KEEP_AWAKE_PROVIDER.as_str(), "keepAwake");
+    assert_eq!(crate::TILING_PROVIDER.as_str(), "tiling");
     assert!(
         descriptor.requires.is_empty(),
-        "Keep Awake is optional, never a hard requirement"
+        "Keep Awake and Tiling are optional, never a hard requirement"
     );
     // Absent Keep Awake: Bar still starts and runs.
     h.start();
@@ -546,6 +550,15 @@ fn bar_observes_keep_awake_optionally_and_never_depends_on_its_crate() {
     assert!(
         !manifest.contains("keep-awake"),
         "stache-bar must not depend on stache-keep-awake"
+    );
+    assert!(
+        !manifest.contains("tiling"),
+        "stache-bar must not depend on stache-tiling"
+    );
+    let tiling = include_str!("../../tiling/Cargo.toml");
+    assert!(
+        !tiling.contains("stache-bar") && !tiling.contains("modules/bar"),
+        "stache-tiling must not depend on stache-bar"
     );
 }
 

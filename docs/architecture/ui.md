@@ -394,9 +394,12 @@ WebKit browser.
   `BarDataProvider`, which always wins over the bridge. Parts 05-08 replace a field's
   source and never the styles. The Clock is UI-local and live. No Bar item calls a
   command that does not exist; Media's click is wired (slice C).
-- **Spaces.** The empty first-slot `<div />` (tiling absent) keeps Media and Status in
-  place. The legacy `Loading...` fallback is ported (`SpacesFallback`) but unreachable:
-  no Bar data source can suspend, so the Suspense boundary never shows it.
+- **Spaces.** The ported legacy Tiling strip reads `BarData.spaces` (mapped from
+  `BarView.tiling` in `barDataFromOutcome`, no own subscription or timer). Unresolved,
+  absent or zero workspaces keep the empty first-slot `<div />` so Media and Status stay in
+  place; `loading` shows the legacy `Loading...` fallback (`SpacesFallback`); clicks go
+  through `tilingClick` with the rendered generation and sequence
+  (see [Bar](../features/bar.md#tiling-strip-ui)).
 - **Error boundary.** `Bar` keeps legacy's `ErrorBoundary` with `QueryErrorFallback`
   and `Suspense fallback={null}`; Retry only resets the boundary.
 - The packaged CSP is `default-src 'self'` with `connect-src ipc: http://ipc.localhost`

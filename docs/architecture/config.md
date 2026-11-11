@@ -121,6 +121,9 @@ with field paths; a rejected file leaves the module inactive and never falls bac
 to enabled defaults. The grid cap of ten and the applied floating
 `default_position` now apply to the core runtime; animation, drag and
 borders apply to the runtime; native tabs follow the shared tab bar (fake-proven, Finder-probed). See [tiling.md](../features/tiling.md).
+Bar reads no Tiling configuration and Tiling reads no Bar configuration: the Bar strip
+comes from Tiling's published state and Tiling's top inset from the host screen
+reservation ([Bar](../features/bar.md#tiling-strip-data)).
 
 `menuAnywhere.toml` backs the MenuAnywhere runtime: the host registers it
 through `MenuAnywhereFactory`, so the file is bound, watched and reloaded like

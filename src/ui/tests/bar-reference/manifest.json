@@ -221,9 +221,87 @@
       "pinnedBy": "table:ui/renderer/bar"
     },
     {
+      "path": "_legacy/app/ui/renderer/bar/Spaces/components/App/App.styles.ts",
+      "blob": "d5257f32636e6117775e9b6b49995c2eb41f77e3",
+      "sha256": "bdbafb85a5e19086c8b9ed6910429e1ec8a1cd8bece7a555ded9e496eea17725",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Spaces/components/App/App.tsx",
+      "blob": "e037478b80316ca8d489f41c29127f5e8c9e187c",
+      "sha256": "10800bddd1bfe176d2f73ab54aafd3075e717e16b90b54516ceccbe38522d41c",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Spaces/components/App/index.ts",
+      "blob": "36d0fd851c9687e2718f6099ab1da13b49105a86",
+      "sha256": "ce3ebafcd6ed04a82c9777a17a84feab4874a2a7898c2aa89d764af8b477ecf3",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Spaces/components/AppList/AppList.tsx",
+      "blob": "243e42f0b51a66aeba3d1fc8191297918509fc8b",
+      "sha256": "f28929c658c06a8ae0b9ae479c46b26ee8d3baf439a951da95263d947952fe8f",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Spaces/components/AppList/index.ts",
+      "blob": "b52386252cff2f13847a31f8eab4e5c4f271d7bf",
+      "sha256": "18a0eeb23f2c7777dd2ef5638bcb16fa53ab8229764c32f53d9a14214b619ae2",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Spaces/components/Workspace/index.ts",
+      "blob": "1bdf5f311393f56e72f3ce1f928dccfbea8f0e67",
+      "sha256": "cee6e65240d68c0cbb818bd12a81e5eab0d22f88cab63de356dc0d438e505b0e",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Spaces/components/Workspace/Workspace.styles.ts",
+      "blob": "d1301d896c27cef42a7b498a4c9f6c05372aff77",
+      "sha256": "a542c30a1344993ccc0b17b7289a0b22d34ab96989f6e6fa9b46a316752aadbb",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Spaces/components/Workspace/Workspace.tsx",
+      "blob": "d9cf2efc1c4efada5d66090dbd908ba02ab90c23",
+      "sha256": "d23fe1ea3061e1b3affcf3faa6a864d3bbb6bcc2dca20c6345b47b0321ad5824",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Spaces/components/WorkspaceList/index.ts",
+      "blob": "e3d9bba30f5b1bddd03444a34b0313181d855a0d",
+      "sha256": "9fd8435ee512e512ea52fbdcf0af91ac0529059f4aaf56a5d31144cc93db1c8a",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Spaces/components/WorkspaceList/WorkspaceList.styles.ts",
+      "blob": "ec9ab20e24fc978c2992009f13fdcff0666dfd9b",
+      "sha256": "80b17d7d97da55b5465d914ffc259db60297df2da834e0d470f1e7fe7a620a00",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Spaces/components/WorkspaceList/WorkspaceList.tsx",
+      "blob": "6e38e3b9e9a916e4604b9904ccf9d7f2c108484c",
+      "sha256": "cdcbfc9f38e9f34de4e4b9873f36a1df6234fd42901f468aff0a066fcb42dc99",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
       "path": "_legacy/app/ui/renderer/bar/Spaces/index.ts",
       "blob": "ff0780fbdefcc5a35fedd9428ff16df68fb641c1",
       "sha256": "17fe0fb88a0e749ad6ea1fcd1a6ebcace550c411fc59f2c0943bae69dc1e6903",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Spaces/Spaces.constants.ts",
+      "blob": "e8701586bb6229a77f009567890c6c5668ab4a91",
+      "sha256": "1d52c6561292989872f42234655aa3afbb2b7d6d55fcf9a507e5a44280a7a458",
+      "pinnedBy": "table:ui/renderer/bar"
+    },
+    {
+      "path": "_legacy/app/ui/renderer/bar/Spaces/Spaces.state.ts",
+      "blob": "85d3972e82c90f9886c4777a29b9a00202557962",
+      "sha256": "ad477503762868f2930d66db1b4c9cb2f42cc070f53a6c4afea5f76c8cf3717e",
       "pinnedBy": "table:ui/renderer/bar"
     },
     {
@@ -460,8 +538,16 @@
       },
       "filesRead": [
         {
+          "file": "icons/SiProtonvpn.cjs",
+          "sha256": "c132fde63d4bcbde7f7aff60321c9e18a0e7ec1fe687297a14c939b686da6428"
+        },
+        {
           "file": "icons/SiTidal.cjs",
           "sha256": "aff200895b7765d99c7ea082b9b7f440c76d485c31c85113f8ccbbb5af9062dd"
+        },
+        {
+          "file": "icons/SiTransmission.cjs",
+          "sha256": "b2601c1c3c235bcd29abc3f8cf8acc38dc53ddac7f2742ad030d95b2c2351a8e"
         }
       ]
     }
@@ -473,7 +559,7 @@
       "aliasOf": "BatteryCharging01Icon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "2a529c5d881b9279b2aa026235370adc858ef6d48ca965d6938dc8c89dc82aef",
       "renderProps": {
         "size": 18,
@@ -488,7 +574,7 @@
       "aliasOf": "BatteryEmptyIcon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "e18e02be3f34b8e85742faf9773a0628cf7ef953252529bcd9b1dbef69060e52",
       "renderProps": {
         "size": 18,
@@ -503,7 +589,7 @@
       "aliasOf": "BatteryFullIcon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "f5abae83097dbb36b8d6aefd52dfe8e1f34cdb4d70e82f7c351d93b2d5c087c2",
       "renderProps": {
         "size": 18,
@@ -518,7 +604,7 @@
       "aliasOf": "BatteryLowIcon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "e204447b550f8a0c49b824f26dd1de7888effcc901586b14e1017df3c3be1d05",
       "renderProps": {
         "size": 18,
@@ -533,7 +619,7 @@
       "aliasOf": "BatteryMedium02Icon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "2103647ca10888d2a65517b9469b6d31d1fb2b7928b114c2b469a3835ab565b0",
       "renderProps": {
         "size": 18,
@@ -548,7 +634,7 @@
       "aliasOf": "BatteryMedium01Icon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "8d8cd30a8247995958fb0e3eb8f3bee27b10ab3cf44b23db3e659347036b2c33",
       "renderProps": {
         "size": 18,
@@ -563,7 +649,7 @@
       "aliasOf": "CloudAngledRainIcon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "ee68b7f1708a042da21c7953df4859ad632b4ad538eb6a23451dab5bdcc0e2c0",
       "renderProps": {
         "size": 18,
@@ -578,7 +664,7 @@
       "aliasOf": "CloudAngledRainZapIcon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "d616f461603260b74cc43702aaa883ec09522b249b32355b23d5ac099588e1c7",
       "renderProps": {
         "size": 18,
@@ -593,7 +679,7 @@
       "aliasOf": "CloudIcon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "893179b9ba847cebcc4d1c8413ee96a75dacc017d9019eeb3e41fcb74a72e3a9",
       "renderProps": {
         "size": 18,
@@ -608,7 +694,7 @@
       "aliasOf": "CloudSlowWindIcon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "313878de4eb12c1584f42e51ea65aa885e2887ba5c846e0b9d0a9dc8b27e0759",
       "renderProps": {
         "size": 18,
@@ -623,7 +709,7 @@
       "aliasOf": "Coffee02Icon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "6f10b20cfe64af027f038de1868bb57bbfbd24c063232cd8494843d3a623824e",
       "renderProps": {
         "size": 18,
@@ -640,7 +726,7 @@
       "aliasOf": "Coffee02Icon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "6f10b20cfe64af027f038de1868bb57bbfbd24c063232cd8494843d3a623824e",
       "renderProps": {
         "size": 18,
@@ -656,7 +742,7 @@
       "aliasOf": "CpuChargeIcon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "160671fa0b3eb9c6bf98731976c05f93a80fc3756dace8b7fbd2aba9c0cb8721",
       "renderProps": {
         "size": 18,
@@ -671,7 +757,7 @@
       "aliasOf": "CpuIcon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "ab978e76a8b75787722aa3db031cc426ee577ad5877aeff909c6ef60c5b0dae7",
       "renderProps": {
         "size": 18,
@@ -686,7 +772,7 @@
       "aliasOf": "FastWindIcon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "81caad3f2263ba5ed21f91090fe7ab436b144e492ac4cfb2c04ca34c6481b24c",
       "renderProps": {
         "size": 18,
@@ -701,7 +787,7 @@
       "aliasOf": "MoonAngledRainZapIcon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "768ba5d7c6ebc720d7e0b2097c65de5e8320cbf14dee4f65bf72892f11d3b8cf",
       "renderProps": {
         "size": 18,
@@ -716,7 +802,7 @@
       "aliasOf": "MoonCloudAngledRainIcon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "b9dc44b5c227e8baa9b5998d69d775d63e1134a7b2bca411802b3f0530e1c8ec",
       "renderProps": {
         "size": 18,
@@ -731,7 +817,7 @@
       "aliasOf": "MoonCloudIcon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "84e2e56568aff88225734b3e938f445ffe245835560739a324d7b5c657ca0cab",
       "renderProps": {
         "size": 18,
@@ -746,7 +832,7 @@
       "aliasOf": "MoonCloudSnowIcon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "2cdb145e2882c69bf519c277a51be815799b8884c8c0742744f773fd89ad512d",
       "renderProps": {
         "size": 18,
@@ -761,7 +847,7 @@
       "aliasOf": "MoonIcon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "19d6bd19e97b3c6fc49deea31eb62efe4610bdf31d29cb8e7c315e5f03894251",
       "renderProps": {
         "size": 18,
@@ -776,7 +862,7 @@
       "aliasOf": "PlayCircle02Icon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "b9aa7d0112c006bde106e31be8f9f95d287b477535d6cab1df477d1f11df42de",
       "renderProps": {
         "size": 22,
@@ -808,7 +894,7 @@
       "aliasOf": "SnowIcon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "2b7a9cec32deeac84da450c88e156f0697315e5228d0be8f058a935fdb3c3613",
       "renderProps": {
         "size": 18,
@@ -823,7 +909,7 @@
       "aliasOf": "SpotifyIcon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "f18b7296e904c95efa3b875a2caddb98b4d317597047e3440612fd6db73d257c",
       "renderProps": {
         "size": 22,
@@ -839,7 +925,7 @@
       "aliasOf": "SunCloud02Icon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "5ed064ae5233cd6d2cf68ad5b2b49d90a41eb06439789ed37702e897f30a3414",
       "renderProps": {
         "size": 18,
@@ -854,7 +940,7 @@
       "aliasOf": "SunCloudAngledRain01Icon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "3b992b511e01324e65d0235f45589ff5090b6ba5f6d0ad7b4c282c486f3a436e",
       "renderProps": {
         "size": 18,
@@ -869,7 +955,7 @@
       "aliasOf": "SunCloudSnow01Icon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "1dabc272a0c486895abcc41d2015c32b41706a9463abda3c29ccfd5085c296c0",
       "renderProps": {
         "size": 18,
@@ -884,7 +970,7 @@
       "aliasOf": "Sun01Icon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "d435079b59edeea1e775ca5b325409075a3bb8dc015f687da910644358b6d920",
       "renderProps": {
         "size": 18,
@@ -899,7 +985,7 @@
       "aliasOf": "Time03Icon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "96d45a3dce8623cfde08ec09eab29a41dc117b6795125431eb9b493a5804b283",
       "renderProps": {
         "size": 18,
@@ -914,7 +1000,7 @@
       "aliasOf": "Vynil02Icon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "2ca334aff622e226d1ea487a6ea92e9e13e46c8526f29febddd58086b7271316",
       "renderProps": {
         "size": 22,
@@ -930,7 +1016,7 @@
       "aliasOf": "Wifi01Icon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "4c476dbbf2edbf7993dffbfaa0613b2093230a7fa8961a10d1ea3988bbca497b",
       "renderProps": {
         "size": 18,
@@ -945,7 +1031,7 @@
       "aliasOf": "WifiDisconnected04Icon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "555a8f8acde4ff6e567190e4a44e0c9b267188378d2a81d5de6b61cda642a87a",
       "renderProps": {
         "size": 18,
@@ -960,7 +1046,7 @@
       "aliasOf": "WifiFullSignalIcon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "5734469f20033a90612f33bb6a2291fe3b764d57abbb202f36a1812cebce977f",
       "renderProps": {
         "size": 18,
@@ -975,7 +1061,7 @@
       "aliasOf": "WifiLowSignalIcon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "9dbd4063de5b9cd692859be19a6be02b413bc89c272c6dc5d2bce89e771ff638",
       "renderProps": {
         "size": 18,
@@ -990,7 +1076,7 @@
       "aliasOf": "WifiMediumSignalIcon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "1c71219fee6b9a9e83f16e64877480cd6db3bfa5650a24e0322fcd1b8b7b3e54",
       "renderProps": {
         "size": 18,
@@ -1005,7 +1091,7 @@
       "aliasOf": "WifiOff02Icon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "ac2432990ee43b33946c760e4d27b81853fb473e39db320f45924c41af25a5bd",
       "renderProps": {
         "size": 18,
@@ -1020,7 +1106,7 @@
       "aliasOf": "YoutubeIcon",
       "package": "@hugeicons/core-free-icons",
       "sourceFile": "dist/cjs/index.js",
-      "sourceSha256": "44533054d2a1175b24a4a0201218bcc87591a61d181aa1f360ae1a3d69d29039",
+      "sourceSha256": "d05683bbe521f728c12e177d2c30e5a7676413f70a66c14da1160cd2f1f31631",
       "definitionSha256": "3e437bc4f24be5e47b69ecd7975296cd9142ffa5998a9503071e1a4b85cfdfd3",
       "renderProps": {
         "size": 22,
@@ -1031,6 +1117,684 @@
       "sha256": "5ff2952f5addba400ef3128ae7e360064b781ed5c031f55e91e8739eea9223a0"
     }
   ],
+  "stripIcons": {
+    "provenance": "user decision 2026-11-10",
+    "note": "Tiling strip (Spaces) icons. hugeicons glyphs come from the repository version (4.4.0), downloaded from the registry and sha512-checked against the repository bun.lock; @hugeicons/react stays at the legacy 1.1.9 and simple-icons at the legacy 13.15.1. The non-strip Bar icons above keep the legacy 4.2.3.",
+    "package": {
+      "name": "@hugeicons/core-free-icons",
+      "version": "4.4.0",
+      "integrity": "sha512-7Mz8bmGoY6tZ6l3C2TXwNMLVSr0I8HPwjjFIERAuJFj3rWwLxdF2ZLkDqdrVuEE1dx5b/VXyIsP4WoSU6Q40KQ==",
+      "registryUrl": "https://registry.npmjs.org/@hugeicons/core-free-icons/-/core-free-icons-4.4.0.tgz",
+      "license": "MIT",
+      "licenseFile": {
+        "path": "LICENSE.md",
+        "sha256": "1658d8213209df7b9b86dfc05d724ede48d00dbc27abc15976ec7adec9601cde"
+      },
+      "integritySource": "bun.lock",
+      "lockfileSha256": "256a06fd99394fc675598a2d5e77322c16afb38f82f590ff28bc6c1429172da3",
+      "filesRead": [
+        {
+          "file": "dist/cjs/index.js",
+          "sha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371"
+        }
+      ]
+    },
+    "appMapAdditions": {
+      "provenance": "user decision 2026-11-10",
+      "entries": {
+        "Zed": "CodeSquareIcon",
+        "Aside": "AiBrowserIcon",
+        "Herdr": "CommandLineIcon",
+        "DeviceHub": "SmartPhone01Icon",
+        "AIOStreams": "PlayListIcon",
+        "Nuvio": "Tv01Icon",
+        "FigCraft": "PaintBoardIcon"
+      }
+    },
+    "glyphChangesFrom4_2_3": {
+      "AiBrowserIcon": "glyph data differs",
+      "Analytics01Icon": "glyph data differs",
+      "Folder01Icon": "glyph data differs",
+      "MessageMultiple01Icon": "glyph data differs",
+      "Settings01Icon": "glyph data differs"
+    },
+    "wrapperComparison": {
+      "legacy": "@hugeicons/react 1.1.9",
+      "repository": "@hugeicons/react 1.1.10",
+      "differingIcons": []
+    },
+    "icons": [
+      {
+        "file": "icons/Spaces.AiBrowserIcon.svg",
+        "icon": "AiBrowserIcon",
+        "aliasOf": "AiBrowserIcon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "a3756a3293d89a05d244e002b354defd963f5cf73478b034690ad1e53cb5d532",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "86303e24ea19b3c55f092fc75b677f54d97005350f3e9829e570e900e889089f"
+      },
+      {
+        "file": "icons/Spaces.Analytics01Icon.svg",
+        "icon": "Analytics01Icon",
+        "aliasOf": "Analytics01Icon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "dd1edca381edc81dad9a30a656db33b056282b08487222f70288fc76961b3b72",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "177540e1c092f08064b76da109d7398844f25373aac83f3206ab7444f6d0e10a"
+      },
+      {
+        "file": "icons/Spaces.AppleFinderIcon.svg",
+        "icon": "AppleFinderIcon",
+        "aliasOf": "AppleFinderIcon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "2578a806f657cbe1f9254a2a9845584d96c60f9ebd1bd5c92b50e8d7a2dee71e",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "83f21862f0e5dc09e9e86b9ae1842e29075ca0123b495c9b9cd4694ba0a4d66a"
+      },
+      {
+        "file": "icons/Spaces.AppleReminderIcon.svg",
+        "icon": "AppleReminderIcon",
+        "aliasOf": "AppleReminderIcon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "3eac278735ac028a448a3a883956b664160246685f8cf2d62138195b07812805",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "64478b80e5a0f7c61aefd83b7ab84af96fa865a1735da259a67ec6309b703817"
+      },
+      {
+        "file": "icons/Spaces.AppStoreIcon.svg",
+        "icon": "AppStoreIcon",
+        "aliasOf": "AppStoreIcon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "dec161547da38bb3272971600f7d7307b1f91544acd2f2363f9f3bc8a92bcdc2",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "41f1f82d556239a442079c1884da86fbead6917a512aa4cb7cb5264a42547c4d"
+      },
+      {
+        "file": "icons/Spaces.ArcBrowserIcon.svg",
+        "icon": "ArcBrowserIcon",
+        "aliasOf": "ArcBrowserIcon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "b8708c132be809299a568da742038a4d8b89add8118b563c4407fcec230f1e49",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "275d267fc1c059e94dad1ec6214fc25d68b079f69556269f1e5c4f8a0e5f338c"
+      },
+      {
+        "file": "icons/Spaces.BrowserIcon.svg",
+        "icon": "BrowserIcon",
+        "aliasOf": "BrowserIcon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "53c57143ca7c24ad8ae688a36daecb155612f183117b5bbb6c77770ce00f5f44",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "cb9ab1fed0911cb92fd12f47943d0b77f415497dc9a28510acc2bb31bd540465"
+      },
+      {
+        "file": "icons/Spaces.CheckListIcon.svg",
+        "icon": "CheckListIcon",
+        "aliasOf": "CheckListIcon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "3c69246c738f283efd0e3ab7ff0b207a6fb4c16c7ed44b39f550dd66845f3a82",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "fdd0170bb399428f34d8cafddcb2445a45fd72975be3a2db264312b45edded8e"
+      },
+      {
+        "file": "icons/Spaces.CodeSimpleIcon.svg",
+        "icon": "CodeSimpleIcon",
+        "aliasOf": "CodeSimpleIcon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "9c241731c8a5c6bc724fdd0975e0eb2b96bb881628bdf7bb12c47e8d5c448622",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "5f004f4b2342ffeaee139e639fcc3ec0e52ce98fa810976e5347aaae8e52b864"
+      },
+      {
+        "file": "icons/Spaces.CodeSquareIcon.svg",
+        "icon": "CodeSquareIcon",
+        "aliasOf": "CodeSquareIcon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "c3c04d63817fb1225615c6a55d096620cc4dcde391d0755ee0b8a2d0e415409f",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "2861b852f2f9058024ba296ef085d7feb1864057183cce0c211e3fea645c5b07"
+      },
+      {
+        "file": "icons/Spaces.CommandLineIcon.svg",
+        "icon": "CommandLineIcon",
+        "aliasOf": "CommandLineIcon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "480562a7f0d54f57ba7e59ea5164d647643940b999c8d8cbc0f593c7ff8884a5",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "e39829ab4f4dfe2a0591b9700d9cda1cda3ee32c7c18eff7c52e7542ee0e4ad4"
+      },
+      {
+        "file": "icons/Spaces.ComputerTerminal01Icon.svg",
+        "icon": "ComputerTerminal01Icon",
+        "aliasOf": "ComputerTerminal01Icon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "ac119b379009e9fdaf20e7fdaf601509948f65ab902889ac88e2d9aa49dcce80",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "d23dcc8f94c29f9665b303149bcf4f94a5fa376406dd8d4f79b6971c736b4d9b"
+      },
+      {
+        "file": "icons/Spaces.DashboardCircleIcon.svg",
+        "icon": "DashboardCircleIcon",
+        "aliasOf": "DashboardCircleIcon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "4f41cebe1ad86c5e82147dc95a82c7a07b52b614dcade8aecc710459e81fcdd1",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "3b3d314cb63fa1b10ac16fcf703ad346873f81f7a029c3dfd70c801204cc9117"
+      },
+      {
+        "file": "icons/Spaces.DiscordIcon.svg",
+        "icon": "DiscordIcon",
+        "aliasOf": "DiscordIcon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "48fa73c526a4d756f6e356828a014f032e3c13c78ec6bda6f32c45705d443ffc",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "0f528e8a53c419181fddaae1f313dc46652a66880c61016c3067006359b860ad"
+      },
+      {
+        "file": "icons/Spaces.FigmaIcon.svg",
+        "icon": "FigmaIcon",
+        "aliasOf": "FigmaIcon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "d9eb8041e81e9b162cee69012b14d3c90717e04227f446db447e74cefe80ef81",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "f82693bfe5e07a2db87d83359a896411a19bb23b55efb8e0f82ec93ec5b2d503"
+      },
+      {
+        "file": "icons/Spaces.Folder01Icon.svg",
+        "icon": "Folder01Icon",
+        "aliasOf": "Folder01Icon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "7c1802a0ec52e32e50d0a0522b59c73066583e048eeafcf5f2e0565138dc18e2",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "51086a4fd42a54c242593f94821eeafc73e0d9046348c0ab1fde1d303a524ca5"
+      },
+      {
+        "file": "icons/Spaces.HardDriveIcon.svg",
+        "icon": "HardDriveIcon",
+        "aliasOf": "HardDriveIcon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "bce8969edc3e1a3258a9975477080ecdda7458798f75cc02fbc93298f6624427",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "b0f6beeac679f2aeeefecffe15223f5c0a1b31cd3ca097a0a31a2b1d769afc11"
+      },
+      {
+        "file": "icons/Spaces.MessageMultiple01Icon.svg",
+        "icon": "MessageMultiple01Icon",
+        "aliasOf": "MessageMultiple01Icon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "4ff45cf92300d1af243d6af86f1649e9177f0b75de6af9756c35c4511200a71a",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "344a2a8f218a682cfe6a4c8bec56d5ac28ba03a1c3101900d986b60019f409ef"
+      },
+      {
+        "file": "icons/Spaces.MixerIcon.svg",
+        "icon": "MixerIcon",
+        "aliasOf": "MixerIcon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "7866caf0febda66b0ec9ed90158e18a7585df799b377f254ed23cc0faff83e8f",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "754b2d9abaa83f13388d518576a3cb6b23b5e8ccb6cb4db2b66e992f6e8da41b"
+      },
+      {
+        "file": "icons/Spaces.MusicNote02Icon.svg",
+        "icon": "MusicNote02Icon",
+        "aliasOf": "MusicNote02Icon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "e6d562f78ee249fa9f1b2a43af21216eeb6e2dc1c6543df4411031ef79e8fdcf",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "53689c6669af6d9c02181fbafe2b59be78526e42212bf852ba05c2df5af58698"
+      },
+      {
+        "file": "icons/Spaces.MusicNote03Icon.svg",
+        "icon": "MusicNote03Icon",
+        "aliasOf": "MusicNote03Icon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "18fc3a2e22b6b6fb8bf5ad450395ac93088adcbfcaeb92f7a8ca64c4255e43f9",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "6506b3c67b898fa35d19813c1a82d68ed63354e4f67a31966b8a76052ef6a884"
+      },
+      {
+        "file": "icons/Spaces.PaintBoardIcon.svg",
+        "icon": "PaintBoardIcon",
+        "aliasOf": "PaintBoardIcon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "91e20ae33b623882d648ba398ae944be7be6bf4f03af7d791dd0969730307d1f",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "2a91b855a3563fdfd795074555c007d3acb7a1d48f5e6c6f34d439e887b74478"
+      },
+      {
+        "file": "icons/Spaces.PlayListIcon.svg",
+        "icon": "PlayListIcon",
+        "aliasOf": "PlayListIcon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "3af2f6ad8b1cbda0a44a58f4a1582c6722bf1825effb85e38acfa7244894f995",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "7cd937a53bf4adf58af2881334dcb926014f5bc8bf1600c7766bd296de799913"
+      },
+      {
+        "file": "icons/Spaces.SafariIcon.svg",
+        "icon": "SafariIcon",
+        "aliasOf": "SafariIcon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "a6d98d9142d33746194ee24038221f7161850dd7344f2d73d6ae2e927003c1df",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "9cebe7cda6dcb586a1273c2838f8e13475071aa20e3be1e5745b9d8a7ad7ebb5"
+      },
+      {
+        "file": "icons/Spaces.SecurityPasswordIcon.svg",
+        "icon": "SecurityPasswordIcon",
+        "aliasOf": "SecurityPasswordIcon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "c28ce9339f3cbe49f66050fef62864cc83a75cc59217f485be9cacb857ed2648",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "cd6fa8927d822c9bd313a4ce14a4bb1bc35388f98963bdcd944221c4b0e41eab"
+      },
+      {
+        "file": "icons/Spaces.Settings01Icon.svg",
+        "icon": "Settings01Icon",
+        "aliasOf": "Settings01Icon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "ad4d652977ac7eba482cdff451eebf8a66ea1f387ddb8195fd83652b0295f072",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "0413fbd90c6b0c96354a671aab94ca7e24136179255b6eb74408611f16583ea0"
+      },
+      {
+        "file": "icons/Spaces.SiProtonvpn.svg",
+        "icon": "SiProtonvpn",
+        "aliasOf": null,
+        "package": "@icons-pack/react-simple-icons",
+        "packageVersion": "13.15.1",
+        "provenance": "legacy lockfile",
+        "sourceFile": "icons/SiProtonvpn.cjs",
+        "sourceSha256": "c132fde63d4bcbde7f7aff60321c9e18a0e7ec1fe687297a14c939b686da6428",
+        "definitionSha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "c00816d4af1f50f7826e0ae61359e13d8ead3bee8fc8d9c739228abe6f5d2274"
+      },
+      {
+        "file": "icons/Spaces.SiTidal.svg",
+        "icon": "SiTidal",
+        "aliasOf": null,
+        "package": "@icons-pack/react-simple-icons",
+        "packageVersion": "13.15.1",
+        "provenance": "legacy lockfile",
+        "sourceFile": "icons/SiTidal.cjs",
+        "sourceSha256": "aff200895b7765d99c7ea082b9b7f440c76d485c31c85113f8ccbbb5af9062dd",
+        "definitionSha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "b939162b88b7ddbb331c4e39f1e263966e9cf38b766e54ba7f85936401bedd39"
+      },
+      {
+        "file": "icons/Spaces.SiTransmission.svg",
+        "icon": "SiTransmission",
+        "aliasOf": null,
+        "package": "@icons-pack/react-simple-icons",
+        "packageVersion": "13.15.1",
+        "provenance": "legacy lockfile",
+        "sourceFile": "icons/SiTransmission.cjs",
+        "sourceSha256": "b2601c1c3c235bcd29abc3f8cf8acc38dc53ddac7f2742ad030d95b2c2351a8e",
+        "definitionSha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "24657d06c84e19d77e0916ec3bdbb253e52ec713b987b66edbba0792ea4ae3bf"
+      },
+      {
+        "file": "icons/Spaces.SlackIcon.svg",
+        "icon": "SlackIcon",
+        "aliasOf": "SlackIcon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "220b25c438a7e6cfcba06c94d15287ec5b32a582ae0afee397f20e398fd952e6",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "3b2a823dbef21d0a14970a9735dbd630c60bad581f8dc4fa86b779a3c2b77854"
+      },
+      {
+        "file": "icons/Spaces.SmartPhone01Icon.svg",
+        "icon": "SmartPhone01Icon",
+        "aliasOf": "SmartPhone01Icon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "5c009c26015f3617f589ece2494a0a3015d414f2b1dcc8e5b1a225216c0ab16d",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "ef2120d2fc3d6e539db90ab2e7a927c318650e01814b6b44fe89c4a8829f8af3"
+      },
+      {
+        "file": "icons/Spaces.SpotifyIcon.svg",
+        "icon": "SpotifyIcon",
+        "aliasOf": "SpotifyIcon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "f18b7296e904c95efa3b875a2caddb98b4d317597047e3440612fd6db73d257c",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "48e79e8a655578ee389d2dacdc6c70ed1c0a1b9cb75eef4aa724eab15b7eb77e"
+      },
+      {
+        "file": "icons/Spaces.Tv01Icon.svg",
+        "icon": "Tv01Icon",
+        "aliasOf": "Tv01Icon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "4d215b9621ccc9fc3914b98b41c4e22393102a1039178fdd1501873b2c17f7fd",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "0f0f1cdc32988a13e4bc0d1f98a3fc1d1534cfdda5430601a8ab0a9430c3ce82"
+      },
+      {
+        "file": "icons/Spaces.VisualStudioCodeIcon.svg",
+        "icon": "VisualStudioCodeIcon",
+        "aliasOf": "VisualStudioCodeIcon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "5c09ac247af7c4d19099b11e4550c2d24dae34fa677170037dae3b4be34d5ecf",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "7ed8ac88e51f6e1090727efd5b62fc1756e434bdabe539dd05255fbb76b8676c"
+      },
+      {
+        "file": "icons/Spaces.Vynil02Icon.svg",
+        "icon": "Vynil02Icon",
+        "aliasOf": "Vynil02Icon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "2ca334aff622e226d1ea487a6ea92e9e13e46c8526f29febddd58086b7271316",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "eb5a264086308179ac378287dd0bd593aa6935cde0d1d0d5f75d23fe2082b183"
+      },
+      {
+        "file": "icons/Spaces.WhatsappIcon.svg",
+        "icon": "WhatsappIcon",
+        "aliasOf": "WhatsappIcon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "2428b4d311338d0c8ff05659569f06d1d9eac3529f004ac0b99a339073bba479",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "9a3005cd935212c1b84db118f9ddd3346dce3c9bb80a4dccffc44ee0f2d56c7d"
+      },
+      {
+        "file": "icons/Spaces.ZoomIcon.svg",
+        "icon": "ZoomIcon",
+        "aliasOf": "ZoomIcon",
+        "package": "@hugeicons/core-free-icons",
+        "packageVersion": "4.4.0",
+        "provenance": "user decision 2026-11-10: strip glyphs from the repository version",
+        "sourceFile": "dist/cjs/index.js",
+        "sourceSha256": "702fe2cd41774fd9fd57fb9009ba710797221678ae31895650d7120729387371",
+        "definitionSha256": "f8ab8518b964404a27359b6c3247f7b31b0cd30a48da27f1325788778f78b91b",
+        "renderProps": {
+          "size": 18,
+          "strokeWidth": 1.8
+        },
+        "renderedBy": "_legacy/app/ui/components/Icon/Icon.tsx + @hugeicons/react 1.1.9 / simple-icons 13.15.1",
+        "sha256": "7af0615f72c2827b47d4c7ad572af72948c3bca6ea4dc19f36d9e94f20d66e55"
+      }
+    ]
+  },
   "hugeiconsRepositoryComparison": {
     "legacyVersion": "4.2.3",
     "repositoryVersion": "4.4.0",
@@ -1215,7 +1979,7 @@
   "outputs": [
     {
       "path": "fixtures/fixtures.json",
-      "sha256": "ea0ecc09c992d56cb1ad1510a295e383a3bfd759043e152d37550d08dbb2b19a"
+      "sha256": "f1589e74d0f29feea35df3b4f1d5b092d8faa5a798653901d3c9566678250e88"
     },
     {
       "path": "icons/BatteryChargingIcon.svg",
@@ -1310,6 +2074,154 @@
       "sha256": "e1fac7c10bf7f7c326f80bfb22ed3acdd006b1e476ef86bcf687c20810114d48"
     },
     {
+      "path": "icons/Spaces.AiBrowserIcon.svg",
+      "sha256": "86303e24ea19b3c55f092fc75b677f54d97005350f3e9829e570e900e889089f"
+    },
+    {
+      "path": "icons/Spaces.Analytics01Icon.svg",
+      "sha256": "177540e1c092f08064b76da109d7398844f25373aac83f3206ab7444f6d0e10a"
+    },
+    {
+      "path": "icons/Spaces.AppleFinderIcon.svg",
+      "sha256": "83f21862f0e5dc09e9e86b9ae1842e29075ca0123b495c9b9cd4694ba0a4d66a"
+    },
+    {
+      "path": "icons/Spaces.AppleReminderIcon.svg",
+      "sha256": "64478b80e5a0f7c61aefd83b7ab84af96fa865a1735da259a67ec6309b703817"
+    },
+    {
+      "path": "icons/Spaces.AppStoreIcon.svg",
+      "sha256": "41f1f82d556239a442079c1884da86fbead6917a512aa4cb7cb5264a42547c4d"
+    },
+    {
+      "path": "icons/Spaces.ArcBrowserIcon.svg",
+      "sha256": "275d267fc1c059e94dad1ec6214fc25d68b079f69556269f1e5c4f8a0e5f338c"
+    },
+    {
+      "path": "icons/Spaces.BrowserIcon.svg",
+      "sha256": "cb9ab1fed0911cb92fd12f47943d0b77f415497dc9a28510acc2bb31bd540465"
+    },
+    {
+      "path": "icons/Spaces.CheckListIcon.svg",
+      "sha256": "fdd0170bb399428f34d8cafddcb2445a45fd72975be3a2db264312b45edded8e"
+    },
+    {
+      "path": "icons/Spaces.CodeSimpleIcon.svg",
+      "sha256": "5f004f4b2342ffeaee139e639fcc3ec0e52ce98fa810976e5347aaae8e52b864"
+    },
+    {
+      "path": "icons/Spaces.CodeSquareIcon.svg",
+      "sha256": "2861b852f2f9058024ba296ef085d7feb1864057183cce0c211e3fea645c5b07"
+    },
+    {
+      "path": "icons/Spaces.CommandLineIcon.svg",
+      "sha256": "e39829ab4f4dfe2a0591b9700d9cda1cda3ee32c7c18eff7c52e7542ee0e4ad4"
+    },
+    {
+      "path": "icons/Spaces.ComputerTerminal01Icon.svg",
+      "sha256": "d23dcc8f94c29f9665b303149bcf4f94a5fa376406dd8d4f79b6971c736b4d9b"
+    },
+    {
+      "path": "icons/Spaces.DashboardCircleIcon.svg",
+      "sha256": "3b3d314cb63fa1b10ac16fcf703ad346873f81f7a029c3dfd70c801204cc9117"
+    },
+    {
+      "path": "icons/Spaces.DiscordIcon.svg",
+      "sha256": "0f528e8a53c419181fddaae1f313dc46652a66880c61016c3067006359b860ad"
+    },
+    {
+      "path": "icons/Spaces.FigmaIcon.svg",
+      "sha256": "f82693bfe5e07a2db87d83359a896411a19bb23b55efb8e0f82ec93ec5b2d503"
+    },
+    {
+      "path": "icons/Spaces.Folder01Icon.svg",
+      "sha256": "51086a4fd42a54c242593f94821eeafc73e0d9046348c0ab1fde1d303a524ca5"
+    },
+    {
+      "path": "icons/Spaces.HardDriveIcon.svg",
+      "sha256": "b0f6beeac679f2aeeefecffe15223f5c0a1b31cd3ca097a0a31a2b1d769afc11"
+    },
+    {
+      "path": "icons/Spaces.MessageMultiple01Icon.svg",
+      "sha256": "344a2a8f218a682cfe6a4c8bec56d5ac28ba03a1c3101900d986b60019f409ef"
+    },
+    {
+      "path": "icons/Spaces.MixerIcon.svg",
+      "sha256": "754b2d9abaa83f13388d518576a3cb6b23b5e8ccb6cb4db2b66e992f6e8da41b"
+    },
+    {
+      "path": "icons/Spaces.MusicNote02Icon.svg",
+      "sha256": "53689c6669af6d9c02181fbafe2b59be78526e42212bf852ba05c2df5af58698"
+    },
+    {
+      "path": "icons/Spaces.MusicNote03Icon.svg",
+      "sha256": "6506b3c67b898fa35d19813c1a82d68ed63354e4f67a31966b8a76052ef6a884"
+    },
+    {
+      "path": "icons/Spaces.PaintBoardIcon.svg",
+      "sha256": "2a91b855a3563fdfd795074555c007d3acb7a1d48f5e6c6f34d439e887b74478"
+    },
+    {
+      "path": "icons/Spaces.PlayListIcon.svg",
+      "sha256": "7cd937a53bf4adf58af2881334dcb926014f5bc8bf1600c7766bd296de799913"
+    },
+    {
+      "path": "icons/Spaces.SafariIcon.svg",
+      "sha256": "9cebe7cda6dcb586a1273c2838f8e13475071aa20e3be1e5745b9d8a7ad7ebb5"
+    },
+    {
+      "path": "icons/Spaces.SecurityPasswordIcon.svg",
+      "sha256": "cd6fa8927d822c9bd313a4ce14a4bb1bc35388f98963bdcd944221c4b0e41eab"
+    },
+    {
+      "path": "icons/Spaces.Settings01Icon.svg",
+      "sha256": "0413fbd90c6b0c96354a671aab94ca7e24136179255b6eb74408611f16583ea0"
+    },
+    {
+      "path": "icons/Spaces.SiProtonvpn.svg",
+      "sha256": "c00816d4af1f50f7826e0ae61359e13d8ead3bee8fc8d9c739228abe6f5d2274"
+    },
+    {
+      "path": "icons/Spaces.SiTidal.svg",
+      "sha256": "b939162b88b7ddbb331c4e39f1e263966e9cf38b766e54ba7f85936401bedd39"
+    },
+    {
+      "path": "icons/Spaces.SiTransmission.svg",
+      "sha256": "24657d06c84e19d77e0916ec3bdbb253e52ec713b987b66edbba0792ea4ae3bf"
+    },
+    {
+      "path": "icons/Spaces.SlackIcon.svg",
+      "sha256": "3b2a823dbef21d0a14970a9735dbd630c60bad581f8dc4fa86b779a3c2b77854"
+    },
+    {
+      "path": "icons/Spaces.SmartPhone01Icon.svg",
+      "sha256": "ef2120d2fc3d6e539db90ab2e7a927c318650e01814b6b44fe89c4a8829f8af3"
+    },
+    {
+      "path": "icons/Spaces.SpotifyIcon.svg",
+      "sha256": "48e79e8a655578ee389d2dacdc6c70ed1c0a1b9cb75eef4aa724eab15b7eb77e"
+    },
+    {
+      "path": "icons/Spaces.Tv01Icon.svg",
+      "sha256": "0f0f1cdc32988a13e4bc0d1f98a3fc1d1534cfdda5430601a8ab0a9430c3ce82"
+    },
+    {
+      "path": "icons/Spaces.VisualStudioCodeIcon.svg",
+      "sha256": "7ed8ac88e51f6e1090727efd5b62fc1756e434bdabe539dd05255fbb76b8676c"
+    },
+    {
+      "path": "icons/Spaces.Vynil02Icon.svg",
+      "sha256": "eb5a264086308179ac378287dd0bd593aa6935cde0d1d0d5f75d23fe2082b183"
+    },
+    {
+      "path": "icons/Spaces.WhatsappIcon.svg",
+      "sha256": "9a3005cd935212c1b84db118f9ddd3346dce3c9bb80a4dccffc44ee0f2d56c7d"
+    },
+    {
+      "path": "icons/Spaces.ZoomIcon.svg",
+      "sha256": "7af0615f72c2827b47d4c7ad572af72948c3bca6ea4dc19f36d9e94f20d66e55"
+    },
+    {
       "path": "icons/SpotifyIcon.svg",
       "sha256": "4a1723119c9c0fe0eaba595892aca9249b22d12ccf094dd8b661077f680cf368"
     },
@@ -1367,7 +2279,7 @@
     },
     {
       "path": "reference.css",
-      "sha256": "1e98add207433b5fc15061294c4339b399148201d0b0e6f3d488f2c3d50d6461"
+      "sha256": "734feccde8030887aaf4453aa48ab0459109b968352deabfb89e6da90a5aed8b"
     }
   ],
   "extractionTool": {
@@ -1378,26 +2290,26 @@
       },
       {
         "path": "scripts/bar-reference/extract.ts",
-        "sha256": "a6a42f5384ccb203fbcdb24c70a6010debdfd35aceece1a3f4875f4fa92d9e4b"
+        "sha256": "67866794acbe30a56e8aee787255c029586e982420403642daa073b961004ef1"
       },
       {
         "path": "scripts/bar-reference/loader.ts",
-        "sha256": "e2cd9f971ace585201c3a8d5f1664085d14dde211d2875b6e0a05eda10004ea6"
+        "sha256": "34b4a3b6dba544617a9647a673c9e68c19f9a49e0081429ee1c971edf4911909"
       },
       {
         "path": "scripts/bar-reference/npm.ts",
-        "sha256": "1e632a69844719faaf0ee9e05a565fb05232cd02ee6201ca9a10e56acfb62749"
+        "sha256": "8c620132dcd573bb598ea4ba2dc16bd007f4f016957efb13a692856ce8bbac9e"
       },
       {
         "path": "scripts/bar-reference/scenarios.ts",
-        "sha256": "71dca00412053ab6ccca2708d6f04c55975a94a85b61bd6e63a2227a7e16898d"
+        "sha256": "8d94e4a9f381d7054c1eadbb4e45284a10f9da1919499ac0b5d21b9d42bfe49e"
       },
       {
         "path": "scripts/bar-reference/stubs.ts",
-        "sha256": "057741f194dbe534619a78cde0b16c62e7bf0c6e8f5ef792eef06af951845cac"
+        "sha256": "8fe46bd2286c84cd4572ce9b4d8f94de3de7e76efa2b59997568dd42581a316a"
       }
     ],
-    "sha256": "234582b15148c45df02baf1adbde535f46749d4cae96730eb5b10384b82d9ea1"
+    "sha256": "3f53558a8ae49cfb804799f1b4450f5b0e971602b33498f2e13f067d6da8d212"
   },
   "scenarios": [
     "bar-default",
@@ -1464,7 +2376,31 @@
     "weather-icon-partlyCloudyDay",
     "weather-icon-partlyCloudyNight",
     "weather-icon-clearDay",
-    "weather-icon-clearNight"
+    "weather-icon-clearNight",
+    "spaces-workspaces-no-focus",
+    "spaces-workspace-focused-terminal",
+    "spaces-workspace-focused-coding",
+    "spaces-workspace-focused-browser",
+    "spaces-workspace-focused-music",
+    "spaces-workspace-focused-design",
+    "spaces-workspace-focused-communication",
+    "spaces-workspace-focused-guitar",
+    "spaces-workspace-focused-misc",
+    "spaces-workspace-focused-files",
+    "spaces-workspace-focused-tasks",
+    "spaces-unknown-workspace",
+    "spaces-app-icons-1",
+    "spaces-app-icons-2",
+    "spaces-app-icons-3",
+    "spaces-app-icons-4",
+    "spaces-app-focused",
+    "spaces-two-apps",
+    "spaces-duplicate-titles",
+    "spaces-duplicate-unicode",
+    "spaces-duplicate-no-focus",
+    "spaces-absent",
+    "spaces-empty",
+    "spaces-with-media"
   ],
   "declaredStubs": [
     "@/hooks",
@@ -1474,10 +2410,9 @@
     "@linaria/core",
     "@tanstack/react-query",
     "@tauri-apps/api/core",
-    "_legacy/app/ui/renderer/bar/Spaces/Spaces.state.ts",
-    "_legacy/app/ui/renderer/bar/Spaces/components/AppList/index.ts",
-    "_legacy/app/ui/renderer/bar/Spaces/components/WorkspaceList/index.ts",
     "motion/react",
+    "overlay:_legacy/app/ui/renderer/bar/Spaces/Spaces.constants.ts",
+    "overlay:_legacy/app/ui/renderer/bar/Spaces/components/Workspace/Workspace.tsx <- @/components/Icon",
     "react",
     "react-error-boundary"
   ],
@@ -1485,6 +2420,10 @@
     {
       "piece": "Surface motion (motion/react)",
       "detail": "motion is not installed. Surface renders the settled inline opacity:1 (opacity:0 for the bar-fade-initial fixture); the 0.275s ease fade itself is JS-driven and must be sampled by the parity runner."
+    },
+    {
+      "piece": "Strip motion (motion/react AnimatePresence, LayoutGroup, motion.div)",
+      "detail": "Rendered settled: presence and layout groups render their children, a motion.div with an animate target carries it as inline style (App reveal: width:auto;opacity:1), the workspace indicator (layoutId, no animate) keeps its own style. The app reveal/exit (width 0<->auto, opacity 0<->1, duration max(0.15, length*0.15/15) s, legacy ease) and the indicator layout spring (bounce 0, duration motionRaw.durationSlower) are JS-driven and sampled by the parity runner against models built from the pinned constants."
     },
     {
       "piece": "ErrorBoundary catch (react-error-boundary)",
@@ -1503,8 +2442,20 @@
       "detail": "React Query, Tauri invoke/events, the useTauri/useWidgetToggle/useMediaQuery hooks and the Weather store plumbing are replaced by fixture data (stubs.ts). Labels, colors, icon choice and markup are computed by the pinned sources."
     },
     {
-      "piece": "Spaces data hook and workspace/app lists",
-      "detail": "Spaces.state, AppList and WorkspaceList are stubbed (tiling absent). Spaces.tsx and its SpacesFallback run unchanged; Spaces/components styles are intentionally not extracted (strip is not ported)."
+      "piece": "Tiling strip data boundary (Spaces.state)",
+      "detail": "The pinned Spaces.state.ts runs: fetchWorkspacesData/fetchAppsData sort and map synthetic invoke answers (get_tiling_*; rejected when the scenario has no Tiling) and useSpaces derives display names, the 40/25 truncation and the laptop focused-only reduction. Only its I/O is replaced: useSuspenseQuery returns the fetchers' resolved results (or suspends for spaces-fallback), useMediaQuery is the fixture breakpoint, Tauri events are inert, and isEnabled (useState(false), set by is_tiling_enabled/INITIALIZED in effects) is the fixture's enabled flag. The App/AppList/Workspace/WorkspaceList components, constants and styles run pinned."
+    },
+    {
+      "piece": "Approved app-map additions (overlay, not in legacy)",
+      "detail": "user decision 2026-11-10: Zed -> CodeSquareIcon, Aside -> AiBrowserIcon, Herdr -> CommandLineIcon, DeviceHub -> SmartPhone01Icon, AIOStreams -> PlayListIcon, Nuvio -> Tv01Icon, FigCraft -> PaintBoardIcon. Overlaid onto the pinned Spaces.constants getAppIcon (an addition is looked up on the trimmed name first; every other name goes through the pinned map and its DashboardCircleIcon fallback)."
+    },
+    {
+      "piece": "Unknown workspace without an icon (overlay, approved deviation)",
+      "detail": "orchestrator decision 2026-11-10, reported to user: legacy Workspace passes workspaceIcons[name] = undefined to Icon for a name outside the map and the Bar is lost to the error fallback. For the Workspace.tsx importer only, Icon renders nothing when icon is undefined, so the pinned Workspace draws its button and indicator without an icon."
+    },
+    {
+      "piece": "Strip icon package version",
+      "detail": "user decision 2026-11-10: the strip's @hugeicons/core-free-icons glyphs come from 4.4.0 (the repository version; integrity from the repository bun.lock), not legacy 4.2.3. @hugeicons/react stays at the legacy 1.1.9 and simple-icons at 13.15.1. Glyphs changed since 4.2.3 are listed in stripIcons.glyphChangesFrom4_2_3."
     },
     {
       "piece": "Styles",

@@ -1,4 +1,8 @@
-import type { BarSnapshotOutcome, BarView_Serialize } from '../src/sdk/bindings.gen';
+import type {
+  BarSnapshotOutcome,
+  BarView_Serialize,
+  TilingStripView_Serialize,
+} from '../src/sdk/bindings.gen';
 import type { BarData } from '../src/shell/windows/Bar/Bar.data';
 
 /** The data production shows before the providers of parts 05-08 land. */
@@ -37,6 +41,7 @@ export function barView(overrides: Partial<BarView_Serialize> = {}): BarView_Ser
     media: null,
     weatherEpoch: '0',
     keepAwake: null,
+    tiling: null,
     ...overrides,
   };
 }
@@ -52,4 +57,23 @@ export function unavailableOutcome(
   reason: Extract<BarSnapshotOutcome, { kind: 'unavailable' }>['reason'] = 'disabled',
 ): Extract<BarSnapshotOutcome, { kind: 'unavailable' }> {
   return { kind: 'unavailable', reason, detail: null, generation: '1', sequence };
+}
+
+type AvailableStrip = Extract<TilingStripView_Serialize, { kind: 'available' }>;
+
+/** An `available` Tiling strip view (two workspaces, one focused Ghostty window). */
+export function tilingStrip(overrides: Partial<AvailableStrip> = {}): AvailableStrip {
+  return {
+    kind: 'available',
+    generation: '3',
+    sequence: '7',
+    workspaces: [
+      { name: 'coding', focused: false },
+      { name: 'terminal', focused: true },
+    ],
+    apps: [{ key: '100', appName: 'Ghostty', title: 'Ghostty' }],
+    focusedApp: { key: '100', appName: 'Ghostty', title: 'Ghostty' },
+    focusedWorkspace: 'terminal',
+    ...overrides,
+  };
 }

@@ -31,11 +31,7 @@ Landed facilities on `main` (reuse; add no parallel path):
 
 Bar foundation landed on `main` as `221b005` (2026-11-08); `feat/tiling` is rebased onto it. Parts 05–09 consume its SDK `PublishedState` channel (`sdk/src/published_state.rs`), `ScreenReservations`/`ScreenReservationObserver`/`ScreenReservationSnapshot` (`sdk/src/screen_reservations.rs`) and the typed `DisplayId` there; Tiling never reimplements them.
 
-Still-unlanded draft:
-
-| Branch     | Draft contract path                                        | Reuse after landing                                                            |
-| ---------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `feat/bar` | [UI shell parity](../2026-11-03-bar/04-ui-shell-parity.md) | Approved empty slot and independent parity reference (tiling-bar part 10 only) |
+Bar 03–08 landed on `main` as `98b0c23` (2026-11-10), including [UI shell parity](../2026-11-03-bar/04-ui-shell-parity.md): its approved empty slot and independent parity reference are reused by tiling-bar part 10 only.
 
 No dependencies on unmerged module crates. Tiling depends only on SDK + macOS (ordinary serialization/geometry dependencies are not sibling services). Bar cannot import Tiling crate/config; Tiling cannot import Bar crate/config. App composition registers original DTO codecs and concrete generated commands/events.
 

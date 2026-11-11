@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-bar-tiling-action"
+description = "Enables the bar_tiling_action command without any pre-configured scope."
+commands.allow = ["bar_tiling_action"]
+
+[[permission]]
+identifier = "deny-bar-tiling-action"
+description = "Denies the bar_tiling_action command without any pre-configured scope."
+commands.deny = ["bar_tiling_action"]

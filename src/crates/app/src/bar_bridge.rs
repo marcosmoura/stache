@@ -29,6 +29,10 @@
 //! in-memory cells only. There is no timer: the projection's watcher waits on the
 //! published-state cell without a timeout and the host status sink calls
 //! [`BarBridge::host_changed`] after every host lifecycle or session change.
+//! A second projection, [`TilingProjection`], feeds [`BarView::tiling`] from
+//! Tiling's `tilingState` the same way (see [`crate::bar_tiling`]); its change
+//! counter is added to the sequence too, and `bar_tiling_action` runs a strip
+//! click through Tiling's own typed focus path.
 //! `bar_session_action` (generic host Pause/Resume, Bar limited to `keepAwake`)
 //! is authorized like `bar_action` and executed by the host runner; see
 //! [`crate::session_action`].
@@ -74,7 +78,8 @@
 //! - shaped like a Bar label while Bar is not running: `unavailable` with the
 //!   reason (the legitimate window may be racing its own teardown).
 //!
-//! `bar_snapshot`, `bar_action`, `bar_weather`, `bar_media_artwork` and `bar_session_action` are ACL-gated in the app
+//! `bar_snapshot`, `bar_action`, `bar_weather`, `bar_media_artwork`,
+//! `bar_session_action` and `bar_tiling_action` are ACL-gated in the app
 //! manifest (`build.rs`): only the `bar-window` capability
 //! (`capabilities/bar.json`, `stache-bar-*`) grants them, together with
 //! listening for the event. The label check above still applies. There is no
@@ -124,6 +129,10 @@ use stache_bar::{
 
 use crate::bar_actions::{ActionSource, BarAction, BarActionOutcome, BarActions};
 use crate::bar_keep_awake::{KeepAwakeIndicator, KeepAwakeProjection, KeepAwakeView};
+use crate::bar_tiling::{
+    BarTilingOutcome, BarTilingRequest, BarTilingUnavailable, TilingProjection, TilingStripView,
+    TilingView,
+};
 use crate::bindings::ModuleState;
 use crate::host::HostHandle;
 use crate::session_action::{
@@ -186,6 +195,10 @@ pub struct BarView {
     /// `active: false`. `paused` and `enabled` are the host session facts for
     /// the click, never derived from the colour.
     pub keep_awake: Option<KeepAwakeIndicator>,
+    /// The Tiling strip data, or `null` until the first observation resolves;
+    /// once resolved it never returns to `null`. `absent`, `loading` or
+    /// `available` (see [`crate::bar_tiling`]).
+    pub tiling: Option<TilingStripView>,
 }
 
 /// Why the Bar is not serving data.
@@ -355,16 +368,25 @@ pub fn sequence_is_newer(held: &str, incoming: &str) -> bool {
     }
 }
 
-/// The view's ordering number: Bar's own sequence plus the Keep Awake
-/// projection's change counter.
-const fn sequence_of(published: &BarPublished, keep_awake: &KeepAwakeView) -> u64 {
-    published.sequence.saturating_add(keep_awake.version)
+/// The optional projections sampled together for one view.
+struct Projected {
+    keep_awake: KeepAwakeView,
+    tiling: TilingView,
 }
 
-fn view_of(published: &BarPublished, keep_awake: &KeepAwakeView) -> BarView {
+/// The view's ordering number: Bar's own sequence plus the Keep Awake and
+/// Tiling projections' change counters (each only grows).
+const fn sequence_of(published: &BarPublished, projected: &Projected) -> u64 {
+    published
+        .sequence
+        .saturating_add(projected.keep_awake.version)
+        .saturating_add(projected.tiling.version)
+}
+
+fn view_of(published: &BarPublished, projected: &Projected) -> BarView {
     BarView {
         generation: published.generation.to_string(),
-        sequence: sequence_of(published, keep_awake).to_string(),
+        sequence: sequence_of(published, projected).to_string(),
         config_revision: published.config_revision.clone(),
         panel: published.panel.clone(),
         menu: published.menu.clone(),
@@ -377,7 +399,8 @@ fn view_of(published: &BarPublished, keep_awake: &KeepAwakeView) -> BarView {
         wifi: published.wifi.clone(),
         media: published.media.clone(),
         weather_epoch: published.weather_epoch.to_string(),
-        keep_awake: keep_awake.indicator,
+        keep_awake: projected.keep_awake.indicator,
+        tiling: projected.tiling.strip.clone(),
     }
 }
 
@@ -419,6 +442,7 @@ pub struct BarBridge {
     media: OnceLock<Arc<ArtworkStore>>,
     session: OnceLock<Arc<dyn SessionControl>>,
     keep_awake: Arc<KeepAwakeProjection>,
+    tiling: Arc<TilingProjection>,
 }
 
 impl BarBridge {
@@ -438,6 +462,13 @@ impl BarBridge {
                     bridge.poke_if_running();
                 }
             }));
+            let tiling = TilingProjection::new();
+            let waker = weak.clone();
+            tiling.set_waker(Arc::new(move || {
+                if let Some(bridge) = waker.upgrade() {
+                    bridge.poke_if_running();
+                }
+            }));
             Self {
                 windows,
                 modules,
@@ -451,6 +482,7 @@ impl BarBridge {
                 media: OnceLock::new(),
                 session: OnceLock::new(),
                 keep_awake,
+                tiling,
             }
         })
     }
@@ -459,6 +491,35 @@ impl BarBridge {
     /// (`keepAwake: null`).
     pub fn bind_keep_awake(&self, registry: &Arc<stache_sdk::Registry>) {
         self.keep_awake.bind(registry);
+    }
+
+    /// Binds the host registry the Tiling projection observes. Optional:
+    /// without it the view stays unresolved (`tiling: null`).
+    pub fn bind_tiling(&self, registry: &Arc<stache_sdk::Registry>) { self.tiling.bind(registry); }
+
+    /// Installs Tiling's typed exact-focus path (its health feeds the
+    /// projection and `bar_tiling_action` runs through it). Set once.
+    pub fn set_tiling_focus(&self, focus: Arc<stache_tiling::ipc::TilingFocus>) {
+        self.tiling.set_focus(focus);
+    }
+
+    /// How many times the Tiling watcher woke up (tests: zero while idle).
+    #[must_use]
+    pub fn tiling_wakeups(&self) -> u64 { self.tiling.wakeups() }
+
+    /// Whether the Tiling watcher thread exists (tests).
+    #[must_use]
+    pub fn tiling_watcher_started(&self) -> bool { self.tiling.worker_started() }
+
+    /// The current Tiling projection, for tests and status.
+    #[must_use]
+    pub fn tiling_view(&self) -> TilingView { self.tiling.view() }
+
+    fn projected(&self) -> Projected {
+        Projected {
+            keep_awake: self.keep_awake.view(),
+            tiling: self.tiling.view(),
+        }
     }
 
     /// How many times the Keep Awake watcher woke up (tests: zero while idle).
@@ -521,7 +582,7 @@ impl BarBridge {
             // A stale label after a reopen, or a forged one.
             return BarSnapshotOutcome::Unauthorized;
         }
-        self.outcome(&published, &self.keep_awake.view())
+        self.outcome(&published, &self.projected())
     }
 
     fn unattached() -> BarSnapshotOutcome {
@@ -533,17 +594,17 @@ impl BarBridge {
         }
     }
 
-    fn outcome(&self, published: &BarPublished, keep_awake: &KeepAwakeView) -> BarSnapshotOutcome {
+    fn outcome(&self, published: &BarPublished, projected: &Projected) -> BarSnapshotOutcome {
         if published.state == BarRuntimeState::Running {
             return BarSnapshotOutcome::Available {
-                view: view_of(published, keep_awake),
+                view: view_of(published, projected),
             };
         }
         BarSnapshotOutcome::Unavailable {
             reason: self.reason(published),
             detail: published.detail.clone(),
             generation: published.generation.to_string(),
-            sequence: sequence_of(published, keep_awake).to_string(),
+            sequence: sequence_of(published, projected).to_string(),
         }
     }
 
@@ -775,6 +836,38 @@ impl BarBridge {
         session.session_action(module, action)
     }
 
+    /// Runs one Tiling strip click for the actual calling window `label`.
+    ///
+    /// Authorized like [`session_action`](Self::session_action): a non-Bar,
+    /// stale or forged label is `unauthorized` before anything reaches Tiling,
+    /// and a Bar-shaped label while Bar is not running is
+    /// `unavailable{barNotRunning}`. Then the decimals are checked, Tiling's
+    /// availability (a click never enables, resumes or reconfigures it), the
+    /// rendered generation and sequence, and finally Tiling's own exact focus
+    /// path resolves the key and revalidates at issuance. Blocks for at most
+    /// Tiling's bounded wait, so it runs off the main thread; it takes no lock
+    /// the read path takes, so it never delays `bar_snapshot` or `BarChanged`.
+    #[must_use]
+    pub fn tiling_action(&self, label: &str, request: &BarTilingRequest) -> BarTilingOutcome {
+        let not_running = BarTilingOutcome::Unavailable {
+            reason: BarTilingUnavailable::BarNotRunning,
+        };
+        if !is_bar_label(label) {
+            return BarTilingOutcome::Unauthorized;
+        }
+        let Some(status) = self.status() else {
+            return not_running;
+        };
+        let running = status.published().state == BarRuntimeState::Running;
+        if running && !self.windows.is_live_label(BarConfig::ID, label) {
+            return BarTilingOutcome::Unauthorized;
+        }
+        if !running {
+            return not_running;
+        }
+        self.tiling.click(request)
+    }
+
     /// Records a change and makes sure a worker will handle it. Cheap and
     /// non-blocking: it is called from the status mutators' threads.
     fn poke(&self) {
@@ -836,9 +929,10 @@ impl BarBridge {
         let running = published.state == BarRuntimeState::Running;
         if running {
             self.keep_awake.ensure_worker();
+            self.tiling.ensure_worker();
         }
-        let keep_awake = self.keep_awake.view();
-        let sequence = sequence_of(&published, &keep_awake);
+        let projected = self.projected();
+        let sequence = sequence_of(&published, &projected);
         let Some(label) = self.windows.live_label(BarConfig::ID) else {
             return running;
         };
@@ -861,7 +955,7 @@ impl BarBridge {
             generation: published.generation.to_string(),
             sequence: sequence.to_string(),
             resnapshot,
-            outcome: (!resnapshot).then(|| self.outcome(&published, &keep_awake)),
+            outcome: (!resnapshot).then(|| self.outcome(&published, &projected)),
         };
         let delivered = self.sink.emit(&label, &event).is_ok();
         let mut pump = lock(&self.pump);
@@ -876,6 +970,7 @@ impl BarBridge {
     pub fn begin_shutdown(&self) {
         lock(&self.pump).closed = true;
         self.keep_awake.begin_shutdown();
+        self.tiling.begin_shutdown();
         self.wake.notify_all();
     }
 
@@ -883,7 +978,8 @@ impl BarBridge {
     #[must_use]
     pub fn finish_shutdown(&self) -> bool {
         self.begin_shutdown();
-        let watcher = self.keep_awake.finish_shutdown();
+        let keep_awake = self.keep_awake.finish_shutdown();
+        let watcher = self.tiling.finish_shutdown() && keep_awake;
         // The worker takes the pump lock to exit, so it is never held while
         // waiting for it.
         let Some(handle) = lock(&self.pump).handle.take() else {
@@ -1002,6 +1098,30 @@ pub async fn bar_session_action(
     tauri::async_runtime::spawn_blocking(move || bridge.session_action(&label, &module, action))
         .await
         .unwrap_or(SessionActionOutcome::Uncertain)
+}
+
+/// Focuses a Tiling workspace or window for the Bar window that called.
+///
+/// `request` is strict: a closed `action` enum (`focusWorkspace{name}` |
+/// `focusWindow{window}`), the rendered Tiling `generation` and `sequence` as
+/// exact decimal strings, and no other field. `window` is the actual calling
+/// webview window injected by Tauri; the bridge authorizes its label against
+/// the live Bar panel. The bounded wait runs on the blocking pool. No outcome
+/// produces UI; the strip changes only through the next `BarChanged`.
+#[tauri::command]
+#[specta::specta]
+pub async fn bar_tiling_action(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    request: BarTilingRequest,
+) -> BarTilingOutcome {
+    use tauri::Manager as _;
+
+    let bridge = Arc::clone(&app.state::<BarBridgeState>().0);
+    let label = window.label().to_owned();
+    tauri::async_runtime::spawn_blocking(move || bridge.tiling_action(&label, &request))
+        .await
+        .unwrap_or(BarTilingOutcome::Uncertain)
 }
 
 /// Resolves the weather inputs (provider, key, location) for the Bar window

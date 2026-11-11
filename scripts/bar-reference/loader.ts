@@ -37,8 +37,20 @@ export interface LoaderOptions {
   stubs: Readonly<Record<string, (importer: string) => unknown>>;
   /** Resolved legacy path -> exports, replacing a pinned file with a declared stub. */
   pathStubs: Readonly<Record<string, unknown>>;
-  /** External (non-legacy) modules that are loaded from real packages. */
-  externals: Readonly<Record<string, () => unknown>>;
+  /** External (non-legacy) modules that are loaded from real packages, per importing module. */
+  externals: Readonly<Record<string, (importer: string) => unknown>>;
+  /**
+   * Declared overlays: resolved legacy path -> transform of the pinned module's real exports. The
+   * pinned file still runs unchanged (its blob is recorded); only what importers see is wrapped.
+   */
+  moduleOverlays?: Readonly<Record<string, (exports: Record<string, unknown>) => unknown>>;
+  /**
+   * Declared per-importer overlays: importing legacy path -> specifier -> transform of the exports
+   * that one importer receives. Other importers get the unmodified module.
+   */
+  importOverlays?: Readonly<
+    Record<string, Readonly<Record<string, (exports: Record<string, unknown>) => unknown>>>
+  >;
 }
 
 type Req = (specifier: string) => unknown;
@@ -48,6 +60,7 @@ export class LegacyLoader {
   readonly usedStubs = new Set<string>();
   readonly sources = new Map<string, string>();
   private readonly cache = new Map<string, unknown>();
+  private readonly overlaid = new Map<string, unknown>();
   private readonly transpiler = new Bun.Transpiler({
     loader: 'tsx',
     tsconfig: {
@@ -67,6 +80,22 @@ export class LegacyLoader {
 
   /** Loads a legacy module by its repository path and returns its exports. */
   load(legacyPath: string): Record<string, unknown> {
+    const overlay = this.options.moduleOverlays?.[legacyPath];
+
+    if (overlay) {
+      if (!this.overlaid.has(legacyPath)) {
+        this.usedStubs.add(`overlay:${legacyPath}`);
+        this.overlaid.set(legacyPath, overlay(this.loadPinned(legacyPath)));
+      }
+
+      return this.overlaid.get(legacyPath) as Record<string, unknown>;
+    }
+
+    return this.loadPinned(legacyPath);
+  }
+
+  /** Loads the pinned module itself, without a module overlay. */
+  loadPinned(legacyPath: string): Record<string, unknown> {
     const stub = this.options.pathStubs[legacyPath];
 
     if (stub !== undefined) {
@@ -113,6 +142,19 @@ export class LegacyLoader {
   }
 
   private resolve(specifier: string, importer: string): unknown {
+    const importOverlay = this.options.importOverlays?.[importer]?.[specifier];
+    const resolved = this.resolveUnwrapped(specifier, importer);
+
+    if (importOverlay) {
+      this.usedStubs.add(`overlay:${importer} <- ${specifier}`);
+
+      return importOverlay(resolved as Record<string, unknown>);
+    }
+
+    return resolved;
+  }
+
+  private resolveUnwrapped(specifier: string, importer: string): unknown {
     const stub = this.options.stubs[specifier];
 
     if (stub) {
@@ -124,7 +166,7 @@ export class LegacyLoader {
     const external = this.options.externals[specifier];
 
     if (external) {
-      return external();
+      return external(importer);
     }
 
     let target: string;

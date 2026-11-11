@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -51,7 +51,10 @@ use stache_sdk::{
     WindowBackend, WindowError, WindowId, WindowKey, WindowKind, WindowRequest, WindowSize,
     inspect_paths,
 };
-use stache_tiling::ipc::{LifecycleControl, LifecycleFailure, LifecycleThread, TilingIpc};
+use stache_tiling::ipc::{
+    ActionLane, IpcTiming, LifecycleControl, LifecycleFailure, LifecycleThread, TilingFocus,
+    TilingIpc,
+};
 use stache_tiling::{
     AppDirectory, DisplayProjection, TilingConfig, TilingParts, TilingRuntime, TilingRuntimeState,
 };
@@ -690,18 +693,50 @@ pub struct TilingFactory {
     /// The socket handlers' retained lifecycle workers, joined (bounded) by
     /// `finish_shutdown`; never detached.
     lifecycle_threads: Mutex<Vec<Arc<LifecycleThread>>>,
+    /// The action lane the socket handler and the Bar focus path share.
+    lane: ActionLane,
+    /// The host registry, bound before `register`.
+    registry: Arc<OnceLock<Weak<Registry>>>,
+    /// The typed exact-focus path the Bar strip click uses.
+    focus: Arc<TilingFocus>,
 }
 
 impl TilingFactory {
     /// Wraps the one host-lifetime runtime service.
     #[must_use]
     pub fn new(runtime: TilingRuntime) -> Self {
+        let lane = ActionLane::default();
+        let registry: Arc<OnceLock<Weak<Registry>>> = Arc::new(OnceLock::new());
+        let source = Arc::clone(&registry);
+        let focus = Arc::new(TilingFocus::new(
+            Arc::new(runtime.clone()),
+            Arc::new(move || {
+                let registry = source.get()?.upgrade()?;
+                registry
+                    .snapshots()
+                    .into_iter()
+                    .find(|snapshot| snapshot.id == TilingConfig::ID)
+            }),
+            runtime.status(),
+            runtime.shutdown_token(),
+            IpcTiming::default(),
+            lane.clone(),
+        ));
         Self {
             runtime,
             control: Arc::new(OnceLock::new()),
             lifecycle_threads: Mutex::new(Vec::new()),
+            lane,
+            registry,
+            focus,
         }
     }
+
+    /// Tiling's typed exact-focus path for the Bar strip click. It shares the
+    /// socket handler's lane, availability rules, bounded wait and shutdown
+    /// token; it never pauses, resumes or reconfigures anything.
+    #[must_use]
+    pub fn focus(&self) -> Arc<TilingFocus> { Arc::clone(&self.focus) }
 
     /// Builds the service over a backend and directory, injecting this crate's
     /// native-to-SDK display projection and observing the host reservations
@@ -800,6 +835,10 @@ impl AppDirectory for NoApplications {
 impl ModuleFactory for TilingFactory {
     fn id(&self) -> ModuleId { TilingConfig::ID }
 
+    fn bind_registry(&self, registry: &Arc<Registry>) {
+        let _ = self.registry.set(Arc::downgrade(registry));
+    }
+
     fn register(
         &self,
         registry: &Registry,
@@ -832,7 +871,8 @@ impl ModuleFactory for TilingFactory {
             Arc::new(lifecycle),
             self.runtime.status(),
             self.runtime.shutdown_token(),
-        );
+        )
+        .with_lane(self.lane.clone());
         self.lifecycle_threads
             .lock()
             .unwrap_or_else(PoisonError::into_inner)

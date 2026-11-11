@@ -19,6 +19,12 @@ use crate::window::{Desired, plan};
 /// depend on the Keep Awake crate (checked by `bar_never_depends_on_keep_awake`).
 pub const KEEP_AWAKE_PROVIDER: ModuleId = ModuleId::new("keepAwake");
 
+/// The optional Tiling published-state provider Bar observes (the strip).
+///
+/// Only the identifier string is shared; this crate does not depend on the
+/// Tiling crate, and Tiling does not depend on this one.
+pub const TILING_PROVIDER: ModuleId = ModuleId::new("tiling");
+
 fn error(operation: Operation, category: ErrorCategory, message: impl Into<String>) -> ModuleError {
     ModuleError::new(BarConfig::ID, operation, category, message)
 }
@@ -99,7 +105,7 @@ impl Module for BarModule {
             // disablement or failure never stops Bar. The identifier is only a
             // name; this crate never imports the Keep Awake crate. The app
             // projects the state into the Bar view.
-            observes: &[KEEP_AWAKE_PROVIDER],
+            observes: &[KEEP_AWAKE_PROVIDER, TILING_PROVIDER],
             reserves_screen: true,
         }
     }

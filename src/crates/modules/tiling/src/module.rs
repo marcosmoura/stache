@@ -913,6 +913,7 @@ impl Module for TilingModule {
         options.probe.clone_from(&parts.timing.probe);
         options.borders.clone_from(&parts.borders);
         options.logger = Some(ctx.logger().clone());
+        options.published = ctx.state_publisher().ok();
         inner.status.borders_failure(None);
         let status = inner.status.clone();
         let sink: FaultSink = Arc::new(move |fault| {

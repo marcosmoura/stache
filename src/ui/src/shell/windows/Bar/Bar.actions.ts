@@ -1,4 +1,10 @@
-import { runBarAction, runSessionAction, type BarAction } from '../../../sdk/client';
+import type { BarTilingTarget } from '../../../sdk/bindings.gen';
+import {
+  runBarAction,
+  runBarTilingAction,
+  runSessionAction,
+  type BarAction,
+} from '../../../sdk/client';
 
 import type { KeepAwakeSession } from './Bar.data';
 
@@ -48,4 +54,30 @@ export function keepAwakeClick(session: KeepAwakeSession | undefined): () => voi
         console.debug(`keep awake ${action} failed`, error);
       });
   };
+}
+
+/**
+ * A Tiling strip click: focuses a workspace or window through
+ * `bar_tiling_action`, echoing the generation and sequence of the strip view that
+ * was rendered so Tiling can refuse a stale target. The outcome only feeds
+ * diagnostics; the strip changes solely through the next `BarChanged`. A strip
+ * that is not `available` (`undefined`) sends nothing.
+ */
+export function tilingClick(
+  rendered: { generation: string; sequence: string } | undefined,
+  action: BarTilingTarget,
+): void {
+  if (!rendered) {
+    return;
+  }
+
+  runBarTilingAction({ generation: rendered.generation, sequence: rendered.sequence, action })
+    .then((outcome) => {
+      if (outcome.kind !== 'applied') {
+        console.debug(`tiling ${action.kind}: ${outcome.kind}`);
+      }
+    })
+    .catch((error: unknown) => {
+      console.debug(`tiling ${action.kind} failed`, error);
+    });
 }

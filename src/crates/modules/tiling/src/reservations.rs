@@ -2,9 +2,10 @@
 //!
 //! Tiling only **reads** the host's [`ScreenReservationSnapshot`]. It never
 //! declares `reserves_screen`, never calls `Registry::apply_screen_topology`
-//! and never reads another module's configuration. Until Bar part 03 applies a
-//! host topology the snapshot lists no display, which means "no host inset on
-//! any display"; Tiling's own native display state still gates every write.
+//! and never reads another module's configuration. The host (Bar) applies the
+//! display topology; until it has, the snapshot lists no display, which means
+//! "no host inset on any display". Tiling's own native display state still
+//! gates every write.
 //!
 //! The snapshot is converted once into the pure [`HostReservations`] value and
 //! handed to the actor as [`crate::Input::Reservations`]. The watcher thread

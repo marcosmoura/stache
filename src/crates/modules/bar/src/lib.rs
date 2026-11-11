@@ -38,7 +38,7 @@ mod tests;
 
 pub use config::{BarConfig, WeatherConfig, WeatherProvider};
 pub use menubar::{MENU_JOIN, MENU_POLL, MENU_RETRY, MenuMonitor, Schedule, next_wake};
-pub use module::{BarModule, BarRuntime, KEEP_AWAKE_PROVIDER};
+pub use module::{BarModule, BarRuntime, KEEP_AWAKE_PROVIDER, TILING_PROVIDER};
 pub use providers::{
     ArtworkLookup, ArtworkStore, BatteryChargeState, BatteryReading, CpuReading, MediaParts,
     MediaPaths, MediaReading, MediaResolver, MediaRunState, MediaStatus, MediaTiming, MediaUpdate,

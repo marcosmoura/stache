@@ -44,6 +44,8 @@ What it reads:
   `@hugeicons/core-free-icons@4.2.3`, `@hugeicons/react@1.1.9` and
   `@icons-pack/react-simple-icons@13.15.1` are downloaded from the registry, their sha512 is checked
   against the lockfile, and they are unpacked into a fresh temporary directory that is deleted afterwards.
+- The repository `bun.lock` for the Tiling strip's `@hugeicons/core-free-icons@4.4.0` integrity (user decision
+  2026-11-10); that tarball is downloaded and sha512-checked the same way.
 - The repository's own `react` and `react-dom/server` (current tooling) to render markup.
 
 How it works (`scripts/bar-reference/`):
@@ -59,9 +61,28 @@ How it works (`scripts/bar-reference/`):
 3. `scenarios.ts` lists the visual branches; each is rendered with `react-dom/server` from the real legacy
    `Bar`/`QueryErrorFallback`, so labels, colors, icon choice and DOM come from the legacy code.
 
-Scope note: the workspace/app strip (`Spaces` components and `Spaces.constants` icon maps) is not ported, so
-its styles and icons are not extracted. `Spaces.tsx` itself (empty first slot and the `SpacesFallback`
-"Loading..." surface) is rendered unchanged.
+Scope note: the workspace/app strip is extracted (Tiling–Bar 10c-2). The pinned `Spaces.tsx`,
+`Spaces.state.ts`, `Spaces.constants.ts`, `Spaces.styles.ts`, `Spaces.types.ts` and
+`components/{App,AppList,Workspace,WorkspaceList}` run; their Linaria templates are flattened into
+`reference.css` and the strip icons are written as `icons/Spaces.<Icon>.svg`. Synthetic Tiling answers enter at
+the `invoke` boundary (`get_tiling_*`); the pinned `fetchWorkspacesData`/`fetchAppsData` sort and map them and the
+pinned `useSpaces` derives display names, the 40/25 truncation and the laptop focused-only reduction.
+
+Strip deviations, each recorded in `handReconstructed` and `stripIcons`:
+
+- **Icons (user decision 2026-11-10).** The strip's hugeicons glyphs come from `@hugeicons/core-free-icons`
+  4.4.0 (the repository version; integrity from the repository `bun.lock`), not legacy 4.2.3. The other Bar icons
+  keep 4.2.3. `@hugeicons/react` stays at the legacy 1.1.9 and simple-icons at 13.15.1. The tool renders every
+  strip glyph with 1.1.9 and with the repository's 1.1.10: no differences. Strip glyphs whose data differs
+  between 4.2.3 and 4.4.0: `AiBrowserIcon`, `Analytics01Icon`, `Folder01Icon`, `MessageMultiple01Icon`,
+  `Settings01Icon` (`stripIcons.glyphChangesFrom4_2_3`).
+- **App-map additions (user decision 2026-11-10, not in legacy).** `Zed` -> CodeSquareIcon, `Aside` ->
+  AiBrowserIcon, `Herdr` -> CommandLineIcon, `DeviceHub` -> SmartPhone01Icon, `AIOStreams` -> PlayListIcon,
+  `Nuvio` -> Tv01Icon, `FigCraft` -> PaintBoardIcon, overlaid onto the pinned `getAppIcon` (the pinned file runs
+  unchanged; its importers see the overlay).
+- **Unknown workspace (orchestrator decision 2026-11-10, reported to the user).** Legacy passes `undefined` to
+  `Icon` and loses the Bar. For the `Workspace.tsx` importer only, `Icon` renders nothing when `icon` is
+  undefined, so the pinned `Workspace` draws its button and indicator without an icon.
 
 ## Provenance and what is hand-reconstructed
 
@@ -77,12 +98,15 @@ unmodified:
 - **Data boundary**: React Query, Tauri `invoke`/events, `useTauri*`/`useWidgetToggle`/`useMediaQuery` and
   the Weather store plumbing are replaced by fixture data. Synthetic values only, never native readings.
 - **`motion`**: not installed; `Surface` renders the settled inline `opacity:1` (and `opacity:0` in
-  `bar-fade-initial`). The 0.275s fade is JS-driven and must be sampled by the runner.
+  `bar-fade-initial`). The 0.275s fade is JS-driven and must be sampled by the runner. Strip: `AnimatePresence`
+  and `LayoutGroup` render their children, the App reveal renders its settled `width:auto;opacity:1`, and the
+  workspace indicator keeps its own style; the reveal/exit and the indicator spring are sampled by the runner.
 - **ErrorBoundary**: static rendering cannot catch; `global-error` renders the pinned `QueryErrorFallback`
   directly.
 - **ScrollingLabel / Media artwork**: measurement-derived scroll state and the artwork `Image()` load result
   are injected (`*-scrolling`, `media-artwork-*`). The artwork PNG is generated, not captured media.
-- **Spaces data hook and lists** are stubs (tiling absent).
+- **Spaces data boundary**: `useSuspenseQuery` returns the pinned fetchers' results (or suspends for
+  `spaces-fallback`), and `isEnabled` (set by effects static rendering never runs) is the fixture's flag.
 - **Styles**: Linaria is replaced by the collector and flattener; Stylis vendor-prefix duplicates are not
   generated; class names are `lr-<Module>-<name>`; rule order is legacy module evaluation order (Button
   before Surface, as in the bundle). If the real legacy bundle ordered CSS differently this must be

@@ -30,6 +30,7 @@ mod minimum_size;
 mod module;
 mod outcome;
 mod presets;
+mod published;
 mod reservations;
 mod rules;
 mod state;
@@ -43,6 +44,8 @@ mod workspaces;
 mod cli_tests;
 #[cfg(test)]
 mod drag_tests;
+#[cfg(test)]
+mod focus_tests;
 #[cfg(test)]
 mod ipc_tests;
 #[cfg(test)]
@@ -126,6 +129,10 @@ pub use presets::{
     FloatingContext, FloatingTarget, FloatingTrigger, PositionDecision, PositionNoOp, PresetNoOp,
     PresetOutcome, PresetRequest, center_frame, choose_floating_target, default_position,
     find_preset, preset_frame, resolve_dimension, resolve_preset,
+};
+pub use published::{
+    PublishedFocus, PublishedWindow, PublishedWorkspace, TilingPublishedState,
+    project as project_published, resolve_window_key, window_key,
 };
 pub use reservations::{
     DisplayProjection, HostDisplay, HostLookup, HostReservations, MAX_HOST_DISPLAYS,

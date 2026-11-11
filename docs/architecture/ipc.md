@@ -339,6 +339,20 @@ command and one generated event (`src/ui/src/sdk/bindings.gen.ts`).
   `allow-bar-session-action`. Async, bounded, one in flight (`busy`). No CLI
   grammar or socket method is added. See
   [Keep Awake session click](../features/bar.md#keep-awake-session-click).
+- `bar_tiling_action(request)` focuses one Tiling workspace or window for the
+  Bar strip and returns `BarTilingOutcome` (tagged by `kind`: `applied`, `noOp`,
+  `stale`, `unavailable` (`reason`: `barNotRunning`, `notRunning`, `disabled`,
+  `paused`, `cleanupPending`, `shuttingDown`, `unhealthy`), `busy`, `uncertain`,
+  `refused`, `failed`, `invalid`, `unauthorized`). `request` is
+  `{ generation, sequence, action }` with unknown fields rejected; `action` is the
+  closed enum `focusWorkspace { name } | focusWindow { window }` (an opaque
+  decimal key from `BarView.tiling`). The actual calling window must be the live Bar
+  panel; malformed decimals are `invalid`; a rendered generation that is not the
+  current one or a sequence ahead of it is `stale`; Tiling's own typed focus path
+  resolves the key against its live snapshot and revalidates at issuance. It never
+  enables, resumes or reconfigures Tiling. ACL-gated by `allow-bar-tiling-action`.
+  Async, bounded, one Tiling action in flight (`busy`, never queued). No CLI grammar
+  or socket method is added. See [Tiling strip data](../features/bar.md#tiling-strip-data).
 - `bar_media_artwork(id)` returns `BarArtworkOutcome` (tagged by `kind`: `ready`
   with `artwork` (base64 PNG), `missing`, `unauthorized`, `unavailable`). `id` is the
   `artworkId` of `BarView.media`; a malformed id is `missing` without touching the

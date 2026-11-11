@@ -40,7 +40,7 @@
     "Battery \"Loading...\" (percentage without state) is reachable only with a cast: the seam type requires state."
   ],
   "matrix": {
-    "scenarios": 65,
+    "scenarios": 89,
     "dimensions": [
       {
         "id": "laptop-1440-pad12-h28",
@@ -64,7 +64,7 @@
         "padding": 14,
         "panelViewportWidth": 1412,
         "height": 28,
-        "scenarios": 18
+        "scenarios": 21
       },
       {
         "id": "external-2560-pad14-h28",
@@ -72,7 +72,7 @@
         "padding": 14,
         "panelViewportWidth": 2532,
         "height": 28,
-        "scenarios": 18
+        "scenarios": 21
       },
       {
         "id": "laptop-1440-pad12-h32",
@@ -80,7 +80,7 @@
         "padding": 12,
         "panelViewportWidth": 1416,
         "height": 32,
-        "scenarios": 18
+        "scenarios": 21
       },
       {
         "id": "external-2560-pad14-h32",
@@ -88,7 +88,7 @@
         "padding": 14,
         "panelViewportWidth": 2532,
         "height": 32,
-        "scenarios": 18
+        "scenarios": 21
       },
       {
         "id": "breakpoint-viewport-2035",
@@ -115,21 +115,26 @@
         "scenarios": "all"
       }
     ],
-    "cases": 485,
-    "elementsCompared": 50506,
-    "screenshotsCompared": 970,
+    "cases": 642,
+    "elementsCompared": 79204,
+    "screenshotsCompared": 1284,
     "groups": {
-      "scenario": 397,
+      "scenario": 529,
       "fade-end": 2,
       "slide-hide": 6,
       "slide-reveal": 6,
-      "reduced-motion": 36,
+      "reduced-motion": 42,
       "reduced-slide-hide": 2,
       "reduced-slide-reveal": 2,
       "pointer-hover": 14,
       "pointer-active": 14,
       "scroll-mid": 6,
-      "negative": 7
+      "strip-pointer-hover": 8,
+      "strip-pointer-active": 8,
+      "strip-reveal-end": 1,
+      "strip-exit-end": 1,
+      "strip-indicator-end": 1,
+      "negative": 12
     }
   }
 }

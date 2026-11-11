@@ -5,6 +5,8 @@ import type { BarSnapshotOutcome } from '../../../sdk';
 import type { BatteryReading } from './Battery/Battery.types';
 import type { CPUInfo } from './Cpu/Cpu.types';
 import type { MediaPayload } from './Media/Media.types';
+import { spacesFromTiling } from './Spaces/Spaces.data';
+import type { SpacesStrip } from './Spaces/Spaces.types';
 import type { WeatherReading } from './Weather/Weather.types';
 import type { WifiInfo } from './Wifi/Wifi.types';
 
@@ -43,6 +45,11 @@ export type BarData = {
   keepAwakeSession?: KeepAwakeSession | undefined;
   /** Wi-Fi reading; `null`/`undefined` read as legacy `Unknown` and hide the item. */
   wifi: WifiInfo | null | undefined;
+  /**
+   * The Tiling strip from `BarView.tiling`; `null`/`undefined` is unresolved and,
+   * like `absent`, renders the empty slot.
+   */
+  spaces?: SpacesStrip | null | undefined;
 };
 
 /** What production shows until a provider has a reading (and for every non-`available` answer). */
@@ -72,14 +79,15 @@ export function useBarData(): BarData {
  * is absent, so each component renders legacy's unresolved branch. Media comes from
  * `BarView.media` without artwork (the artwork is fetched by id, see `useMediaArtwork`);
  * Keep Awake maps `BarView.keepAwake` (`null`/absent is unresolved, so the component renders its
- * legacy loading branch; otherwise only `active` is drawn).
+ * legacy loading branch; otherwise only `active` is drawn). Spaces maps `BarView.tiling` into
+ * legacy-shaped strip data (sorted workspaces, apps keyed by the opaque window key).
  */
 export function barDataFromOutcome(outcome: BarSnapshotOutcome | undefined): BarData {
   if (outcome?.kind !== 'available') {
     return ABSENT_BAR_DATA;
   }
 
-  const { cpu, battery, wifi, media, keepAwake } = outcome.view;
+  const { cpu, battery, wifi, media, keepAwake, tiling } = outcome.view;
 
   return {
     ...ABSENT_BAR_DATA,
@@ -106,5 +114,6 @@ export function barDataFromOutcome(outcome: BarSnapshotOutcome | undefined): Bar
     keepAwakeSession: keepAwake
       ? { paused: keepAwake.paused, enabled: keepAwake.enabled }
       : undefined,
+    spaces: spacesFromTiling(tiling),
   };
 }

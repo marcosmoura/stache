@@ -35,19 +35,6 @@ import { buildScenarios, type ParityScenario } from './scenarios';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(), once: vi.fn(), emit: vi.fn() }));
-// Lets one scenario put the real Bar into legacy's "Spaces suspended" state: `Spaces` renders the
-// shipped `SpacesFallback` instead of its (never suspending) content.
-vi.mock('../../src/shell/windows/Bar/Spaces', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/shell/windows/Bar/Spaces')>();
-  const { SpacesFallback } = await import('../../src/shell/windows/Bar/Spaces/Spaces');
-  const { spaces } = await import('./spacesFlag');
-
-  return {
-    ...actual,
-    Spaces: () => (spaces.fallback ? <SpacesFallback /> : <actual.Spaces />),
-  };
-});
-
 const SCALE = window.devicePixelRatio;
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -59,6 +46,8 @@ const LEGACY_MOTION = {
   duration: 150,
   /** `motionRaw.durationSlow` = 0.275 s; the 400ms in `motion.durationSlow` is a CSS string never used by Surface. */
   surfaceFade: 275,
+  /** `motionRaw.durationSlower` = 0.5 s: the workspace indicator spring (`bounce: 0`). */
+  indicatorSpring: 500,
 };
 
 interface Dimension {
@@ -67,7 +56,7 @@ interface Dimension {
   padding: number;
   height: number;
   width: number;
-  /** Every one of the 65 scenarios (otherwise the representative subset). */
+  /** Every one of the 89 scenarios (otherwise the representative subset). */
   full: boolean;
 }
 
@@ -115,6 +104,9 @@ const SUBSET = [
   'weather-loading',
   'weather-icon-snow',
   'keep-awake-active',
+  'spaces-app-focused',
+  'spaces-unknown-workspace',
+  'spaces-duplicate-titles',
 ];
 const SCROLLING = ['media-long-title', 'media-long-title-scrolling', 'wifi-long-ssid-scrolling'];
 
@@ -347,7 +339,7 @@ describe('environment and provenance', () => {
   test('every reference scenario has exactly one parity mapping', () => {
     const names = (manifest as unknown as { scenarios: string[] }).scenarios;
 
-    expect(names).toHaveLength(65);
+    expect(names).toHaveLength(89);
     expect(scenarios.map((scenario) => scenario.name).sort()).toEqual([...names].sort());
     expect(Object.keys(fixtures).sort()).toEqual([...names].sort());
   });
@@ -687,6 +679,326 @@ describe.each(SLIDE_DIMS)('scrolling labels with overflow, mid-cycle $id', (dim)
   );
 });
 
+// -- Tiling strip: pointer states and motion ---------------------------------------------------
+
+/** Buttons of the strip (workspaces, then apps) in DOM order. */
+const STRIP_BUTTONS = '[data-testid="spaces-container"] button';
+
+describe.each(SLIDE_DIMS)('strip hover and active $id', (dim) => {
+  test.each(['hover', 'active'] as const)(
+    'every workspace and app button, %s',
+    async (state) => {
+      await setViewport(frameOf(dim));
+      const scenario = scenarioOf('spaces-app-focused');
+
+      const point = async (rendered: Rendered, index: number): Promise<Snapshot> => {
+        await commands.parityPointer('hover', rendered.selector, STRIP_BUTTONS, index);
+
+        if (state === 'active') {
+          await commands.parityPointer('down', '', '', 0);
+        }
+
+        await nextFrame(rendered.document.defaultView as Window);
+        await applyTimeline(rendered, { kind: 'settled' });
+        const result = await snapshot(rendered);
+
+        await commands.parityPointer('reset', '', '', 0);
+
+        return result;
+      };
+
+      const probe = track(await renderReference(scenario.name, frameOf(dim)));
+
+      await untilStable(probe, 3);
+      const buttons = probe.container.querySelectorAll(STRIP_BUTTONS).length;
+      const resting = await snapshot(probe);
+
+      forget(probe);
+      // Two workspaces, then three apps (wide) or the focused app only (laptop widths).
+      expect(buttons).toBe(dim.width <= 2036 ? 3 : 5);
+
+      for (let index = 0; index < buttons; index++) {
+        const reference = track(await renderReference(scenario.name, frameOf(dim)));
+
+        await untilStable(reference, 3);
+        const referenceSnap = await point(reference, index);
+
+        forget(reference);
+
+        const rendered = track(await renderNew(scenario, frameOf(dim)));
+
+        await untilStable(rendered);
+        const actualSnap = await point(rendered, index);
+
+        forget(rendered);
+
+        // Not vacuous: the pointer state changes the legacy render of that button.
+        expect(
+          compareCaptures(resting.capture, referenceSnap.capture).length,
+          `pointer ${state} on strip button ${index} changed nothing in the reference`,
+        ).toBeGreaterThan(0);
+        expectIdentical(referenceSnap, actualSnap, `strip-pointer-${state}`);
+      }
+    },
+    TIMEOUT * 3,
+  );
+});
+
+/** Width and opacity of each app's outer motion element (the Stack's children after the list). */
+function appSamples(rendered: Rendered): { width: number; opacity: number; label?: number }[] {
+  const win = rendered.document.defaultView as Window;
+  const stack = rendered.container.querySelector('[data-testid="spaces-container"]');
+
+  return [...(stack?.children ?? [])].slice(1).map((outer) => {
+    const label = outer.querySelector('button > div');
+
+    return {
+      width: outer.getBoundingClientRect().width,
+      opacity: Number(win.getComputedStyle(outer).opacity),
+      ...(label ? { label: Number(win.getComputedStyle(label).opacity) } : {}),
+    };
+  });
+}
+
+/** Legacy App transition duration (ms): `max(duration, length * duration / 15)`. */
+function revealMs(displayName: string): number {
+  return Math.max(LEGACY_MOTION.duration, (displayName.length * LEGACY_MOTION.duration) / 15);
+}
+
+/**
+ * Bound for a sampled value against the legacy curve, PENDING USER APPROVAL (docs/guides/testing.md).
+ * Opacity: the approved Surface-fade bound (motion's bezier solver vs the exact curve). Width: one
+ * WebKit layout unit (1/64 px) plus the same relative curve error on the full width.
+ */
+const CURVE_BOUND = 5e-4;
+const widthBound = (full: number) => 1 / 64 + full * CURVE_BOUND;
+
+describe('strip motion (legacy App reveal/exit and workspace indicator spring)', () => {
+  const dim = DIMENSIONS[1] as Dimension;
+
+  test(
+    'app reveal: t=0 is collapsed, the midpoint follows the legacy curve, the end equals the reference',
+    async () => {
+      await setViewport(frameOf(dim));
+      const scenario = scenarioOf('spaces-duplicate-titles');
+      // Display names legacy derives for the four windows (Code x3 share a name: titles; an empty
+      // title keeps the app name), cut at 40 + "..." on a wide panel.
+      const names = [
+        'A deliberately long synthetic window tit...',
+        'Ünïcødé façade — 文件 — a long synthetic w...',
+        'Code',
+        'Safari',
+      ];
+      const reference = await referenceSnapshot(scenario, dim, { kind: 'settled' });
+      const referenceFrame = track(await renderReference(scenario.name, frameOf(dim)));
+
+      await untilStable(referenceFrame, 3);
+      const settled = appSamples(referenceFrame);
+
+      forget(referenceFrame);
+      expect(settled).toHaveLength(names.length);
+      expect(referenceFrame.container.textContent).toContain(names[0]);
+
+      freezeClock();
+      const rendered = track(await renderNew(scenario, frameOf(dim), { settle: false }));
+
+      await delay(30);
+      await stepClock(0);
+      const start = appSamples(rendered);
+
+      expect(start.map(({ width, opacity }) => [width, opacity])).toEqual(names.map(() => [0, 0]));
+      expect(start[0]?.label).toBe(0);
+
+      const model = bezierOf(LEGACY_MOTION.easing);
+      const shortest = revealMs('Code');
+
+      // Midpoint of the shortest reveal; the long titles are still in progress (length-scaled).
+      const mid = Math.floor(shortest / 2);
+
+      await stepClock(mid);
+      const middle = appSamples(rendered);
+
+      names.forEach((name, index) => {
+        const progress = model(Math.min(1, mid / revealMs(name)));
+        const sample = middle[index];
+
+        expect(Math.abs((sample?.opacity ?? -1) - progress)).toBeLessThan(CURVE_BOUND);
+
+        // Unfocused apps animate to their settled width; the focused one to the width motion
+        // measured before its label grew, so it is only bounded.
+        if (index === 0) {
+          expect(sample?.width).toBeGreaterThan(0);
+          expect(sample?.width).toBeLessThan(settled[index]?.width ?? 0);
+          expect(Math.abs((sample?.label ?? -1) - progress)).toBeLessThan(CURVE_BOUND);
+        } else {
+          const full = settled[index]?.width ?? 0;
+
+          expect(Math.abs((sample?.width ?? -1) - full * progress)).toBeLessThanOrEqual(
+            widthBound(full),
+          );
+        }
+      });
+      expect(revealMs(names[0] ?? '')).toBeGreaterThan(shortest);
+
+      await stepClock(revealMs(names[0] ?? '') + 50);
+      await stepClock(revealMs(names[0] ?? '') + 100);
+      await nextFrame(rendered.document.defaultView as Window);
+      const ended = appSamples(rendered);
+
+      // Every motion value has ended on the frozen clock; back on real time only font loading (the
+      // CJK fallback of the Unicode title) may still be pending, nothing animates any more.
+      releaseClock();
+      await untilStable(rendered);
+      expect(appSamples(rendered)).toEqual(ended);
+      const finished = await snapshot(rendered);
+
+      forget(rendered);
+      expectIdentical(reference, finished, 'strip-reveal-end');
+    },
+    TIMEOUT,
+  );
+
+  test(
+    'app exit: the app stays for the legacy duration, then the Bar equals the reference',
+    async () => {
+      await setViewport(frameOf(dim));
+      const before = scenarioOf('spaces-app-focused');
+      const after = scenarioOf('spaces-two-apps');
+      const reference = await referenceSnapshot(after, dim, { kind: 'settled' });
+
+      const rendered = track(await renderNew(before, frameOf(dim)));
+
+      expect(appSamples(rendered)).toHaveLength(3);
+      freezeClock();
+      rendered.rerender(after.data);
+      await delay(30);
+
+      // motion 13.1.0 (the legacy lockfile's version too) does not tween this exit: the leaving
+      // app's width resolves to 0 on the first frame and opacity stays 1 until it is removed when the
+      // legacy duration (max(0.15, length * 0.15 / 15) s) ends. No curve to sample; only the
+      // presence window and the end state are compared (reported, see testing.md).
+      const duration = revealMs('Safari');
+
+      await stepClock(duration - 1);
+      expect(appSamples(rendered)).toHaveLength(3);
+      await stepClock(duration);
+      await stepClock(duration + 50);
+      await nextFrame(rendered.document.defaultView as Window);
+      expect(appSamples(rendered)).toHaveLength(2);
+      const finished = await snapshot(rendered);
+
+      releaseClock();
+      forget(rendered);
+      expectIdentical(reference, finished, 'strip-exit-end');
+    },
+    TIMEOUT,
+  );
+
+  test(
+    'workspace indicator: layout spring (bounce 0, durationSlower) from the old to the new workspace',
+    async () => {
+      await setViewport(frameOf(dim));
+      const from = scenarioOf('spaces-workspace-focused-terminal');
+      const to = scenarioOf('spaces-workspace-focused-tasks');
+      // Sorted strip: terminal is the first button, tasks the tenth.
+      const FROM = 0;
+      const TO = 9;
+      const indicators = (rendered: Rendered) =>
+        rendered.container.querySelectorAll(`${STRIP_BUTTONS} > div`);
+      const indicatorRect = (rendered: Rendered, button: number) => {
+        const indicator = rendered.container
+          .querySelectorAll(STRIP_BUTTONS)
+          [button]?.querySelector(':scope > div');
+
+        if (!indicator) {
+          throw new Error(`No indicator in strip button ${button}`);
+        }
+
+        return rectOf(indicator);
+      };
+      const referenceRect = async (scenario: ParityScenario, button: number) => {
+        const reference = track(await renderReference(scenario.name, frameOf(dim)));
+
+        await untilStable(reference, 3);
+        expect(indicators(reference)).toHaveLength(1);
+        const rect = indicatorRect(reference, button);
+
+        forget(reference);
+
+        return rect;
+      };
+      const start = await referenceRect(from, FROM);
+      const end = await referenceRect(to, TO);
+      const reference = await referenceSnapshot(to, dim, { kind: 'settled' });
+
+      const rendered = track(await renderNew(from, frameOf(dim)));
+
+      expect(indicatorRect(rendered, FROM)).toEqual(start);
+      freezeClock();
+      rendered.rerender(to.data);
+      await delay(30);
+      await stepClock(0);
+      // The new indicator is drawn where the old one was (motion crossfades the two shared-layout
+      // elements; the crossfade opacity is motion's own and is not modelled).
+      expect(indicatorRect(rendered, TO)).toEqual(start);
+
+      // Critically damped (bounce 0) spring whose envelope reaches motion's 0.001 settle threshold at
+      // the legacy duration: e^(-w d) (1 + w d) = 0.001, x(t) = 1 - e^(-w t) (1 + w t).
+      const seconds = LEGACY_MOTION.indicatorSpring / 1000;
+      let low = 0;
+      let high = 200;
+
+      for (let step = 0; step < 200; step++) {
+        const omega = (low + high) / 2;
+
+        if (Math.exp(-omega * seconds) * (1 + omega * seconds) > 0.001) {
+          low = omega;
+        } else {
+          high = omega;
+        }
+      }
+
+      const omega = (low + high) / 2;
+      const spring = (ms: number) => 1 - Math.exp((-omega * ms) / 1000) * (1 + (omega * ms) / 1000);
+
+      for (const ms of [50, LEGACY_MOTION.indicatorSpring / 4, LEGACY_MOTION.indicatorSpring / 2]) {
+        await stepClock(ms);
+        const rect = indicatorRect(rendered, TO);
+        const progress = spring(ms);
+
+        rect.forEach((value, index) => {
+          const expected =
+            (start[index] ?? 0) + ((end[index] ?? 0) - (start[index] ?? 0)) * progress;
+          const travel = Math.abs((end[index] ?? 0) - (start[index] ?? 0));
+
+          expect(
+            Math.abs(value - expected),
+            `indicator edge ${index} at ${ms}ms: ${value} vs ${expected}`,
+          ).toBeLessThanOrEqual(widthBound(travel));
+        });
+      }
+
+      await stepClock(LEGACY_MOTION.indicatorSpring);
+      await stepClock(LEGACY_MOTION.indicatorSpring + 100);
+      await nextFrame(rendered.document.defaultView as Window);
+      expect(indicators(rendered)).toHaveLength(1);
+      expect(indicatorRect(rendered, TO)).toEqual(end);
+      const finished = await snapshot(rendered);
+
+      releaseClock();
+      forget(rendered);
+      expectIdentical(reference, finished, 'strip-indicator-end');
+    },
+    TIMEOUT,
+  );
+});
+
+function rectOf(element: Element): number[] {
+  const rect = element.getBoundingClientRect();
+
+  return [rect.x, rect.y, rect.width, rect.height];
+}
+
 describe('the render is deterministic (no tolerance is needed)', () => {
   test.each(['bar-default', 'media-paused', 'cpu-threshold-84'])(
     '%s renders to identical pixels twice on each side',
@@ -811,8 +1123,115 @@ describe('negative tests: the gate catches regressions in the new render', () =>
     TIMEOUT,
   );
 
+  // The same perturbations applied to the Tiling strip.
+  const stripPerturbations: Perturbation[] = [
+    {
+      label: 'strip workspace icon path',
+      categories: ['svg'],
+      apply: (rendered) => {
+        rendered.container
+          .querySelector(`${STRIP_BUTTONS} svg path`)
+          ?.setAttribute('d', 'M2 2L22 22');
+      },
+    },
+    {
+      label: 'strip app icon swapped for another glyph',
+      categories: ['svg'],
+      apply: (rendered) => {
+        const [first, second] = [
+          ...rendered.container.querySelectorAll('[data-testid="spaces-container"] > div svg'),
+        ];
+
+        if (first && second) {
+          first.innerHTML = second.innerHTML;
+        }
+      },
+    },
+    {
+      label: 'strip label font family',
+      categories: ['style', 'geometry'],
+      apply: inject(
+        '[data-testid="spaces-container"] button > div { font-family: Menlo, monospace !important; }',
+      ),
+    },
+    {
+      label: 'strip app padding +1px',
+      categories: ['style', 'geometry'],
+      apply: inject(
+        '[data-testid="spaces-container"] > div > button { padding-left: 11px !important; }',
+      ),
+    },
+    {
+      label: 'strip app column-gap +1px',
+      categories: ['style', 'geometry'],
+      apply: inject(
+        '[data-testid="spaces-container"] > div > button { column-gap: 7px !important; }',
+      ),
+    },
+  ];
+
+  test.each(stripPerturbations)(
+    '$label is reported by the comparison and the screenshot',
+    async ({ categories, apply }) => {
+      await setViewport(frameOf(dim));
+      const scenario = scenarioOf('spaces-app-focused');
+      const reference = await referenceSnapshot(scenario, dim, { kind: 'settled' });
+      const rendered = track(await renderNew(scenario, frameOf(dim)));
+
+      await applyTimeline(rendered, { kind: 'settled' });
+      const clean = await snapshot(rendered);
+
+      expect(compareCaptures(reference.capture, clean.capture)).toEqual([]);
+      expect(clean.png === reference.png).toBe(true);
+
+      apply(rendered);
+      await nextFrame(rendered.document.defaultView as Window);
+      const perturbed = await snapshot(rendered);
+      const diffs = compareCaptures(reference.capture, perturbed.capture);
+
+      for (const category of categories) {
+        expect(
+          diffs.some((diff) => diff.category === category),
+          `no ${category} difference reported`,
+        ).toBe(true);
+      }
+
+      expect(perturbed.png === reference.png, 'screenshot comparison did not notice').toBe(false);
+      counters.groups['negative'] = (counters.groups['negative'] ?? 0) + 1;
+    },
+    TIMEOUT,
+  );
+
   describe('provenance', () => {
     const clone = <T,>(value: T): T => structuredClone(value);
+
+    test('a tampered strip icon or strip source provenance fails verifyReference', async () => {
+      const stripIcon = Object.keys(referenceFiles).find((file) =>
+        file.startsWith('icons/Spaces.'),
+      ) as string;
+
+      expect(stripIcon).toBeDefined();
+      const tamperedFile = await verifyReference(
+        { ...referenceFiles, [stripIcon]: `${referenceFiles[stripIcon]} ` },
+        manifest,
+        { harnessSources },
+      );
+
+      expect(tamperedFile.ok).toBe(false);
+
+      const tampered = clone(manifest);
+      const source = tampered.sources.find((entry) =>
+        entry.path.endsWith('/Spaces/components/App/App.tsx'),
+      );
+
+      expect(source).toBeDefined();
+
+      if (source) {
+        source.sha256 = 'not-a-hash';
+      }
+
+      expect((await verifyReference(referenceFiles, tampered, { harnessSources })).ok).toBe(false);
+    });
 
     test('a tampered manifest pin fails verifyReference', async () => {
       const tampered = clone(manifest);

@@ -7,7 +7,13 @@
  */
 import { deflateSync } from 'node:zlib';
 
-import { FAIL, SUSPEND, type RenderContext, type ScrollState } from './stubs.ts';
+import {
+  FAIL,
+  SUSPEND,
+  type RenderContext,
+  type ScrollState,
+  type TilingFixture,
+} from './stubs.ts';
 
 export const FROZEN_NOW = '2026-11-10T14:05:09.000Z';
 export const FROZEN_CLOCK_LABEL = 'Tue Nov 10 14:05:09';
@@ -132,7 +138,7 @@ export function baseContext(): RenderContext {
       isLoading: false,
       isConfigured: true,
     },
-    spaces: 'empty',
+    tiling: null,
     surfaceOpacity: 1,
     loadedArtwork: undefined,
     scrollStates: [],
@@ -195,7 +201,7 @@ export function buildScenarios(): Scenario[] {
     {
       name: 'spaces-fallback',
       description: 'Spaces suspended: SpacesFallback "Loading..." Surface in the first slot.',
-      patch: { spaces: 'suspend' },
+      patch: { queries: { tiling_workspace_data: SUSPEND } },
     },
 
     {
@@ -417,6 +423,203 @@ export function buildScenarios(): Scenario[] {
       patch: { weather: { weather: { currentConditions: { feelslike: 21.2, icon: key } } } },
     });
   }
+
+  scenarios.push(...stripScenarios());
+
+  return scenarios;
+}
+
+// -- Tiling strip (Spaces) --------------------------------------------------------------------
+//
+// Synthetic Tiling answers at the `invoke` boundary. The pinned `fetchWorkspacesData` /
+// `fetchAppsData` sort and map them and the pinned `useSpaces` derives display names, truncation and
+// the laptop focused-only reduction; nothing here pre-computes what legacy renders.
+
+/** Legacy `workspaceOrder`, given to Tiling reversed so the pinned sort has work to do. */
+export const STRIP_WORKSPACES = [
+  'terminal',
+  'coding',
+  'browser',
+  'music',
+  'design',
+  'communication',
+  'guitar',
+  'misc',
+  'files',
+  'tasks',
+] as const;
+
+/**
+ * Every app name of the legacy `appIcons` map (key order of the pinned source, including the
+ * U+200E-prefixed WhatsApp), the seven approved additions (user decision 2026-11-10) and one unknown
+ * name for the `DashboardCircleIcon` fallback.
+ */
+export const STRIP_APP_NAMES = [
+  'Ableton Live',
+  'Activity Monitor',
+  'App Store',
+  'Archetype Gojira X',
+  'Archetype John Mayer X',
+  'Archetype Nolly X',
+  'Audio MIDI Setup',
+  'Fortin Nameless Suite X',
+  'Microsoft Edge Dev',
+  'Proton Drive',
+  'Proton Pass',
+  'Proton VPN',
+  'Soldano SLO100 X',
+  '\u200EWhatsApp',
+  'Zed Preview',
+  'Bloom',
+  'Code',
+  'Dia',
+  'Discord',
+  'Feishin',
+  'Figma',
+  'Finder',
+  'Ghostty',
+  'Reminders',
+  'Safari',
+  'Settings',
+  'Slack',
+  'Spotify',
+  'TIDAL',
+  'Transmission',
+  'WhatsApp',
+  'Zoom',
+  'Zed',
+  'Aside',
+  'Herdr',
+  'DeviceHub',
+  'AIOStreams',
+  'Nuvio',
+  'FigCraft',
+  'Synthetic Unknown App',
+] as const;
+
+/** Apps per icon-coverage scenario (an unfocused app is icon-only, so ten fit every layout). */
+export const STRIP_APPS_PER_SCENARIO = 10;
+
+export const STRIP_LONG_TITLE = 'A deliberately long synthetic window title that is cut.ts';
+export const STRIP_UNICODE_TITLE = 'Ünïcødé façade — 文件 — a long synthetic window title.md';
+
+type WindowSpec = [appName: string, title: string];
+
+function tiling(
+  workspaces: readonly string[],
+  focusedWorkspace: string | null,
+  windows: readonly WindowSpec[] = [],
+  focusedIndex: number | null = null,
+  enabled = true,
+): { tiling: TilingFixture } {
+  return {
+    tiling: {
+      enabled,
+      workspaces: [...workspaces],
+      focusedWorkspace,
+      windows: windows.map(([appName, title], index) => ({ id: 101 + index, appName, title })),
+      focusedWindow: focusedIndex === null ? null : 101 + focusedIndex,
+    },
+  };
+}
+
+const ALL_WORKSPACES = [...STRIP_WORKSPACES].reverse();
+const FOCUS_APPS: WindowSpec[] = [
+  ['Ghostty', 'zsh'],
+  ['Code', 'main.ts'],
+  ['Safari', 'Start Page'],
+];
+const DUPLICATES: WindowSpec[] = [
+  ['Code', STRIP_LONG_TITLE],
+  ['Code', STRIP_UNICODE_TITLE],
+  ['Code', ''],
+  ['Safari', 'Start Page'],
+];
+
+function stripScenarios(): Scenario[] {
+  const scenarios: Scenario[] = [
+    {
+      name: 'spaces-workspaces-no-focus',
+      description: 'Every legacy workspace icon, none focused (no indicator), no apps.',
+      patch: tiling(ALL_WORKSPACES, null),
+    },
+    ...STRIP_WORKSPACES.map((name) => ({
+      name: `spaces-workspace-focused-${name}`,
+      description: `Every legacy workspace icon; ${name} focused (indicator), the rest unfocused.`,
+      patch: tiling(ALL_WORKSPACES, name),
+    })),
+    {
+      name: 'spaces-unknown-workspace',
+      description:
+        'Unknown workspace names sort last alphabetically; the focused unknown one has the indicator and no icon (approved deviation).',
+      patch: tiling(['workspace-2', 'coding', 'terminal', 'workspace-1'], 'workspace-1'),
+    },
+  ];
+
+  for (let start = 0; start < STRIP_APP_NAMES.length; start += STRIP_APPS_PER_SCENARIO) {
+    const names = STRIP_APP_NAMES.slice(start, start + STRIP_APPS_PER_SCENARIO);
+    const part = start / STRIP_APPS_PER_SCENARIO + 1;
+
+    scenarios.push({
+      name: `spaces-app-icons-${part}`,
+      description: `App icons ${start + 1}-${start + names.length} of the app map (unfocused, no focused app).`,
+      patch: tiling(
+        ['terminal'],
+        'terminal',
+        names.map((name) => [name, 'Window']),
+      ),
+    });
+  }
+
+  scenarios.push(
+    {
+      name: 'spaces-app-focused',
+      description:
+        'Focused app shows its label; laptop widths reduce the list to the focused app only.',
+      patch: tiling(['coding', 'terminal'], 'coding', FOCUS_APPS, 1),
+    },
+    {
+      name: 'spaces-two-apps',
+      description:
+        'The spaces-app-focused strip after its last app (Safari) closed: the app exit end state.',
+      patch: tiling(['coding', 'terminal'], 'coding', FOCUS_APPS.slice(0, 2), 1),
+    },
+    {
+      name: 'spaces-duplicate-titles',
+      description:
+        'Duplicate app names show window titles; the focused long title is cut at 40 + "..." (laptop: focused only, app name).',
+      patch: tiling(['coding', 'terminal'], 'coding', DUPLICATES, 0),
+    },
+    {
+      name: 'spaces-duplicate-unicode',
+      description: 'Duplicate app names; the focused Unicode title is cut at 40 + "...".',
+      patch: tiling(['coding', 'terminal'], 'coding', DUPLICATES, 1),
+    },
+    {
+      name: 'spaces-duplicate-no-focus',
+      description:
+        'Duplicate app names without a focused app: titles are derived (25 on laptop widths) but no label is drawn.',
+      patch: tiling(['coding', 'terminal'], 'coding', DUPLICATES),
+    },
+    {
+      name: 'spaces-absent',
+      description: 'Tiling not enabled: the empty first-slot div in the full Bar.',
+      patch: tiling(ALL_WORKSPACES, 'terminal', FOCUS_APPS, 0, false),
+    },
+    {
+      name: 'spaces-empty',
+      description: 'Tiling enabled with zero workspaces: the empty first-slot div in the full Bar.',
+      patch: tiling([], null),
+    },
+    {
+      name: 'spaces-with-media',
+      description: 'Strip, centred media and status together in the full Bar layout.',
+      patch: {
+        ...tiling(['coding', 'terminal'], 'coding', FOCUS_APPS, 1),
+        queries: { media: media(SPOTIFY) },
+      },
+    },
+  );
 
   return scenarios;
 }

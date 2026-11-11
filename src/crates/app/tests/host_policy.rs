@@ -166,7 +166,8 @@ fn the_bar_window_has_only_the_snapshot_and_event_listener_permissions() {
         .iter()
         .map(|value| value.as_str().expect("permission"))
         .collect();
-    // `bar_snapshot`, `bar_action`, `bar_weather`, `bar_media_artwork` and `bar_session_action` are ACL-gated to this
+    // `bar_snapshot`, `bar_action`, `bar_weather`, `bar_media_artwork`, `bar_session_action` and
+    // `bar_tiling_action` are ACL-gated to this
     // capability (and also check the calling window label themselves); the event listener
     // pair is the only rest.
     assert_eq!(permissions, [
@@ -175,6 +176,7 @@ fn the_bar_window_has_only_the_snapshot_and_event_listener_permissions() {
         "allow-bar-weather",
         "allow-bar-media-artwork",
         "allow-bar-session-action",
+        "allow-bar-tiling-action",
         "core:event:allow-listen",
         "core:event:allow-unlisten"
     ]);
