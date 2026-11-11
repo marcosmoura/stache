@@ -212,6 +212,10 @@ describe('checkWorkflow', () => {
       'tauri build',
     ],
     ['a bun script', '      - run: bun test:scripts', 'bun test:scripts'],
+    ['a double-quoted command', '      - run: "cargo build"', '"cargo build"'],
+    ['a single-quoted command', "      - run: 'cargo build'", "'cargo build'"],
+    ['a nested shell command', "      - run: sh -c 'cargo build'", 'sh -c'],
+    ['cargo called by path', '      - run: ~/.cargo/bin/cargo build', 'bin/cargo build'],
     ['bun run', '      - run: bun run lint', 'bun run lint'],
   ])('rejects %s before the lock guard', (_name, step, needle) => {
     const text = unguarded(step);
@@ -230,6 +234,28 @@ describe('checkWorkflow', () => {
     'node_modules/.bin/playwright install webkit',
   ])('allows "%s" before the lock guard', (command) => {
     expect(check(unguarded(`      - run: ${command}`))).toEqual([]);
+  });
+
+  it('keeps the per-job guard when "jobs:" carries a comment', () => {
+    const text = `${valid.replace('\njobs:\n', '\njobs: # every job\n')}
+  test:
+    runs-on: macos-26
+    steps:
+      - run: cargo build
+`;
+
+    expect(check(text)).toEqual([
+      `fixture.yml:${lineOf(text, 'cargo build')}: no "cargo fetch --locked" step before this cargo-running step`,
+    ]);
+  });
+
+  it('accepts a flow-style matrix entry, which is not a step', () => {
+    const text = valid.replace(
+      '    runs-on: macos-26\n',
+      '    runs-on: macos-26\n    strategy:\n      matrix:\n        include:\n          - { target: aarch64 }\n',
+    );
+
+    expect(check(text)).toEqual([]);
   });
 
   it('requires the lock guard in every job that runs cargo', () => {

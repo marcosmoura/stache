@@ -562,6 +562,27 @@ describe('media-control --refresh (synthetic bottle, no network)', () => {
     expect(readManifest(manifestPath)).toEqual(real);
   });
 
+  it('reports a failed tag lookup as it is, not as a missing tag', async () => {
+    const { fetch, root, manifestPath, tmpRoot } = setup(nextBottle(), '0.7.8');
+    const limited: Fetch = async (url, init) =>
+      url.includes('/mediaremote-adapter/commits/')
+        ? new Response('rate limited', { status: 403 })
+        : fetch(url, init);
+
+    await expect(
+      refresh({
+        fetch: limited,
+        root,
+        manifestPath,
+        tmpRoot,
+        bottleTag: 'arm64_tahoe',
+        version: '0.7.8',
+      }),
+    ).rejects.toThrow(/Download failed \(403\)/);
+    expect(readdirSync(root)).toEqual([]);
+    expect(readManifest(manifestPath)).toEqual(real);
+  });
+
   it('writes nothing when the formula is at another version', async () => {
     const { fetch, root, manifestPath, tmpRoot } = setup(nextBottle(), '0.7.9');
 

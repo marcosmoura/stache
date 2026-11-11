@@ -604,8 +604,11 @@ export async function refresh(options: {
         await fetchOk(fetchFn, `https://api.github.com/repos/${adapterRepository}/commits/${tag}`)
       ).json()) as { sha: string }
     ).sha;
-  } catch {
-    tagged = null;
+  } catch (error) {
+    // Only a missing tag means "does not exist"; a rate limit or network failure must surface.
+    if (!(error instanceof Error) || !error.message.startsWith('Download failed (404)')) {
+      throw error;
+    }
   }
 
   if (tagged !== submodule.sha) {

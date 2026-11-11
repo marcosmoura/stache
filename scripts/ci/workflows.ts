@@ -24,7 +24,7 @@ const GUARD = 'cargo fetch --locked';
  * `-v`) are exempt.
  */
 const CARGO_RUNNING =
-  /(?:^|[\s;&|(])(?:(?:cargo|bunx|npx|\S*node_modules\/\.bin\/tauri)(?=\s|$)|bun\s+(?!(?:install|audit|pm|--version|-v)(?:\s|$))\S)/m;
+  /(?:^|[\s;&|('"])(?:(?:(?:\S*\/)?cargo|bunx|npx|\S*node_modules\/\.bin\/tauri)(?=[\s'"]|$)|bun\s+(?!(?:install|audit|pm|--version|-v)(?:[\s'"]|$))\S)/m;
 
 function indentOf(line: string): number {
   return line.length - line.trimStart().length;
@@ -63,7 +63,7 @@ function stepLines(lines: string[], at: number): number[] {
 /** Index of the job each line belongs to: the keys directly under `jobs:`; -1 outside a job. */
 function jobOf(lines: string[]): number[] {
   const jobs = Array.from({ length: lines.length }, () => -1);
-  const top = lines.findIndex((line) => /^jobs:\s*$/.test(line));
+  const top = lines.findIndex((line) => /^jobs:\s*(#.*)?$/.test(line));
 
   if (top < 0) {
     return jobs;
@@ -96,6 +96,43 @@ function jobOf(lines: string[]): number[] {
   }
 
   return jobs;
+}
+
+/** Lines that open a step: the list items directly under a `steps:` key. */
+function stepStarts(lines: string[]): Set<number> {
+  const starts = new Set<number>();
+
+  lines.forEach((line, index) => {
+    if (!/^\s*steps:\s*(#.*)?$/.test(line)) {
+      return;
+    }
+
+    const own = indentOf(line);
+    let item = -1;
+
+    for (let next = index + 1; next < lines.length; next += 1) {
+      const candidate = lines[next];
+      const isItem = candidate.trimStart().startsWith('-');
+
+      if (candidate.trim() === '' || candidate.trimStart().startsWith('#')) {
+        continue;
+      }
+
+      if (indentOf(candidate) < own || (indentOf(candidate) === own && !isItem)) {
+        break;
+      }
+
+      if (item < 0) {
+        item = indentOf(candidate);
+      }
+
+      if (isItem && indentOf(candidate) === item) {
+        starts.add(next);
+      }
+    }
+  });
+
+  return starts;
 }
 
 /** Commands of each `run:`, with the line they start on; block scalars are joined. */
@@ -140,6 +177,7 @@ export function checkWorkflow({ file, text }: WorkflowFile): string[] {
   const lines = text.split('\n');
   const errors: string[] = [];
   const at = (index: number, message: string) => errors.push(`${file}:${index + 1}: ${message}`);
+  const steps = stepStarts(lines);
   let topPermissions = -1;
 
   lines.forEach((line, index) => {
@@ -163,7 +201,7 @@ export function checkWorkflow({ file, text }: WorkflowFile): string[] {
       }
     }
 
-    if (/^\s*-\s*\{/.test(line)) {
+    if (steps.has(index) && /^\s*-\s*\{/.test(line)) {
       at(index, 'flow-style steps ("- { ... }") are not supported; write the step as a block');
     }
 
