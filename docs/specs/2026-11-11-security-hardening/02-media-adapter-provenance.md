@@ -1,5 +1,5 @@
 ---
-status: draft
+status: in-progress
 ---
 
 # 02 — Media adapter provenance
@@ -62,7 +62,8 @@ spec on `main` (Decision 3). Do not change how the adapter is run or resolved.
     `raw.githubusercontent.com/ungive/mediaremote-adapter/<revision>/...` at the pinned
     revision SHA, not the tag. Exit non-zero on any difference, naming the file.
   - `--refresh --bottle <tag> --version <v>` (network, writes): resolve the formula, bottle
-    digest and revisions from `formulae.brew.sh`, then rewrite the files and the manifest. The
+    digest and source revision from `formulae.brew.sh` and the `mediaremote-adapter` submodule
+    revision from the GitHub API, then rewrite the files and the manifest. The
     next refresh uses this mode. Its output still has to pass `--verify-upstream` and the live
     probe below before it is committed.
 
@@ -148,5 +149,6 @@ spec on `main` (Decision 3). Do not change how the adapter is run or resolved.
   nested code. Do not ad-hoc re-sign here: that would break byte identity with the bottle.
 - Some harness sandboxes leave an empty `.claude/` directory inside the resource directory.
   `--check` reports it as an extra entry. Delete it locally; it is untracked.
-- Network hosts the tool needs: `formulae.brew.sh` (refresh only), `ghcr.io` (token and blob;
-  it may redirect to `pkg-containers.githubusercontent.com`) and `raw.githubusercontent.com`.
+- Network hosts the tool needs: `formulae.brew.sh` and `api.github.com` (refresh only),
+  `ghcr.io` (token and blob; it may redirect to `pkg-containers.githubusercontent.com`) and
+  `raw.githubusercontent.com`.

@@ -36,9 +36,12 @@ statement below concerns the base `tauri.conf.json`, the only config a package i
 - **Bundle contents.** The expected `.app` is `Contents/MacOS/stache` as the only
   executable, `Contents/Info.plist`, `Contents/Resources/icon.icns` and `_CodeSignature`.
   Frontend assets are embedded in the binary by `custom-protocol`, so no separate frontend
-  directory is expected. Generator and smoke binaries and any framework must be absent.
+  directory is expected. `Contents/Resources/media-control/` holds exactly the files and symlink
+  targets in `scripts/media-control/manifest.json` (flattened by Tauri), plus `PROVENANCE.md` and
+  `LICENSE`. Generator and smoke binaries and any other framework must be absent.
 - **Linkage.** `Contents/MacOS/stache` must be arm64 only and link only system libraries
-  under `/System` or `/usr/lib`. This is the fact that lets Part 03 sign without nested code.
+  under `/System` or `/usr/lib`. This rule covers `Contents/MacOS/stache` only; the nested
+  `media-control` code is signed separately by Part 03.
 - **Unchanged.** `bundle.targets` stays `["app"]`. The capability list stays exactly
   `test-window`. No entitlements file is added.
 

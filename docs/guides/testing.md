@@ -345,7 +345,10 @@ CI rules (`.github/workflows/`):
   the TOML that `writeNextConfigs` writes (`global.toml`, `proxyAudio.toml`) and that
   `writeLegacyConfig` keeps writing JSONC for the legacy app. `scripts/ci/workflows.test.ts` reads
   every `.github/workflows/*.yml` and `*.yaml` as text and enforces the CI rules above, naming file
-  and line.
+  and line. `scripts/media-control/vendor.test.ts` runs the `vendor:media-control -- --check` logic
+  on the vendored media adapter and its manifest, and covers `--verify-upstream` with an injected
+  fetch and a synthetic bottle built in the test; it never touches the network. The real
+  `bun run vendor:media-control -- --verify-upstream` (ghcr.io and raw GitHub) runs in CI only.
 - `test:native`: cargo-nextest across only the root workspace with
   `--features stache-app/dev-tools`; checks desktop identity/window policy, the SDK lifecycle, config
   and window suites, app host races/permissions/shutdown, the proxyAudio policy and fake-backend

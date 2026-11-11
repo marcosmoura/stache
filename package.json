@@ -24,7 +24,8 @@
     "test:parity": "vitest run --project bar-parity-1x --project bar-parity-2x",
     "test:scripts": "vitest run --config vitest.scripts.config.ts",
     "test:ui:coverage": "vitest run --coverage --project ui",
-    "test:native": "cargo nextest run --workspace --features stache-app/dev-tools"
+    "test:native": "cargo nextest run --workspace --features stache-app/dev-tools",
+    "vendor:media-control": "bun scripts/media-control/vendor.ts"
   },
   "dependencies": {
     "@hugeicons/core-free-icons": "4.4.0",

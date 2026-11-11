@@ -113,9 +113,15 @@ is `RELEASE-06-03`.
 
 ## Notes
 
-- This tree has no `MediaRemoteAdapter.framework` or `resources/` input, so the legacy caveat
-  does not apply today. It would apply again if a later part adds nested code, which is why
-  verification stays strict and deep.
+- Nested code: `Contents/Resources/media-control/` holds two Mach-O files,
+  `MediaRemoteAdapterTestClient` and `MediaRemoteAdapter.framework/Versions/A/MediaRemoteAdapter`
+  (listed in `scripts/media-control/manifest.json`), plus `mediaremote-adapter.pl`. Upstream's
+  build ad-hoc signs them and its framework already fails strict verification. Each nested Mach-O
+  must be signed individually, inside out, with the Developer ID, hardened runtime and a timestamp
+  before the app itself is signed. Tauri flattens the framework symlinks in the bundle (the
+  top-level `MediaRemoteAdapter` becomes a regular copy of the binary and `Versions/Current` and
+  `Resources` are absent), so signing must work on the flattened layout. Verification stays strict
+  and deep.
 - Apple's notarization documentation could not be retrieved while writing this spec. The zip
   submission and zip-cannot-be-stapled statements come from prior knowledge; `RELEASE-03-08` is
   what proves the sequence.

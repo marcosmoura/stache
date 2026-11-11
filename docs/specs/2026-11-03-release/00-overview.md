@@ -72,7 +72,10 @@ binary. Its `Info.plist` sets `LSUIElement`, `NSHighResolutionCapable`,
 `resources/Frameworks`, and its README warns that the retained
 `MediaRemoteAdapter.framework` fails strict deep-signature validation. It has no updater
 and no login item. Its cache **and control socket** live under
-`~/Library/Caches/com.marcosmoura.stache`. This tree has none of those resources.
+`~/Library/Caches/com.marcosmoura.stache`. This tree bundles
+`Contents/Resources/media-control/`: two Mach-O files (`MediaRemoteAdapterTestClient` and
+`MediaRemoteAdapter.framework`) plus a perl script, ad-hoc signed by upstream's build, with the
+framework already failing strict verification at source.
 
 ## Decisions
 

@@ -37,6 +37,8 @@ jobs:
       - name: Lockfile matches manifests
         run: cargo fetch --locked
       - run: bun install --frozen-lockfile
+      - name: Vendored media adapter matches the pinned bottle
+        run: bun run vendor:media-control -- --verify-upstream
       - run: node_modules/.bin/playwright install webkit
       - name: Generated artifacts drift
         run: bun run check:generated
