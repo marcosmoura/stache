@@ -19,13 +19,14 @@ use objc2_app_kit::{
     NSWorkspaceActiveSpaceDidChangeNotification, NSWorkspaceApplicationKey,
     NSWorkspaceDidLaunchApplicationNotification, NSWorkspaceDidTerminateApplicationNotification,
 };
+use objc2_core_foundation::CGRect;
 use objc2_foundation::{
     NSNotification, NSNotificationCenter, NSNotificationName, NSOperationQueue, NSString,
 };
 
 use super::super::spaces::{SpaceDiagnostic, UnknownCause};
 use super::super::wake::WakeSource;
-use super::hub::{DisplayLister, LoopWaker, MAX_DISPLAYS, SourceHub};
+use super::hub::{DisplayGeometry, DisplayLister, LoopWaker, MAX_DISPLAYS, SourceHub};
 use super::owner::{SessionFactory, Source, SpaceSession};
 use super::skylight::{SkyLightSpaceNotify, SpaceChangeRegistrar};
 use crate::ax::{AxApi, AxElement, AxNotification, AxObserver, ELEMENT_TIMEOUT, SystemAx};
@@ -39,6 +40,9 @@ const PUMP_TIMEOUT: Duration = Duration::from_hours(24);
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
     fn CGGetActiveDisplayList(max: u32, displays: *mut u32, count: *mut u32) -> i32;
+    fn CGDisplayBounds(display: u32) -> CGRect;
+    fn CGDisplayPixelsWide(display: u32) -> usize;
+    fn CGDisplayPixelsHigh(display: u32) -> usize;
 }
 
 const MAX_DISPLAYS_U32: u32 = 16;
@@ -57,6 +61,26 @@ impl DisplayLister for SystemDisplays {
             unsafe { CGGetActiveDisplayList(MAX_DISPLAYS_U32, out.as_mut_ptr(), &raw mut count) };
         // A full buffer may be truncated: treat it as a failed query.
         (code == 0 && (count as usize) < MAX_DISPLAYS).then_some(count as usize)
+    }
+
+    fn geometry(&self, id: u32) -> Option<DisplayGeometry> {
+        // SAFETY: plain value queries by display id (thread-safe, no
+        // allocation); an unknown id yields an empty rectangle and zero sizes.
+        let (bounds, pixels_wide, pixels_high) = unsafe {
+            (
+                CGDisplayBounds(id),
+                CGDisplayPixelsWide(id),
+                CGDisplayPixelsHigh(id),
+            )
+        };
+        Some(DisplayGeometry {
+            x: bounds.origin.x,
+            y: bounds.origin.y,
+            width: bounds.size.width,
+            height: bounds.size.height,
+            pixels_wide,
+            pixels_high,
+        })
     }
 }
 

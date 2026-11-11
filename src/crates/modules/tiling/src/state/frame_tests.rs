@@ -601,6 +601,31 @@ fn floating_layout_writes_nothing() {
 }
 
 #[test]
+fn a_revealed_window_with_no_frame_to_write_is_not_left_waiting() {
+    // A floating window is never written, so "revealed until its first write"
+    // would never end for it, and its border (which waits for that write)
+    // would never show.
+    let mut fixture = Fixture::new(
+        one_screen(),
+        config(serde_json::json!({
+            "default_layout": "floating",
+            "floating": { "default_position": "default" }
+        })),
+        2,
+    );
+    assert!(writes_of(&fixture.enable()).is_empty());
+    assert!(
+        fixture.state.frames.revealed.is_empty(),
+        "{:?}",
+        fixture.state.frames.revealed
+    );
+    let model =
+        crate::borders::border_model(&fixture.state, &crate::config::BordersConfig::default());
+    assert_eq!(model.entries.len(), 2, "both floating windows are bordered");
+    assert!(model.entries.values().all(|entry| entry.write_pending.is_none()));
+}
+
+#[test]
 fn a_destroyed_window_forgets_its_attempt_and_its_late_ack_is_stale() {
     let mut fixture = Fixture::single();
     let window = fixture.windows[0];

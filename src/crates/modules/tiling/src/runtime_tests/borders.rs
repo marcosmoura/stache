@@ -668,6 +668,39 @@ fn incoming_borders_wait_for_the_shown_observation_the_reveal_write_and_one_fram
     );
 }
 
+/// TB-04-02: a floating window is never written, so its border must not wait
+/// for a reveal write that never comes: when its workspace returns it shows
+/// after the shown observation and one display frame.
+#[test]
+fn a_floating_window_gets_its_border_back_when_its_workspace_returns() {
+    let (mut desk, [_w1, _w2, _w3]) = Desk::started();
+    // The focused window (W1) floats: Tiling writes it no more.
+    desk.intent(Intent::ToggleFloating);
+    for _ in 0..3 {
+        desk.frame();
+    }
+    desk.workspace("b");
+    desk.lifecycle(0, LifecycleKind::Hidden);
+    desk.frame();
+    desk.mark("back");
+    desk.workspace("a");
+    desk.frame();
+    desk.lifecycle(0, LifecycleKind::Unhidden);
+    for _ in 0..3 {
+        desk.frame();
+    }
+    let back = desk.since("back");
+    assert!(
+        !back.iter().any(|e| matches!(e, Ev::Write(w) if w.application() == desk.ids[0])),
+        "a floating window is not written: {back:#?}"
+    );
+    assert_eq!(
+        Desk::shows_in(&back, 101).len(),
+        1,
+        "its border returns without a reveal write: {back:#?}"
+    );
+}
+
 /// TB-04-02: a user hide (command-H) hides the overlays in the turn the
 /// `Hidden` observation arrives; Cmd-Tab unhide follows the show rule.
 #[test]

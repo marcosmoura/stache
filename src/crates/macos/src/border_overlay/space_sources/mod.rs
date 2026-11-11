@@ -23,7 +23,7 @@
 //! | Mission Control, App Exposé, Show Desktop and exit | AX notifications on the Dock process (`AxObserver` on the owner run loop); the owner drains the observer after the run loop handled it and pushes facts | owner |
 //! | Dock launch / terminate | `NSWorkspace` did-launch / did-terminate for `com.apple.dock`; posts a re-register command | `NSOperationQueue` worker |
 //! | Space change completed | public `NSWorkspaceActiveSpaceDidChangeNotification`, no display info, so every active display | `NSOperationQueue` worker |
-//! | Display layout change | `NSApplicationDidChangeScreenParametersNotification` (posted on main, delivered to the queue); only the end is observable | `NSOperationQueue` worker |
+//! | Display layout change | `NSApplicationDidChangeScreenParametersNotification` (posted on main, delivered to the queue), counted only when the displays or their geometry differ from the last read (it is also posted for HDR headroom changes); only the end is observable | `NSOperationQueue` worker |
 //! | Space change began | private `SkyLight` connection notify proc, `dlsym`-resolved (`skylight.rs`), no display, so every active display | unverified (the connection's event source; possibly main) |
 //! | Fullscreen | not a source: the Tiling engine reports `FullscreenChanged` from the window flags it already observes | actor |
 //!
@@ -60,7 +60,9 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-pub use hub::{Command, Commands, DisplayLister, LoopWaker, MAX_DISPLAYS, SourceHub};
+pub use hub::{
+    Command, Commands, DisplayGeometry, DisplayLister, LoopWaker, MAX_DISPLAYS, SourceHub,
+};
 pub use owner::{OwnerState, SessionFactory, Source, SpaceSession, run_owner};
 pub use window_list::{OnScreenWindows, SystemOnScreenWindows, WindowListError, confirm_on_screen};
 
@@ -231,6 +233,7 @@ impl SpaceEvents for SystemSpaceEvents {
             let exit = Arc::clone(&exit);
             move || {
                 let _guard = ExitGuard(exit);
+                hub.prime_display_layout();
                 run_owner(factory, &hub, &commands);
             }
         });

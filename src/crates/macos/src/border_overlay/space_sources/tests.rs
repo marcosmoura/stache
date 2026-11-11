@@ -21,12 +21,27 @@ fn display(n: u32) -> DisplayId { DisplayId::new(n) }
 // ---- fakes -------------------------------------------------------------------
 
 #[derive(Clone, Default)]
-struct FakeDisplays(Arc<Mutex<Option<Vec<u32>>>>);
+struct FakeDisplays(
+    Arc<Mutex<Option<Vec<u32>>>>,
+    Arc<Mutex<BTreeMap<u32, DisplayGeometry>>>,
+);
 
 impl FakeDisplays {
-    fn with(ids: &[u32]) -> Self { Self(Arc::new(Mutex::new(Some(ids.to_vec())))) }
+    fn with(ids: &[u32]) -> Self { Self(Arc::new(Mutex::new(Some(ids.to_vec()))), Arc::default()) }
 
     fn set(&self, ids: Option<&[u32]>) { *lock(&self.0) = ids.map(<[u32]>::to_vec); }
+
+    /// Gives display `id` a geometry `width` points wide.
+    fn resize(&self, id: u32, width: f64) {
+        lock(&self.1).insert(id, DisplayGeometry {
+            x: 0.0,
+            y: 0.0,
+            width,
+            height: 1200.0,
+            pixels_wide: 1920,
+            pixels_high: 1200,
+        });
+    }
 }
 
 impl DisplayLister for FakeDisplays {
@@ -35,6 +50,8 @@ impl DisplayLister for FakeDisplays {
         out[..ids.len()].copy_from_slice(&ids);
         Some(ids.len())
     }
+
+    fn geometry(&self, id: u32) -> Option<DisplayGeometry> { lock(&self.1).get(&id).copied() }
 }
 
 #[derive(Default)]
@@ -241,6 +258,69 @@ fn a_layout_change_reports_both_ends_and_completes_vanished_transitions() {
         F::SpaceChangeCompleted { display: display(2) },
         F::DisplayLayoutChanged,
     ]);
+}
+
+#[test]
+fn screen_parameter_notifications_with_an_unchanged_layout_are_ignored() {
+    // macOS also posts the notification when only the display's HDR headroom
+    // changed (many times a second while brightness adapts): no layout fact.
+    let (hub, mailbox, _) = hub_rig(&[1, 2]);
+    hub.display_layout_changed();
+    let _ = mailbox.drain();
+    for _ in 0..30 {
+        hub.display_layout_changed();
+    }
+    assert!(mailbox.drain().facts.is_empty(), "the layout did not change");
+}
+
+#[test]
+fn a_primed_hub_ignores_the_first_unchanged_notification_too() {
+    let (hub, mailbox, displays) = hub_rig(&[1]);
+    displays.resize(1, 1920.0);
+    hub.prime_display_layout();
+    hub.display_layout_changed();
+    assert!(mailbox.drain().facts.is_empty(), "same displays, same geometry");
+}
+
+#[test]
+fn a_geometry_change_of_the_same_displays_is_a_layout_change_once() {
+    let (hub, mailbox, displays) = hub_rig(&[1]);
+    displays.resize(1, 1920.0);
+    hub.prime_display_layout();
+    displays.resize(1, 2560.0);
+    hub.display_layout_changed();
+    assert_eq!(mailbox.drain().facts, [
+        F::DisplayLayoutChanging,
+        F::DisplayLayoutChanged
+    ]);
+    hub.display_layout_changed();
+    assert!(
+        mailbox.drain().facts.is_empty(),
+        "the new layout is the known one"
+    );
+}
+
+#[test]
+fn an_unreadable_display_list_fails_closed_and_the_next_read_reports_once() {
+    let (hub, mailbox, displays) = hub_rig(&[1]);
+    hub.prime_display_layout();
+    displays.set(None);
+    for _ in 0..2 {
+        hub.display_layout_changed();
+        assert_eq!(mailbox.drain().facts, [
+            F::DisplayLayoutChanging,
+            F::SourceLost(U::QueryFailed),
+            F::DisplayLayoutChanged,
+        ]);
+    }
+    displays.set(Some(&[1]));
+    hub.display_layout_changed();
+    assert_eq!(mailbox.drain().facts, [
+        F::DisplayLayoutChanging,
+        F::DisplayLayoutChanged
+    ]);
+    hub.display_layout_changed();
+    assert!(mailbox.drain().facts.is_empty());
 }
 
 #[test]

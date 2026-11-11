@@ -84,11 +84,43 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// One display's geometry: its bounds in the global point space and its size
+/// in pixel units.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DisplayGeometry {
+    /// Left edge, in points.
+    pub x: f64,
+    /// Top edge, in points.
+    pub y: f64,
+    /// Width, in points.
+    pub width: f64,
+    /// Height, in points.
+    pub height: f64,
+    /// Width in pixel units.
+    pub pixels_wide: usize,
+    /// Height in pixel units.
+    pub pixels_high: usize,
+}
+
 /// The active display ids.
 pub trait DisplayLister: Send + Sync {
     /// Writes the active display ids into `out` and returns how many, or `None`
     /// when the query failed or does not fit.
     fn active(&self, out: &mut [u32; MAX_DISPLAYS]) -> Option<usize>;
+
+    /// The geometry of the active display `id`, or `None` when it is unknown
+    /// (the display then counts by its id alone).
+    fn geometry(&self, id: u32) -> Option<DisplayGeometry> {
+        let _ = id;
+        None
+    }
+}
+
+/// The displays and their geometry: what a real layout change changes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct DisplayLayout {
+    len: usize,
+    displays: [(u32, Option<DisplayGeometry>); MAX_DISPLAYS],
 }
 
 /// A fixed set of display ids.
@@ -118,6 +150,9 @@ pub struct SourceHub {
     commands: Arc<Commands>,
     /// Displays whose Space change began and has not completed.
     transitions: Mutex<DisplaySet>,
+    /// The display layout last seen; `None` before the first read and after an
+    /// unreadable one.
+    layout: Mutex<Option<DisplayLayout>>,
     mission_control: AtomicBool,
     accepting: AtomicBool,
     in_flight: AtomicUsize,
@@ -132,6 +167,7 @@ impl SourceHub {
             displays,
             commands,
             transitions: Mutex::new(DisplaySet::new()),
+            layout: Mutex::new(None),
             mission_control: AtomicBool::new(false),
             accepting: AtomicBool::new(true),
             in_flight: AtomicUsize::new(0),
@@ -234,11 +270,45 @@ impl SourceHub {
         }
     }
 
-    /// The screen parameters changed (a display was added, removed or
-    /// rearranged). Only the end is observable: the layout is reported as
+    /// The current displays and their geometry, or `None` when the display
+    /// list is unreadable. No lock of ours is held while asking.
+    fn read_layout(&self) -> Option<DisplayLayout> {
+        let mut ids = [0_u32; MAX_DISPLAYS];
+        let len = self.displays.active(&mut ids)?;
+        let mut displays = [(0_u32, None); MAX_DISPLAYS];
+        for (slot, &id) in displays.iter_mut().zip(&ids[..len]) {
+            *slot = (id, self.displays.geometry(id));
+        }
+        Some(DisplayLayout { len, displays })
+    }
+
+    /// Records the current display layout as the one later screen-parameter
+    /// notifications are compared with. The owner calls it once at start, so
+    /// the first notification that changes nothing is already ignored.
+    pub fn prime_display_layout(&self) {
+        let layout = self.read_layout();
+        *lock(&self.layout) = layout;
+    }
+
+    /// The screen parameters changed. The system posts this for more than
+    /// layout changes: a display's HDR headroom follows brightness in small
+    /// steps, many times a second, with the same displays and geometry. Only
+    /// a different set of displays or a different geometry is a layout change
+    /// (a display added, removed, rearranged or resized); anything else is
+    /// ignored. An unreadable display list fails closed and is reported.
+    ///
+    /// Only the end of a change is observable: the layout is reported as
     /// changing and changed in one burst, which hides every border and
     /// re-confirms. A transition recorded for a display that is gone completes.
     pub fn display_layout_changed(&self) {
+        let layout = self.read_layout();
+        {
+            let mut known = lock(&self.layout);
+            if layout.is_some() && *known == layout {
+                return;
+            }
+            *known = layout;
+        }
         self.emit(SpaceFact::DisplayLayoutChanging);
         let mut buffer = [0_u32; MAX_DISPLAYS];
         let active = self.displays.active(&mut buffer);

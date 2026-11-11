@@ -171,7 +171,8 @@ pub struct FrameBook {
     /// Windows of a just-revealed workspace that have not had their first
     /// settled write yet. Their writes are direct, never animated: animation is
     /// only for layout changes inside an already visible workspace. A window
-    /// leaves the set when it is written or found already at its target.
+    /// leaves the set when it is written, found already at its target, or has
+    /// no frame to write (a floating window).
     pub revealed: BTreeSet<WindowInstance>,
 }
 
@@ -539,6 +540,9 @@ pub(super) fn plan_and_issue(state: &mut TilingState, fx: &mut Vec<Effect>) {
     let unsettled = state.unsettled_apps();
     note_revealed(state);
     let desired = desired_frames(state);
+    // A revealed window with no frame to write (a floating window, a Grid
+    // extra) is never "written or found at its target": it waits for nothing.
+    state.frames.revealed.retain(|token| desired.contains_key(token));
     let forced = state.frames.records.values().any(|record| record.forced);
     if desired != state.frames.desired || forced {
         state.frames.plan_sequence += 1;

@@ -903,17 +903,7 @@ impl Engine {
         };
         // The runtime-owned hidden applications are an input of the pure
         // transition: their windows keep their layout slot.
-        if let Some(visibility) = &self.visibility {
-            // Our unhide is done once the ledger releases the record, yet the
-            // application still reads hidden until its shown observation: it
-            // stays ours until then. Anything that reads visible is dropped.
-            self.released_hidden
-                .retain(|application| state.apps.get(application).is_some_and(|app| app.hidden));
-            let mut owned = visibility.hidden_apps();
-            owned.extend(self.released_hidden.iter().copied());
-            self.released_hidden.clone_from(&owned);
-            state.set_owned_hidden(owned);
-        }
+        self.sync_owned_hidden(&mut state);
         // The same for the instant-fallback applications.
         if let Some(animation) = &self.animation {
             state.set_animation_fallback(animation.fallback_apps());
@@ -949,6 +939,11 @@ impl Engine {
         self.diag.effects(&state, &effects);
         let outbox = state.take_tab_outbox();
         self.note_tab_outbox(&state, outbox, now);
+        // The transition may be the one that read an application visible again
+        // (its shown observation): it stops being ours now, not at the next
+        // input, so the border of a window nothing else will touch (a floating
+        // one) is not left waiting for an unrelated input.
+        self.sync_owned_hidden(&mut state);
         self.state = Some(state);
         // Borders first: an overlay of a window that left the visible workspace
         // is ordered out before this input's frame writes are queued.
@@ -961,6 +956,21 @@ impl Engine {
             self.retime(now);
         }
         true
+    }
+
+    /// Copies the runtime-owned hidden applications into the pure state.
+    ///
+    /// Our unhide is done once the ledger releases the record, yet the
+    /// application still reads hidden until its shown observation: it stays
+    /// ours until then. Anything that reads visible is dropped.
+    fn sync_owned_hidden(&mut self, state: &mut TilingState) {
+        let Some(visibility) = &self.visibility else { return };
+        self.released_hidden
+            .retain(|application| state.apps.get(application).is_some_and(|app| app.hidden));
+        let mut owned = visibility.hidden_apps();
+        owned.extend(self.released_hidden.iter().copied());
+        self.released_hidden.clone_from(&owned);
+        state.set_owned_hidden(owned);
     }
 
     /// Tells the animation control what this turn changed for it: a
