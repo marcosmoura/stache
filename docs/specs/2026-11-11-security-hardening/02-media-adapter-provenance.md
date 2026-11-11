@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 ---
 
 # 02 — Media adapter provenance
@@ -141,6 +141,12 @@ spec on `main` (Decision 3). Do not change how the adapter is run or resolved.
   from both copies.
 
 ## Notes
+
+- Live probe, approved by the user and run on 2026-11-11 (macOS 27.0): `test` exited 0 and
+  `stream --no-diff` emitted two data lines from the repository copy and again from the release
+  bundle, whose adapter files matched the manifest. `codesign --verify --deep --strict` passes on
+  the ad-hoc, hardened-runtime app. The binaries are built for macOS 26 but were run on macOS 27
+  only.
 
 - Changed after review (2026-11-11): the tool calls `/usr/bin/tar`; `--refresh` writes nothing
   unless every manifest path exists in the new bottle, checks the adapter tag against the

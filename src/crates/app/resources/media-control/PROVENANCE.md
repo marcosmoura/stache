@@ -74,4 +74,13 @@ streamed newline-delimited JSON (`{"type":"data","diff":false,"payload":{...}}`)
 no permission prompt, spawned no child processes (perl loads the framework in-process)
 and ended on `SIGTERM` with the child reaped. Relative paths fail ("Failed to load
 framework"), so callers must pass absolute paths. Largest observed line was about 157 KB
-(base64 artwork). The current `arm64_tahoe` files have not yet been probed live.
+(base64 artwork).
+
+## Live probe of the current files (2026-11-11, macOS 27.0, arm64)
+
+The approved probe ran the `arm64_tahoe` files from this directory and from the release bundle
+built by `bun run tauri:build`. In both places `test` exited 0 with no output, and six seconds of
+`stream --no-diff` produced two `data` lines (an empty payload, then the full now-playing payload,
+about 193 KB with artwork), nothing on standard error and a clean exit on `SIGTERM`. The bundled
+files matched the manifest byte for byte with their executable bits. The binaries are built for
+macOS 26 (`minos 26.0`); they were run on macOS 27.0 only, so macOS 26 itself is not verified.
