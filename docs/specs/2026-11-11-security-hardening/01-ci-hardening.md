@@ -87,6 +87,13 @@ true. No product code changes.
 
 ## Notes
 
+- Decided by the user on 2026-11-11: CI no longer runs the Bar visual-parity gate. The first
+  Quality run of the branch failed at `bun run test` because `test:parity` needs the Maple Mono
+  NF font, which the GitHub runner lacks; `main` had failed the same way since 2026-11-10. The
+  workflow now runs `test:ui`, `test:scripts` and `test:native` as separate steps and the parity
+  gate stays a local check. The "first Quality run passes" criterion is judged on the run after
+  this change.
+
 - Changed after review (2026-11-11): the pin test allows a job-level `permissions:` block, so a
   later workflow can raise one job above the read-only default; the top-level rule is unchanged
   and `quality.yml` has no job-level block. The lock guard is checked per job, block scalars with

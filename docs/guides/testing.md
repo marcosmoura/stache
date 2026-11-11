@@ -338,6 +338,9 @@ CI rules (`.github/workflows/`):
   artifacts (`schemas/**`, `src/crates/app/gen/**`, `src/ui/src/sdk/bindings.gen.ts`) are excluded:
   their bytes belong to the generators, so `check:generated`, not the formatter, is their gate.
 - `test` runs `test:ui`, `test:parity`, `test:scripts` and `test:native`. Bun runs commands; Vitest runs TS tests.
+  CI runs `test:ui`, `test:scripts` and `test:native` as separate steps and leaves `test:parity` out: the
+  parity gate needs the system-installed Maple Mono NF font and reference renders from the development
+  machine, so it runs locally only (`bun run test`, the pre-push hook and before a Bar UI merge).
 - `test:ui`: real Playwright WebKit through Vitest. Suites live under `src/ui/src` next to components;
   `src/ui/tests` holds setup/support only. SDK wrapper and status-feed suites mock the generated Tauri
   command/event boundary; `Shell` router and `TestWindow` suites prove route validation, subscription
