@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 01 — Overlay window engine
@@ -25,9 +25,9 @@ New `macos/src/border_overlay/` (`mod.rs`, `control.rs`, `native.rs`, `testing.r
 
 ## Acceptance criteria
 
-- [ ] TB-01-01: With a fake executor and fake native backend, `apply` never runs native code off main, never waits on main, merges latest-wins per handle within `MAX_OVERLAYS`, and keeps `Hide`/`Release` ordering; `HideAll` is applied ahead of every other pending command and never merged away; acknowledgements are bounded and typed.
-- [ ] TB-01-02: Coordinate conversion, outset frame, corner radius (symbol present, absent, zero) and scale selection are pure functions with tests across two displays with different scales and a non-zero primary origin.
-- [ ] TB-01-03: Pool reuse, `release_all` and refusal at the cap leave no live overlay in the fake owner map; each capability gap (relative ordering, corner radius, Space) has one status diagnostic.
+- [x] TB-01-01: With a fake executor and fake native backend, `apply` never runs native code off main, never waits on main, merges latest-wins per handle within `MAX_OVERLAYS`, and keeps `Hide`/`Release` ordering; `HideAll` is applied ahead of every other pending command and never merged away; acknowledgements are bounded and typed.
+- [x] TB-01-02: Coordinate conversion, outset frame, corner radius (symbol present, absent, zero) and scale selection are pure functions with tests across two displays with different scales and a non-zero primary origin.
+- [x] TB-01-03: Pool reuse, `release_all` and refusal at the cap leave no live overlay in the fake owner map; each capability gap (relative ordering, corner radius, Space) has one status diagnostic.
 
 ## Tests
 
@@ -39,11 +39,18 @@ Compile on macOS 26, then on an owned test application window: `orderWindow(_:re
 
 ## Review checklist
 
-- [ ] [Hard rule checklist](00-overview.md#hard-rule-review-checklist-every-part) passed: inspired by, not derived from, JankyBorders; the files above were studied, none copied, translated or closely paraphrased.
+- [x] [Hard rule checklist](00-overview.md#hard-rule-review-checklist-every-part) passed: inspired by, not derived from, JankyBorders; the files above were studied, none copied, translated or closely paraphrased.
 
 ## Notes
 
 - Rollback: delete the module; nothing uses it.
 - Overlays are Stache's own windows, so Tiling never tracks them (`modules/tiling/src/state/transition.rs:177`, self bundle id exclusion); keep that exclusion covered by a test.
 - Unverified until the gate: everything native above.
+- Implemented (2026-11-10): `OrderingMode::RelativeToTarget` by default; `RaiseFallback` is set through `OverlayControl::set_ordering_mode` from the gate's verdict, since AppKit gives no signal that a foreign window number was ignored. `SLSWindowIteratorGetCornerRadii` is only detected (`dlsym`), not called: its signature is not public, so the call is wired only after the native gate; until then `round` uses the provisional `fallback_corner_radius` (16 pt on macOS 26, unverified) and the corner-radius diagnostic is shown.
+- A `Show` merged into the same pending batch after a `HideAll` is still applied after it; the stale-epoch drop is part 05 (TB-05-02).
+- Native run 1 (2026-11-10, approved, build `f8754c5`, the user's own `tiling.toml` with animations on): borders render around the focused window. Findings: (1) ordered **above** its target, a border flips under the window whenever the user clicks the application (macOS raises the window after Stache's re-order); (2) the visible border looks about 1.5× as thick as JankyBorders with the same `width`; (3) the inner corner radius should be about 1 pt larger; (4) borders lag behind manual drags and resizes (expected until [part 06](06-live-follow.md)).
+- Decisions from that run (user, 2026-11-10): placement is configurable, `below` (default) or `above` its target window; with `below` the ring extends under the window edge and the window hides the inner part. Two thirds of the configured width is visible outside the window. The inner radius is the window radius plus 1 pt. The `tiling.toml` key ships in [part 08](08-migration-removal.md) with the other additive fields; until then the engine uses the default.
 - Docs: owner map in [architecture/overview.md](../../architecture/overview.md); fakes in [guides/testing.md](../../guides/testing.md).
+- Native run 2 (2026-11-10): `below` placement confirmed (the border stayed under its window on every click). Two thirds of the width looked thinner than JankyBorders; the user chose five sixths (`VISIBLE_FRACTION = 5/6`).
+- `VISIBLE_FRACTION` = 5/6 (user choice after native run 2, 2026-11-10; calibration history: run 1 drew the full width and looked 1.5 times too thick, run 2 drew two thirds and looked too thin). The decision above that says two thirds is superseded; the hidden part under the window is now one sixth of the width.
+- Native run 3 (2026-11-10): five sixths of the width looked right to the user ("so much better").

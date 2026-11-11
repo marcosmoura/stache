@@ -77,6 +77,14 @@ pub enum AxNotification {
     ApplicationShown,
     /// `AXTitleChanged`.
     TitleChanged,
+    /// Dock: Mission Control (all windows) was shown.
+    ExposeShowAllWindows,
+    /// Dock: App Exposé (front windows) was shown.
+    ExposeShowFrontWindows,
+    /// Dock: Show Desktop was shown.
+    ExposeShowDesktop,
+    /// Dock: Mission Control, App Exposé or Show Desktop ended.
+    ExposeExit,
 }
 
 impl AxNotification {
@@ -94,6 +102,15 @@ impl AxNotification {
         Self::ApplicationShown,
         Self::TitleChanged,
     ];
+    /// The Dock notifications. They are deliberately **not** in [`Self::ALL`]:
+    /// the window adapters register `ALL`-derived sets and must stay unchanged.
+    /// Names are unverified until the part 05 native check (see `names`).
+    pub const DOCK: [Self; 4] = [
+        Self::ExposeShowAllWindows,
+        Self::ExposeShowFrontWindows,
+        Self::ExposeShowDesktop,
+        Self::ExposeExit,
+    ];
 
     /// The `kAX*Notification` string value.
     #[must_use]
@@ -110,6 +127,10 @@ impl AxNotification {
             Self::ApplicationHidden => names::APPLICATION_HIDDEN,
             Self::ApplicationShown => names::APPLICATION_SHOWN,
             Self::TitleChanged => names::TITLE_CHANGED,
+            Self::ExposeShowAllWindows => names::EXPOSE_SHOW_ALL_WINDOWS,
+            Self::ExposeShowFrontWindows => names::EXPOSE_SHOW_FRONT_WINDOWS,
+            Self::ExposeShowDesktop => names::EXPOSE_SHOW_DESKTOP,
+            Self::ExposeExit => names::EXPOSE_EXIT,
         }
     }
 }
@@ -287,6 +308,7 @@ impl Context {
             ax_type: unsafe { AXUIElementGetTypeID() },
             names: AxNotification::ALL
                 .iter()
+                .chain(AxNotification::DOCK.iter())
                 .map(|&notification| (notification, CFString::new(notification.name())))
                 .collect(),
         }
@@ -360,6 +382,7 @@ pub struct AxObserver {
     registrations: Vec<(ElementKey, AxNotification)>,
     names: Vec<(AxNotification, CFString)>,
     context: Box<Context>,
+    pid: i32,
     _owner_local: PhantomData<*const ()>,
 }
 
@@ -398,12 +421,21 @@ impl AxObserver {
             registrations: Vec::new(),
             names: AxNotification::ALL
                 .iter()
+                .chain(AxNotification::DOCK.iter())
                 .map(|&notification| (notification, CFString::new(notification.name())))
                 .collect(),
             context: Box::new(Context::new()),
+            pid,
             _owner_local: PhantomData,
         })
     }
+
+    /// Whether the observed process no longer exists. A registration on an
+    /// exited process cannot be removed (the removal fails with
+    /// `CannotComplete`), and it died with the process. A reused pid reads as
+    /// alive, which only keeps a registration owed.
+    #[must_use]
+    pub fn target_exited(&self) -> bool { process_exited(self.pid) }
 
     /// Adds the observer's source to the **calling thread's** run loop. Call it
     /// on the owner thread; callbacks are then delivered while that thread runs
@@ -584,9 +616,34 @@ impl Drop for AxObserver {
     }
 }
 
+unsafe extern "C" {
+    fn kill(pid: i32, signal: i32) -> i32;
+}
+
+/// `kill(pid, 0)`: no signal is sent; `ESRCH` means no such process.
+fn process_exited(pid: i32) -> bool {
+    const ESRCH: i32 = 3;
+    if pid <= 0 {
+        return false;
+    }
+    // SAFETY: signal 0 only checks that the process exists.
+    let code = unsafe { kill(pid, 0) };
+    code != 0 && std::io::Error::last_os_error().raw_os_error() == Some(ESRCH)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_exited_process_reads_as_exited() {
+        assert!(!process_exited(std::process::id().cast_signed()));
+        let mut child = std::process::Command::new("/usr/bin/true").spawn().expect("spawn");
+        let pid = child.id().cast_signed();
+        child.wait().expect("wait");
+        assert!(process_exited(pid), "a reaped child no longer exists");
+        assert!(!process_exited(0));
+    }
     use crate::ax::{AxApi, SystemAx};
 
     fn drain_keys(mailbox: &mut Mailbox<u32>) -> Vec<(AxNotification, ElementKey)> {
@@ -739,5 +796,12 @@ mod tests {
         let unique: std::collections::HashSet<_> =
             AxNotification::ALL.iter().map(|n| n.name()).collect();
         assert_eq!(unique.len(), AxNotification::ALL.len());
+        let dock: std::collections::HashSet<_> =
+            AxNotification::DOCK.iter().map(|n| n.name()).collect();
+        assert_eq!(dock.len(), 4);
+        assert!(
+            dock.is_disjoint(&unique),
+            "Dock names stay out of the window sets"
+        );
     }
 }

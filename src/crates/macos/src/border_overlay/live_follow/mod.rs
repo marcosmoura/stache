@@ -1,0 +1,307 @@
+//! Live follow of user drags and resizes (part 06).
+//!
+//! While the user moves or resizes a bordered window, the window server sends
+//! private notifications. [`SystemLiveFollow`] listens for them, and while at
+//! least one bordered window reports motion it ticks a per-display
+//! [`FrameClock`] (the shared adapter of `display_link`, no second adapter). The
+//! first move or resize event of a window with no read in the current display
+//! period reads its bounds at once on the owner thread and hands the move to a
+//! [`FollowSink`] (the Tiling route, which sends it to the overlay control); the
+//! display clock then only paces the later reads, at most one per window per
+//! display period, coalesced into one batch per tick. The clock stops after
+//! [`QUIET`] without events; idle owns no clock.
+//!
+//! Only move and resize events act. The hide, unhide, reorder and close
+//! candidates stay **unverified and are not acted on** (native run 2: the
+//! candidate hide event fired after nearly every show and hid the border); each
+//! has its own flag in [`FollowTiming`], off by default, for a later verified
+//! run. Without the private symbols the engine falls back to hiding the
+//! border while its window moves (public fallback, Tiling side).
+//!
+//! Approach only, never code (decision 5): the reference border tool's `src/events.c`
+//! (`events_register`: which notifications exist and that its own windows are
+//! ignored by owner), `src/windows.c` (`windows_update_notifications`: a
+//! per-window subscription of the bordered ids), `src/border.c` (`border_move`:
+//! read the target bounds, move the border) and `src/animation.c` (display
+//! pacing) were studied for what to listen for. The declarations and every
+//! structure here are written from the spec; no header of either project is
+//! copied.
+//!
+//! # Threads
+//!
+//! ```text
+//! actor thread            owner thread `stache-tiling-borders-events`        any thread
+//!   set_targets ───────▶  session: register, subscribe, pump (run loop)  ◀─── callbacks
+//!   (latest wins)         FollowCore: events, clocks, bounds reads,             copy (kind, id)
+//!                         quiet period, sink calls                              into EventSlots
+//! ```
+//!
+//! * The **owner thread** owns the registration and its run loop
+//!   ([`WindowEventSession`] is created, used and dropped there; it is not
+//!   `Send`) and also runs the follower ([`FollowCore`]): the private bounds
+//!   read and the batch send never run on the actor or the main thread and
+//!   never wait for either. Deliberately one thread (not the spaces owner): the
+//!   follower must not be delayed by Dock Accessibility drains.
+//! * **Callbacks** (unverified thread, possibly main) only copy
+//!   `(event, cg_window_id)` into [`EventSlots`] (a fixed array, latest per
+//!   window and kind, no allocation, no lock held while calling out, no AX) and
+//!   wake the owner. Events for windows that are not watched (not currently
+//!   bordered, or owned by Stache) are dropped and counted.
+//! * The **actor** only calls [`LiveFollow::set_targets`] (a latest-wins
+//!   mailbox, never blocking) when the bordered set changes, and reads
+//!   [`LiveFollow::status`].
+//! * The **frame clock** callbacks only store a tick and wake the owner.
+//!
+//! # Stop
+//!
+//! [`SystemLiveFollow::stop_bounded`] closes the slots first (waits for the
+//! callbacks in progress), posts a stop, waits for the owner within a bound and
+//! joins it. The owner stops every clock with the shared stop guarantee (no
+//! callback after release). A clock that cannot stop is a [`StuckClock`]: it is
+//! retained by the source (never dropped, never detached) and reported by
+//! [`SystemLiveFollow::stuck_clocks`]; the outcome is then not `Stopped`.
+//!
+//! # Unverified until the part 06 native check
+//!
+//! The event ids and payload layout of the window notifications, the signatures
+//! of the subscription and bounds functions, the thread the callbacks run on,
+//! whether the registration needs the owner's run loop, the cost of one bounds
+//! read and the display link cadence on `ProMotion` displays. See
+//! [`skylight`].
+
+#[cfg(any(test, feature = "testing"))]
+mod fakes;
+mod follower;
+pub mod native;
+mod owner;
+pub mod skylight;
+mod slots;
+#[cfg(test)]
+mod tests;
+
+use std::fmt;
+use std::sync::Arc;
+use std::time::Duration;
+
+#[cfg(any(test, feature = "testing"))]
+pub use fakes::{FakeLiveFollow, FakeSessionControl, FakeSink, SinkCall};
+pub use follower::{FollowCore, FollowCounters, FollowTiming};
+pub use owner::{SessionMaker, SystemLiveFollow, forgotten_follow_owners};
+pub use slots::{EventSlots, SlotEvent, SlotsCounters};
+
+use super::OverlayRect;
+pub use super::space_sources::{LoopWaker, StopObserver, StopOutcome};
+use crate::DisplayId;
+use crate::windows::WindowInstance;
+
+/// How long a window may stay silent before the follower stops ticking for it.
+pub const QUIET: Duration = Duration::from_millis(100);
+/// The owner thread name.
+pub const OWNER_THREAD_NAME: &str = "stache-tiling-borders-events";
+
+/// The window notifications live follow listens for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum WindowEventKind {
+    /// The window moved.
+    Move,
+    /// The window was resized.
+    Resize,
+    /// The window was re-ordered in the window server's stack (candidate id,
+    /// unverified, not acted on).
+    Reorder,
+    /// The window was ordered out or hidden (candidate id, unverified, not acted
+    /// on: it fired after nearly every show in native run 2).
+    Hide,
+    /// The window was ordered back in or unhidden (candidate id, unverified, not
+    /// acted on).
+    Unhide,
+    /// The window was destroyed (candidate id, unverified, not acted on).
+    Close,
+}
+
+impl WindowEventKind {
+    /// Every kind.
+    pub const ALL: [Self; 6] = [
+        Self::Move,
+        Self::Resize,
+        Self::Reorder,
+        Self::Hide,
+        Self::Unhide,
+        Self::Close,
+    ];
+
+    /// The bit this kind occupies in a slot.
+    #[must_use]
+    pub const fn bit(self) -> u32 {
+        match self {
+            Self::Move => 1,
+            Self::Resize => 2,
+            Self::Reorder => 4,
+            Self::Hide => 8,
+            Self::Unhide => 16,
+            Self::Close => 32,
+        }
+    }
+}
+
+/// One bordered window the follower may follow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FollowTarget {
+    /// The exact Tiling window (opaque to the follower; handed back to the sink).
+    pub window: WindowInstance,
+    /// The window server id events and bounds reads use.
+    pub cg_window_id: u32,
+    /// The display the window is on (selects the frame clock). `None` is never
+    /// followed: the Tiling fallback handles it.
+    pub display: Option<DisplayId>,
+    /// The owner process, to drop Stache's own windows.
+    pub owner_pid: Option<i32>,
+}
+
+/// One bounds sample of a moving window.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FollowMove {
+    /// The window.
+    pub window: WindowInstance,
+    /// Its bounds, global top-left points.
+    pub bounds: OverlayRect,
+    /// The authority stamp [`FollowSink::authority`] returned before the read.
+    pub stamp: u64,
+}
+
+/// What the follower reports into. Implemented by the Tiling route. Every method
+/// must be non-blocking; none may take the actor or main thread.
+pub trait FollowSink: Send + Sync {
+    /// The authority stamp for a live sample of `window`, or `None` while Tiling
+    /// owns the window (a write in flight, unknown window): no bounds are read.
+    fn authority(&self, window: WindowInstance) -> Option<u64>;
+    /// One coalesced batch of live samples for one tick. A sample whose stamp is
+    /// no longer current (a Tiling frame arrived meanwhile) is dropped.
+    fn moves(&self, moves: &[FollowMove]);
+    /// Whether `window` is currently followed (inside its quiet period).
+    fn following(&self, window: WindowInstance, following: bool);
+    /// The window server hid the window: hide its border earlier.
+    fn hide(&self, window: WindowInstance);
+    /// The window server unhid the window. Never shows a border by itself.
+    fn unhide(&self, window: WindowInstance);
+    /// The window was re-ordered: re-order its border relative to it.
+    fn reorder(&self, window: WindowInstance);
+    /// The window was destroyed: release its border.
+    fn close(&self, window: WindowInstance);
+}
+
+/// Whether live follow works.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LiveStatus {
+    /// The owner has not finished registering yet.
+    Starting,
+    /// Registered and subscribed.
+    Active,
+    /// Unavailable, with the reason.
+    Unavailable(String),
+}
+
+impl LiveStatus {
+    /// The one diagnostic for an unavailable live follow.
+    #[must_use]
+    pub fn diagnostic(&self) -> Option<String> {
+        match self {
+            Self::Unavailable(reason) => Some(unavailable_message(reason)),
+            Self::Starting | Self::Active => None,
+        }
+    }
+}
+
+/// The diagnostic for an unavailable live follow.
+#[must_use]
+pub fn unavailable_message(reason: &str) -> String {
+    format!("borders: live follow unavailable ({reason}); borders hide while a window moves")
+}
+
+/// Why registration or a subscription failed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LiveUnavailable {
+    /// The reason, for the diagnostic.
+    pub reason: String,
+}
+
+impl LiveUnavailable {
+    /// A failure with `reason`.
+    #[must_use]
+    pub fn new(reason: impl Into<String>) -> Self { Self { reason: reason.into() } }
+
+    /// A missing private symbol.
+    #[must_use]
+    pub fn missing_symbol(name: &str) -> Self { Self::new(format!("missing symbol {name}")) }
+}
+
+impl fmt::Display for LiveUnavailable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str(&self.reason) }
+}
+
+/// The owner-thread side of the native notifications. Created, used and dropped
+/// on the owner thread; deliberately not `Send`.
+pub trait WindowEventSession {
+    /// A waker for this session's run loop, callable from any thread. It must
+    /// make a pending or future [`Self::pump`] return.
+    fn waker(&self) -> LoopWaker;
+    /// Resolves every needed symbol and registers the callbacks, which record
+    /// into `slots`. Total: any missing symbol or refused registration is an
+    /// error.
+    ///
+    /// # Errors
+    /// Why live follow is unavailable.
+    fn register(&mut self, slots: Arc<EventSlots>) -> Result<(), LiveUnavailable>;
+    /// Replaces the per-window subscription with `ids` (at most `MAX_OVERLAYS`).
+    ///
+    /// # Errors
+    /// Why live follow became unavailable.
+    fn subscribe(&mut self, ids: &[u32]) -> Result<(), LiveUnavailable>;
+    /// One private bounds read, global top-left points.
+    fn bounds(&mut self, cg_window_id: u32) -> Option<OverlayRect>;
+    /// Runs the run loop until it is woken, a source was handled or `timeout`.
+    fn pump(&mut self, timeout: Duration);
+    /// Removes every registration (idempotent).
+    fn unregister(&mut self);
+}
+
+/// The engine's view of live follow.
+pub trait LiveFollow: Send {
+    /// Starts the owner; non-blocking (registration happens on the owner).
+    fn start(&mut self, sink: Arc<dyn FollowSink>);
+    /// Replaces the bordered set (latest wins, bounded to `MAX_OVERLAYS`).
+    fn set_targets(&mut self, targets: &[FollowTarget]);
+    /// The current status.
+    fn status(&self) -> LiveStatus;
+    /// Stops the owner and every clock within a bound. A timed out stop keeps
+    /// the owner and the stuck clocks (never detached), and a later `stop`
+    /// retries them.
+    fn stop(&mut self) -> StopOutcome;
+}
+
+/// Creates a fresh live follow for each run of the module.
+pub type LiveFollowFactory = Arc<dyn Fn() -> Box<dyn LiveFollow> + Send + Sync>;
+
+/// A live follow that is permanently unavailable (the symbols cannot be
+/// resolved on this build): the Tiling fallback applies and the diagnostic
+/// carries `reason`.
+#[derive(Clone, Debug)]
+pub struct UnavailableLiveFollow {
+    reason: String,
+}
+
+impl UnavailableLiveFollow {
+    /// Unavailable for `reason`.
+    #[must_use]
+    pub fn new(reason: impl Into<String>) -> Self { Self { reason: reason.into() } }
+}
+
+impl LiveFollow for UnavailableLiveFollow {
+    fn start(&mut self, _sink: Arc<dyn FollowSink>) {}
+
+    fn set_targets(&mut self, _targets: &[FollowTarget]) {}
+
+    fn status(&self) -> LiveStatus { LiveStatus::Unavailable(self.reason.clone()) }
+
+    fn stop(&mut self) -> StopOutcome { StopOutcome::NotRunning }
+}

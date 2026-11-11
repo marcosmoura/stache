@@ -602,8 +602,8 @@ pub trait ApplicationBackend: Send + Sync {
         Err(ApplicationError::Unavailable)
     }
 
-    /// Registers launch, terminate, hide and unhide observation for one
-    /// generation.
+    /// Registers launch, terminate, hide, unhide and active Space change
+    /// observation for one generation.
     ///
     /// The native callbacks must only intern or look up the instance and enqueue
     /// the pure [`LifecycleEvent`] on a *later* main turn (see

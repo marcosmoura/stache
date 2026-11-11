@@ -226,6 +226,7 @@ fn a_full_coordinator_falls_back_to_one_direct_write() {
         visibility: Arc::new(crate::VisibilityControl::new()),
         actions: None,
         animation: Arc::clone(&animation),
+        borders: None,
     };
     let stamp = Stamp { epoch, registry: 1 };
     let components = FrameComponents { position: true, size: true };

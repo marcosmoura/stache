@@ -20,10 +20,10 @@ use stache_macos::{ApplicationId, DisplayId, DisplayLayout};
 
 use super::{
     AppInfo, AppRecord, Cause, CompletionResult, DesiredWindow, Effect, FOCUS_HISTORY_CAPACITY,
-    FocusState, Health, HealthFault, Input, MAX_TRACK_RETRIES, MAX_UNCONFIRMED_APPS,
-    OVERLOAD_THRESHOLD, ObservedWindow, Scan, Scope, ScreenState, Stamp, TOMBSTONE_CAPACITY,
-    TRACK_CHUNK, TilingState, WORKSPACE_HISTORY_CAPACITY, WindowState, WorkspaceId, drag, frames,
-    intents, slots, tab_sync,
+    FocusState, Health, HealthFault, Input, MAX_FULLSCREEN_RECHECKS, MAX_TRACK_RETRIES,
+    MAX_UNCONFIRMED_APPS, OVERLOAD_THRESHOLD, ObservedWindow, Scan, Scope, ScreenState, Stamp,
+    TOMBSTONE_CAPACITY, TRACK_CHUNK, TilingState, WORKSPACE_HISTORY_CAPACITY, WindowState,
+    WorkspaceId, drag, frames, intents, slots, tab_sync,
 };
 use crate::config::TilingConfig;
 use crate::geometry::Rect;
@@ -58,6 +58,8 @@ fn apply(state: &mut TilingState, input: Input, fx: &mut Vec<Effect>) {
             state.active_application = Some(application);
             // An application the user brings forward gets another chance.
             retry_unsettled(state, application);
+            // A missed Space change must not leave a returned window unlisted.
+            relist_unlisted(state, application, false);
             if state.apps.contains_key(&application) {
                 // Provisional: only a window already on a visible workspace. The
                 // application's real focused window decides a workspace switch.
@@ -327,6 +329,142 @@ fn lifecycle(state: &mut TilingState, kind: LifecycleKind, info: AppInfo, fx: &m
         }
         LifecycleKind::Hidden => set_app_hidden(state, application, true),
         LifecycleKind::Unhidden => set_app_hidden(state, application, false),
+        LifecycleKind::SpaceChanged => space_changed(state, fx),
+    }
+}
+
+/// Whether `window` left `AXWindows` and released its slot with nothing taking
+/// its place: suspended, no longer holding the tile, and no listed member of its
+/// slot. An inactive native tab is not one: another member of its slot is
+/// listed (or it is listed itself and only flagged inactive).
+pub(super) fn unlisted_without_replacement(state: &TilingState, window: &WindowState) -> bool {
+    window.suspended
+        && !window.slot_held
+        && window.departing.is_none()
+        && !state.windows.values().any(|member| {
+            member.token != window.token
+                && member.tab_group.is_some()
+                && member.tab_group == window.tab_group
+                && !member.suspended
+        })
+}
+
+/// Whether `window` starts (or continues) a re-list series: unlisted without
+/// a replacement and not yet taken to be on another Space.
+fn relist_candidate(state: &TilingState, window: &WindowState) -> bool {
+    unlisted_without_replacement(state, window) && !window.relists_spent
+}
+
+/// Lists `application` again when it has a window that left `AXWindows`
+/// without a replacement: a window that rejoined it (a native fullscreen exit)
+/// is found by the listing and returns to its slot.
+///
+/// The rule (see `docs/features/tiling.md`): a window freshly unlisted starts a
+/// bounded series of listings. Once one series ran out with the window still
+/// missing (and not observed fullscreen) it is taken to be on another Space:
+/// each later activation lists its application once, never a new series. A
+/// Space change always starts a full series again (the window may rejoin
+/// `AXWindows` only some time after the change, as Ghostty does on a native
+/// fullscreen exit it never reported).
+fn relist_unlisted(state: &mut TilingState, application: ApplicationId, space_change: bool) {
+    if space_change {
+        let spent: Vec<WindowInstance> = state
+            .windows
+            .values()
+            .filter(|w| {
+                w.application == application
+                    && w.relists_spent
+                    && unlisted_without_replacement(state, w)
+            })
+            .map(|w| w.token)
+            .collect();
+        for token in spent {
+            if let Some(window) = state.windows.get_mut(&token) {
+                window.relists_spent = false;
+            }
+        }
+    }
+    let mut candidate = false;
+    let mut unlisted = false;
+    for window in state.windows.values().filter(|w| w.application == application) {
+        if unlisted_without_replacement(state, window) {
+            unlisted = true;
+            candidate |= relist_candidate(state, window);
+        }
+    }
+    if candidate {
+        start_relists(state, application);
+    } else if unlisted && !state.unlisted_relists.contains_key(&application) {
+        mark(state, Scope::App(application), Cause::Unlisted);
+    }
+}
+
+/// Lists `application` now and starts following it: the window may rejoin
+/// `AXWindows` only after the Space change completed, so the application is
+/// listed again after the settle delay until it is back (bounded).
+fn start_relists(state: &mut TilingState, application: ApplicationId) {
+    state.unlisted_relists.insert(application, 0);
+    mark(state, Scope::App(application), Cause::Unlisted);
+}
+
+/// A listing of `application` completed: while one of its windows is still
+/// unlisted without a replacement after a Space change or an activation, it is
+/// listed again after the settle delay, at most [`MAX_FULLSCREEN_RECHECKS`]
+/// times. A window still missing stays suspended.
+fn follow_unlisted(state: &mut TilingState, application: ApplicationId) {
+    let Some(&count) = state.unlisted_relists.get(&application) else {
+        return;
+    };
+    let unlisted = state
+        .windows
+        .values()
+        .any(|window| window.application == application && relist_candidate(state, window));
+    if !unlisted || count >= MAX_FULLSCREEN_RECHECKS {
+        state.unlisted_relists.remove(&application);
+        if unlisted {
+            // The series ran out: a window still missing that is not observed
+            // fullscreen is on another Space; no new series for it.
+            let spent: Vec<WindowInstance> = state
+                .windows
+                .values()
+                .filter(|window| {
+                    window.application == application
+                        && !window.observed.fullscreen
+                        && relist_candidate(state, window)
+                })
+                .map(|window| window.token)
+                .collect();
+            for token in spent {
+                if let Some(window) = state.windows.get_mut(&token) {
+                    window.relists_spent = true;
+                }
+            }
+        }
+        return;
+    }
+    state.unlisted_relists.insert(application, count + 1);
+    state.tab_outbox.settle.entry(application).or_insert(false);
+}
+
+/// The active Space changed (native fullscreen always enters or leaves one):
+/// list again every application with a window unlisted without a replacement,
+/// and read again every window observed fullscreen, since nothing else reports
+/// either change.
+fn space_changed(state: &mut TilingState, fx: &mut Vec<Effect>) {
+    let applications: BTreeSet<ApplicationId> = state
+        .windows
+        .values()
+        .filter(|window| unlisted_without_replacement(state, window))
+        .map(|window| window.application)
+        .collect();
+    for application in applications {
+        relist_unlisted(state, application, true);
+    }
+    let Some(stamp) = state.stamp else { return };
+    for window in state.windows.values() {
+        if window.observed.fullscreen && !window.suspended {
+            fx.push(Effect::Snapshot { stamp, window: window.token });
+        }
     }
 }
 
@@ -354,6 +492,7 @@ fn terminate_app(state: &mut TilingState, application: ApplicationId, fx: &mut V
     state.excluded.retain(|token, _| token.application() != application);
     state.tabs.forget_app(application);
     state.tab_outbox.settle.remove(&application);
+    state.unlisted_relists.remove(&application);
     state.reconcile.unsettled.remove(&application);
     let tracked = state.apps.remove(&application).is_some_and(|record| record.tracked);
     state.enhanced_ui.remove(&application);
@@ -423,6 +562,7 @@ fn window_event(state: &mut TilingState, event: WindowEvent, fx: &mut Vec<Effect
             state.reconcile.inflight.remove(&application);
             state.reconcile.scans.remove(&application);
             state.reconcile.unsettled.remove(&application);
+            state.unlisted_relists.remove(&application);
             slots::resolve_returns(state, application);
             close_departing(state, application, None);
             state.startup.failed.insert(application);
@@ -609,6 +749,9 @@ fn ingest(
     // motion; it is our own echo, so the confirmed frame is kept (bounded).
     if origin.is_none() && frames::absorb_echo(state, token, observed.frame) {
         observed.frame = state.windows.get(&token).and_then(|w| w.observed.frame);
+    } else if origin.is_none() && !observed.fullscreen {
+        // A native fullscreen frame is not a minimum the window re-asserts.
+        frames::observe_growth(state, token, observed.frame);
     }
     let exclusion = exclusion_for(state, application, &observed);
     // A window adopted by a creation or a read, or by a listing once startup is
@@ -632,6 +775,7 @@ fn ingest(
             return;
         }
         tab_sync::observe(state, snapshot, false);
+        slots::recheck_fullscreen(state, token, false);
         // A suspended window listed again gets its slot back: at once for a
         // single read, after the whole listing otherwise (the window it replaces
         // may be reported unlisted later in the same listing).
@@ -691,6 +835,8 @@ fn ingest(
         tab_group: None,
         arrival: matches!(snapshot.tab_bar, TabBarRead::Bar(bar) if bar.count >= 2),
         returning: false,
+        fullscreen_rechecks: 0,
+        relists_spent: false,
     });
     assign(state, token);
     // A new tabbed window that replaces the one window of the application that
@@ -746,7 +892,7 @@ fn buffer_focus(state: &mut TilingState, token: WindowInstance) {
 /// A window was adopted (or took over a slot): it takes the focus when its
 /// notification was buffered, else the frontmost application's real focused
 /// window is read. Identity only; a guess never switches a workspace.
-fn adopted_focus(state: &mut TilingState, token: WindowInstance) {
+pub(super) fn adopted_focus(state: &mut TilingState, token: WindowInstance) {
     let application = token.application();
     let buffered = state.pending_focus.buffered.remove(&application);
     let fresh = buffered.is_some_and(|(held, at)| {
@@ -921,6 +1067,8 @@ fn hand_over(
         tab_group: group,
         arrival: false,
         returning: false,
+        fullscreen_rechecks: 0,
+        relists_spent: false,
     });
     for workspace in &mut state.workspaces {
         for held in &mut workspace.order {
@@ -958,6 +1106,7 @@ fn hand_over(
     } else if let Some(window) = state.windows.get_mut(&old) {
         window.desired = DesiredWindow::default();
         window.suspended = true;
+        window.relists_spent = false;
         window.slot_held = false;
         window.returning = false;
         window.arrival = false;
@@ -1206,6 +1355,7 @@ fn finish_scan(state: &mut TilingState, application: ApplicationId, truncated: b
     if state.reconcile.unconfirmed.is_empty() && !state.reconcile.all {
         state.reconcile.consecutive_overflows = 0;
     }
+    follow_unlisted(state, application);
 }
 
 pub(super) fn mark(state: &mut TilingState, scope: Scope, cause: Cause) {

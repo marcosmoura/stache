@@ -10,7 +10,7 @@ pub mod activation;
 pub mod applications;
 pub mod audio;
 pub mod ax;
-pub mod borders;
+pub mod border_overlay;
 pub mod caps_remap;
 pub mod desktop;
 pub mod display;
@@ -52,13 +52,6 @@ pub use applications::{
 pub use audio::{
     AudioBackend, AudioChangeSubscription, AudioDevice, AudioDeviceId, AudioDirection, AudioError,
     AudioWakeup, CoreAudioBackend,
-};
-#[cfg(any(test, feature = "testing"))]
-pub use borders::testing::{FakeSend, FakeTransport};
-pub use borders::{
-    BORDERS_BINARY, BordersConnection, BordersTransport, CLI_CHILD_DEADLINE, CLI_OUTPUT_CAP,
-    CliOutcome, CliRunner, EncodeError, MACH_SEND_DEADLINE_MAX, MAX_PAYLOAD_BYTES, MissingService,
-    Rejection, SERVICE_NAME, SendOutcome, ServiceAttempt, encode_mach_args,
 };
 #[cfg(any(test, feature = "testing"))]
 pub use desktop::testing::{FakeDesktop, FakeSetCall};

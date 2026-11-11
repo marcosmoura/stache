@@ -26,11 +26,10 @@ use stache_notunes::NoTunesConfig;
 use stache_proxy_audio::{AudioDeviceInfo, AudioListKind, AudioListParams, ProxyAudioConfig};
 use stache_sdk::{GlobalConfig, IDENTITY, ModuleSnapshot, ModuleStatus, UnavailableReason};
 use stache_tiling::{
-    AnimationConfig, BorderAnimationConfig, BorderStateConfig, BorderStyle, BordersConfig,
-    DimensionValue, EasingType, FloatingConfig, FloatingPosition, FloatingPreset, GapValue,
-    GapsConfig, GapsConfigValue, GradientConfig, LayoutType, MasterConfig, MasterPosition,
-    ScreenGapsConfig, TilingConfig, TilingRuntimeState, TilingRuntimeStatus, WindowRule,
-    WorkspaceConfig,
+    AnimationConfig, BorderAnimationConfig, BorderStateConfig, BordersConfig, DimensionValue,
+    EasingType, FloatingConfig, FloatingPosition, FloatingPreset, GapValue, GapsConfig,
+    GapsConfigValue, GradientConfig, LayoutType, MasterConfig, MasterPosition, ScreenGapsConfig,
+    TilingConfig, TilingRuntimeState, TilingRuntimeStatus, WindowRule, WorkspaceConfig,
 };
 use stache_wallpapers::{
     WallpaperMode, WallpaperScreen, WallpaperSelection, WallpapersConfig, WallpapersOutcomeCause,
@@ -430,7 +429,6 @@ pub fn builder() -> Builder<tauri::Wry> {
         .typ::<FloatingPreset>()
         .typ::<DimensionValue>()
         .typ::<BordersConfig>()
-        .typ::<BorderStyle>()
         .typ::<BorderStateConfig>()
         .typ::<GradientConfig>()
         .typ::<BorderAnimationConfig>()

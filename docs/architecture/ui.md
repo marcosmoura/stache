@@ -122,7 +122,7 @@ or UI surface consumes them yet.
 `AnimationConfig`, `MasterConfig`, `MasterPosition`, `WorkspaceConfig`,
 `WindowRule`, `GapsConfigValue`, `GapsConfig`, `ScreenGapsConfig`, `GapValue`,
 `FloatingConfig`, `FloatingPosition`, `FloatingPreset`, `DimensionValue`,
-`BordersConfig`, `BorderStyle`, `BorderStateConfig`, `GradientConfig` and
+`BordersConfig`, `BorderStateConfig`, `GradientConfig` and
 `BorderAnimationConfig`) are exported the same way. They are catalog types for
 the Tiling configuration; the shipped Tiling runtime consumes them when `enabled = true`.
 

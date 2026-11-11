@@ -1057,6 +1057,41 @@ impl FakeApplicationBackend {
         delivered
     }
 
+    /// Delivers one active Space change to every live lifecycle registration,
+    /// like the system observer: a pure [`LifecycleKind::SpaceChanged`] with
+    /// the reserved id of the registration's generation, through the same
+    /// deferral. Returns how many registrations received it.
+    #[must_use]
+    pub fn deliver_space_change(&self) -> usize {
+        let deliveries: Vec<(LifecycleSink, LifecycleEvent)> = lock(&self.state.lifecycles)
+            .iter()
+            .map(|(handle, registration)| {
+                (
+                    Arc::clone(&registration.sink),
+                    super::lifecycle::space_changed(*handle, registration.generation),
+                )
+            })
+            .collect();
+        let delivered = deliveries.len();
+        let executor = lock(&self.state.notification_queue).clone();
+        for (sink, event) in deliveries {
+            if let Some(executor) = &executor {
+                let executor = Arc::clone(executor);
+                defer_lifecycle(move |job| executor.try_enqueue(job), sink, event);
+            } else {
+                defer_lifecycle(
+                    |job| {
+                        job();
+                        Ok(())
+                    },
+                    sink,
+                    event,
+                );
+            }
+        }
+        delivered
+    }
+
     fn remove_lifecycle(&self, handle: BackendHandle, generation: u64) {
         let mut lifecycles = lock(&self.state.lifecycles);
         if lifecycles

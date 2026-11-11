@@ -16,7 +16,7 @@
 //! a backend call, a completion submit or a wait on another party.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use stache_macos::ax::{AxPoint, AxSize};
@@ -28,6 +28,7 @@ use stache_sdk::CancellationToken;
 
 use super::Clock;
 use crate::backend::WindowBackend;
+use crate::borders::{BorderFrameKind, BorderFrames, outcome_frame};
 use crate::geometry::Rect;
 use crate::outcome::FrameComponents;
 
@@ -81,6 +82,9 @@ pub struct FrameControl {
     gate: Arc<GenerationCell>,
     clock: Arc<dyn Clock>,
     shared: Arc<Shared>,
+    /// Where the native borders learn each written frame. Set once at
+    /// composition; reporting never waits.
+    borders: OnceLock<Arc<dyn BorderFrames>>,
 }
 
 struct Shared {
@@ -99,6 +103,42 @@ impl FrameControl {
                 ledger: Mutex::new(Ledger::default()),
                 idle: Condvar::new(),
             }),
+            borders: OnceLock::new(),
+        }
+    }
+
+    /// Reports every frame this control dispatches, and (through the animation
+    /// sink) every animated frame, to the native borders. Set once; a second
+    /// call is ignored.
+    pub fn set_border_frames(&self, borders: Arc<dyn BorderFrames>) {
+        let _ = self.borders.set(borders);
+    }
+
+    /// Reports one frame to the borders, if any are composed. Never blocks.
+    pub fn report_border(
+        &self,
+        window: WindowInstance,
+        plan_sequence: u64,
+        frame: Rect,
+        kind: BorderFrameKind,
+    ) {
+        if let Some(borders) = self.borders.get() {
+            borders.report(window, plan_sequence, frame, kind);
+        }
+    }
+
+    /// Reports what a finished write left the window at (see
+    /// [`outcome_frame`]).
+    pub fn report_border_outcome(
+        &self,
+        window: WindowInstance,
+        plan_sequence: u64,
+        target: Rect,
+        outcome: &WindowActionOutcome,
+        confirmed: BorderFrameKind,
+    ) {
+        if let Some((frame, kind)) = outcome_frame(target, outcome, confirmed) {
+            self.report_border(window, plan_sequence, frame, kind);
         }
     }
 
@@ -232,6 +272,27 @@ impl FrameControl {
         let request = match self.request(cancel, job, FrameStage::Direct) {
             Ok(request) => request,
             Err(outcome) => return reply(outcome),
+        };
+        // The border follows the target at once and is corrected by the
+        // readback in the reply; a write that is inert reported nothing above.
+        self.report_border(
+            job.window,
+            job.plan_sequence,
+            job.target,
+            BorderFrameKind::Target,
+        );
+        let reply = {
+            let borders = self.borders.get().cloned();
+            let (window, plan_sequence, target) = (job.window, job.plan_sequence, job.target);
+            move |outcome: WindowActionOutcome| {
+                if let Some(borders) = borders
+                    && let Some((frame, kind)) =
+                        outcome_frame(target, &outcome, BorderFrameKind::Readback)
+                {
+                    borders.report(window, plan_sequence, frame, kind);
+                }
+                reply(outcome);
+            }
         };
         // Shared so a refused batch (whose reply never runs) can still answer.
         let slot = Arc::new(Mutex::new(Some(reply)));

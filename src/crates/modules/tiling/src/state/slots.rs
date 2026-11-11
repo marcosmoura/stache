@@ -20,8 +20,10 @@
 use stache_macos::ApplicationId;
 use stache_macos::windows::WindowInstance;
 
-use super::transition::{assign, destroy, untrack};
-use super::{DesiredWindow, MAX_PENDING_HANDOVERS, TabNote, TilingState, frames};
+use super::transition::{adopted_focus, assign, destroy, untrack};
+use super::{
+    DesiredWindow, MAX_FULLSCREEN_RECHECKS, MAX_PENDING_HANDOVERS, TabNote, TilingState, frames,
+};
 
 fn note(state: &mut TilingState, note: TabNote) {
     if state.tab_outbox.notes.len() < MAX_PENDING_HANDOVERS {
@@ -54,6 +56,7 @@ pub(super) fn suspend(state: &mut TilingState, token: WindowInstance) {
     let group = known.unwrap_or_else(|| mint_group(state));
     if let Some(window) = state.windows.get_mut(&token) {
         window.suspended = true;
+        window.relists_spent = false;
         window.slot_held = held;
         window.returning = false;
         window.tab_group = Some(group);
@@ -151,6 +154,7 @@ pub(super) fn transplant(state: &mut TilingState, from: WindowInstance, to: Wind
     if let Some(window) = state.windows.get_mut(&from) {
         window.desired = DesiredWindow::default();
         window.suspended = true;
+        window.relists_spent = false;
         window.slot_held = false;
         window.returning = false;
         window.arrival = false;
@@ -206,6 +210,7 @@ pub(super) fn resolve_return(state: &mut TilingState, token: WindowInstance, wai
             window.returning = false;
         }
         note(state, TabNote::Resumed(token));
+        recheck_fullscreen(state, token, true);
         return;
     }
     let holder = group.and_then(|group| {
@@ -234,6 +239,7 @@ pub(super) fn resolve_return(state: &mut TilingState, token: WindowInstance, wai
             destroy(state, holder);
         }
         note(state, TabNote::Returned(token, holder));
+        recheck_fullscreen(state, token, true);
         return;
     }
     // No member holds the tile (it was released or its window closed), or one is
@@ -249,6 +255,38 @@ pub(super) fn resolve_return(state: &mut TilingState, token: WindowInstance, wai
     }
     assign(state, token);
     note(state, TabNote::Resumed(token));
+    recheck_fullscreen(state, token, true);
+    // Releasing the slot took the focus away with the window, and a frontmost
+    // application gets no activation when its window comes back (a native
+    // fullscreen exit): its real focused window is read again.
+    adopted_focus(state, token);
+}
+
+/// A window listed again after it left `AXWindows` (a native fullscreen exit)
+/// may still read fullscreen: the flag flips after the exit's last
+/// notification, so it would stay out of the layout. It is listed again after
+/// the settle delay until it reads windowed, a bounded number of times.
+/// `start` begins the count for a window that just returned; otherwise only a
+/// window already being rechecked is followed.
+pub(super) fn recheck_fullscreen(state: &mut TilingState, token: WindowInstance, start: bool) {
+    let Some(window) = state.windows.get_mut(&token) else {
+        return;
+    };
+    if start {
+        window.fullscreen_rechecks = 0;
+    } else if window.fullscreen_rechecks == 0 || window.suspended {
+        return;
+    }
+    if !window.observed.fullscreen {
+        window.fullscreen_rechecks = 0;
+        return;
+    }
+    if window.fullscreen_rechecks >= MAX_FULLSCREEN_RECHECKS {
+        return;
+    }
+    window.fullscreen_rechecks += 1;
+    let application = window.application;
+    state.tab_outbox.settle.entry(application).or_insert(false);
 }
 
 /// The listing of `application` settled: suspended windows whose slot nobody

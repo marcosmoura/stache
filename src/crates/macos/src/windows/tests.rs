@@ -1454,7 +1454,7 @@ fn tokens_from_another_adapter_or_epoch_cannot_issue() {
 // ---- actions ------------------------------------------------------------------
 
 #[test]
-fn set_frame_writes_position_then_size_under_the_one_second_timeout() {
+fn set_frame_writes_size_position_size_under_the_one_second_timeout() {
     let mut h = H::new();
     let (_, nodes, tokens) = h.app_with_windows(app(1), 1, 1);
     h.ax.clear_calls();
@@ -1466,7 +1466,8 @@ fn set_frame_writes_position_then_size_under_the_one_second_timeout() {
         .expect("press timeout");
     let position = calls.iter().position(|c| matches!(c, Call::SetPosition(..))).expect("pos");
     let size = calls.iter().position(|c| matches!(c, Call::SetSize(..))).expect("size");
-    assert!(timeout < position && position < size);
+    let last_size = calls.iter().rposition(|c| matches!(c, Call::SetSize(..))).expect("size");
+    assert!(timeout < size && size < position && position < last_size);
     let WindowActionOutcome::Issued { kind, native, observed } = outcome else {
         panic!("{outcome:?}");
     };
@@ -1813,6 +1814,44 @@ fn a_failed_removal_is_quarantined_and_retries_exactly_once_per_call() {
     assert_eq!(h.ax.live_elements(), 0);
     h.gate = Arc::new(GenerationCell::new());
     assert!(h.install().expect("install after cleanup") > h.epoch);
+}
+
+#[test]
+fn registrations_of_an_exited_application_are_not_quarantined() {
+    // Native run 12: System Settings terminated, its untrack failed every
+    // removal with `CannotComplete` and the five registrations stayed
+    // quarantined until the backend close reported them.
+    let mut h = H::new();
+    h.app_with_windows(app(1), 500, 0);
+    h.obs.set_remove_error(500, Some(AxError::CannotComplete));
+    h.obs.set_exited(500, true);
+    assert_eq!(h.stop(), StopOutcome::Clean { applications: 1 });
+    assert!(h.obs.registrations(500).is_empty());
+    assert_eq!(h.ax.live_elements(), 0);
+}
+
+#[test]
+fn a_hung_application_stays_quarantined_until_it_exits() {
+    let mut h = H::new();
+    h.app_with_windows(app(1), 500, 0);
+    h.obs.set_remove_error(500, Some(AxError::CannotComplete));
+    let StopOutcome::Quarantined {
+        applications: 1,
+        registrations: 5,
+    } = h.stop()
+    else {
+        panic!("a live application that refuses the removal stays owed");
+    };
+    let report = h.run(|reply| Command::Retry { reply });
+    assert_eq!(report.remaining_registrations, 5);
+    // The application exits: the next retry finds nothing left to remove.
+    h.obs.set_exited(500, true);
+    let report = h.run(|reply| Command::Retry { reply });
+    assert_eq!(report, CleanupReport {
+        cleaned_applications: 1,
+        remaining_applications: 0,
+        remaining_registrations: 0
+    });
 }
 
 #[test]

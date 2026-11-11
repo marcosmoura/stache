@@ -135,6 +135,13 @@ impl AnimationSink for LiveSink {
                     reply(FrameReply::Done(FrameAck { outcome, sent_at: None }));
                 }
                 Ok(request) => {
+                    // The border follows the frame as it is sent (same tick).
+                    self.frames.report_border(
+                        job.window,
+                        job.plan_sequence,
+                        job.target,
+                        crate::borders::BorderFrameKind::AnimationFrame,
+                    );
                     let reply = Once::new(reply);
                     let answer = reply.clone();
                     batch.push((
@@ -186,6 +193,15 @@ impl AnimationSink for LiveSink {
                 job.period.as_secs_f64() * 1000.0,
             ));
         }
+        // The animation settled (or ended): the border takes the settled or
+        // read-back frame of this exact plan; a stale plan is ignored there.
+        self.frames.report_border_outcome(
+            job.window,
+            job.plan_sequence,
+            job.target,
+            &outcome,
+            crate::borders::BorderFrameKind::Settled,
+        );
         // A closed mailbox means the actor is gone; nobody is waiting.
         let _ = self.ingress.submit(Input::Completion {
             stamp: job.stamp,

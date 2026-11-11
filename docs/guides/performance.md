@@ -223,12 +223,31 @@ Whether those threads, their wakeups and CPU cost are acceptable is
 **unverified**; the instant fallback (see [Tiling](../features/tiling.md#animation))
 bounds the cost of an application that cannot keep up.
 
-Borders are off by default and then own no thread, port, child or timer. Enabled,
-they spawn one runner thread holding the latest pending update; animation frames
-are capped at **8 per second**, a Mach send at 0.5 s, a helper CLI child at 2 s
-(plus 2 s to reap, 64 KiB per output stream), and the stop join at the sum of
-those. Waits are cancellation-wakeable and no lock is held across a send or a
-sleep. The achieved rate and JankyBorders' own load are **unverified**.
+Borders are off by default and then own no thread, overlay, observer or timer. Enabled,
+they are drawn by Stache (Tiling borders part 07 bounds, tested with fakes): at most `MAX_OVERLAYS` (64)
+overlay windows plus a bounded reuse pool and **one** pending overlay batch (latest wins); two owner
+threads (`stache-tiling-borders-spaces`, `stache-tiling-borders-events`), and while a user drag moves a
+window at most one display link per display and one bounds read per moving window per display frame,
+stopping 100 ms after the last move; **zero** Stache wakeups while idle, including while a `loop`
+rotation or ping-pong runs (every animation is a Core Animation animation on the render server, no
+timer); memory per overlay bounded by its layers (no bitmap backing store), except a glow's band: one
+small 9-slice tile bitmap per glow overlay, independent of the window size (a square of side
+`2m + n` points at the display scale, `m` the panel margin and `n = ceil(2m + 2k + 2) - 2m` with
+`k = radius + 0.5w + 3w`; about 128 pt, 256 KB at 2x for a 6 pt glow), stretched over the panel
+with `contentsCenter` and re-rendered on main only when the width, corner radius, color or display
+scale changes, never on a move or resize (a window narrower than `n` falls back to a panel-sized
+bitmap re-rendered on resize). The actor never waits on
+main; the effects thread waits at most a short bound for the pre-hide of an application's borders; an
+overlay batch unacknowledged for 250 ms reports `borders: main thread busy`; a stop waits at most
+500 ms (off main) for the release acknowledgement. In native run 2 of part 04 the main-thread
+acknowledgement of border batches measured p50 5.5 ms, p90 101 ms, max 255 ms (one display, the
+user's desktop).
+
+**Unmeasured natively:** the part 07 measurement method (release build, three bordered test windows;
+idle CPU, wakeups and memory for 60 s each with borders off, static, ping-pong, and `loop` on all three
+plus a cross-fade every 5 s; 100 start/stop and reload cycles with a window-list check for leftover
+overlays; quit through the tray) has **not been run**, so no CPU, wakeup or memory number exists. Native
+run 10 checked only that teardown was clean on every quit.
 
 ## Tiling strip in the Bar (Tiling–Bar part 10)
 

@@ -1144,24 +1144,50 @@ export type BindingStatus_Serialize = {
 	detail: string | null,
 };
 
-/**  Color animation for gradient borders. */
+/**  Animation for gradient borders. */
 export type BorderAnimationConfig = BorderAnimationConfig_Serialize | BorderAnimationConfig_Deserialize;
 
-/**  Color animation for gradient borders. */
+/**  Animation for gradient borders. */
 export type BorderAnimationConfig_Deserialize = {
-	/**  Duration in milliseconds of one color-swap leg. */
+	/**  Animation style; omitted is `ping_pong`. */
+	style?: BorderAnimationStyle | null,
+	/**
+	 *  Duration in milliseconds of one color-swap leg (`ping_pong`) or one
+	 *  turn (`once`, `loop`); values below 16 are treated as 16.
+	 */
 	duration: number,
-	/**  Easing of each leg. */
+	/**  Easing of each leg or turn. */
 	easing?: EasingType,
 };
 
-/**  Color animation for gradient borders. */
+/**  Animation for gradient borders. */
 export type BorderAnimationConfig_Serialize = {
-	/**  Duration in milliseconds of one color-swap leg. */
+	/**  Animation style; omitted is `ping_pong`. */
+	style?: BorderAnimationStyle,
+	/**
+	 *  Duration in milliseconds of one color-swap leg (`ping_pong`) or one
+	 *  turn (`once`, `loop`); values below 16 are treated as 16.
+	 */
 	duration: number,
-	/**  Easing of each leg. */
+	/**  Easing of each leg or turn. */
 	easing: EasingType,
 };
+
+/**  How a gradient border animates. */
+export type BorderAnimationStyle =
+/**  The two colors swap back and forth, `duration` per leg (focused window only). */
+"ping_pong" |
+/**  The gradient angle turns 360 degrees once, `duration` per turn. */
+"once" |
+/**  The gradient angle turns 360 degrees forever, `duration` per turn. */
+"loop";
+
+/**  Where a border is ordered relative to its window. */
+export type BorderOrder =
+/**  Directly below the window; the window covers the inner part of the border. */
+"below" |
+/**  Directly above the window, entirely outside its frame. */
+"above";
 
 /**  One border state: `false` or an object with a width and a color source. */
 export type BorderStateConfig = BorderStateConfig_Serialize | BorderStateConfig_Deserialize;
@@ -1216,12 +1242,30 @@ width: number;
 /**  Glow color. */
 glow: string }) & { animation?: never; color?: never; gradient?: never };
 
-/**  Border corner style. */
-export type BorderStyle =
-/**  Rounded corners. */
-"round" |
-/**  Square corners. */
-"square";
+/**  Focus color cross-fade between a border's previous and new colors. */
+export type BorderTransitionConfig = BorderTransitionConfig_Serialize | BorderTransitionConfig_Deserialize;
+
+/**  Focus color cross-fade between a border's previous and new colors. */
+export type BorderTransitionConfig_Deserialize = {
+	/**
+	 *  Fade duration in milliseconds; 0 is instant, other values below 16 are
+	 *  treated as 16.
+	 */
+	duration: number,
+	/**  Easing of the fade. */
+	easing?: EasingType,
+};
+
+/**  Focus color cross-fade between a border's previous and new colors. */
+export type BorderTransitionConfig_Serialize = {
+	/**
+	 *  Fade duration in milliseconds; 0 is instant, other values below 16 are
+	 *  treated as 16.
+	 */
+	duration: number,
+	/**  Easing of the fade. */
+	easing: EasingType,
+};
 
 /**  Window border configuration. */
 export type BordersConfig = BordersConfig_Serialize | BordersConfig_Deserialize;
@@ -1229,18 +1273,17 @@ export type BordersConfig = BordersConfig_Serialize | BordersConfig_Deserialize;
 /**  Window border configuration. */
 export type BordersConfig_Deserialize = {
 	/**
-	 *  Whether borders are enabled. Setting this to `true` is your explicit
-	 *  consent for Stache to overwrite the shared `JankyBorders` settings it names:
-	 *  width, style, hidpi, active and inactive colors and the blacklist. Their
-	 *  previous values are not read or restored. Stache never starts, restarts or
-	 *  kills the `JankyBorders` service (it must already be running) and, when
-	 *  borders stop or are disabled, leaves the last settings it sent in place.
+	 *  Whether Stache draws borders around Tiling-managed windows. Borders are
+	 *  drawn by Stache itself; nothing external is started, changed or left
+	 *  behind, and disabling them removes every border.
 	 */
 	enabled?: boolean,
-	/**  Border style; omitted uses the external service default (round). */
-	style?: BorderStyle | null,
-	/**  Retina support (`hidpi`); omitted uses the external service default (true). */
+	/**  Retina support (`hidpi`); omitted is true. */
 	hidpi?: boolean | null,
+	/**  Focus color cross-fade; omitted is instant. */
+	transition?: BorderTransitionConfig_Deserialize | null,
+	/**  Border order relative to its window; omitted is `below`. */
+	order?: BorderOrder | null,
 	/**  Focused windows. */
 	focused?: BorderStateConfig_Deserialize,
 	/**  Unfocused windows; `false` hides them. */
@@ -1268,18 +1311,17 @@ export type BordersConfig_Deserialize = {
 /**  Window border configuration. */
 export type BordersConfig_Serialize = {
 	/**
-	 *  Whether borders are enabled. Setting this to `true` is your explicit
-	 *  consent for Stache to overwrite the shared `JankyBorders` settings it names:
-	 *  width, style, hidpi, active and inactive colors and the blacklist. Their
-	 *  previous values are not read or restored. Stache never starts, restarts or
-	 *  kills the `JankyBorders` service (it must already be running) and, when
-	 *  borders stop or are disabled, leaves the last settings it sent in place.
+	 *  Whether Stache draws borders around Tiling-managed windows. Borders are
+	 *  drawn by Stache itself; nothing external is started, changed or left
+	 *  behind, and disabling them removes every border.
 	 */
 	enabled: boolean,
-	/**  Border style; omitted uses the external service default (round). */
-	style?: BorderStyle,
-	/**  Retina support (`hidpi`); omitted uses the external service default (true). */
+	/**  Retina support (`hidpi`); omitted is true. */
 	hidpi?: boolean,
+	/**  Focus color cross-fade; omitted is instant. */
+	transition?: BorderTransitionConfig_Serialize,
+	/**  Border order relative to its window; omitted is `below`. */
+	order?: BorderOrder,
 	/**  Focused windows. */
 	focused: BorderStateConfig_Serialize,
 	/**  Unfocused windows; `false` hides them. */

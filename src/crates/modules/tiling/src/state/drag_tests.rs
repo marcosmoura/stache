@@ -218,6 +218,29 @@ fn moved_by(frame: Rect, dx: f64, dy: f64) -> Rect {
 
 fn close(a: f64, b: f64) -> bool { (a - b).abs() < 1e-9 }
 
+// ------------------------------------------------- pressed (border fallback)
+
+#[test]
+fn pressed_names_the_window_under_the_mouse_down_for_the_gesture_only() {
+    let mut rig = Rig::new("split", 3);
+    assert!(
+        rig.f.state.drag.pressed().is_empty(),
+        "no gesture, nothing pressed"
+    );
+    rig.down(0); // the down is at (100, 100)
+    let under: Vec<WindowInstance> = (0..3)
+        .filter(|index| crate::drag::contains_inclusive(&rig.frame(*index), point(100.0, 100.0)))
+        .map(|index| rig.token(index))
+        .collect();
+    assert!(!under.is_empty(), "the fixture puts a window under the pointer");
+    assert_eq!(rig.f.state.drag.pressed(), under);
+    // The gesture lasts through the settling reads, then pressed is empty again.
+    let up = rig.up(0);
+    assert_eq!(rig.f.state.drag.pressed(), under, "still settling");
+    rig.answer(&up, &[]);
+    assert!(rig.f.state.drag.pressed().is_empty(), "the gesture was decided");
+}
+
 // --------------------------------------------------------------- capture
 
 #[test]
@@ -814,6 +837,21 @@ fn every_lost_observation_cancels_the_gesture_and_reconciles_once() {
         assert_eq!(rig.diagnostics().drag_lost_observations, 2);
         assert_eq!(rig.diagnostics().drag_cancelled, 1);
     }
+}
+
+/// An observer that could not be installed is not a lost observation: drag is
+/// degraded and nothing is counted; a gesture in progress is still voided.
+#[test]
+fn an_unavailable_observer_degrades_drag_without_counting_a_loss() {
+    let mut rig = Rig::new("split", 2);
+    rig.f.apply(Input::Drag(DragSignal::Unavailable));
+    assert!(rig.f.state.drag.degraded);
+    assert_eq!(rig.diagnostics().drag_lost_observations, 0);
+    let mut rig = Rig::new("split", 2);
+    rig.down(0);
+    rig.f.apply(Input::Drag(DragSignal::Unavailable));
+    assert_cancelled(&rig, LostCause::Stopped);
+    assert!(rig.f.state.drag.degraded);
 }
 
 #[test]

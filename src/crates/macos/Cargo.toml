@@ -23,11 +23,11 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSAc
 objc2-core-audio = { version = "0.3.2", default-features = false, features = ["AudioHardware", "std"] }
 objc2-core-audio-types = { version = "0.3.2", default-features = false, features = ["CoreAudioBaseTypes", "std"] }
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["CFBase", "CFDate", "CFDictionary", "CFMachPort", "CFNumber", "CFRunLoop", "CFString", "block2", "std"] }
-objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["CGEvent", "CGEventTypes", "CGSession", "std"] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["CGBitmapContext", "CGColor", "CGColorSpace", "CGContext", "CGEvent", "CGEventTypes", "CGImage", "CGPath", "CGSession", "std"] }
 objc2-core-location = { version = "0.3.2", default-features = false, features = ["CLLocation", "CLLocationManager", "CLLocationManagerDelegate", "block2", "std"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSArray", "NSAttributedString", "NSBundle", "NSDate", "NSDictionary", "NSDistributedNotificationCenter", "NSError", "NSNotification", "NSObject", "NSOperation", "NSString", "NSTimer", "NSURL", "NSUserDefaults", "block2", "std"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSArray", "NSAttributedString", "NSBundle", "NSDate", "NSDictionary", "NSDistributedNotificationCenter", "NSError", "NSNotification", "NSObject", "NSOperation", "NSProcessInfo", "NSString", "NSTimer", "NSURL", "NSUserDefaults", "block2", "std"] }
 objc2-io-kit = { version = "0.3.2", default-features = false, features = ["pwr_mgt", "std"] }
-objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["CAAnimation", "CABase", "CALayer", "CAMediaTiming", "CAMediaTimingFunction", "CATransaction", "objc2-core-foundation", "objc2-core-graphics", "std"] }
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["CAAnimation", "CABase", "CAGradientLayer", "CALayer", "CAMediaTiming", "CAMediaTimingFunction", "CAShapeLayer", "CATransaction", "objc2-core-foundation", "objc2-core-graphics", "std"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 stache-sdk = { path = "../sdk" }

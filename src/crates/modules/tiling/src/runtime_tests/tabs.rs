@@ -35,7 +35,7 @@ fn config() -> Arc<TilingConfig> {
     )
 }
 
-fn bar(id: u64, count: usize) -> TabBarRead {
+pub(super) fn bar(id: u64, count: usize) -> TabBarRead {
     TabBarRead::Bar(TabBar {
         id: TabBarId::for_testing(id),
         count,
@@ -44,15 +44,15 @@ fn bar(id: u64, count: usize) -> TabBarRead {
 }
 
 /// A desktop with a Finder-like application and another application.
-struct Tabs {
-    rig: Rig,
+pub(super) struct Tabs {
+    pub(super) rig: Rig,
     serial: u64,
 }
 
 impl Tabs {
     /// `finder_on_main`: Finder windows join the visible `main` workspace
     /// (otherwise a rule sends them to the hidden `files` workspace).
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let mut rig = Rig::new(
             "",
             vec![
@@ -83,12 +83,16 @@ impl Tabs {
         Self { rig, serial: 0 }
     }
 
-    fn token(&mut self, app: u64) -> WindowInstance {
+    pub(super) fn token(&mut self, app: u64) -> WindowInstance {
         self.serial += 1;
         self.rig.token(app, self.serial)
     }
 
-    fn snapshot(token: WindowInstance, bar: TabBarRead, frame: Option<Rect>) -> WindowSnapshot {
+    pub(super) fn snapshot(
+        token: WindowInstance,
+        bar: TabBarRead,
+        frame: Option<Rect>,
+    ) -> WindowSnapshot {
         let mut snapshot = snapshot(token, "w", 100 + u32::try_from(token.serial()).unwrap_or(0));
         // Finder windows report AXDialog (kept: >= 400x300).
         snapshot.subrole = AxReading::Value("AXDialog".to_owned());
@@ -105,7 +109,7 @@ impl Tabs {
         snapshot
     }
 
-    fn enumerate(&mut self, token: WindowInstance, bar: TabBarRead) {
+    pub(super) fn enumerate(&mut self, token: WindowInstance, bar: TabBarRead) {
         let snapshot = Self::snapshot(token, bar, None);
         self.rig.push(WindowEventKind::Snapshot {
             snapshot,
@@ -115,14 +119,14 @@ impl Tabs {
     }
 
     /// Both applications enumerated their first scan.
-    fn finish_startup(&mut self) {
+    pub(super) fn finish_startup(&mut self) {
         self.rig.complete(app(FINDER));
         self.rig.complete(app(OTHER));
         self.rig.pump();
     }
 
     /// The window as laid out now: the frame a native tab swap keeps.
-    fn slot(&self, token: WindowInstance) -> Rect {
+    pub(super) fn slot(&self, token: WindowInstance) -> Rect {
         self.rig
             .snap()
             .frames
@@ -132,12 +136,12 @@ impl Tabs {
             .expect("frame")
     }
 
-    fn order(&self) -> Vec<WindowInstance> {
+    pub(super) fn order(&self) -> Vec<WindowInstance> {
         self.rig.snap().workspaces.iter().flat_map(|ws| ws.order.clone()).collect()
     }
 
     /// The tiles: tracked windows that are not suspended members of a slot.
-    fn windows(&self) -> Vec<WindowInstance> {
+    pub(super) fn windows(&self) -> Vec<WindowInstance> {
         self.rig
             .snap()
             .windows
@@ -148,13 +152,13 @@ impl Tabs {
     }
 
     /// Every tracked window, suspended members included.
-    fn tracked(&self) -> Vec<WindowInstance> {
+    pub(super) fn tracked(&self) -> Vec<WindowInstance> {
         self.rig.snap().windows.iter().map(|w| w.token).collect()
     }
 
-    fn writes(&self) -> usize { self.rig.backend.written_frames().len() }
+    pub(super) fn writes(&self) -> usize { self.rig.backend.written_frames().len() }
 
-    fn refreshes(&self) -> usize {
+    pub(super) fn refreshes(&self) -> usize {
         self.rig
             .calls()
             .iter()
@@ -163,15 +167,15 @@ impl Tabs {
     }
 
     /// Lets the actor clock pass `by` and runs what came due.
-    fn wait(&mut self, by: Duration) {
+    pub(super) fn wait(&mut self, by: Duration) {
         self.rig.clock.advance(by);
         self.rig.engine.turn();
         self.rig.pump();
     }
 
-    fn settle_delay(&mut self) { self.wait(TAB_SETTLE_DELAY); }
+    pub(super) fn settle_delay(&mut self) { self.wait(TAB_SETTLE_DELAY); }
 
-    fn focus(&mut self, token: WindowInstance) {
+    pub(super) fn focus(&mut self, token: WindowInstance) {
         self.rig.push(WindowEventKind::Window {
             window: token,
             change: WindowChange::Focused,
@@ -179,7 +183,7 @@ impl Tabs {
         self.rig.pump();
     }
 
-    fn destroyed(&mut self, token: WindowInstance) {
+    pub(super) fn destroyed(&mut self, token: WindowInstance) {
         self.rig.push(WindowEventKind::Window {
             window: token,
             change: WindowChange::Destroyed,
@@ -187,7 +191,7 @@ impl Tabs {
         self.rig.pump();
     }
 
-    fn listed(&mut self, token: WindowInstance, bar: TabBarRead, frame: Rect) {
+    pub(super) fn listed(&mut self, token: WindowInstance, bar: TabBarRead, frame: Rect) {
         let snapshot = Self::snapshot(token, bar, Some(frame));
         self.rig.push(WindowEventKind::Snapshot {
             snapshot,
@@ -196,7 +200,7 @@ impl Tabs {
         self.rig.pump();
     }
 
-    fn created(&mut self, token: WindowInstance, bar: TabBarRead, frame: Rect) {
+    pub(super) fn created(&mut self, token: WindowInstance, bar: TabBarRead, frame: Rect) {
         let snapshot = Self::snapshot(token, bar, Some(frame));
         self.rig.push(WindowEventKind::Snapshot {
             snapshot,
@@ -205,12 +209,12 @@ impl Tabs {
         self.rig.pump();
     }
 
-    fn end_listing(&mut self) {
+    pub(super) fn end_listing(&mut self) {
         self.rig.complete(app(FINDER));
         self.rig.pump();
     }
 
-    fn unsettled_listing(&mut self) {
+    pub(super) fn unsettled_listing(&mut self) {
         self.rig.push(WindowEventKind::EnumerationUnsettled {
             application: app(FINDER),
             windows: 1,
@@ -219,7 +223,7 @@ impl Tabs {
     }
 
     /// Finder with a three-tab group in master next to another app's window.
-    fn finder_group() -> (Self, WindowInstance, WindowInstance) {
+    pub(super) fn finder_group() -> (Self, WindowInstance, WindowInstance) {
         let mut tabs = Self::new();
         let finder = tabs.token(FINDER);
         let other = tabs.token(OTHER);
@@ -642,7 +646,7 @@ fn applications_without_a_tab_bar_are_never_listed_for_focus_changes() {
 // ---------------------------------------------------------------- suspended
 
 impl Tabs {
-    fn suspend(&mut self, token: WindowInstance) {
+    pub(super) fn suspend(&mut self, token: WindowInstance) {
         self.rig.push(WindowEventKind::Window {
             window: token,
             change: WindowChange::Suspended,
@@ -652,7 +656,7 @@ impl Tabs {
 
     /// A one-window application (no tab bar, like a single Ghostty window) next
     /// to another application's window.
-    fn single() -> (Self, WindowInstance, WindowInstance) {
+    pub(super) fn single() -> (Self, WindowInstance, WindowInstance) {
         let mut tabs = Self::new();
         let single = tabs.token(FINDER);
         let other = tabs.token(OTHER);
@@ -664,12 +668,12 @@ impl Tabs {
         (tabs, single, other)
     }
 
-    fn suspended_of(&self, token: WindowInstance) -> bool {
+    pub(super) fn suspended_of(&self, token: WindowInstance) -> bool {
         self.rig.snap().window(token).is_some_and(|window| window.suspended)
     }
 
     /// One settled listing that names exactly `listed` (each on its slot).
-    fn settled_listing(&mut self, listed: &[(WindowInstance, TabBarRead)]) {
+    pub(super) fn settled_listing(&mut self, listed: &[(WindowInstance, TabBarRead)]) {
         self.settle_delay();
         for (token, bar) in listed {
             let frame = self.slot(*token);
@@ -981,4 +985,24 @@ fn a_return_announced_before_the_close_waits_for_the_settle_instead_of_adding_a_
     tabs.end_listing();
     assert_eq!(tabs.order(), vec![single, other]);
     assert_eq!(tabs.writes(), writes);
+}
+
+#[test]
+fn a_window_back_from_native_fullscreen_is_laid_out_again() {
+    // Native run 4: Ghostty enters native fullscreen, leaves `AXWindows` alive
+    // (suspended), no window takes its place, the slot is released; after the
+    // exit it is listed again off its tile and must be a tile again.
+    let (mut tabs, single, other) = Tabs::single();
+    tabs.suspend(single);
+    tabs.settled_listing(&[(other, TabBarRead::None)]);
+    assert_eq!(tabs.order(), vec![other], "the released slot reflows");
+    assert_eq!(tabs.rig.snap().diagnostics.tab_slots_released, 1);
+    let writes = tabs.writes();
+
+    let off = Rect::new(162.0, 137.0, 700.0, 500.0);
+    tabs.created(single, TabBarRead::None, off);
+    assert!(!tabs.suspended_of(single));
+    assert!(tabs.order().contains(&single), "a tile again");
+    assert!(tabs.writes() > writes, "laid out again");
+    assert_ne!(tabs.slot(single), off);
 }

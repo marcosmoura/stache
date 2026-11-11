@@ -240,8 +240,8 @@ struct Setup {
     /// The fake owner refuses to install the listen-only tap (Input Monitoring
     /// missing).
     listen_only_refused: bool,
-    /// The `JankyBorders` authority (fakes only).
-    borders: Option<crate::borders::BordersParts>,
+    /// The native borders' fakes (overlay control and the two owners).
+    native: Option<native::Fakes>,
     /// Register the `tilingState` schema, as the app does.
     schemas: bool,
 }
@@ -262,7 +262,7 @@ impl Default for Setup {
             applications: None,
             input: true,
             listen_only_refused: false,
-            borders: None,
+            native: None,
             schemas: false,
         }
     }
@@ -313,7 +313,9 @@ impl Host {
         );
         parts.reservations = Some(Arc::clone(&source) as Arc<dyn ReservationSource>);
         parts.applications = setup.applications.clone();
-        parts.borders = setup.borders.clone();
+        if let Some(fakes) = &setup.native {
+            fakes.install(&mut parts);
+        }
         parts.displays = setup
             .display
             .clone()
@@ -970,6 +972,35 @@ fn an_incomplete_epoch_stop_is_retried_without_repeating_other_stages() {
     host.disable();
 }
 
+/// Native run 12: registrations a target application refuses to remove (hung)
+/// are owed by a runtime stop, but at process exit they die with the process.
+/// The quit reports them and is not a stop failure.
+#[test]
+fn registrations_owed_at_process_exit_are_reported_not_owed() {
+    let host = Host::started();
+    host.backend.script_stop(StopOutcome::Quarantined {
+        applications: 1,
+        registrations: 5,
+    });
+    host.backend
+        .script_close(stache_macos::windows::CloseOutcome::Quarantined { registrations: 5 });
+    host.runtime.begin_shutdown();
+    assert!(
+        host.registry.set_enabled(host.handle, false).is_ok(),
+        "the stop is Ok: {:?}",
+        host.runtime.status().read()
+    );
+    assert_eq!(host.state(), TilingRuntimeState::Inactive);
+    assert!(host.trace().contains(&Teardown::Epoch));
+    let detail = host.runtime.status().read().detail.expect("reported");
+    assert!(
+        detail.contains("1 application(s) and 5 observer registration(s)")
+            && detail.contains("released by the system at process exit"),
+        "{detail}"
+    );
+    assert!(host.runtime.finish_shutdown(), "the factory drain answers");
+}
+
 #[test]
 fn a_failed_start_with_an_incomplete_unwind_is_quarantined_and_retried() {
     let fail = Arc::new(AtomicBool::new(true));
@@ -1501,7 +1532,7 @@ mod production_surface {
             !status.diagnostics.iter().any(|d| d.contains("animations")),
             "animation is implemented: no unsupported diagnostic"
         );
-        assert!(status.diagnostics[0].contains("no JankyBorders authority"));
+        assert_eq!(status.diagnostics[0], crate::module::NO_BORDER_OVERLAYS);
         assert!(status.diagnostics[1].contains("native tabs are not read"));
         // The accepted configuration still holds the request.
         assert_eq!(
@@ -2211,210 +2242,7 @@ mod animation {
     }
 }
 
-mod borders {
-    use super::*;
-    use crate::borders::BordersParts;
-    use crate::borders::fakes::{Cli, Net};
-
-    struct Rig {
-        host: Host,
-        net: Arc<Net>,
-        cli: Arc<Cli>,
-    }
-
-    fn rig(present: bool) -> Rig {
-        let net = Net::new(present);
-        let cli = Cli::new();
-        let host = Host::with(Setup {
-            borders: Some(BordersParts::new(net.factory(), cli.factory())),
-            ..Setup::default()
-        });
-        Rig { host, net, cli }
-    }
-
-    fn with_borders() -> TilingConfig {
-        let mut config = enabled();
-        config.borders.enabled = true;
-        config
-    }
-
-    fn running(host: &Host) -> bool {
-        host.runtime.tracking().is_some_and(|rt| rt.borders().is_running())
-    }
-
-    #[test]
-    fn disabled_borders_own_no_runner_port_or_child() {
-        let rig = rig(true);
-        rig.host.registry.start_all().expect("start");
-        let tracking = rig.host.runtime.tracking().expect("running");
-        assert!(!tracking.borders().is_running());
-        assert!(!tracking.borders().owes_cleanup());
-        feed_window(&rig.host);
-        assert_eq!(
-            (rig.net.created(), rig.net.lookups(), rig.net.sends().len()),
-            (0, 0, 0)
-        );
-        assert!(rig.cli.spawned().is_empty());
-        rig.host.disable();
-        assert!(
-            !rig.host.trace().contains(&Teardown::Borders),
-            "no borders stage was owed"
-        );
-        let status = rig.host.runtime.status().read();
-        assert!(status.detail.is_none(), "{status:?}");
-    }
-
-    #[test]
-    fn an_accepted_enable_starts_the_runner_and_a_reload_to_disabled_stops_it_silently() {
-        let rig = rig(true);
-        rig.host.registry.start_all().expect("start");
-        rig.host.reload(with_borders()).expect("enable");
-        wait_until("the runner", || running(&rig.host));
-        assert!(rig.net.wait_sends(1, Duration::from_secs(10)));
-        assert_eq!(rig.net.sends()[0][0], "width=4");
-        assert!(rig.net.sends()[0].last().expect("blacklist").starts_with("blacklist="));
-        let status = rig.host.runtime.status().read();
-        assert!(
-            status.diagnostics.iter().all(|d| !d.contains("borders")),
-            "{status:?}"
-        );
-        assert!(status.healthy);
-
-        let before = rig.net.sends();
-        rig.host.reload(enabled()).expect("disable");
-        wait_until("the runner closed", || !running(&rig.host));
-        let tracking = rig.host.runtime.tracking().expect("running");
-        assert!(tracking.borders().join_within(Duration::from_secs(10)));
-        assert_eq!(rig.net.dropped(), 1, "the connection was released");
-        assert_eq!(rig.net.sends(), before, "disabling sent nothing");
-        rig.host.disable();
-    }
-
-    #[test]
-    fn stop_closes_the_runner_before_the_drain_and_leaves_the_last_settings() {
-        let rig = rig(true);
-        rig.host.reload(with_borders()).expect("config");
-        rig.host.registry.start_all().expect("start");
-        assert!(rig.net.wait_sends(1, Duration::from_secs(10)));
-        let before = rig.net.sends();
-        rig.host.disable();
-        assert_eq!(rig.host.state(), TilingRuntimeState::Inactive);
-        let trace = rig.host.trace();
-        let borders = trace.iter().position(|s| *s == Teardown::Borders).expect("borders ran");
-        let drained = trace.iter().position(|s| *s == Teardown::Drained).expect("drained");
-        assert!(borders < drained);
-        assert_eq!(rig.net.dropped(), 1);
-        assert_eq!(rig.net.sends(), before, "stop sent no mutation");
-        assert!(rig.net.sends().iter().flatten().all(|arg| arg != "width=0"));
-        let detail = rig.host.runtime.status().read().detail.expect("detail");
-        assert!(detail.contains("keeps the last border settings"), "{detail}");
-    }
-
-    #[test]
-    fn a_missing_service_degrades_borders_only() {
-        let rig = rig(false);
-        rig.host.reload(with_borders()).expect("config");
-        rig.host.registry.start_all().expect("start");
-        wait_until("the diagnostic", || {
-            rig.host
-                .runtime
-                .status()
-                .read()
-                .diagnostics
-                .iter()
-                .any(|d| d.contains("git.felix.borders"))
-        });
-        let status = rig.host.runtime.status().read();
-        assert_eq!(status.state, TilingRuntimeState::Running);
-        assert!(status.healthy, "borders alone are degraded");
-        assert!(rig.net.sends().is_empty());
-        assert!(rig.cli.spawned().is_empty(), "no CLI without a service");
-        assert_eq!(rig.host.status(), ModuleStatus::Running);
-        rig.host.disable();
-        assert!(
-            rig.host.runtime.status().read().detail.is_none(),
-            "nothing was left behind"
-        );
-    }
-
-    #[test]
-    fn the_actor_feeds_the_focused_window_layout_to_the_runner() {
-        let rig = rig(true);
-        let mut config = with_borders();
-        config.default_layout = LayoutType::Monocle;
-        rig.host.reload(config).expect("config");
-        rig.host.registry.start_all().expect("start");
-        assert!(rig.net.wait_sends(1, Duration::from_secs(10)));
-        let runtime = rig.host.runtime.tracking().expect("running");
-        let mut feed = Feed::new(runtime.epoch().value());
-        feed.adapter = rig.host.backend.adapter();
-        runtime.submit_displays(None, one_display()).expect("displays");
-        wait_until("tracked", || {
-            rig.host
-                .backend
-                .calls()
-                .iter()
-                .any(|call| matches!(call, FakeBackendCall::Track(..)))
-        });
-        let sink = rig.host.backend.sink().expect("sink");
-        let token = feed.token(1, 1);
-        assert!(sink.push(feed.event(WindowEventKind::Snapshot {
-            snapshot: snapshot(token, "w", 1),
-            origin: SnapshotOrigin::Created,
-        })));
-        assert!(sink.push(feed.event(WindowEventKind::EnumerationComplete {
-            application: app(1),
-            windows: 1,
-            truncated: false,
-        })));
-        assert!(sink.push(feed.event(WindowEventKind::Window {
-            window: token,
-            change: stache_macos::windows::WindowChange::Focused,
-        })));
-        // The monocle workspace's state colors the active border: a pure value
-        // derived from the published snapshot, no AX read.
-        wait_until("the monocle focus command", || {
-            rig.net.sends().iter().any(|args| {
-                args.first().is_some_and(|a| a == "width=4")
-                    && args.get(1).is_some_and(|a| a == "active_color=0xFFCBA6F7")
-            })
-        });
-        rig.host.disable();
-    }
-
-    #[test]
-    fn a_runner_blocked_in_a_send_quarantines_the_stop_and_the_retry_completes_it() {
-        let rig = rig(true);
-        rig.net.hold();
-        rig.host.reload(with_borders()).expect("config");
-        rig.host.registry.start_all().expect("start");
-        assert!(rig.net.wait_entered(1, Duration::from_secs(10)));
-        let started = Instant::now();
-        rig.host.disable();
-        assert!(started.elapsed() < Duration::from_secs(5), "the stop is finite");
-        let status = rig.host.runtime.status().read();
-        assert_eq!(status.state, TilingRuntimeState::Quarantined);
-        assert!(status.owed.contains(&"borders runner".to_owned()), "{status:?}");
-        assert!(matches!(rig.host.status(), ModuleStatus::Failed(_)));
-        // The core stages that do not depend on the runner still ran.
-        assert!(rig.host.trace().contains(&Teardown::Runner));
-
-        rig.net.release();
-        rig.host.enable();
-        assert_eq!(
-            rig.host.status(),
-            ModuleStatus::Running,
-            "{:?}",
-            rig.host.runtime.status().read()
-        );
-        assert_eq!(rig.net.dropped(), 1, "the blocked connection was released");
-        assert_eq!(
-            rig.host.trace().iter().filter(|s| **s == Teardown::Borders).count(),
-            1
-        );
-        rig.host.disable();
-    }
-}
+mod native;
 
 // ------------------------------------------------------------- TI-10-01 (10a)
 

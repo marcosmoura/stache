@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 04 — Tiling coupling
@@ -26,9 +26,9 @@ New `modules/tiling/src/borders/{model.rs,engine.rs}` (pure border model and the
 
 ## Acceptance criteria
 
-- [ ] TB-04-01: The pure model includes exactly the decision 2 windows across tiled, floating, ignored, system, minimized, fullscreen, hidden, suspended, inactive-tab, invisible-workspace and unknown-`cg_window_id` fixtures, with today's precedence and the resolved OQ-1/OQ-3/OQ-6 answers (including an entry matching only the bundle id, only the name, and an executable name that matches neither).
-- [ ] TB-04-02: With fakes, a workspace switch hides the outgoing application's overlays and receives their acknowledgement before the fake `HideApp` send (or times out after `BORDER_HIDE_WAIT` with a counter); revealed windows show only after the shown observation, the completed reveal write and one fake frame tick, in that order.
-- [ ] TB-04-03: Borders follow direct writes, every animation frame and the corrected readback for the current plan only; stale plan sequences, refused and partial writes are handled; focus changes recolor and reorder without recreating overlays; tab handover and `slot_held` behave as specified.
+- [x] TB-04-01: The pure model includes exactly the decision 2 windows across tiled, floating, ignored, system, minimized, fullscreen, hidden, suspended, inactive-tab, invisible-workspace and unknown-`cg_window_id` fixtures, with today's precedence and the resolved OQ-1/OQ-3/OQ-6 answers (including an entry matching only the bundle id, only the name, and an executable name that matches neither).
+- [x] TB-04-02: With fakes, a workspace switch hides the outgoing application's overlays and receives their acknowledgement before the fake `HideApp` send (or times out after `BORDER_HIDE_WAIT` with a counter); revealed windows show only after the shown observation, the completed reveal write and one fake frame tick, in that order.
+- [x] TB-04-03: Borders follow direct writes, every animation frame and the corrected readback for the current plan only; stale plan sequences, refused and partial writes are handled; focus changes recolor and reorder without recreating overlays; tab handover and `slot_held` behave as specified.
 
 ## Tests
 
@@ -40,10 +40,16 @@ On owned test instances of Ghostty and Spotify (exact instances named in the app
 
 ## Review checklist
 
-- [ ] [Hard rule checklist](00-overview.md#hard-rule-review-checklist-every-part) passed: event handling inspired by, not derived from, `events.c`/`windows.c`.
+- [x] [Hard rule checklist](00-overview.md#hard-rule-review-checklist-every-part) passed: event handling inspired by, not derived from, `events.c`/`windows.c`.
 
 ## Notes
 
 - Rollback: compose `BordersControl` again; parts 01–03 stay unused.
 - Unverified: whether one frame after the reveal write is enough.
+- Implemented (2026-11-10): `borders/model.rs` (pure model), `borders/engine.rs` (actor-owned diff engine, show rule, part 05 suspend/resume hooks), `borders/route.rs` (`SharedBorderRoute`: the `BorderFrames` seam for the frame paths and the bounded `hide_application_bounded` for the effects thread), `actor/borders.rs` (actor side). The engine update runs after each transition and before that input's effects are dispatched. Frames come from `FrameControl::submit_direct` (target and readback) and `LiveSink` (each animated frame, settle). End-to-end scenarios live in `runtime_tests/borders.rs`.
+- Limits found while implementing: an application unhidden without a later `Shown` observation keeps its borders gated (no timeout fallback; native gate item); a refused write with no readback leaves the border at the target until the next model frame change; `borders.ignore` matches `app_id` exactly or `app_name` as a case-insensitive substring, as `policy::blacklist` did.
+- Native gate: not run (needs per-run approval).
+- Native run 1 (2026-11-10, build `f8754c5`, the user's own workspaces with animations on, Ghostty, Spotify and Zed): about 20 workspace switches by app activation and 20 ⌘H/Cmd-Tab cycles on Ghostty and Spotify showed **no blink**; borders appeared instantly. The log recorded 59 hides and 13 unhides with no warning. Not yet run: the overlay command log with timestamps (no border logging exists) and late-hide counters (not surfaced by `tiling query status`). TB-04 blink pass is recorded; the rest of the gate stays open.
+- Snapshot animation (a draft spec approved 2026-11-10 and since removed from `main`, decision 1) parked a window in a display corner during its animation. If it returns, a parked window must not be bordered: its overlay hides before the park write and returns through the show-after-visible rule after the reveal write, and that spec adds the parked flag to `border_model` with a scenario test.
 - Docs: none lasting until part 08.
+- Native run 2 (2026-11-10): app switches across workspaces sometimes took about 2 s. The delay remained, less often, with borders disabled by reload, so it predates borders but borders add to it. In the log Tiling reacted within about 8 ms of each activation; main-thread acknowledgements of border batches had p50 5.5 ms, p90 101 ms, max 255 ms.

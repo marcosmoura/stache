@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 02 — Static rendering styles
@@ -31,9 +31,9 @@ Resolved OQ-2: any direction, drawn exactly. The field keeps its documented mean
 
 ## Acceptance criteria
 
-- [ ] TB-02-01: Pure mapping tests cover every `BorderStateConfig` variant, disabled and unparsable colors, `rgb()`/`rgba()`, width 0 and both styles, with color, precedence and width results identical to the current `policy.rs` tests; every border's width is the active state's width.
-- [ ] TB-02-02: `gradient_points` is tested for 0, 45, 90, 135, 180, 225, 270, 315, 359.99, -90, 360 and 720 on a square, a 3:1 and a 1:3 size: the direction in points equals the angle within 0.01°, `from` lands on the documented corner or edge, and 225/315 match today's bucket corners.
-- [ ] TB-02-03: Recolor, angle and width changes mutate the fake layer tree in place without creating a new overlay or an implicit animation; disabled states and width 0 hide the overlay.
+- [x] TB-02-01: Pure mapping tests cover every `BorderStateConfig` variant, disabled and unparsable colors, `rgb()`/`rgba()`, width 0 and both styles, with color, precedence and width results identical to the current `policy.rs` tests; every border's width is the active state's width.
+- [x] TB-02-02: `gradient_points` is tested for 0, 45, 90, 135, 180, 225, 270, 315, 359.99, -90, 360 and 720 on a square, a 3:1 and a 1:3 size: the direction in points equals the angle within 0.01°, `from` lands on the documented corner or edge, and 225/315 match today's bucket corners.
+- [x] TB-02-03: Recolor, angle and width changes mutate the fake layer tree in place without creating a new overlay or an implicit animation; disabled states and width 0 hide the overlay.
 
 ## Tests
 
@@ -45,10 +45,13 @@ Combined with part 01's gate when approved together: render each style (solid; g
 
 ## Review checklist
 
-- [ ] [Hard rule checklist](00-overview.md#hard-rule-review-checklist-every-part) passed: drawing approach inspired by, not derived from, `border.c`/`drawing.h`; no copied, translated or closely paraphrased code or constants.
+- [x] [Hard rule checklist](00-overview.md#hard-rule-review-checklist-every-part) passed: drawing approach inspired by, not derived from, `border.c`/`drawing.h`; no copied, translated or closely paraphrased code or constants.
 
 ## Notes
 
 - Rollback: revert to part 01's solid stroke.
 - Unverified: glow look, color space match with JankyBorders, `CAGradientLayer` unit-space orientation on macOS (covered by the gate).
+- Implemented (2026-11-10): `gradient_points` assumes an unflipped layer (unit y up) and that `CAGradientLayer` interpolates in unit space, so the unit vector is the point-space direction scaled by the layer size; points may fall outside `[0, 1]`. Glow is the ring plus a same-color shadow (radius = width) inside a container masked to exclude the target frame; the panel gains a glow margin. An unparsable color maps to a transparent solid with the state's width. `BorderAppearance::corner_radius` is an override (`None` keeps part 01's resolution); Tiling passes `None`.
+- Native gate: not run (needs per-run approval; combined with parts 01 and 03).
+- Native run 1 (2026-11-10, build `f8754c5`, one 2× display): gradient directions 0, 45, 90 and 270 confirmed by the user on wide and grid windows (180 and 315 not separately checked). Glow was too subtle: the blur radius is now three times the width (`GLOW_RADIUS_FACTOR`, unverified). Square style showed gaps at the windows' round corners with above placement; below placement is expected to fill them (re-check). Borders are absent from a ⌘⇧3 screenshot (`sharingType = none` works).
 - Docs: none lasting until part 08; appearance rules are recorded in this spec.

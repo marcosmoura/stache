@@ -224,3 +224,39 @@ fn suspended_windows_are_released_when_the_runtime_stops() {
     assert!(matches!(h.stop(), StopOutcome::Clean { .. }));
     assert_eq!(h.ax.live_elements(), 0);
 }
+
+/// Native run 4: a window that entered native fullscreen left `AXWindows`
+/// (suspended) and was listed again after the exit. The consumer learned that
+/// from a single-window snapshot, so that read must also lift the owner's own
+/// suspension: otherwise every intermediate animation frame answers
+/// `Stale(Suspended)` and a later unlisting is never reported again.
+#[test]
+fn a_suspended_window_read_while_listed_again_is_no_longer_suspended() {
+    use super::frames::{frame_request, taken};
+    let mut h = H::new();
+    let (app_el, nodes, tokens) = h.app_with_windows(app(1), 500, 1);
+    h.ax.edit(app_el, |n| n.windows = Ok(Vec::new()));
+    let events = refresh(&mut h, app(1));
+    assert_eq!(changes(&events, WindowChange::Suspended), vec![tokens[0]]);
+
+    // Listed again; only a single-window read observes it.
+    h.ax.edit(app_el, |n| n.windows = Ok(vec![nodes[0]]));
+    let outcome = h.run(|reply| Command::Snapshot { window: tokens[0], reply });
+    assert!(matches!(outcome, SnapshotOutcome::Snapshot(_)), "{outcome:?}");
+
+    let replies = h.put(frame_request(tokens[0], 1, 5.0, FrameStage::Intermediate));
+    h.turn();
+    let got = taken(&replies);
+    assert!(
+        matches!(got.as_slice(), [FrameReply::Done(FrameAck {
+            outcome: WindowActionOutcome::Issued { .. },
+            ..
+        })]),
+        "{got:?}"
+    );
+
+    // Unlisted again: the suspension is reported again.
+    h.ax.edit(app_el, |n| n.windows = Ok(Vec::new()));
+    let events = refresh(&mut h, app(1));
+    assert_eq!(changes(&events, WindowChange::Suspended), vec![tokens[0]]);
+}

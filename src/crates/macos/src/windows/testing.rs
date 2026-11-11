@@ -38,6 +38,7 @@ struct PidScript {
     attached: bool,
     observers_created: usize,
     remove_attempts: usize,
+    exited: bool,
 }
 
 #[derive(Default)]
@@ -81,6 +82,11 @@ impl FakeObservers {
 
     pub fn set_remove_error(&self, pid: i32, error: Option<AxError>) {
         lock(&self.state).pids.entry(pid).or_default().remove_error = error;
+    }
+
+    /// Marks `pid`'s process as exited (or running again).
+    pub fn set_exited(&self, pid: i32, exited: bool) {
+        lock(&self.state).pids.entry(pid).or_default().exited = exited;
     }
 
     pub fn set_create_error(&self, error: Option<AxError>) {
@@ -219,6 +225,10 @@ impl WindowObserver<FakeWindowElement> for FakeObserver {
         script.registrations.retain(|(registered, _)| *registered != node);
         script.interned.remove(&node);
         drop(state);
+    }
+
+    fn target_exited(&self) -> bool {
+        lock(&self.script.state).pids.get(&self.pid).is_some_and(|script| script.exited)
     }
 }
 

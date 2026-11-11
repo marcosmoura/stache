@@ -8,6 +8,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use stache_macos::applications::LifecycleKind;
 use stache_macos::windows::{IssuedKind, WindowActionOutcome};
 use stache_macos::{ApplicationId, DisplayId};
 use stache_sdk::ScopedLogger;
@@ -67,6 +68,12 @@ impl Diag {
                         label(state, window.application())
                     ));
                 }
+            }
+            Input::Lifecycle {
+                kind: LifecycleKind::SpaceChanged,
+                ..
+            } => {
+                logger.debug(format!("{} tiling: active Space changed", self.origin.stamp()));
             }
             Input::Lifecycle { kind, info } => {
                 // Only a launch carries a description; the other events name the
@@ -186,8 +193,21 @@ impl Diag {
                 window,
             ),
         };
+        // The fullscreen flag the return read: a native fullscreen exit lists
+        // the window again before macOS clears it.
+        // The frame it reads and its planned tile tell whether a missing write
+        // was skipped because it already sits on its tile.
+        let fullscreen = state.windows.get(&window).map_or_else(String::new, |held| {
+            format!(
+                " (reads fullscreen={}, frame={:?}, tile={:?}, focused={})",
+                held.observed.fullscreen,
+                held.observed.frame,
+                state.frames.desired.get(&window),
+                state.focus.window == Some(window),
+            )
+        });
         logger.debug(format!(
-            "tiling: {} {what}: {window:?}",
+            "tiling: {} {what}{fullscreen}: {window:?}",
             label(state, window.application())
         ));
     }

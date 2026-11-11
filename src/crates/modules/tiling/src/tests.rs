@@ -234,7 +234,7 @@ fn master_ratio_is_bounded_and_positions_parse() {
 #[test]
 fn borders_accept_every_state_shape() {
     let config = accepted(&json!({ "borders": {
-        "enabled": true, "style": "square", "hidpi": false,
+        "enabled": true, "hidpi": false,
         "focused": { "width": 4, "color": "#89b4fa" },
         "unfocused": false,
         "monocle": { "width": 2, "glow": "rgba(137, 180, 250, 0.2)" },
@@ -245,7 +245,6 @@ fn borders_accept_every_state_shape() {
         "ignore": [{ "app_name": "Preview" }],
     } }));
     let b = &config.borders;
-    assert_eq!(b.style, Some(BorderStyle::Square));
     assert_eq!(b.unfocused, BorderStateConfig::Disabled(false));
     let BorderStateConfig::GradientColor { gradient, .. } = &b.floating else {
         panic!()
@@ -265,6 +264,98 @@ fn borders_accept_every_state_shape() {
     assert_eq!(serde_json::from_value::<TilingConfig>(out).unwrap(), config);
 }
 
+/// TB-08-04: `transition`, `animation.style` and `order` parse, default and
+/// round-trip; omitted they leave the legacy meaning.
+#[test]
+fn border_extension_fields_parse_and_default() {
+    let legacy = accepted(&json!({ "borders": {
+        "transition": null,
+        "focused": { "width": 4, "gradient": { "from": "#fff", "to": "#000" },
+            "animation": { "duration": 800, "easing": "ease_in_out" } },
+    }}));
+    assert_eq!(legacy.borders.transition, None);
+    assert_eq!(legacy.borders.order, None);
+    let BorderStateConfig::GradientColor { animation: Some(animation), .. } =
+        &legacy.borders.focused
+    else {
+        panic!("gradient with animation");
+    };
+    assert_eq!(animation.style, None);
+    assert_eq!(animation.effective_style(), BorderAnimationStyle::PingPong);
+    let out = serde_json::to_value(&legacy).unwrap();
+    assert!(out["borders"].get("transition").is_none());
+    assert!(out["borders"].get("order").is_none());
+    assert!(out["borders"]["focused"]["animation"].get("style").is_none());
+
+    let config = accepted(&json!({ "borders": {
+        "transition": { "duration": 200 },
+        "order": "above",
+        "focused": { "width": 4, "gradient": { "from": "#fff", "to": "#000", "angle": 45 },
+            "animation": { "style": "loop", "duration": 4000, "easing": "linear" } },
+        "unfocused": { "width": 4, "gradient": { "from": "#fff", "to": "#000" },
+            "animation": { "style": "once", "duration": 1000 } },
+        "monocle": { "width": 4, "gradient": { "from": "#fff", "to": "#000" },
+            "animation": { "style": "ping_pong", "duration": 500 } },
+    }}));
+    let b = &config.borders;
+    assert_eq!(
+        b.transition,
+        Some(BorderTransitionConfig {
+            duration: 200,
+            easing: EasingType::EaseOut
+        })
+    );
+    assert_eq!(b.order, Some(BorderOrder::Above));
+    for (state, style) in [
+        (&b.focused, BorderAnimationStyle::Loop),
+        (&b.unfocused, BorderAnimationStyle::Once),
+        (&b.monocle, BorderAnimationStyle::PingPong),
+    ] {
+        let BorderStateConfig::GradientColor { animation: Some(animation), .. } = state else {
+            panic!("gradient with animation");
+        };
+        assert_eq!(animation.style, Some(style));
+    }
+    let out = serde_json::to_value(&config).unwrap();
+    assert_eq!(out["borders"]["order"], json!("above"));
+    assert_eq!(
+        out["borders"]["transition"],
+        json!({ "duration": 200, "easing": "ease_out" })
+    );
+    assert_eq!(out["borders"]["focused"]["animation"]["style"], json!("loop"));
+    assert_eq!(serde_json::from_value::<TilingConfig>(out).unwrap(), config);
+    accepted(&json!({ "borders": { "order": "below", "transition": { "duration": 0 } } }));
+}
+
+#[test]
+fn malformed_border_extension_fields_are_rejected_with_their_path() {
+    let error = rejected(&json!({ "borders": { "unfocused": { "width": 4,
+        "gradient": { "from": "#fff", "to": "#000" },
+        "animation": { "style": "pingPong", "duration": 400 } } } }));
+    assert_eq!(
+        error,
+        "borders.unfocused.animation.style: unknown style `pingPong`; expected `ping_pong`, \
+         `once` or `loop`"
+    );
+    let error = rejected(&json!({ "borders": { "monocle": { "width": 4,
+        "gradient": { "from": "#fff", "to": "#000" },
+        "animation": { "style": "spin", "duration": 400 } } } }));
+    assert!(
+        error.starts_with("borders.monocle.animation.style: unknown style `spin`"),
+        "{error}"
+    );
+    let error = rejected(&json!({ "borders": { "order": "top" } }));
+    assert!(
+        error.contains("unknown variant `top`") && error.contains("expected `below` or `above`"),
+        "{error}"
+    );
+    let error =
+        rejected(&json!({ "borders": { "transition": { "duration": 200, "easing": "bouncy" } } }));
+    assert!(error.contains("unknown variant `bouncy`"), "{error}");
+    rejected(&json!({ "borders": { "transition": { "easing": "linear" } } }));
+    rejected(&json!({ "borders": { "transition": { "duration": -1 } } }));
+}
+
 #[test]
 fn malformed_borders_are_rejected() {
     for state in [
@@ -282,7 +373,6 @@ fn malformed_borders_are_rejected() {
         rejected(&json!({ "borders": { "focused": state } }));
     }
     rejected(&json!({ "borders": { "grid": { "width": 1, "color": "red" } } }));
-    rejected(&json!({ "borders": { "style": "pill" } }));
     accepted(&json!({ "borders": { "focused": { "width": 4, "color": "rgb(1, 2, 3)" } } }));
     accepted(&json!({ "borders": { "focused": { "width": 4, "color": "89b4fa" } } }));
 }
@@ -326,6 +416,21 @@ fn catalog_reports_validation_and_unknown_keys() {
         .inspect(TilingConfig::ID, path, "default_layout = \"tall\"\n")
         .expect_err("invalid");
     assert_ne!(diagnostic.kind, DiagnosticKind::Validation);
+}
+
+#[test]
+fn a_removed_border_style_key_still_loads_as_one_unknown_key_warning() {
+    // `borders.style` was removed: borders are always round. Old files load.
+    let catalog = catalog();
+    let path = Path::new("tiling.toml");
+    let round = accepted(&json!({ "borders": { "enabled": true } }));
+    for style in ["round", "square"] {
+        let text = format!("[borders]\nenabled = true\nstyle = \"{style}\"\n");
+        let warnings = catalog.inspect(TilingConfig::ID, path, &text).expect("valid");
+        assert_eq!(warnings, ["borders.style"], "{style}");
+        let loaded = accepted(&json!({ "borders": { "enabled": true, "style": style } }));
+        assert_eq!(loaded, round, "{style} loads as the always-round default");
+    }
 }
 
 #[test]

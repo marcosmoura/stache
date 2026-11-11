@@ -786,6 +786,7 @@ impl TilingFactory {
     ///   `AXTabGroup` element `AppKit` moves between the windows of a group.
     #[must_use]
     pub fn production(main_thread: Arc<dyn MainThreadExecutor>, self_bundle_id: &str) -> Self {
+        let overlay_executor = Arc::clone(&main_thread);
         let applications = stache_tiling::ControlActionsSource::new(ApplicationControl::system(
             Arc::clone(&main_thread),
         ));
@@ -804,20 +805,45 @@ impl TilingFactory {
         );
         parts.applications = Some(Arc::new(applications));
         parts.displays = Some(stache_macos::DisplayControl::system(main_thread));
-        // The JankyBorders authority: a transport created on the runner thread
-        // (never at construction) and a host-lifetime-independent executor per
-        // runner. Inert until an accepted `borders.enabled: true` (the consent).
-        parts.borders = Some(stache_tiling::BordersParts::new(
-            Arc::new(|| {
-                Box::new(stache_macos::borders::BordersConnection::new())
-                    as Box<dyn stache_macos::borders::BordersTransport>
-            }),
-            Arc::new(|| {
-                stache_sdk::commands::CommandExecutor::new(
-                    stache_sdk::commands::CommandEnvironment::from_env(),
-                )
-            }),
-        ));
+        // Borders are drawn by Stache's own overlay control over the main-thread
+        // executor. Nothing native exists yet: the control creates panels on
+        // first show.
+        {
+            use stache_macos::border_overlay::{
+                LazyCornerRadiusResolver, OverlayBackend, OverlayCapabilities, OverlayControl,
+                RadiusCapability, SystemOverlayBackend, SystemSpaceEvents,
+            };
+            // Looked up lazily (first overlay radius request), so nothing native
+            // happens here while borders are disabled. The private radius call
+            // is detected but not wired until its native check, so every round
+            // border uses the fallback radius for now.
+            let capabilities = OverlayCapabilities {
+                radius: RadiusCapability::FallbackOnly,
+                ..OverlayCapabilities::default()
+            };
+            parts.overlay = Some(Arc::new(OverlayControl::new(
+                overlay_executor,
+                Arc::new(SystemOverlayBackend::new(Arc::new(
+                    LazyCornerRadiusResolver::system(),
+                ))) as Arc<dyn OverlayBackend>,
+                capabilities,
+            )));
+            // The Space and Mission Control sources and the active-Space
+            // confirmation are factories: nothing native exists until the border
+            // engine starts (borders enabled); the owner thread then registers
+            // and the gate opens only after every source reports in. A stop
+            // timeout is not observed yet (part 07 marks it owed).
+            parts.space_events = Some(SystemSpaceEvents::factory(None));
+            parts.space_confirm = Some(stache_tiling::system_confirmer_factory());
+            // Live follow (part 06): the owner thread resolves the private
+            // symbols and registers when the engine starts; the shared system
+            // frame clock factory paces it. Without the symbols the Tiling
+            // fallback hides a border while its window moves.
+            parts.live_follow = Some(stache_macos::border_overlay::SystemLiveFollow::factory(
+                Arc::new(stache_macos::SystemFrameClockFactory),
+                None,
+            ));
+        }
         Self::new(TilingRuntime::new(parts))
     }
 }
@@ -5100,13 +5126,13 @@ mod tests {
         );
         let details = view.tiling.expect("details");
         assert!(details.healthy);
-        // Borders (this host composed no JankyBorders authority, so nothing is
-        // sent), the explicit "tabs are not read" capability and, with no shared
+        // Borders (this host composed no border overlays, so nothing is
+        // drawn), the explicit "tabs are not read" capability and, with no shared
         // input service attached to this fake host, the degraded passive drag
         // (only drag, never the module). Animation is implemented (part 08), so a
         // requested animation publishes no unsupported diagnostic.
         assert_eq!(details.diagnostics.len(), 3, "{details:?}");
-        assert!(details.diagnostics.iter().any(|d| d.contains("no JankyBorders authority")));
+        assert!(details.diagnostics.iter().any(|d| d.contains("composed no border overlays")));
         assert!(!details.diagnostics.iter().any(|d| d.contains("animation")));
         assert!(details.diagnostics.iter().any(|d| d.contains("native tabs are not read")));
         assert!(details.diagnostics.iter().any(|d| d.contains("drag is unavailable")));

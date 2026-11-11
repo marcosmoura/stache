@@ -26,7 +26,6 @@ use crate::actor::{
 };
 use crate::animation::AnimationControl;
 use crate::backend::WindowBackend;
-use crate::borders::{BordersControl, BordersParts, FaultSink};
 use crate::config::TilingConfig;
 use crate::events::{Ingress, Pipeline, SubmitError};
 use crate::state::{AppInfo, Health, Input, Stamp, TilingSnapshot, TilingState};
@@ -90,11 +89,21 @@ pub struct TrackingOptions {
     /// Native hide, unhide and activation for this run. `None` hides nothing
     /// and cannot activate a window for focus.
     pub actions: Option<Arc<ApplicationActions>>,
-    /// The borders authority the host composed. `None` means an enabled
-    /// configuration only reports a diagnostic and nothing is sent.
-    pub borders: Option<BordersParts>,
-    /// Receives the borders delivery fault (`None` clears it).
-    pub borders_sink: Option<FaultSink>,
+    /// The overlay control the host composed. With it the run composes the
+    /// border engine; `None` composes no borders.
+    pub overlay: Option<Arc<stache_macos::border_overlay::OverlayControl>>,
+    /// Creates the Space and Mission Control event source of the native border
+    /// engine. `None` composes none: the border gate then stays in
+    /// `Unknown { SourcesNotStarted }` and every border stays hidden.
+    pub space_events: Option<stache_macos::border_overlay::SpaceEventsFactory>,
+    /// Creates the active-Space confirmation of the native border engine. `None`
+    /// keeps the engine's default (every window confirmed), which only matters
+    /// once a source opens the gate.
+    pub space_confirm: Option<crate::borders::ConfirmerFactory>,
+    /// Creates the live follow source of the native border engine (part 06).
+    /// `None` composes none: borders then move only from Tiling's own frame
+    /// observations, as before part 06.
+    pub live_follow: Option<stache_macos::border_overlay::LiveFollowFactory>,
     /// The host logger, scoped to the module. `None` is silent.
     pub logger: Option<stache_sdk::ScopedLogger>,
     /// Creates the per-display frame clocks that pace animations. `None` uses
@@ -128,8 +137,10 @@ impl TrackingOptions {
             defer_begin: false,
             probe: None,
             actions: None,
-            borders: None,
-            borders_sink: None,
+            overlay: None,
+            space_events: None,
+            space_confirm: None,
+            live_follow: None,
             logger: None,
             frame_clocks: None,
             published: None,
@@ -169,6 +180,35 @@ struct Authority {
     revision: u64,
 }
 
+/// The native borders of one run: the route shared with the frame paths and the
+/// effects thread, and the diagnostics the actor publishes.
+struct NativeBorders {
+    route: Arc<crate::borders::SharedBorderRoute>,
+    notes: crate::actor::BorderNotes,
+    /// The stop-time ledger shared with the actor's border side.
+    lifecycle: Arc<crate::borders::BorderLifecycle>,
+}
+
+/// The longest a stop waits for the main thread to acknowledge the release of
+/// every native border overlay (re-exported from the borders lifecycle).
+pub const BORDERS_RELEASE_WAIT: Duration = Duration::from_millis(500);
+
+/// What the borders stage of a stop achieved.
+#[derive(Debug, PartialEq, Eq)]
+pub enum BordersStop {
+    /// Nothing is left: owners stopped, every overlay released and acknowledged.
+    Done,
+    /// Something is still owed and retained for a later stop.
+    Owed {
+        /// What is owed, for the quarantine message.
+        note: String,
+        /// Whether the only thing owed is the main thread's acknowledgement of
+        /// the overlay release. A process exit settles exactly that, because the
+        /// window server removes the windows of an exiting process.
+        exit_settles: bool,
+    },
+}
+
 /// A started harness.
 pub struct TrackingRuntime {
     backend: Arc<dyn WindowBackend>,
@@ -181,7 +221,8 @@ pub struct TrackingRuntime {
     frames: Arc<FrameControl>,
     visibility: Arc<VisibilityControl>,
     animation: Arc<AnimationControl>,
-    borders: Arc<BordersControl>,
+    /// The native border route and the notes the actor publishes for status.
+    native_borders: Option<NativeBorders>,
     actions: Option<Arc<ApplicationActions>>,
     authority: Mutex<Authority>,
     epoch: RuntimeEpoch,
@@ -309,16 +350,21 @@ impl TrackingRuntime {
             options.logger.clone(),
             origin,
         ));
-        // Inert: no thread, port or child until an enabled configuration.
-        let borders = Arc::new(BordersControl::new(
-            options.borders.clone().map(|mut parts| {
-                parts.logger.clone_from(&options.logger);
-                parts.origin = origin;
-                parts
-            }),
-            Arc::clone(&clock),
-            options.borders_sink.clone().unwrap_or_else(|| Arc::new(|_| {})),
-        ));
+        // The native engine's shared half: frames of every path report into the
+        // route, the effects thread hides borders through it. Nothing native is
+        // created here; the control makes panels lazily.
+        let native_borders = options.overlay.as_ref().map(|control| {
+            let route = Arc::new(crate::borders::SharedBorderRoute::new(Arc::clone(control)));
+            frames.set_border_frames(Arc::clone(&route) as Arc<dyn crate::borders::BorderFrames>);
+            route.log().set(options.logger.clone(), origin);
+            let lifecycle = Arc::new(crate::borders::BorderLifecycle::new());
+            lifecycle.log().set(options.logger.clone(), origin);
+            NativeBorders {
+                route,
+                notes: crate::actor::BorderNotes::default(),
+                lifecycle,
+            }
+        });
         let env = EffectEnv {
             backend: Arc::clone(&backend),
             directory: Arc::clone(&directory),
@@ -328,6 +374,7 @@ impl TrackingRuntime {
             visibility: Arc::clone(&visibility),
             actions: options.actions.clone(),
             animation: Arc::clone(&animation),
+            borders: native_borders.as_ref().map(|native| Arc::clone(&native.route)),
         };
         if options.fails(StartStage::Runner) {
             return Err(unwind(StartError::Injected(StartStage::Runner), None));
@@ -352,7 +399,26 @@ impl TrackingRuntime {
         engine.set_visibility_control(Arc::clone(&visibility));
         engine.set_logger(options.logger.clone(), origin);
         visibility.set_logger(options.logger.clone(), origin);
-        engine.set_borders_control(Arc::clone(&borders));
+        if let Some(native) = &native_borders {
+            let mut border_engine = crate::borders::BorderEngine::new(
+                Arc::clone(&native.route),
+                &crate::config::BordersConfig::default(),
+            );
+            if let Some(factory) = &options.space_events {
+                border_engine.set_space_source(factory());
+            }
+            if let Some(factory) = &options.space_confirm {
+                border_engine.set_confirmer(factory());
+            }
+            if let Some(factory) = &options.live_follow {
+                border_engine.set_live_follow(factory());
+            }
+            engine.set_border_engine(
+                border_engine,
+                Arc::clone(&native.notes),
+                Arc::clone(&native.lifecycle),
+            );
+        }
         if let Some(publisher) = options.published.clone() {
             engine.set_state_publisher(publisher);
         }
@@ -377,7 +443,7 @@ impl TrackingRuntime {
             frames,
             visibility,
             animation,
-            borders,
+            native_borders,
             actions: options.actions.clone(),
             authority: Mutex::new(Authority::default()),
             epoch,
@@ -528,7 +594,6 @@ impl TrackingRuntime {
         // `animation_failure`.
         if !self.gate.is_sealed() {
             let _ = self.animation.configure(&config.animations);
-            self.borders.configure(&config);
         }
         {
             let mut authority = self.authority.lock().unwrap_or_else(PoisonError::into_inner);
@@ -608,18 +673,78 @@ impl TrackingRuntime {
     #[must_use]
     pub fn stop_frame_clocks(&self, hop: Duration) -> bool { self.animation.release_clocks(hop) }
 
-    /// The borders runner handle.
+    /// Settles the borders of this run: the actor's owners stopped (within
+    /// `hop`), every overlay released on main and the acknowledgement compared
+    /// with the ledger, waiting at most `release_wait` for the main thread
+    /// (this thread is never main). Without borders it is `Done`.
     #[must_use]
-    pub const fn borders(&self) -> &Arc<BordersControl> { &self.borders }
+    pub fn stop_borders(&self, hop: Duration, release_wait: Duration) -> BordersStop {
+        let mut notes = Vec::new();
+        let mut exit_settles = true;
+        if let Some(native) = &self.native_borders {
+            native.route.close();
+            let settle = native.lifecycle.settle(
+                native.route.control(),
+                crate::borders::OWNERS_STOP_WAIT.min(hop),
+                release_wait,
+            );
+            if settle.is_clean() {
+                native
+                    .lifecycle
+                    .log()
+                    .info(|| "settle result=Settled (nothing owed)".to_owned());
+            } else {
+                exit_settles &= settle.only_unacknowledged();
+                native.lifecycle.log().info(|| {
+                    format!(
+                        "settle result=Owed owed={:?} only_unacknowledged={}",
+                        settle.owed,
+                        settle.only_unacknowledged()
+                    )
+                });
+                notes.push(settle.describe());
+            }
+        }
+        if notes.is_empty() {
+            BordersStop::Done
+        } else {
+            BordersStop::Owed {
+                note: notes.join("; "),
+                exit_settles,
+            }
+        }
+    }
 
-    /// Closes the borders runner for good (it sends nothing and the service
-    /// keeps its last settings) and joins it within `hop`, reaping any helper
-    /// child it spawned. A runner blocked in a send keeps its handle for a
-    /// retry. `true` when nothing is left.
+    /// Logs (info) that the native overlays were left to the window server at
+    /// process exit; a no-op without native borders or a logger.
+    pub fn log_borders_left_to_exit(&self, note: &str) {
+        if let Some(native) = &self.native_borders {
+            native.lifecycle.log().info(|| format!("settle result=LeftToExit note={note}"));
+        }
+    }
+
+    /// Whether this run composed the native border engine.
     #[must_use]
-    pub fn stop_borders(&self, hop: Duration) -> bool {
-        self.borders.stop();
-        self.borders.join_within(hop)
+    pub const fn has_native_borders(&self) -> bool { self.native_borders.is_some() }
+
+    /// Whether the borders stage of a stop has something to release (overlays
+    /// of a composed border engine).
+    #[must_use]
+    pub const fn owes_borders_cleanup(&self) -> bool { self.native_borders.is_some() }
+
+    /// The native border route of this run (tests drive the frame seam with it).
+    #[cfg(test)]
+    pub(crate) fn border_route(&self) -> Option<&Arc<crate::borders::SharedBorderRoute>> {
+        self.native_borders.as_ref().map(|native| &native.route)
+    }
+
+    /// The border diagnostics the actor published (empty without native
+    /// borders). A borders problem never changes Tiling's health.
+    #[must_use]
+    pub fn border_diagnostics(&self) -> Vec<String> {
+        self.native_borders.as_ref().map_or_else(Vec::new, |native| {
+            native.notes.lock().unwrap_or_else(PoisonError::into_inner).clone()
+        })
     }
 
     /// The visibility control: the ledger and the restore.
@@ -668,7 +793,10 @@ impl TrackingRuntime {
     /// mailbox. Waits for nothing; idempotent.
     pub fn quiesce(&self) {
         self.seal();
-        self.borders.stop();
+        // No border may appear after the seal; the stop releases what exists.
+        if let Some(native) = &self.native_borders {
+            native.route.close();
+        }
         self.cancel.cancel();
         self.ingress.shutdown();
     }
@@ -710,7 +838,7 @@ impl TrackingRuntime {
         self.animation.stop();
         let _ = self.animation.join_within(HOP);
         let _ = self.animation.release_clocks(HOP);
-        let _ = self.stop_borders(crate::borders::JOIN_BOUND);
+        let _ = self.stop_borders(HOP, Duration::from_millis(500));
         self.runner.close();
         self.backend.stop(self.epoch, &self.gate, None)
     }

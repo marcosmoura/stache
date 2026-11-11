@@ -55,8 +55,8 @@ use crate::applications::ApplicationId;
 use crate::ax::{
     AxApi, AxError, AxEvent, AxNotification, AxReading, BoolAttribute, ELEMENT_TIMEOUT, ElementKey,
     FrameRead, FrameWriteOutcome, PRESS_TIMEOUT, TabGroupRead, TabGroupSearch, WindowAx,
-    WindowIdCapability, WindowString, WriteStatus, find_tab_group, read_frame, read_tab_bar_shape,
-    read_tab_group, resizable, write_frame_gated,
+    WindowIdCapability, WindowString, WriteOrder, WriteStatus, find_tab_group, read_frame,
+    read_tab_bar_shape, read_tab_group, resizable, write_frame_gated,
 };
 
 /// Elements an enumeration chunk may issue before it yields.
@@ -451,6 +451,13 @@ fn teardown<S: WindowSystem>(mut app: AppState<S>) -> Result<(), AppState<S>> {
         }
     }
     remaining.retain(|(key, _)| !gone.contains(key));
+    // An exited process fails every removal (`CannotComplete`), yet its
+    // registrations died with it: nothing is left to owe.
+    if !remaining.is_empty() && app.observer.target_exited() {
+        for (key, _) in std::mem::take(&mut remaining) {
+            app.observer.forget_destroyed(key);
+        }
+    }
     if remaining.is_empty() {
         Ok(())
     } else {
@@ -513,7 +520,11 @@ const fn change_for(notification: AxNotification) -> Option<WindowChange> {
         AxNotification::TitleChanged => Some(WindowChange::TitleChanged),
         AxNotification::WindowCreated
         | AxNotification::ApplicationHidden
-        | AxNotification::ApplicationShown => None,
+        | AxNotification::ApplicationShown
+        | AxNotification::ExposeShowAllWindows
+        | AxNotification::ExposeShowFrontWindows
+        | AxNotification::ExposeShowDesktop
+        | AxNotification::ExposeExit => None,
     }
 }
 
@@ -1314,10 +1325,16 @@ impl<S: WindowSystem> Core<S> {
             Err(Invalid::Unverified(error)) => SnapshotOutcome::Unverified(error),
             Ok(index) => {
                 let Some(app) =
-                    self.runtime.as_ref().and_then(|rt| rt.apps.get(&window.application()))
+                    self.runtime.as_mut().and_then(|rt| rt.apps.get_mut(&window.application()))
                 else {
                     return SnapshotOutcome::Stale(StaleReason::ApplicationGone);
                 };
+                // `validate` just found it in `AXWindows`: a suspended window is
+                // listed again. The consumer takes this snapshot as its return,
+                // so the owner must stop refusing it too (an intermediate frame
+                // checks only this flag), and a later unlisting is reported
+                // again.
+                app.windows[index].suspended = None;
                 let held = &app.windows[index];
                 SnapshotOutcome::Snapshot(Box::new(read_snapshot(
                     self.system.ax(),
@@ -1472,7 +1489,14 @@ impl<S: WindowSystem> Core<S> {
         };
         let outcome = match request.action {
             WindowAction::SetFrame { position, size } => {
-                match write_frame_gated(ax, element, position, size, &mut commit) {
+                match write_frame_gated(
+                    ax,
+                    element,
+                    position,
+                    size,
+                    WriteOrder::Settled,
+                    &mut commit,
+                ) {
                     None => None,
                     Some(FrameWriteOutcome::NotSent(error)) => Some(Err(timeout_refusal(error))),
                     Some(FrameWriteOutcome::Attempted { position, size }) => {
@@ -1671,6 +1695,7 @@ impl<S: WindowSystem> Core<S> {
     /// One mailbox frame: the checks of [`Self::act`], then a gated write.
     /// Only [`FrameStage::Direct`] reads the frame back, and only
     /// [`FrameStage::Intermediate`] skips the `AXWindows` membership listing.
+    #[allow(clippy::too_many_lines)] // one gated send: admission, lease, write, readback
     fn frame(&mut self, request: &FrameRequest) -> FrameAck {
         let issuance = &request.issuance;
         let window = issuance.window();
@@ -1739,7 +1764,8 @@ impl<S: WindowSystem> Core<S> {
                 false
             }
         };
-        let written = write_frame_gated(ax, element, request.position, request.size, commit);
+        let order = write_order(request.stage);
+        let written = write_frame_gated(ax, element, request.position, request.size, order, commit);
         let outcome = match written {
             None => None,
             Some(FrameWriteOutcome::NotSent(error)) => Some(Err(timeout_refusal(error))),
@@ -2476,3 +2502,12 @@ mod owner_local {
 }
 
 type SystemWindowsCheck = super::system::SystemWindows;
+
+/// Only the frames a window ends at use the settled (size, position, size)
+/// order; motion frames stay at two calls.
+const fn write_order(stage: FrameStage) -> WriteOrder {
+    match stage {
+        FrameStage::First | FrameStage::Intermediate => WriteOrder::Motion,
+        FrameStage::Final | FrameStage::Direct => WriteOrder::Settled,
+    }
+}

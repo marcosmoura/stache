@@ -114,23 +114,69 @@
       }
     },
     "BorderAnimationConfig": {
-      "description": "Color animation for gradient borders.",
+      "description": "Animation for gradient borders.",
       "type": "object",
       "properties": {
         "duration": {
-          "description": "Duration in milliseconds of one color-swap leg.",
+          "description": "Duration in milliseconds of one color-swap leg (`ping_pong`) or one\nturn (`once`, `loop`); values below 16 are treated as 16.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0
         },
         "easing": {
-          "description": "Easing of each leg.",
+          "description": "Easing of each leg or turn.",
           "$ref": "#/$defs/EasingType",
           "default": "linear"
+        },
+        "style": {
+          "description": "Animation style; omitted is `ping_pong`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BorderAnimationStyle"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
         "duration"
+      ]
+    },
+    "BorderAnimationStyle": {
+      "description": "How a gradient border animates.",
+      "anyOf": [
+        {
+          "description": "The two colors swap back and forth, `duration` per leg (focused window only).",
+          "type": "string",
+          "const": "ping_pong"
+        },
+        {
+          "description": "The gradient angle turns 360 degrees once, `duration` per turn.",
+          "type": "string",
+          "const": "once"
+        },
+        {
+          "description": "The gradient angle turns 360 degrees forever, `duration` per turn.",
+          "type": "string",
+          "const": "loop"
+        }
+      ]
+    },
+    "BorderOrder": {
+      "description": "Where a border is ordered relative to its window.",
+      "oneOf": [
+        {
+          "description": "Directly below the window; the window covers the inner part of the border.",
+          "type": "string",
+          "const": "below"
+        },
+        {
+          "description": "Directly above the window, entirely outside its frame.",
+          "type": "string",
+          "const": "above"
+        }
       ]
     },
     "BorderStateConfig": {
@@ -213,19 +259,24 @@
         }
       ]
     },
-    "BorderStyle": {
-      "description": "Border corner style.",
-      "oneOf": [
-        {
-          "description": "Rounded corners.",
-          "type": "string",
-          "const": "round"
+    "BorderTransitionConfig": {
+      "description": "Focus color cross-fade between a border's previous and new colors.",
+      "type": "object",
+      "properties": {
+        "duration": {
+          "description": "Fade duration in milliseconds; 0 is instant, other values below 16 are\ntreated as 16.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
         },
-        {
-          "description": "Square corners.",
-          "type": "string",
-          "const": "square"
+        "easing": {
+          "description": "Easing of the fade.",
+          "$ref": "#/$defs/EasingType",
+          "default": "ease_out"
         }
+      },
+      "required": [
+        "duration"
       ]
     },
     "BordersConfig": {
@@ -244,7 +295,7 @@
           ]
         },
         "enabled": {
-          "description": "Whether borders are enabled. Setting this to `true` is your explicit\nconsent for Stache to overwrite the shared `JankyBorders` settings it names:\nwidth, style, hidpi, active and inactive colors and the blacklist. Their\nprevious values are not read or restored. Stache never starts, restarts or\nkills the `JankyBorders` service (it must already be running) and, when\nborders stop or are disabled, leaves the last settings it sent in place.",
+          "description": "Whether Stache draws borders around Tiling-managed windows. Borders are\ndrawn by Stache itself; nothing external is started, changed or left\nbehind, and disabling them removes every border.",
           "type": "boolean",
           "default": false
         },
@@ -276,7 +327,7 @@
           ]
         },
         "hidpi": {
-          "description": "Retina support (`hidpi`); omitted uses the external service default (true).",
+          "description": "Retina support (`hidpi`); omitted is true.",
           "type": [
             "boolean",
             "null"
@@ -308,6 +359,17 @@
             "color": "#cba6f7",
             "width": 4
           }
+        },
+        "order": {
+          "description": "Border order relative to its window; omitted is `below`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BorderOrder"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "split": {
           "description": "Windows in split layout.",
@@ -342,11 +404,11 @@
             }
           ]
         },
-        "style": {
-          "description": "Border style; omitted uses the external service default (round).",
+        "transition": {
+          "description": "Focus color cross-fade; omitted is instant.",
           "anyOf": [
             {
-              "$ref": "#/$defs/BorderStyle"
+              "$ref": "#/$defs/BorderTransitionConfig"
             },
             {
               "type": "null"

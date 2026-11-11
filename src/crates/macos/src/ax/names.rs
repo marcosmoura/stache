@@ -81,4 +81,22 @@ pub(super) mod notification {
     pub const APPLICATION_HIDDEN: &str = "AXApplicationHidden";
     pub const APPLICATION_SHOWN: &str = "AXApplicationShown";
     pub const TITLE_CHANGED: &str = "AXTitleChanged";
+
+    /// Dock notification: Mission Control (all windows) was shown.
+    ///
+    /// **Unverified until the part 05 native check.** The four Dock names are the
+    /// ones commonly reported for the Dock process (`AXExposeShowAllWindows`,
+    /// `AXExposeShowFrontWindows`, `AXExposeShowDesktop`, `AXExposeExit`); they
+    /// are not declared in a public header. Whether macOS 26 still posts them,
+    /// on which element and how early relative to the first animation frame is
+    /// the native check's question. A rename makes registration fail, which
+    /// fails closed (`SourceLost`).
+    pub const EXPOSE_SHOW_ALL_WINDOWS: &str = "AXExposeShowAllWindows";
+    /// Dock notification: App Exposé (front windows) was shown. Unverified.
+    pub const EXPOSE_SHOW_FRONT_WINDOWS: &str = "AXExposeShowFrontWindows";
+    /// Dock notification: Show Desktop was shown. Unverified.
+    pub const EXPOSE_SHOW_DESKTOP: &str = "AXExposeShowDesktop";
+    /// Dock notification: Mission Control, App Exposé or Show Desktop ended.
+    /// Unverified.
+    pub const EXPOSE_EXIT: &str = "AXExposeExit";
 }

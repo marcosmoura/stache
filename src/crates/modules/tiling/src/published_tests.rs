@@ -65,6 +65,8 @@ fn window(token: WindowInstance, workspace: Option<u32>, title: &str) -> WindowS
         tab_group: None,
         arrival: false,
         returning: false,
+        fullscreen_rechecks: 0,
+        relists_spent: false,
     }
 }
 

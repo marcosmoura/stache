@@ -21,15 +21,18 @@ use stache_macos::windows::{ApplicationChange, EventQueue, WindowChange, WindowE
 use stache_macos::{ApplicationId, DisplayId};
 use stache_sdk::CancellationToken;
 
+mod borders;
 mod diag;
 mod frames;
 
+pub use borders::BorderNotes;
+#[cfg(test)]
+pub use borders::ENGINE_FAULT;
 pub use diag::Diag;
 pub use frames::{DRAIN_QUANTUM, DrainOutcome, FRAME_PLAN_DEADLINE, FrameControl, FrameJob};
 
 use crate::animation::{AnimationControl, AnimationJob, AnimationSettings};
 use crate::backend::WindowBackend;
-use crate::borders::{BordersControl, FocusInput};
 use crate::drag::{DragSignal, GESTURE_TIMEOUT, LostCause};
 use crate::events::{Ingress, RETIME_EPSILON, Wake, flush_period};
 use crate::state::{
@@ -186,6 +189,9 @@ pub struct EffectEnv {
     pub actions: Option<Arc<ApplicationActions>>,
     /// The animation worker handle: inert until an enabled configuration.
     pub animation: Arc<AnimationControl>,
+    /// The native border route: the effects thread hides an application's
+    /// borders through it right before `HideApp`. `None` composes none.
+    pub borders: Option<Arc<crate::borders::SharedBorderRoute>>,
 }
 
 impl EffectEnv {
@@ -312,7 +318,18 @@ impl EffectEnv {
             }
             Effect::CancelFrame { window } => self.frames.cancel(window),
             Effect::HideApp { stamp, application } => {
-                self.visibility.execute_hide(&self.exec(stamp), application);
+                // The application's borders hide first, and the effects thread
+                // waits at most `BORDER_HIDE_WAIT` for the main thread to order
+                // them out. The hide is never delayed further for borders.
+                if let Some(route) = &self.borders {
+                    let _ = route.hide_application_bounded(application);
+                }
+                let sent = self.visibility.execute_hide(&self.exec(stamp), application);
+                // A hide that provably did not go out must not leave the
+                // borders gated until a shown observation that never comes.
+                if !sent && let Some(route) = &self.borders {
+                    route.note_application_shown(application);
+                }
                 self.complete(stamp, CompletionResult::Visibility(application));
             }
             Effect::UnhideApp { stamp, application } => {
@@ -327,6 +344,11 @@ impl EffectEnv {
                     window,
                 );
                 self.visibility.finish_focus();
+                // The actor re-orders the window's border above it on this
+                // completion.
+                if let Some(route) = &self.borders {
+                    route.note_raised(window);
+                }
                 self.complete(stamp, CompletionResult::Visibility(window.application()));
             }
             Effect::Publish => {}
@@ -500,7 +522,8 @@ pub struct Engine {
     rates: BTreeMap<DisplayId, Option<f64>>,
     frames: Option<Arc<FrameControl>>,
     visibility: Option<Arc<VisibilityControl>>,
-    borders: Option<Arc<BordersControl>>,
+    /// The native border engine (actor thread only), when composed.
+    border_side: Option<borders::BorderSide>,
     animation: Option<Arc<AnimationControl>>,
     /// The generation's published-state point; `None` publishes nothing.
     published: Option<crate::published::Publication>,
@@ -575,7 +598,7 @@ impl Engine {
             rates: BTreeMap::new(),
             frames: None,
             visibility: None,
-            borders: None,
+            border_side: None,
             animation: None,
             published: None,
             last_admission: crate::events::AdmissionStats::default(),
@@ -616,10 +639,25 @@ impl Engine {
         self.visibility = Some(visibility);
     }
 
-    /// Shares the borders control. The actor feeds it the focus state as plain
-    /// values after each published change; it never blocks on it.
-    pub fn set_borders_control(&mut self, borders: Arc<BordersControl>) {
-        self.borders = Some(borders);
+    /// Hands the native border engine to the actor, which owns it from now on.
+    /// The engine follows `borders.enabled` of the accepted configuration, so a
+    /// disabled configuration creates no overlay.
+    pub fn set_border_engine(
+        &mut self,
+        engine: crate::borders::BorderEngine,
+        notes: BorderNotes,
+        lifecycle: Arc<crate::borders::BorderLifecycle>,
+    ) {
+        let side = borders::BorderSide::new(engine, notes, lifecycle);
+        // A queued Space fact wakes the actor like a sink notification does.
+        let ingress = Arc::clone(&self.ingress);
+        side.set_space_waker(Arc::new({
+            let ingress = Arc::clone(&ingress);
+            move || ingress.notify_sink()
+        }));
+        // So does a note from live follow (a private hide, unhide, reorder, close).
+        side.set_live_waker(Arc::new(move || ingress.notify_sink()));
+        self.border_side = Some(side);
     }
 
     /// Forwards each published snapshot's display projection to `publisher`
@@ -660,6 +698,9 @@ impl Engine {
         }
         let now = self.clock.now();
         self.ingress.take_sink_dirty();
+        // Space and Mission Control facts first: the gate must be current before
+        // any input's border update.
+        self.poll_border_spaces(now);
         let batch = self.sink.drain();
         let routed: Vec<_> = batch
             .events
@@ -694,13 +735,21 @@ impl Engine {
         let gesture_due = self.watch_gesture(now);
         let settle_due = self.fire_settles(now);
         let retry_due = self.fire_track_retries(now);
+        let borders_due = self.tick_borders(now);
         let geometry = self.ingress.with(|pipeline| pipeline.geometry().next_deadline());
         Turn {
             processed,
-            next_deadline: [geometry, gesture_due, visibility_due, settle_due, retry_due]
-                .into_iter()
-                .flatten()
-                .min(),
+            next_deadline: [
+                geometry,
+                gesture_due,
+                visibility_due,
+                settle_due,
+                retry_due,
+                borders_due,
+            ]
+            .into_iter()
+            .flatten()
+            .min(),
             halted: false,
         }
     }
@@ -836,6 +885,7 @@ impl Engine {
     fn apply(&mut self, input: Input, now: Instant) -> bool {
         let retime = matches!(input, Input::Displays(_));
         self.observe_visibility(&input);
+        self.note_border_visibility(&input, now);
         if let Some(state) = &self.state {
             self.diag.input(state, &input);
         }
@@ -893,6 +943,9 @@ impl Engine {
         let outbox = state.take_tab_outbox();
         self.note_tab_outbox(&state, outbox, now);
         self.state = Some(state);
+        // Borders first: an overlay of a window that left the visible workspace
+        // is ordered out before this input's frame writes are queued.
+        self.update_borders(now);
         self.dispatch(effects);
         if retime {
             self.retime(now);
@@ -937,26 +990,41 @@ impl Engine {
     /// visibility, before the pure transition consumes the input.
     fn observe_visibility(&self, input: &Input) {
         let Some(visibility) = &self.visibility else { return };
-        let observed = match input {
-            Input::Lifecycle { kind, info } => match kind {
-                LifecycleKind::Hidden => Some((info.application, Observation::Hidden)),
-                LifecycleKind::Unhidden => Some((info.application, Observation::Shown)),
-                LifecycleKind::Terminated => Some((info.application, Observation::Gone)),
-                LifecycleKind::Launched | LifecycleKind::TerminatedUnresolved => None,
-            },
-            Input::Window(event) => match &event.kind {
-                WindowEventKind::Application { application, change } => match change {
-                    ApplicationChange::Hidden => Some((*application, Observation::Hidden)),
-                    ApplicationChange::Shown => Some((*application, Observation::Shown)),
-                    _ => None,
-                },
-                _ => None,
-            },
-            _ => None,
-        };
-        if let Some((application, observation)) = observed {
+        if let Some((application, observation)) = observed_visibility(input) {
             visibility.observe(application, observation);
         }
+    }
+
+    /// Tells the borders what the actor just learned about an application's
+    /// visibility: an external hide orders its overlays out in this turn, a
+    /// shown observation opens the show rule for its windows.
+    fn note_border_visibility(&mut self, input: &Input, now: Instant) {
+        let Some(side) = &mut self.border_side else { return };
+        match observed_visibility(input) {
+            Some((application, Observation::Hidden)) => side.application_hidden(application),
+            Some((application, Observation::Shown)) => side.application_shown(now, application),
+            _ => {}
+        }
+    }
+
+    /// Diffs the new state into the native borders (before its effects go out).
+    fn update_borders(&mut self, now: Instant) {
+        if let (Some(side), Some(state)) = (&mut self.border_side, &self.state) {
+            side.update(now, state);
+        }
+    }
+
+    /// Drains the Space event mailbox into the border gate.
+    fn poll_border_spaces(&mut self, now: Instant) {
+        if let Some(side) = &mut self.border_side {
+            side.poll_spaces(now);
+        }
+    }
+
+    /// Shows the borders whose display frame passed; returns when the next one
+    /// is due.
+    fn tick_borders(&mut self, now: Instant) -> Option<Instant> {
+        self.border_side.as_mut().and_then(|side| side.tick(now))
     }
 
     /// Plans hides and unhides from the visibility requirement and queues them.
@@ -1047,6 +1115,10 @@ impl Engine {
         }
         let periods: BTreeMap<DisplayId, Duration> =
             rates.iter().map(|(id, hz)| (*id, flush_period(*hz))).collect();
+        // A border waits one frame of the slowest display (the safe side).
+        if let (Some(side), Some(period)) = (&mut self.border_side, periods.values().max()) {
+            side.set_frame_period(*period);
+        }
         self.rates = rates;
         self.ingress.with(|pipeline| {
             pipeline.geometry_mut().retime(periods, |token| state.display_of(token), now);
@@ -1065,11 +1137,6 @@ impl Engine {
             snapshot.hidden_apps = visibility.owned();
         }
         self.last_admission = admission;
-        if let Some(borders) = &self.borders
-            && let Some(focus) = border_focus(&snapshot)
-        {
-            borders.observe(focus);
-        }
         self.cell.publish(snapshot);
         // After the swap, so every key the published state names already
         // resolves against the runtime snapshot.
@@ -1092,18 +1159,27 @@ impl Engine {
     }
 }
 
-/// The pure border facts of a snapshot: the focused window's workspace layout
-/// and whether the window floats. `None` without a focused tracked window.
-fn border_focus(snapshot: &TilingSnapshot) -> Option<FocusInput> {
-    let window = snapshot.focus.window?;
-    let workspace = snapshot.focus.workspace?;
-    let layout = snapshot.workspaces.iter().find(|candidate| candidate.id == workspace)?.layout;
-    let floating = snapshot
-        .windows
-        .iter()
-        .find(|candidate| candidate.token == window)
-        .is_some_and(|candidate| candidate.desired.floating);
-    Some(FocusInput { layout, floating })
+/// What an input says about an application's visibility, if anything.
+const fn observed_visibility(input: &Input) -> Option<(ApplicationId, Observation)> {
+    match input {
+        Input::Lifecycle { kind, info } => match kind {
+            LifecycleKind::Hidden => Some((info.application, Observation::Hidden)),
+            LifecycleKind::Unhidden => Some((info.application, Observation::Shown)),
+            LifecycleKind::Terminated => Some((info.application, Observation::Gone)),
+            LifecycleKind::Launched
+            | LifecycleKind::TerminatedUnresolved
+            | LifecycleKind::SpaceChanged => None,
+        },
+        Input::Window(event) => match &event.kind {
+            WindowEventKind::Application { application, change } => match change {
+                ApplicationChange::Hidden => Some((*application, Observation::Hidden)),
+                ApplicationChange::Shown => Some((*application, Observation::Shown)),
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// Starts the actor thread. It exits on cancellation, when the engine halts, or

@@ -372,3 +372,35 @@ fn a_backend_without_lifecycle_support_is_unavailable_not_silent() {
     assert!(outcome.proves_no_send());
     assert!(!authorization.is_issued());
 }
+
+#[test]
+fn a_space_change_is_an_application_less_deferred_lifecycle_event() {
+    let f = fixture();
+    let queue = Arc::new(ManualExecutor::new(false));
+    f.backend.defer_launches(Arc::clone(&queue));
+    let key = f.backend.add_running_with_pid("com.example.a", 7);
+    let id = f.observation.running_applications("com.example.a").expect("running")[0];
+    watch(&f);
+    assert!(!LifecycleKind::ALL.contains(&LifecycleKind::SpaceChanged));
+    assert_eq!(f.backend.deliver_space_change(), 1);
+    assert!(events(&f).is_empty(), "nothing ran inside the native callback");
+    assert_eq!(queue.drain(), 1);
+    let seen = events(&f);
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].kind, LifecycleKind::SpaceChanged);
+    assert_eq!(seen[0].pid, None);
+    assert_ne!(seen[0].application, id, "it names no application");
+    // Ordered with the other kinds of the same stream.
+    assert_eq!(f.backend.deliver_lifecycle(LifecycleKind::Hidden, key), 1);
+    assert_eq!(f.backend.deliver_space_change(), 1);
+    assert_eq!(queue.drain(), 2);
+    let kinds: Vec<_> = events(&f).iter().map(|event| event.kind).collect();
+    assert_eq!(kinds, [
+        LifecycleKind::SpaceChanged,
+        LifecycleKind::Hidden,
+        LifecycleKind::SpaceChanged
+    ]);
+    // A stopped generation receives none.
+    f.observation.stop().expect("stop");
+    assert_eq!(f.backend.deliver_space_change(), 0);
+}

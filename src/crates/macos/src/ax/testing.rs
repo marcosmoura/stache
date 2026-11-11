@@ -638,7 +638,7 @@ mod tests {
     }
 
     #[test]
-    fn writes_are_separate_calls_position_first_after_the_action_timeout() {
+    fn a_combined_write_is_size_then_position_then_size_after_the_action_timeout() {
         let fake = FakeWindowAx::new();
         let id = window(&fake);
         let element = fake.element(id);
@@ -652,9 +652,67 @@ mod tests {
         assert!(outcome.is_complete() && !outcome.is_partial());
         assert_eq!(fake.calls(), [
             Call::SetTimeout(id, PRESS_TIMEOUT),
+            Call::SetSize(id, size),
             Call::SetPosition(id, target),
             Call::SetSize(id, size),
         ]);
+    }
+
+    #[test]
+    fn a_motion_write_is_position_then_size_once() {
+        let fake = FakeWindowAx::new();
+        let id = window(&fake);
+        let element = fake.element(id);
+        let target = AxPoint { x: 1.0, y: 2.0 };
+        let size = AxSize { width: 3.0, height: 4.0 };
+        let outcome = super::super::window::write_frame_gated(
+            &fake,
+            &element,
+            Some(target),
+            Some(size),
+            super::super::window::WriteOrder::Motion,
+            || true,
+        );
+        assert!(outcome.is_some_and(|outcome| outcome.is_complete()));
+        assert_eq!(fake.calls(), [
+            Call::SetTimeout(id, PRESS_TIMEOUT),
+            Call::SetPosition(id, target),
+            Call::SetSize(id, size),
+        ]);
+    }
+
+    #[test]
+    fn single_half_writes_are_one_call_each() {
+        let fake = FakeWindowAx::new();
+        let id = window(&fake);
+        let element = fake.element(id);
+        let target = AxPoint { x: 1.0, y: 2.0 };
+        let size = AxSize { width: 3.0, height: 4.0 };
+        write_frame(&fake, &element, None, Some(size));
+        write_frame(&fake, &element, Some(target), None);
+        assert_eq!(fake.calls(), [
+            Call::SetTimeout(id, PRESS_TIMEOUT),
+            Call::SetSize(id, size),
+            Call::SetTimeout(id, PRESS_TIMEOUT),
+            Call::SetPosition(id, target),
+        ]);
+    }
+
+    #[test]
+    fn a_combined_write_reports_a_failed_position_between_the_size_steps() {
+        let fake = FakeWindowAx::new();
+        let id = window(&fake);
+        fake.edit(id, |node| {
+            node.set_position_result = Err(AxError::CannotComplete);
+        });
+        let element = fake.element(id);
+        let size = AxSize { width: 3.0, height: 4.0 };
+        let outcome = write_frame(&fake, &element, Some(AxPoint { x: 1.0, y: 2.0 }), Some(size));
+        assert_eq!(outcome, FrameWriteOutcome::Attempted {
+            position: WriteStatus::Failed(AxError::CannotComplete),
+            size: WriteStatus::Written,
+        });
+        assert_eq!(fake.calls().len(), 4, "the final size step still runs");
     }
 
     #[test]
@@ -670,8 +728,22 @@ mod tests {
             Some(AxSize { width: 1.0, height: 2.0 }),
         );
         assert_eq!(outcome, FrameWriteOutcome::Attempted {
-            position: WriteStatus::Written,
+            position: WriteStatus::Failed(AxError::CannotComplete),
             size: WriteStatus::Failed(AxError::CannotComplete),
+        });
+        assert!(!outcome.is_complete());
+
+        // A size-only write that fails, with the position applied before it.
+        fake.edit(id, |node| node.set_size_result = Err(AxError::ApiDisabled));
+        let outcome = write_frame(
+            &fake,
+            &element,
+            Some(AxPoint { x: 5.0, y: 6.0 }),
+            Some(AxSize { width: 1.0, height: 2.0 }),
+        );
+        assert_eq!(outcome, FrameWriteOutcome::Attempted {
+            position: WriteStatus::Written,
+            size: WriteStatus::Failed(AxError::ApiDisabled),
         });
         assert!(outcome.is_partial() && !outcome.is_complete());
         assert_eq!(
@@ -690,6 +762,74 @@ mod tests {
             size: WriteStatus::NotRequested,
         });
         assert!(!outcome.is_partial() && !outcome.is_complete());
+    }
+
+    #[test]
+    fn a_hung_application_stops_a_combined_write_after_the_first_size_step() {
+        let fake = FakeWindowAx::new();
+        let id = window(&fake);
+        fake.edit(id, |node| node.set_size_result = Err(AxError::CannotComplete));
+        let element = fake.element(id);
+        let size = AxSize { width: 3.0, height: 4.0 };
+        let outcome = write_frame(&fake, &element, Some(AxPoint { x: 1.0, y: 2.0 }), Some(size));
+        assert_eq!(outcome, FrameWriteOutcome::Attempted {
+            position: WriteStatus::Failed(AxError::CannotComplete),
+            size: WriteStatus::Failed(AxError::CannotComplete),
+        });
+        assert_eq!(
+            fake.calls(),
+            [Call::SetTimeout(id, PRESS_TIMEOUT), Call::SetSize(id, size)],
+            "no position and no second size step after the timeout"
+        );
+    }
+
+    #[test]
+    fn a_failed_final_size_step_after_an_applied_first_one_reports_the_size_written() {
+        let fake = FakeWindowAx::new();
+        let id = window(&fake);
+        let element = fake.element(id);
+        // The final size step fails once the position landed.
+        let edit = fake.clone();
+        fake.on_node_write(move |node| {
+            if edit.calls().iter().any(|call| matches!(call, Call::SetPosition(..))) {
+                edit.edit(node, |n| n.set_size_result = Err(AxError::Other(-25200)));
+            }
+        });
+        let size = AxSize { width: 3.0, height: 4.0 };
+        let outcome = write_frame(&fake, &element, Some(AxPoint { x: 1.0, y: 2.0 }), Some(size));
+        assert_eq!(fake.calls().len(), 4);
+        assert_eq!(outcome, FrameWriteOutcome::Attempted {
+            position: WriteStatus::Written,
+            size: WriteStatus::Written,
+        });
+        assert_eq!(read_frame(&fake, &element).size, AxReading::Value(size));
+    }
+
+    #[test]
+    fn a_final_size_step_losing_the_permission_is_reported_as_the_failure() {
+        for error in [
+            AxError::ApiDisabled,
+            AxError::CannotComplete,
+            AxError::InvalidElement,
+        ] {
+            let fake = FakeWindowAx::new();
+            let id = window(&fake);
+            let element = fake.element(id);
+            let edit = fake.clone();
+            fake.on_node_write(move |node| {
+                if edit.calls().iter().any(|call| matches!(call, Call::SetPosition(..))) {
+                    edit.edit(node, |n| n.set_size_result = Err(error));
+                }
+            });
+            let size = AxSize { width: 3.0, height: 4.0 };
+            let outcome =
+                write_frame(&fake, &element, Some(AxPoint { x: 1.0, y: 2.0 }), Some(size));
+            assert_eq!(fake.calls().len(), 4);
+            assert_eq!(outcome, FrameWriteOutcome::Attempted {
+                position: WriteStatus::Written,
+                size: WriteStatus::Failed(error),
+            });
+        }
     }
 
     #[test]

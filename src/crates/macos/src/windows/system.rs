@@ -45,6 +45,9 @@ pub trait WindowObserver<E> {
     fn release(&mut self, key: ElementKey);
     /// Forgets registrations of an element the system proved gone.
     fn forget_destroyed(&mut self, key: ElementKey);
+    /// Whether the observed process has exited: its registrations died with
+    /// it and can no longer be removed.
+    fn target_exited(&self) -> bool;
 }
 
 impl WindowObserver<AxElement> for AxObserver {
@@ -77,6 +80,8 @@ impl WindowObserver<AxElement> for AxObserver {
     fn release(&mut self, key: ElementKey) { Self::release(self, key); }
 
     fn forget_destroyed(&mut self, key: ElementKey) { Self::forget_destroyed(self, key); }
+
+    fn target_exited(&self) -> bool { Self::target_exited(self) }
 }
 
 /// Everything native the owner thread uses. Created **inside** the owner

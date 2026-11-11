@@ -1,4 +1,5 @@
-//! Application lifecycle notifications: launch, terminate, hide and unhide.
+//! Application lifecycle notifications: launch, terminate, hide and unhide,
+//! plus the application-less active Space change.
 //!
 //! [`ApplicationObservation::watch_lifecycle`] registers one additive workspace
 //! observer set on the same generation as the will-launch observer. The will-launch
@@ -36,7 +37,10 @@
 //! `NSWorkspaceDidUnhideApplicationNotification` on the workspace notification
 //! center, delivered on the main operation queue with the
 //! `NSWorkspaceApplicationKey` user-info value, exactly like the existing
-//! will-launch observer. Delivery is native behavior that is **unverified** by
+//! will-launch observer. `NSWorkspaceActiveSpaceDidChangeNotification` is
+//! observed on the same center and queue, in the same generation, and becomes
+//! [`LifecycleKind::SpaceChanged`] with a reserved id (it names no
+//! application); its block reads nothing and only defers the event. Delivery is native behavior that is **unverified** by
 //! the default tests.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -44,12 +48,14 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 
 use block2::{DynBlock, RcBlock};
-use objc2::runtime::AnyObject;
+use objc2::rc::Retained;
+use objc2::runtime::{AnyObject, NSObjectProtocol, ProtocolObject};
 use objc2_app_kit::{
-    NSWorkspaceDidHideApplicationNotification, NSWorkspaceDidLaunchApplicationNotification,
-    NSWorkspaceDidTerminateApplicationNotification, NSWorkspaceDidUnhideApplicationNotification,
+    NSWorkspaceActiveSpaceDidChangeNotification, NSWorkspaceDidHideApplicationNotification,
+    NSWorkspaceDidLaunchApplicationNotification, NSWorkspaceDidTerminateApplicationNotification,
+    NSWorkspaceDidUnhideApplicationNotification,
 };
-use objc2_foundation::{NSNotification, NSOperationQueue};
+use objc2_foundation::{NSNotification, NSNotificationCenter, NSOperationQueue};
 use stache_sdk::{CancellationToken, ThreadError};
 
 use super::{
@@ -75,6 +81,11 @@ pub enum LifecycleKind {
     Hidden,
     /// `NSWorkspaceDidUnhideApplicationNotification`.
     Unhidden,
+    /// `NSWorkspaceActiveSpaceDidChangeNotification`: the active Space changed
+    /// (including entering or leaving a native fullscreen Space). It names no
+    /// application, so it is **not** in [`Self::ALL`]; the event's
+    /// `application` is a reserved id naming nothing and `pid` is `None`.
+    SpaceChanged,
 }
 
 impl LifecycleKind {
@@ -106,6 +117,15 @@ pub type LifecycleSink = Arc<dyn Fn(LifecycleEvent) + Send + Sync>;
 /// unknown.
 #[must_use]
 pub const fn diagnostic_pid(raw: i32) -> Option<i32> { if raw > 0 { Some(raw) } else { None } }
+
+/// The pure event for one active Space change of a generation.
+pub(super) const fn space_changed(handle: BackendHandle, generation: u64) -> LifecycleEvent {
+    LifecycleEvent {
+        kind: LifecycleKind::SpaceChanged,
+        application: ApplicationId::unresolved(handle, generation),
+        pid: None,
+    }
+}
 
 /// Queues one pure event for a later main turn; a rejected enqueue drops it and
 /// never runs it inline (inline delivery could re-enter the commit gate).
@@ -204,9 +224,9 @@ pub(super) fn observe_system(
                     LifecycleKind::Terminated => NSWorkspaceDidTerminateApplicationNotification,
                     LifecycleKind::Hidden => NSWorkspaceDidHideApplicationNotification,
                     // `ALL` never contains the synthesized kind.
-                    LifecycleKind::Unhidden | LifecycleKind::TerminatedUnresolved => {
-                        NSWorkspaceDidUnhideApplicationNotification
-                    }
+                    LifecycleKind::Unhidden
+                    | LifecycleKind::TerminatedUnresolved
+                    | LifecycleKind::SpaceChanged => NSWorkspaceDidUnhideApplicationNotification,
                 };
                 state.center.addObserverForName_object_queue_usingBlock(
                     Some(name),
@@ -217,8 +237,49 @@ pub(super) fn observe_system(
             };
             state.lifecycle.push(token);
         }
+        let token = observe_space_change(&state.center, &queue, handle, generation, sink);
+        state.lifecycle.push(token);
         Ok(())
     })
+}
+
+/// Registers the active Space change observer of one generation: the block
+/// reads nothing and only defers the application-less event.
+fn observe_space_change(
+    center: &NSNotificationCenter,
+    queue: &NSOperationQueue,
+    handle: BackendHandle,
+    generation: u64,
+    sink: &LifecycleSink,
+) -> Retained<ProtocolObject<dyn NSObjectProtocol>> {
+    let sink = Arc::clone(sink);
+    let block = RcBlock::new(move |_notification: NonNull<NSNotification>| {
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let installed =
+                OBSERVERS.with(|cell| cell.borrow().get(&handle).map(|state| state.generation));
+            if !ingestion_is_current(installed, generation) {
+                return;
+            }
+            defer_lifecycle(
+                crate::main_thread::run_on_main,
+                Arc::clone(&sink),
+                space_changed(handle, generation),
+            );
+        }));
+    });
+    let block: &DynBlock<dyn Fn(NonNull<NSNotification>)> = &block;
+    // SAFETY: the notification name is an immutable AppKit constant; the
+    // observer object is `None`; delivery is on the given main operation queue,
+    // and the caller stores the token with the lifecycle tokens, removed in
+    // `unobserve_system`/`unobserve`.
+    unsafe {
+        center.addObserverForName_object_queue_usingBlock(
+            Some(NSWorkspaceActiveSpaceDidChangeNotification),
+            None,
+            Some(queue),
+            block,
+        )
+    }
 }
 
 /// Removes only the lifecycle observers of one generation. Idempotent; a

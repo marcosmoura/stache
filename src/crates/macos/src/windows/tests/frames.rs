@@ -160,7 +160,10 @@ fn an_intermediate_replacing_a_first_keeps_its_listing_and_envelope_size() {
             .into_iter()
             .filter(|call| matches!(call, Call::SetSize(..)))
             .count();
-    assert_eq!(sizes, 1, "the envelope size is still written");
+    assert_eq!(
+        sizes, 1,
+        "the envelope size is still written once (motion order)"
+    );
     assert!(
         h.ax.calls().iter().any(
             |call| matches!(call, Call::SetPosition(_, p) if (p.x - 2.0).abs() < f64::EPSILON)

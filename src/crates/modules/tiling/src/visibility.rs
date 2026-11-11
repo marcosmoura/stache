@@ -1277,9 +1277,17 @@ impl VisibilityControl {
     }
 
     /// Runs one planned hide: public hide first, `AXHidden` only on a refusal.
-    pub fn execute_hide(&self, exec: &Exec<'_>, application: ApplicationId) {
+    /// Returns whether a hide may have reached the application (`false` is
+    /// proof that nothing was sent).
+    #[allow(
+        clippy::must_use_candidate,
+        reason = "the planned hide's result is also reported"
+    )]
+    pub fn execute_hide(&self, exec: &Exec<'_>, application: ApplicationId) -> bool {
         let evidence = self.hide_evidence(exec, application);
+        let sent = !matches!(evidence, HideEvidence::NotSent(_));
         self.report(Report::Hide(application, evidence));
+        sent
     }
 
     fn hide_evidence(&self, exec: &Exec<'_>, application: ApplicationId) -> HideEvidence {

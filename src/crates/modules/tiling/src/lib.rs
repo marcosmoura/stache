@@ -80,16 +80,13 @@ pub use backend::{
 };
 #[cfg(any(test, feature = "testing"))]
 pub use backend::{FakeBackendCall, FakeWindowBackend, FrameBatchRecord, SendHold, SentFrame};
-pub use borders::{
-    ANIMATION_FPS, BORDERS_THREAD_NAME, BordersControl, BordersParts, BordersWorker,
-    ExecutorFactory, FRAME_PERIOD, FRAME_SEND_DEADLINE, Fault, FaultKind, FaultSink, FocusInput,
-    JOIN_BOUND, REAP_BOUND, TransportFactory,
-};
+pub use borders::{ActiveSpaceConfirm, ConfirmerFactory, FocusInput, system_confirmer_factory};
 pub use config::{
-    AnimationConfig, BorderAnimationConfig, BorderStateConfig, BorderStyle, BordersConfig,
-    DimensionValue, EasingType, FloatingConfig, FloatingPosition, FloatingPreset, GapValue,
-    GapsConfig, GapsConfigValue, GradientConfig, LayoutType, MasterConfig, MasterPosition,
-    ScreenGapsConfig, TilingConfig, WindowRule, WorkspaceConfig,
+    AnimationConfig, BorderAnimationConfig, BorderAnimationStyle, BorderOrder, BorderStateConfig,
+    BorderTransitionConfig, BordersConfig, DimensionValue, EasingType, FloatingConfig,
+    FloatingPosition, FloatingPreset, GapValue, GapsConfig, GapsConfigValue, GradientConfig,
+    LayoutType, MasterConfig, MasterPosition, ScreenGapsConfig, TilingConfig, WindowRule,
+    WorkspaceConfig,
 };
 pub use displays::{DISPLAY_THREAD_NAME, DisplayFeed};
 pub use drag::{

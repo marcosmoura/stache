@@ -40,6 +40,7 @@ Approved by the user on 2026-11-09. They supersede the [Tiling part 09](../2026-
 7. **Appearance answers (2026-11-09).** One width for every border, taken from the active (focused) state, as today (OQ-1). Gradients run in exactly the configured direction at any angle, not two diagonal buckets (OQ-2; convention and visual changes in [part 02](02-rendering.md#gradient-direction)). Per-layout and `floating` overrides color only the focused window, as today (OQ-3). `round` uses the private `SLSWindowIteratorGetCornerRadii` with a measured per-OS fallback; `square` is 0 (OQ-4). Ignore rules match the application's bundle id and name, not JankyBorders' process name (OQ-6).
 8. **Animations are Hyprland-style and GPU-only.** Gradient angle rotation (`once` or `loop`) and a focus color cross-fade, modeled on Hyprland's `borderangle` and `border` animations (behavioral reference only: <https://wiki.hypr.land/Configuring/Animations/>), run as Core Animation animations on the render server: no per-frame IPC, timer or process wakeup, zero work while idle; a running loop costs only compositor time. The legacy ping-pong keeps working ([part 03](03-animations.md)).
 9. **Never visible in Mission Control or on another Space (OQ-5).** No border may be visible in Mission Control, App Exposé, Show Desktop, a Space switch animation, a fullscreen transition or on an inactive Space. Any visible border there is a defect, not a limit; when the state cannot be determined, every border hides ([part 05](05-spaces-mission-control.md)).
+10. **Focus width animation (2026-11-11).** With `unfocused = false` and a `transition`, a focus change grows the new border from width 0 and shrinks the old one to 0 before it hides, GPU only and never delaying a hide; approved by the user 2026-11-11 after native run 11 ([part 09](09-focus-width-animation.md)).
 
 ## Hard rule review checklist (every part)
 
@@ -67,14 +68,15 @@ Studied by the spec writer on 2026-11-09 for approach only (decision 5). JankyBo
 
 | Part                               | Summary                                                                                | Status |
 | ---------------------------------- | -------------------------------------------------------------------------------------- | ------ |
-| [01](01-overlay-engine.md)         | Main-thread overlay window pool, ordering, collection behavior, solid stroke           | draft  |
-| [02](02-rendering.md)              | Static Core Animation styles: solid, exact-angle gradient, glow, width, style, hidpi   | draft  |
-| [03](03-animations.md)             | Hyprland-style GPU animations: angle rotation once/loop, focus cross-fade, ping-pong   | draft  |
-| [04](04-tiling-coupling.md)        | Border model from Tiling state; frame, focus, hide-before/show-after, tabs             | draft  |
-| [05](05-spaces-mission-control.md) | Spaces and Mission Control: hidden in Exposé, Space switches, fullscreen; fail closed  | draft  |
-| [06](06-live-follow.md)            | Live drag/resize follow: gated SkyLight notifications, display pacing, fallback        | draft  |
-| [07](07-lifecycle.md)              | Start/stop/reload stages, no leaked overlays, quarantine, performance budget           | draft  |
-| [08](08-migration-removal.md)      | Approved native check, config extension, production switch, JankyBorders removal, docs | draft  |
+| [01](01-overlay-engine.md)         | Main-thread overlay window pool, ordering, collection behavior, solid stroke           | done   |
+| [02](02-rendering.md)              | Static Core Animation styles: solid, exact-angle gradient, glow, width, style, hidpi   | done   |
+| [03](03-animations.md)             | Hyprland-style GPU animations: angle rotation once/loop, focus cross-fade, ping-pong   | done   |
+| [04](04-tiling-coupling.md)        | Border model from Tiling state; frame, focus, hide-before/show-after, tabs             | done   |
+| [05](05-spaces-mission-control.md) | Spaces and Mission Control: hidden in Exposé, Space switches, fullscreen; fail closed  | done   |
+| [06](06-live-follow.md)            | Live drag/resize follow: gated SkyLight notifications, display pacing, fallback        | done   |
+| [07](07-lifecycle.md)              | Start/stop/reload stages, no leaked overlays, quarantine, performance budget           | done   |
+| [08](08-migration-removal.md)      | Approved native check, config extension, production switch, JankyBorders removal, docs | done   |
+| [09](09-focus-width-animation.md)  | Focus width grow/shrink when unfocused borders are off                                 | done   |
 
 ## Sequencing
 
@@ -104,7 +106,7 @@ The [merge gate](../../workflow.md#merge-gate) blocks merging while any part is 
 
   Recommended defaults: (a) `style` absent = `ping_pong`, so legacy configs animate exactly as today (focused window only); (b) `once`/`loop` apply to every bordered window whose active state carries them (Hyprland-like, so an animated `unfocused` gradient rotates too), not only the focused one; (c) rotation increases the angle (counterclockwise under the angle convention), no `direction` field; (d) `transition` absent = instant, `easing` default `ease_out`, `duration = 0` = instant; (e) border animations ignore `tiling.animations.enabled` and the system Reduce Motion setting, consistent with the [animation spec](../2026-11-09-tiling-animation/00-overview.md) OQ-5.
 
-- **OQ-B unattainable Space-switch guarantee.** If part 05's native check finds a scenario (most likely a trackpad Space swipe or a fullscreen transition started by the green button) where no available mechanism hides borders before the first transition frame, part 05 fails and stays open. Recommended: the user then chooses between another mechanism found in that run and an explicitly approved documented limit; nothing is accepted silently.
+- **OQ-B unattainable Space-switch guarantee — resolved 2026-11-10: structural guarantee accepted.** Native runs 3 and 4 found that on macOS 26 no available signal precedes a Space switch or Mission Control: the Dock posts none of the Exposé notifications (all registered without error) and the private Space-change event arrives about 1 ms before the public completion. The user approved the structural guarantee as the pass criterion: no border is visible in Mission Control, App Exposé, Show Desktop, a fullscreen transition or on an inactive Space, and during a Space slide a border may only travel with its own window (each overlay belongs to its target's Space, `transient`, never on all Spaces). Detection stays as a best-effort, fail-closed layer. The formal native check (20 repeats per scenario, 60 fps recording) verifies this criterion; a border shown apart from its window, or in Mission Control, Exposé, Show Desktop or a fullscreen transition, still fails.
 
 ### Resolved (2026-11-09)
 

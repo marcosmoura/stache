@@ -85,6 +85,9 @@ pub struct FrameAttempt {
     /// The plan asked for an animated transition. While it is in flight the
     /// window is in motion: its observed frame is not a baseline.
     pub animated: bool,
+    /// The one size-only re-write that checks a wider readback after a write
+    /// that moved and resized the window together.
+    pub corrective: bool,
     /// Progress.
     pub status: AttemptStatus,
 }
@@ -120,6 +123,13 @@ pub struct FrameRecord {
     pub forced: bool,
     /// Own geometry echoes of a settled animation still to ignore (bounded).
     pub settle_echoes: u8,
+    /// A write that moved and resized the window read back larger than its
+    /// target: one size-only re-write of the same target is owed before any
+    /// minimum is learned (the readback may be a transient of the move).
+    pub size_check: bool,
+    /// The target the one corrective size-only write was already sent for:
+    /// at most one per target, so a refused size is never fought.
+    pub size_checked: Option<Rect>,
 }
 
 /// A native display presence a host reservation was last accepted for.
@@ -344,8 +354,21 @@ fn desired_frames(state: &mut TilingState) -> BTreeMap<WindowInstance, Rect> {
             continue;
         }
         let mut frames = plan.frames;
+        // Grid cells stay fixed (an intentional deviation from legacy): an
+        // inferred minimum never reshapes them; a refusing window overflows.
+        let grid = workspace.layout == crate::config::LayoutType::Grid;
         let minimum_of = |token: &WindowInstance| {
-            state.frames.records.get(token).and_then(|record| record.minimum.effective())
+            state.frames.records.get(token).and_then(|record| {
+                if grid {
+                    MinimumConstraint {
+                        inferred: None,
+                        ..record.minimum
+                    }
+                    .effective()
+                } else {
+                    record.minimum.effective()
+                }
+            })
         };
         if frames.iter().any(|(token, _)| minimum_of(token).is_some()) {
             let ids: Vec<WindowInstance> = frames.iter().map(|(token, _)| *token).collect();
@@ -436,7 +459,7 @@ fn decide(record: &FrameRecord, target: &Rect, actual: &Rect, revision: u64) -> 
             }
         }
         AttemptStatus::Settled(outcome) => {
-            if record.forced || !same_target {
+            if record.forced || !same_target || record.size_check {
                 return Decision::Issue { external: false };
             }
             // A proven-no-send caused by a plan or revision change never
@@ -448,6 +471,14 @@ fn decide(record: &FrameRecord, target: &Rect, actual: &Rect, revision: u64) -> 
                 }) || attempt.revision != revision);
             if unspent && !matches!(outcome, OperationOutcome::Stale { .. }) {
                 return Decision::Issue { external: false };
+            }
+            // The window refused this very target (a write that was really sent) with a size it re-asserts:
+            // it overflows its cell and is not fought (no external retry).
+            if record.minimum.inferred.is_some_and(|minimum| {
+                target.width < minimum.width - INFERENCE_TOLERANCE
+                    || target.height < minimum.height - INFERENCE_TOLERANCE
+            }) {
+                return Decision::Skip;
             }
             // No retry after an unknown result or a refusal.
             if matches!(outcome, OperationOutcome::Uncertain { .. })
@@ -607,6 +638,14 @@ pub(super) fn plan_and_issue(state: &mut TilingState, fx: &mut Vec<Effect>) {
         }
         record.forced = false;
         record.settle_echoes = 0;
+        let corrective = std::mem::take(&mut record.size_check) && !target_changed;
+        if corrective {
+            // One direct size-only write: the position already landed, and an
+            // animation's intermediate frames could never prove a minimum.
+            wanted.position = false;
+            wanted.size = true;
+            record.size_checked = Some(*target);
+        }
         record.attempt = Some(FrameAttempt {
             plan_sequence,
             revision,
@@ -614,11 +653,13 @@ pub(super) fn plan_and_issue(state: &mut TilingState, fx: &mut Vec<Effect>) {
             wanted,
             from: actual,
             animated: false,
+            corrective,
             status: AttemptStatus::InFlight,
         });
         // A just-revealed window is written directly, whatever the config says.
         // An application in instant fallback gets one direct write per plan.
-        let animate = !state.frames.revealed.remove(token)
+        let animate = !corrective
+            && !state.frames.revealed.remove(token)
             && !state.animation_fallback.contains(&token.application())
             && animations
                 .as_ref()
@@ -820,9 +861,7 @@ pub(super) fn complete(
         OperationOutcome::Enqueued => {}
     }
     let actual = result.actual();
-    if actual.is_some()
-        && attempt.wanted.size
-        && record.inferences < MAX_INFERENCES
+    if attempt.wanted.size
         && let Some(actual) = actual
         && let Some(inferred) = infer_minimum(
             &attempt.target,
@@ -830,10 +869,16 @@ pub(super) fn complete(
             record.minimum.reported,
             record.minimum.inferred,
         )
-        && record.minimum.inferred != Some(inferred)
     {
-        record.minimum.inferred = Some(inferred);
-        record.inferences += 1;
+        // A window moved and resized in one write, or animated through
+        // intermediate frames, can read back a transient size. Only a size
+        // the window still refuses on a direct size-only write is its
+        // minimum; the corrective check is owed at most once per target.
+        if attempt.corrective || (!attempt.wanted.position && !attempt.animated) {
+            learn_minimum(&mut record.minimum, &mut record.inferences, inferred);
+        } else if record.size_checked.is_none_or(|checked| !near_rect(&checked, &attempt.target)) {
+            record.size_check = true;
+        }
     }
     attempt.status = AttemptStatus::Settled(result);
     if attempt.animated {
@@ -856,6 +901,55 @@ pub(super) fn complete(
         // Our own write is the new baseline of a gesture in progress, so its
         // echo can never look like the user moving the window.
         super::drag::rebase(&mut state.drag, window, actual);
+    }
+}
+
+fn learn_minimum(minimum: &mut MinimumConstraint, inferences: &mut u8, inferred: Size) {
+    if *inferences < MAX_INFERENCES && minimum.inferred != Some(inferred) {
+        minimum.inferred = Some(inferred);
+        *inferences += 1;
+    }
+}
+
+/// A window that took its planned size and later reads larger on its own (no
+/// gesture in progress) is re-asserting a minimum it does not report (legacy
+/// `detect_and_update_inferred_minimum` on resize events). It is learned, so
+/// the next plan lays out around it instead of writing the rejected size back.
+pub(super) fn observe_growth(state: &mut TilingState, token: WindowInstance, frame: Option<Rect>) {
+    let Some(frame) = frame else { return };
+    // A gesture in progress, or no passive observer at all (a user resize
+    // would be invisible), means the growth may be the user's: learn nothing.
+    if state.drag.gesture.is_some() || state.drag.degraded {
+        return;
+    }
+    // The usable area of the window's display: a window at least that large
+    // in a dimension is zoomed or maximized, not re-asserting a minimum.
+    let usable = state
+        .display_of(token)
+        .and_then(|display| display_area(state, display).ok())
+        .map(|(usable, _)| usable);
+    let Some(record) = state.frames.records.get_mut(&token) else {
+        return;
+    };
+    let Some(attempt) = record.attempt.as_ref() else {
+        return;
+    };
+    let AttemptStatus::Settled(OperationOutcome::Applied { .. }) = &attempt.status else {
+        return;
+    };
+    if !attempt.wanted.size || record.size_check {
+        return;
+    }
+    if let Some(inferred) = infer_minimum(
+        &attempt.target,
+        &frame,
+        record.minimum.reported,
+        record.minimum.inferred,
+    ) && !usable.is_some_and(|usable| {
+        inferred.width >= usable.width - INFERENCE_TOLERANCE
+            || inferred.height >= usable.height - INFERENCE_TOLERANCE
+    }) {
+        learn_minimum(&mut record.minimum, &mut record.inferences, inferred);
     }
 }
 

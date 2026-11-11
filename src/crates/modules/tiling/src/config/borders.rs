@@ -32,15 +32,68 @@ impl Default for GradientConfig {
     }
 }
 
-/// Color animation for gradient borders.
+/// How a gradient border animates.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum BorderAnimationStyle {
+    /// The two colors swap back and forth, `duration` per leg (focused window only).
+    #[default]
+    PingPong,
+    /// The gradient angle turns 360 degrees once, `duration` per turn.
+    Once,
+    /// The gradient angle turns 360 degrees forever, `duration` per turn.
+    Loop,
+    /// Any other value; rejected by validation with the field path.
+    #[serde(untagged)]
+    #[schemars(skip)]
+    #[specta(skip)]
+    Unknown(String),
+}
+
+/// Animation for gradient borders.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Type)]
 #[serde(rename_all = "snake_case")]
 pub struct BorderAnimationConfig {
-    /// Duration in milliseconds of one color-swap leg.
+    /// Animation style; omitted is `ping_pong`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<BorderAnimationStyle>,
+    /// Duration in milliseconds of one color-swap leg (`ping_pong`) or one
+    /// turn (`once`, `loop`); values below 16 are treated as 16.
     pub duration: u32,
-    /// Easing of each leg.
+    /// Easing of each leg or turn.
     #[serde(default = "default_border_easing")]
     pub easing: EasingType,
+}
+
+impl BorderAnimationConfig {
+    /// The style in effect: omitted is `ping_pong`.
+    #[must_use]
+    pub fn effective_style(&self) -> BorderAnimationStyle { self.style.clone().unwrap_or_default() }
+}
+
+/// Focus color cross-fade between a border's previous and new colors.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Type)]
+#[serde(rename_all = "snake_case")]
+pub struct BorderTransitionConfig {
+    /// Fade duration in milliseconds; 0 is instant, other values below 16 are
+    /// treated as 16.
+    pub duration: u32,
+    /// Easing of the fade.
+    #[serde(default)]
+    pub easing: EasingType,
+}
+
+/// Where a border is ordered relative to its window.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, Type,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum BorderOrder {
+    /// Directly below the window; the window covers the inner part of the border.
+    #[default]
+    Below,
+    /// Directly above the window, entirely outside its frame.
+    Above,
 }
 
 const fn default_border_easing() -> EasingType { EasingType::Linear }
@@ -94,7 +147,15 @@ impl BorderStateConfig {
             )),
             Self::SolidColor { color, .. } => validate_color(&format!("{field}.color"), color),
             Self::GlowColor { glow, .. } => validate_color(&format!("{field}.glow"), glow),
-            Self::GradientColor { gradient, .. } => {
+            Self::GradientColor { gradient, animation, .. } => {
+                if let Some(BorderAnimationStyle::Unknown(value)) =
+                    animation.as_ref().and_then(|animation| animation.style.as_ref())
+                {
+                    return Err(format!(
+                        "{field}.animation.style: unknown style `{value}`; expected `ping_pong`, \
+                         `once` or `loop`"
+                    ));
+                }
                 validate_color(&format!("{field}.gradient.from"), &gradient.from)?;
                 validate_color(&format!("{field}.gradient.to"), &gradient.to)?;
                 if !gradient.angle.is_finite() {
@@ -106,36 +167,23 @@ impl BorderStateConfig {
     }
 }
 
-/// Border corner style.
-#[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, Type,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum BorderStyle {
-    /// Rounded corners.
-    #[default]
-    Round,
-    /// Square corners.
-    Square,
-}
-
 /// Window border configuration.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Type)]
 #[serde(default, rename_all = "snake_case")]
 pub struct BordersConfig {
-    /// Whether borders are enabled. Setting this to `true` is your explicit
-    /// consent for Stache to overwrite the shared `JankyBorders` settings it names:
-    /// width, style, hidpi, active and inactive colors and the blacklist. Their
-    /// previous values are not read or restored. Stache never starts, restarts or
-    /// kills the `JankyBorders` service (it must already be running) and, when
-    /// borders stop or are disabled, leaves the last settings it sent in place.
+    /// Whether Stache draws borders around Tiling-managed windows. Borders are
+    /// drawn by Stache itself; nothing external is started, changed or left
+    /// behind, and disabling them removes every border.
     pub enabled: bool,
-    /// Border style; omitted uses the external service default (round).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub style: Option<BorderStyle>,
-    /// Retina support (`hidpi`); omitted uses the external service default (true).
+    /// Retina support (`hidpi`); omitted is true.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hidpi: Option<bool>,
+    /// Focus color cross-fade; omitted is instant.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transition: Option<BorderTransitionConfig>,
+    /// Border order relative to its window; omitted is `below`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order: Option<BorderOrder>,
     /// Focused windows.
     pub focused: BorderStateConfig,
     /// Unfocused windows; `false` hides them.
@@ -171,8 +219,9 @@ impl Default for BordersConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            style: None,
             hidpi: None,
+            transition: None,
+            order: None,
             focused: BorderStateConfig::solid("#b4befe"),
             unfocused: BorderStateConfig::solid("#6c7086"),
             monocle: BorderStateConfig::solid("#cba6f7"),

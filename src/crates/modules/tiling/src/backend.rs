@@ -764,6 +764,7 @@ mod fake {
         focused: HashMap<ApplicationId, WindowInstance>,
         resolve: HashMap<u32, WindowInstance>,
         stop_outcome: Option<StopOutcome>,
+        close_outcome: Option<CloseOutcome>,
         retry_reports: VecDeque<Option<CleanupReport>>,
         lease_restores: VecDeque<LeaseRestoreOutcome>,
         install_error: Option<InstallError>,
@@ -1279,6 +1280,11 @@ mod fake {
             self.state().retry_reports.push_back(report);
         }
 
+        /// Scripts the close outcome (default `Closed`).
+        pub fn script_close(&self, outcome: CloseOutcome) {
+            self.state().close_outcome = Some(outcome);
+        }
+
         /// Scripts the next stop outcome (default `Clean`).
         pub fn script_stop(&self, outcome: StopOutcome) {
             self.state().stop_outcome = Some(outcome);
@@ -1600,8 +1606,9 @@ mod fake {
         }
 
         fn close(&self) -> CloseOutcome {
-            self.state().calls.push(FakeBackendCall::Close);
-            CloseOutcome::Closed
+            let mut state = self.state();
+            state.calls.push(FakeBackendCall::Close);
+            state.close_outcome.take().unwrap_or(CloseOutcome::Closed)
         }
     }
 }

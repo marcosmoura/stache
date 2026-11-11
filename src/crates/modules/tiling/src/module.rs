@@ -20,10 +20,15 @@
 //! 9. the passive drag observer on the shared listen-only tap (optional: a
 //!    refusal degrades drag only, with a status diagnostic)
 //!
-//! The borders runner is not a numbered stage: it is spawned only while the
-//! accepted configuration has `borders.enabled` (at stage 7 and live on every
-//! accepted revision), owns its connection and helper child, and a failure to
-//! start or deliver degrades borders only.
+//! The borders are not a numbered stage: the border engine follows the
+//! accepted configuration's `borders.enabled` on the actor thread (at stage 7
+//! and live on every accepted revision), creates overlays lazily on the main
+//! thread, and a failure degrades borders only.
+//!
+//! A missing main-thread acknowledgement of the overlay release is owed (and the
+//! module quarantined) on a runtime stop, but only a note when the host is tearing
+//! the whole process down: the window server removes the overlays of an exiting
+//! process. A stuck owner, a mismatched count or a silent actor stay owed.
 //!
 //! The reservation watcher and the display feed are primed before the authority
 //! is published, so reservations and native topology are consumed before the
@@ -34,7 +39,7 @@
 //!
 //! Stop seals the authority immediately (one atomic store), publishes the
 //! stopping status, then wakes every wait and runs the owed stages in order with
-//! fresh finite waits: remove the drag observer, close the borders runner (it sends nothing; the service keeps its last settings), drain frame issuance, close and join the animation worker, the restore of runtime-hidden applications, the
+//! fresh finite waits: remove the drag observer, settle the borders (the border engine's Spaces and live-follow owners stop, then every overlay is released on the main thread and the acknowledgement is compared with the engine's handle ledger, waited for off main only), drain frame issuance, close and join the animation worker, the restore of runtime-hidden applications, the
 //! reservation watcher, the display feed, the backend epoch, the actor and the effect worker.
 //! A stage that does not finish stays *owed*. The exact resources are retained
 //! in a quarantine; `start` refuses while any stage is owed and a later `stop`
@@ -54,13 +59,14 @@ use stache_sdk::{
 
 use crate::actor::{AppDirectory, Clock, SystemClock};
 use crate::backend::WindowBackend;
-use crate::borders::{BordersParts, FaultSink, JOIN_BOUND};
 use crate::config::TilingConfig;
 use crate::displays::DisplayFeed;
-use crate::drag::DragFeed;
+use crate::drag::{DragFeed, DragSignal};
 use crate::reservations::{DisplayProjection, ReservationSource, ReservationWatcher};
 use crate::status::{AppLabel, TilingStatusSource};
-use crate::tracking::{HOP, StageProbe, StartError, StartStage, TrackingOptions, TrackingRuntime};
+use crate::tracking::{
+    BordersStop, HOP, StageProbe, StartError, StartStage, TrackingOptions, TrackingRuntime,
+};
 use crate::visibility::{ActionsDirectory, ApplicationActionsSource, OwnedApp};
 
 /// A revision observer (tests hold the coordinator with it).
@@ -77,7 +83,8 @@ pub enum Teardown {
     Sealed,
     /// The drag observer was removed.
     Drag,
-    /// The borders runner was closed and joined (only traced when one existed).
+    /// The border engine was settled and its overlays released (only traced when
+    /// borders were composed).
     Borders,
     /// Frame issuance was drained.
     Drained,
@@ -106,9 +113,12 @@ pub struct TilingTiming {
     pub poll: Duration,
     /// One finite acknowledgement hop for every cleanup wait.
     pub hop: Duration,
-    /// The longest a stop waits for the borders runner (one Mach send, one CLI
-    /// child and the cancel/reap window).
+    /// The longest a stop waits for the border owners (actor-side sources) to
+    /// stop.
     pub borders_join: Duration,
+    /// The longest a stop waits, off the main thread, for the main thread to
+    /// acknowledge the release of every native border overlay.
+    pub borders_release_wait: Duration,
     /// Called with each observed revision before it is adopted.
     pub observed: Option<RevisionHook>,
     /// Fallible staging of a candidate configuration.
@@ -124,7 +134,8 @@ impl Default for TilingTiming {
         Self {
             poll: Duration::from_millis(100),
             hop: HOP,
-            borders_join: JOIN_BOUND,
+            borders_join: HOP,
+            borders_release_wait: crate::tracking::BORDERS_RELEASE_WAIT,
             observed: None,
             stage: None,
             probe: None,
@@ -160,11 +171,19 @@ pub struct TilingParts {
     /// Native display topology. `None` delivers no layout: Tiling then sees no
     /// screens and never guesses one.
     pub displays: Option<DisplayControl>,
-    /// The `JankyBorders` authority: how to reach the service and the helper CLI.
-    /// `None` composes none, so an enabled `borders.enabled` only reports a
-    /// diagnostic and nothing is looked up or sent. Accepted `enabled: true` is
-    /// the consent to overwrite the shared settings.
-    pub borders: Option<BordersParts>,
+    /// The overlay control. With it a run composes the border engine; `None`
+    /// composes none, so an enabled `borders.enabled` only reports a
+    /// diagnostic. The control creates no panel until the first border shows.
+    pub overlay: Option<Arc<stache_macos::border_overlay::OverlayControl>>,
+    /// Creates the Space and Mission Control event source. `None` keeps every
+    /// border hidden (fail closed).
+    pub space_events: Option<stache_macos::border_overlay::SpaceEventsFactory>,
+    /// Creates the active-Space confirmation. `None` confirms every window.
+    pub space_confirm: Option<crate::borders::ConfirmerFactory>,
+    /// Creates the live follow source of the borders. `None` composes none:
+    /// borders then move only from
+    /// Tiling's own frame observations.
+    pub live_follow: Option<stache_macos::border_overlay::LiveFollowFactory>,
 }
 
 impl TilingParts {
@@ -187,7 +206,10 @@ impl TilingParts {
             timing: TilingTiming::default(),
             applications: None,
             displays: None,
-            borders: None,
+            overlay: None,
+            space_events: None,
+            space_confirm: None,
+            live_follow: None,
         }
     }
 }
@@ -205,6 +227,8 @@ struct Inner {
     /// Ambiguous visibility records kept past a stop: the ledger cannot tell
     /// our hide from an external one, so it never unhides them on its own.
     ambiguous: Mutex<Vec<Retained>>,
+    /// The last module logger, so the factory drain can name why it answered no.
+    logger: Mutex<Option<stache_sdk::ScopedLogger>>,
 }
 
 /// An ambiguous visibility record kept across stops, with the process id used
@@ -293,6 +317,7 @@ impl TilingRuntime {
                 shutdown: CancellationToken::new(),
                 current: Mutex::new(Weak::new()),
                 ambiguous: Mutex::new(Vec::new()),
+                logger: Mutex::new(None),
             }),
         }
     }
@@ -343,14 +368,44 @@ impl TilingRuntime {
     pub fn shutdown_token(&self) -> CancellationToken { self.inner.shutdown.clone() }
 
     /// Stage 3 of host shutdown, after the registry stopped the module: closes
-    /// the backend owner thread. `false` when quarantined resources keep it
-    /// alive or it did not finish (never detached to look clean).
+    /// the backend owner thread. `false` when it did not finish, or when
+    /// quarantined registrations keep it alive outside a host shutdown (never
+    /// detached to look clean). After [`Self::begin_shutdown`] quarantined
+    /// registrations are logged: the system releases them with the process.
     #[must_use]
     pub fn finish_shutdown(&self) -> bool {
-        matches!(
-            self.inner.parts.backend.close(),
-            stache_macos::windows::CloseOutcome::Closed
-        )
+        let outcome = self.inner.parts.backend.close();
+        let (clean, message) = match outcome {
+            stache_macos::windows::CloseOutcome::Closed => (true, None),
+            // Only quarantined registrations keep the owner alive, and the host
+            // is exiting (this stage runs only at host shutdown): the system
+            // releases them with the process.
+            stache_macos::windows::CloseOutcome::Quarantined { registrations }
+                if self.inner.closing.load(Ordering::SeqCst) =>
+            {
+                (
+                    true,
+                    Some(format!(
+                        "tiling backend close left {registrations} observer registration(s) to \
+                         the system at process exit"
+                    )),
+                )
+            }
+            other => (
+                false,
+                Some(format!("tiling backend close is not clean: {other:?}")),
+            ),
+        };
+        if let Some(message) = message
+            && let Some(logger) = lock(&self.inner.logger).as_ref()
+        {
+            if clean {
+                logger.info(message);
+            } else {
+                logger.warn(message);
+            }
+        }
+        clean
     }
 }
 
@@ -406,7 +461,7 @@ impl Owed {
         let mut owed = Vec::new();
         for (flag, name) in [
             (self.drag, "drag observer"),
-            (self.borders, "borders runner"),
+            (self.borders, "borders overlays"),
             (self.drain, "frame drain"),
             (self.animation, "animation worker"),
             (self.frame_clock, "frame clock"),
@@ -482,6 +537,8 @@ struct Held {
     drag: Option<Arc<DragFeed>>,
     owed: Owed,
     last: String,
+    /// What a process-exit stop left to the window server (reported, not owed).
+    left_to_exit: Option<String>,
     _guards: Vec<CancelListener>,
 }
 
@@ -533,27 +590,40 @@ impl Inner {
             self.trace(Teardown::Drag);
         }
 
-        // The borders runner is released next: it sends nothing, so nothing more
-        // reaches the service, and its connection and helper child are freed.
+        // The borders are released next: the engine's owners stop and every
+        // overlay is released on the main thread.
         if held.owed.borders {
-            if held
-                .runtime
-                .as_ref()
-                .is_none_or(|rt| rt.stop_borders(self.parts.timing.borders_join))
-            {
-                held.owed.borders = false;
-                self.trace(Teardown::Borders);
-            } else {
-                let retained =
-                    held.runtime.as_ref().map(|rt| rt.borders().retained()).unwrap_or_default();
-                notes.push(if retained.is_empty() {
-                    "the borders runner is blocked in a send".to_owned()
-                } else {
-                    format!(
-                        "the borders runner left helper child(ren): {}",
-                        retained.join(", ")
-                    )
-                });
+            let stop = held.runtime.as_ref().map_or(BordersStop::Done, |rt| {
+                rt.stop_borders(
+                    self.parts.timing.borders_join,
+                    self.parts.timing.borders_release_wait,
+                )
+            });
+            match stop {
+                BordersStop::Done => {
+                    held.owed.borders = false;
+                    self.trace(Teardown::Borders);
+                }
+                // The host is tearing the whole process down and the only thing
+                // missing is the main thread's acknowledgement: the window server
+                // removes the overlays of an exiting process, so nothing leaks.
+                // Reported as a note, not as an owed stage. A runtime stop (pause,
+                // disable, reload) never takes this branch.
+                BordersStop::Owed { note, exit_settles: true }
+                    if self.closing.load(Ordering::SeqCst) =>
+                {
+                    held.owed.borders = false;
+                    if let Some(runtime) = held.runtime.as_ref() {
+                        runtime.log_borders_left_to_exit(&note);
+                    }
+                    held.left_to_exit = Some(format!(
+                        "border overlays were left to the window server at process exit: {note}"
+                    ));
+                    self.trace(Teardown::Borders);
+                }
+                BordersStop::Owed { note, .. } => {
+                    notes.push(format!("the borders stage is owed: {note}"));
+                }
             }
         }
 
@@ -638,10 +708,15 @@ impl Inner {
             }
         }
         if let Some(owed) = held.owed.epoch {
-            let remaining = match (owed, &held.runtime) {
+            // What is still registered when removal stays owed: (applications, registrations).
+            let mut unremoved = None;
+            let mut remaining = match (owed, &held.runtime) {
                 (EpochOwed::Stop, Some(runtime)) => match runtime.stop_epoch(hop) {
                     StopOutcome::Clean { .. } | StopOutcome::NotCurrent => None,
-                    StopOutcome::Quarantined { .. } => Some(EpochOwed::Cleanup),
+                    StopOutcome::Quarantined { applications, registrations } => {
+                        unremoved = Some((applications, registrations));
+                        Some(EpochOwed::Cleanup)
+                    }
                     other => {
                         notes
                             .push(format!("the backend epoch stop is not acknowledged: {other:?}"));
@@ -665,6 +740,10 @@ impl Inner {
                             None
                         }
                         Some(report) => {
+                            unremoved = Some((
+                                report.remaining_applications,
+                                report.remaining_registrations,
+                            ));
                             notes.push(format!(
                                 "{} application(s) and {} registration(s) still owe removal",
                                 report.remaining_applications, report.remaining_registrations
@@ -678,6 +757,31 @@ impl Inner {
                     }
                 }
             };
+            // The host is tearing the process down: observer registrations
+            // that a live but unresponsive application refused to remove are
+            // released by the system when this process exits. Reported as a
+            // note, not owed. A runtime stop (pause, disable, reload) never
+            // takes this branch.
+            if let (Some(EpochOwed::Cleanup), Some((applications, registrations))) =
+                (remaining, unremoved)
+                && self.closing.load(Ordering::SeqCst)
+            {
+                if let Some(owed) = notes.last()
+                    && owed.contains("still owe removal")
+                {
+                    notes.pop();
+                }
+                remaining = None;
+                let note = format!(
+                    "{applications} application(s) and {registrations} observer registration(s) \
+                     that could not be removed are released by the system at process exit"
+                );
+                held.left_to_exit = Some(
+                    held.left_to_exit
+                        .take()
+                        .map_or_else(|| note.clone(), |held| format!("{held}; {note}")),
+                );
+            }
             held.owed.epoch = remaining;
             if remaining.is_none() {
                 self.trace(Teardown::Epoch);
@@ -734,6 +838,7 @@ impl TilingModule {
         } else {
             let ambiguous = lock(&inner.ambiguous);
             let mut notes = Vec::new();
+            notes.extend(held.left_to_exit.clone());
             if !ambiguous.is_empty() {
                 notes.push(format!(
                     "{} application(s) hidden by an unattributable cause are retained and not \
@@ -742,13 +847,6 @@ impl TilingModule {
                 ));
             }
             drop(ambiguous);
-            if held.runtime.as_ref().is_some_and(|rt| rt.borders().left_settings()) {
-                notes.push(
-                    "JankyBorders keeps the last border settings Stache sent; nothing was reset \
-                     or restored"
-                        .to_owned(),
-                );
-            }
             let detail = (!notes.is_empty()).then(|| notes.join("; "));
             inner.status.inactive(detail);
             self.slot = Slot::Idle;
@@ -770,7 +868,7 @@ impl TilingModule {
         let owed = Owed {
             drag: false,
             drain: false,
-            borders: runtime.as_ref().is_some_and(|rt| rt.borders().owes_cleanup()),
+            borders: runtime.as_ref().is_some_and(|rt| rt.owes_borders_cleanup()),
             animation: runtime.is_some(),
             frame_clock: runtime.is_some(),
             enhanced_ui: runtime.is_some(),
@@ -788,6 +886,7 @@ impl TilingModule {
             drag: None,
             owed,
             last: cause.clone(),
+            left_to_exit: None,
             _guards: guards,
         });
         match self.settle(held, Operation::Start) {
@@ -812,6 +911,7 @@ impl TilingModule {
                 ..Owed::default()
             },
             last: cause.clone(),
+            left_to_exit: None,
             _guards: Vec::new(),
         });
         match self.settle(held, Operation::Start) {
@@ -911,15 +1011,15 @@ impl Module for TilingModule {
         options.registry = inner.generation.fetch_add(1, Ordering::SeqCst) + 1;
         options.defer_begin = true;
         options.probe.clone_from(&parts.timing.probe);
-        options.borders.clone_from(&parts.borders);
+        {
+            options.overlay.clone_from(&parts.overlay);
+            options.space_events.clone_from(&parts.space_events);
+            options.space_confirm.clone_from(&parts.space_confirm);
+            options.live_follow.clone_from(&parts.live_follow);
+        }
         options.logger = Some(ctx.logger().clone());
+        *lock(&inner.logger) = Some(ctx.logger().clone());
         options.published = ctx.state_publisher().ok();
-        inner.status.borders_failure(None);
-        let status = inner.status.clone();
-        let sink: FaultSink = Arc::new(move |fault| {
-            status.borders_failure(fault.map(crate::borders::Fault::describe));
-        });
-        options.borders_sink = Some(sink);
         let mut directory = Arc::clone(&parts.directory);
         if let Some(source) = &parts.applications {
             match source.open(&ctx.cancellation()) {
@@ -1143,6 +1243,12 @@ impl Module for TilingModule {
                 .map(|control| control.pacing_diagnostics())
                 .unwrap_or_default()
         })));
+        {
+            let weak = Arc::downgrade(&runtime);
+            inner.status.set_native_borders_source(Some(Box::new(move || {
+                weak.upgrade().map(|runtime| runtime.border_diagnostics()).unwrap_or_default()
+            })));
+        }
         let animation = Arc::downgrade(runtime.animation());
         inner.status.set_animation_source(Some(Box::new(move || {
             animation.upgrade().map(|control| control.report()).unwrap_or_default()
@@ -1154,6 +1260,13 @@ impl Module for TilingModule {
             Ok(feed) => Some(Arc::new(feed)),
             Err(unavailable) => {
                 inner.status.drag_failure(Some(unavailable.to_string()));
+                // A closed mailbox means the actor is gone; nothing to tell
+                // beyond a debug note.
+                if let Err(error) =
+                    runtime.ingress().submit(crate::state::Input::Drag(DragSignal::Unavailable))
+                {
+                    ctx.logger().debug(format!("drag unavailable was not delivered: {error:?}"));
+                }
                 None
             }
         };
@@ -1197,7 +1310,19 @@ impl Module for TilingModule {
         Ok(())
     }
 
-    fn stop(&mut self, _ctx: &ModuleContext) -> ModuleResult<()> {
+    fn stop(&mut self, ctx: &ModuleContext) -> ModuleResult<()> {
+        let result = self.stop_slot();
+        // The host records only that the module failed; the owed stages are the
+        // evidence a native run needs.
+        if let Err(error) = &result {
+            ctx.logger().warn(format!("tiling stop is incomplete: {error}"));
+        }
+        result
+    }
+}
+
+impl TilingModule {
+    fn stop_slot(&mut self) -> ModuleResult<()> {
         match std::mem::replace(&mut self.slot, Slot::Idle) {
             Slot::Idle => Ok(()),
             Slot::Quarantined(held) => self.settle(held, Operation::Stop),
@@ -1223,7 +1348,7 @@ impl Module for TilingModule {
                     drag,
                     owed: Owed {
                         drag: had_drag,
-                        borders: run.runtime.borders().owes_cleanup(),
+                        borders: run.runtime.owes_borders_cleanup(),
                         drain: true,
                         animation: true,
                         frame_clock: true,
@@ -1236,6 +1361,7 @@ impl Module for TilingModule {
                         runner: true,
                     },
                     last: String::new(),
+                    left_to_exit: None,
                     _guards: guards,
                 });
                 self.settle(held, Operation::Stop)
@@ -1248,10 +1374,19 @@ impl Module for TilingModule {
 // Coordinator
 // ---------------------------------------------------------------------------
 
+/// The diagnostic of an enabled `borders` on a host that composed no overlay
+/// control: nothing is drawn, Tiling itself is unaffected.
+pub const NO_BORDER_OVERLAYS: &str =
+    "borders: enabled, but this host composed no border overlays; nothing is drawn";
+
 /// The optional-feature diagnostics of an adopted configuration: features not
-/// implemented yet plus an animation worker that could not start.
+/// implemented yet, enabled borders without overlays, and an animation worker
+/// that could not start.
 fn feature_diagnostics(runtime: &TrackingRuntime, config: &TilingConfig) -> Vec<String> {
     let mut features = crate::status::unsupported_features(config);
+    if config.borders.enabled && !runtime.has_native_borders() {
+        features.push(NO_BORDER_OVERLAYS.to_owned());
+    }
     features.extend(runtime.animation_failure());
     features
 }

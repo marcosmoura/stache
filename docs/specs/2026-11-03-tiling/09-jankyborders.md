@@ -4,6 +4,8 @@ status: done
 
 # 09 — Optional external JankyBorders integration
 
+> **Superseded** by [Tiling native borders](../2026-11-09-tiling-borders/00-overview.md) (part 08, 2026-11-11): the JankyBorders path described here was removed; Stache draws borders itself. Kept as history.
+
 Read when implementing after 08 and separate approval. External integration is retained, not silently replaced with a custom border engine.
 
 ## Scope

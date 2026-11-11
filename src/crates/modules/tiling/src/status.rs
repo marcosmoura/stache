@@ -78,12 +78,12 @@ struct Shared {
     display: Mutex<Option<String>>,
     /// Why the passive drag observer is not running, if it is not.
     drag: Mutex<Option<String>>,
-    /// The latest borders delivery fault (borders only; never the runtime).
-    borders: Mutex<Option<String>>,
     /// Ambiguous records retained past a stop.
     retained: Mutex<Vec<String>>,
     /// Which displays animate on the timer instead of a frame clock, read live.
     pacing: Mutex<Option<PacingSource>>,
+    /// The live native border diagnostics (engine and overlay), when composed.
+    native_borders: Mutex<Option<PacingSource>>,
     /// The live instant-fallback set and animation metrics.
     animation: Mutex<Option<AnimationSource>>,
 }
@@ -135,8 +135,7 @@ pub fn animation_diagnostics(
 ///
 /// Each entry would be an explicit unsupported diagnostic, never a silent
 /// erasure. Every optional feature of the configuration now has a runtime, so
-/// none is listed; borders report their own delivery faults through
-/// `diagnostics`.
+/// none is listed; borders report their own problems through `diagnostics`.
 #[must_use]
 pub const fn unsupported_features(_config: &crate::config::TilingConfig) -> Vec<String> {
     Vec::new()
@@ -248,11 +247,19 @@ impl TilingStatusSource {
             status
                 .diagnostics
                 .extend(self.shared.drag.lock().unwrap_or_else(PoisonError::into_inner).clone());
-            status
-                .diagnostics
-                .extend(self.shared.borders.lock().unwrap_or_else(PoisonError::into_inner).clone());
             if let Some(source) =
                 self.shared.pacing.lock().unwrap_or_else(PoisonError::into_inner).as_ref()
+            {
+                status.diagnostics.extend(source());
+            }
+            // Border problems are diagnostics only: the health above is the
+            // runtime's, not the borders'.
+            if let Some(source) = self
+                .shared
+                .native_borders
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .as_ref()
             {
                 status.diagnostics.extend(source());
             }
@@ -331,6 +338,11 @@ impl TilingStatusSource {
         *self.shared.pacing.lock().unwrap_or_else(PoisonError::into_inner) = source;
     }
 
+    /// Sets (or clears) the live source of native border diagnostics.
+    pub(crate) fn set_native_borders_source(&self, source: Option<PacingSource>) {
+        *self.shared.native_borders.lock().unwrap_or_else(PoisonError::into_inner) = source;
+    }
+
     /// Records (or clears) the latest display feed problem.
     pub(crate) fn display_failure(&self, failure: Option<String>) {
         *self.shared.display.lock().unwrap_or_else(PoisonError::into_inner) = failure;
@@ -340,12 +352,6 @@ impl TilingStatusSource {
     /// alone is degraded; ordinary tiling stays healthy.
     pub(crate) fn drag_failure(&self, failure: Option<String>) {
         *self.shared.drag.lock().unwrap_or_else(PoisonError::into_inner) = failure;
-    }
-
-    /// Records (or clears) the latest borders delivery fault. Borders alone are
-    /// degraded; layout, commands and other modules are unaffected.
-    pub(crate) fn borders_failure(&self, failure: Option<String>) {
-        *self.shared.borders.lock().unwrap_or_else(PoisonError::into_inner) = failure;
     }
 
     /// Replaces the retained ambiguous records (the caller merges and prunes).

@@ -455,6 +455,7 @@ fn entries(directory: &Path) -> Vec<String> {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // one end-to-end migration scenario
 fn per_module_jsonc_files_in_the_previous_spellings_migrate_and_load_cleanly() {
     let root = tempfile::tempdir().expect("temp dir");
     let directory = per_module_dir(root.path(), &[]);
@@ -477,7 +478,16 @@ fn per_module_jsonc_files_in_the_previous_spellings_migrate_and_load_cleanly() {
         out.lines().next(),
         Some(format!("migrating per-module files from {}", directory.display()).as_str())
     );
-    assert!(!out.contains("warning"), "{out}");
+    // The removed `borders.style` key is the only thing carried as unknown:
+    // per-module files never run legacy hooks, and borders are always round.
+    let removed_style = "warning: unknown tiling key `borders.style` is preserved in tiling.toml and ignored by \
+         the typed configuration";
+    assert!(
+        out.lines()
+            .filter(|line| line.contains("warning"))
+            .all(|line| line == removed_style),
+        "{out}"
+    );
     assert!(!out.contains("emitted default template"), "{out}");
 
     for (id, text) in PER_MODULE {
@@ -496,7 +506,12 @@ fn per_module_jsonc_files_in_the_previous_spellings_migrate_and_load_cleanly() {
         let warnings = catalog
             .inspect(id, &path, &text)
             .unwrap_or_else(|error| panic!("{name}: {error}"));
-        assert!(warnings.is_empty(), "{name}: {warnings:?}");
+        if name == "tiling.toml" {
+            assert_eq!(warnings.len(), 1, "{name}: {warnings:?}");
+            assert!(warnings[0].contains("borders.style"), "{name}: {warnings:?}");
+        } else {
+            assert!(warnings.is_empty(), "{name}: {warnings:?}");
+        }
     }
     let read = |id: &str| fs::read_to_string(directory.join(format!("{id}.toml"))).expect(id);
 
@@ -552,10 +567,16 @@ fn per_module_jsonc_files_in_the_previous_spellings_migrate_and_load_cleanly() {
         "user data is never renamed"
     );
 
-    // Nothing is stale any more.
+    // Nothing is stale any more; only the removed `borders.style` key warns.
     let (code, out, err) = cli(&args(&directory, &["config", "path"]));
     assert_eq!(code, ExitCode::SUCCESS, "{err}");
-    assert!(!out.contains("migrate") && !out.contains("warning"), "{out}");
+    assert!(!out.contains("migrate"), "{out}");
+    assert!(
+        out.lines()
+            .filter(|line| line.contains("warning"))
+            .all(|line| line.contains("unknown key `borders.style` is ignored")),
+        "{out}"
+    );
 }
 
 #[test]
@@ -638,4 +659,137 @@ fn a_single_per_module_file_and_a_stale_hint_for_a_partial_migration() {
     let (_, out, _) = cli(&args(&directory, &["config", "path"]));
     assert!(out.contains("tiling.jsonc is ignored"), "{out}");
     assert!(!out.contains("bar.jsonc is ignored"), "{out}");
+}
+
+/// TB-08-04: the approved OQ-A border example plus `order = "above"` loads on
+/// the real catalog without warnings, with typed values and validation; the
+/// same file without the new keys keeps the legacy meaning.
+#[test]
+fn the_feature_doc_borders_example_loads_and_validates() {
+    // The `tiling.toml` example in docs/features/tiling.md (Borders section),
+    // kept verbatim so the shipped doc cannot drift from the loader.
+    const DOC_EXAMPLE: &str = r##"
+[borders]
+enabled = true
+order = "below"
+transition = { duration = 200, easing = "ease_out" }
+unfocused = false
+
+[borders.focused]
+width = 6
+gradient = { from = "#b4befe", to = "#cba6f7", angle = 45 }
+animation = { style = "loop", duration = 4000, easing = "linear" }
+
+[[borders.ignore]]
+app_id = "com.apple.systempreferences"
+"##;
+    let catalog = catalog();
+    let path = Path::new("tiling.toml");
+    let (tiling, warnings) = catalog
+        .decode_typed::<TilingConfig>(TilingConfig::ID, path, DOC_EXAMPLE)
+        .expect("the documented example decodes");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(
+        catalog
+            .inspect(TilingConfig::ID, path, DOC_EXAMPLE)
+            .expect("inspect")
+            .is_empty()
+    );
+    stache_sdk::config::loader::validate(
+        stache_sdk::config::ConfigFileId::module(TilingConfig::ID),
+        path,
+        &tiling,
+    )
+    .expect("the documented example validates");
+}
+
+#[test]
+fn the_approved_native_borders_example_loads_with_typed_values() {
+    use stache_tiling::{
+        BorderAnimationStyle, BorderOrder, BorderStateConfig, BorderTransitionConfig, EasingType,
+    };
+
+    const APPROVED: &str = r##"
+[borders]
+enabled = true
+transition = { duration = 200, easing = "ease_out" }
+order = "above"
+
+[borders.focused]
+width = 4
+gradient = { from = "#b4befe", to = "#cba6f7", angle = 45 }
+animation = { style = "loop", duration = 4000, easing = "linear" }
+"##;
+    let catalog = catalog();
+    let path = Path::new("tiling.toml");
+    let (tiling, warnings) = catalog
+        .decode_typed::<TilingConfig>(TilingConfig::ID, path, APPROVED)
+        .expect("the approved example decodes");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(catalog.inspect(TilingConfig::ID, path, APPROVED).expect("inspect").is_empty());
+    let borders = &tiling.borders;
+    assert_eq!(
+        borders.transition,
+        Some(BorderTransitionConfig {
+            duration: 200,
+            easing: EasingType::EaseOut,
+        })
+    );
+    assert_eq!(borders.order, Some(BorderOrder::Above));
+    let BorderStateConfig::GradientColor {
+        animation: Some(animation),
+        gradient,
+        width,
+    } = &borders.focused
+    else {
+        panic!("an animated gradient: {:?}", borders.focused);
+    };
+    assert_eq!(*width, 4);
+    assert!((gradient.angle - 45.0).abs() < f64::EPSILON);
+    assert_eq!(animation.style, Some(BorderAnimationStyle::Loop));
+    assert_eq!(animation.duration, 4000);
+    assert_eq!(animation.easing, EasingType::Linear);
+
+    // Without the additions: no transition, below, and a ping-pong animation.
+    let legacy = APPROVED
+        .replace("transition = { duration = 200, easing = \"ease_out\" }\n", "")
+        .replace("order = \"above\"\n", "")
+        .replace("style = \"loop\", ", "");
+    let (old, warnings) = catalog
+        .decode_typed::<TilingConfig>(TilingConfig::ID, path, &legacy)
+        .expect("the legacy shape decodes");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(old.borders.transition, None);
+    assert_eq!(old.borders.order, None);
+    let BorderStateConfig::GradientColor { animation: Some(animation), .. } = &old.borders.focused
+    else {
+        panic!("an animated gradient");
+    };
+    assert_eq!(animation.effective_style(), BorderAnimationStyle::PingPong);
+
+    // An unknown style fails module validation with its path; an unknown order
+    // fails decoding.
+    let validate = |config: &TilingConfig| {
+        stache_sdk::config::loader::validate(
+            stache_sdk::config::ConfigFileId::module(TilingConfig::ID),
+            path,
+            config,
+        )
+    };
+    validate(&tiling).expect("the approved example validates");
+    let bad_style = APPROVED.replace("\"loop\"", "\"spin\"");
+    let (spin, _) = catalog
+        .decode_typed::<TilingConfig>(TilingConfig::ID, path, &bad_style)
+        .expect("an unknown style still decodes");
+    let error = validate(&spin).expect_err("an unknown style is invalid");
+    assert!(
+        error
+            .to_string()
+            .contains("borders.focused.animation.style: unknown style `spin`"),
+        "{error}"
+    );
+    let bad_order = APPROVED.replace("\"above\"", "\"top\"");
+    catalog
+        .decode_typed::<TilingConfig>(TilingConfig::ID, path, &bad_order)
+        .expect_err("unknown order");
 }

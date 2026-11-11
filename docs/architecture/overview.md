@@ -53,7 +53,9 @@ Read when changing the shipped foundation boundaries.
   outcome model; `NSRunningApplication hide`/`unhide`) and `watch_lifecycle` (launch, terminate,
   hide, unhide as pure `LifecycleEvent`s with the exact `ApplicationId`, deferred to a later main
   turn; a terminate that cannot be resolved to an id after pruning is delivered as the synthesized
-  `TerminatedUnresolved`, never dropped). Part 06 slice B adds the `AXHidden` fallback beside them,
+  `TerminatedUnresolved`, never dropped; the active Space change
+  (`NSWorkspaceActiveSpaceDidChangeNotification`) arrives on the same stream as the
+  application-less `SpaceChanged`). Part 06 slice B adds the `AXHidden` fallback beside them,
   on the tracked application's Tiling AX shard (`stache-tiling-ax-<n>`, never main and never
   `MenuAnywhere`'s `stache-ax-owner`): `WindowAx::set_hidden` plus the `windows` command `application_hidden`
   (`HiddenRequest`/`HiddenOutcome`) read or write `AXHidden` on one tracked exact `ApplicationId`
@@ -78,6 +80,29 @@ Read when changing the shipped foundation boundaries.
   allocation-free input callback over the shared service, one worker, the HUD owner (`HudHost`)
   and an injected host frontmost lease. The app's `hold_to_quit.rs` is its factory and teardown
   owners. See [hold-to-quit.md](../features/hold-to-quit.md).
+- `src/crates/macos/src/border_overlay/`: the Tiling borders' overlay-window engine (always built; inert
+  until `borders.enabled`): a `Send + Sync` `OverlayControl` with one
+  latest-wins pending batch over an injected `MainThreadExecutor`, and main-thread-owned `NSPanel` +
+  `CAShapeLayer` overlays with a bounded pool (at most 64), released only by `release_all`. The
+  Tiling actor owns the border engine (`modules/tiling/src/borders/`); the frame paths and the effects
+  thread share only its non-blocking route. Every `Show`/`Order` carries the gate epoch it was
+  computed under and the main thread drops one older than the latest applied `HideAll`; a pure
+  `SpaceGate` (Mission Control, Space and fullscreen transitions, fail-closed `Unknown` causes) is fed
+  by a bounded `SpaceMailbox` that a `SpaceEvents` source fills. The native source
+  (`space_sources/`, `SystemSpaceEvents`) owns one thread, `stache-tiling-borders-spaces` (started only when the border engine starts and joined within a bound at stop, never main): its run
+  loop hosts the Dock Accessibility observer and a wake source; `NSWorkspace` and the private
+  `SkyLight` notification callbacks only push facts. Live follow (`live_follow/`, `SystemLiveFollow`) owns a
+  second thread, `stache-tiling-borders-events` (started with the engine, joined within a
+  bound): it owns the private window-notification registration and its run loop, the per-display frame
+  clocks and the bounds reads, and reports into the route; without its private symbols the engine hides a
+  border while its window moves. Stop (`borders/lifecycle.rs`): the actor stops the owners, retires its
+  handle ledger and enqueues `release_all`; the module stop, off main, waits at most 500 ms for the
+  acknowledgement and compares its handle count with the ledger; at process exit a missing
+  acknowledgement is a note, not an owed stage. Owner map: overlays on the main thread only; the border
+  engine on the Tiling actor thread; the Spaces owner and the live-follow owner on their own threads;
+  the frame paths and the effects thread only report into the route and never wait on main beyond the
+  bounded pre-hide. See [Tiling borders](../features/tiling.md#borders) and
+  [the spec](../specs/2026-11-09-tiling-borders/00-overview.md).
 - `src/crates/modules/menu-anywhere`: the MenuAnywhere module — authoritative `menuAnywhere.toml`
   (`enabled`, `modifiers`, `mouse_button`), schema, template and migration, plus `MenuAnywhereRuntime`: a
   pure-decision input callback over the shared service (one published tuple, one busy reservation, a
@@ -511,38 +536,3 @@ fake-proven only; construction starts nothing and sends no AX message.
   and counts of partially placed windows and visibility conflicts. The production directory is the
   run's own application observation (`ActionsDirectory`), so every `ApplicationId` shares the
   generation its hide, unhide and activation authorizations accept.
-
-## External borders transport (`stache_macos::borders`, Tiling part 09 slice A)
-
-`stache_macos::borders` is the safe native transport to an externally managed `JankyBorders`
-service. It is consumed by the Tiling borders runner (part 09 slice B: color/style/blacklist policy and
-the `borders.enabled` consent). The module sends NUL-separated argv batches (the legacy
-`encode_mach_args` bytes) as one complex Mach message with a single out-of-line descriptor to
-`git.felix.borders`, and offers a bounded `borders` CLI fallback through the SDK `CommandExecutor`
-(`resolve_binary`, `run_captured_prepared`, 2 s child deadline, 64 KiB per-stream cap, cancel/reap
-only the exact child; no shell).
-
-- **Never launch, leave on stop.** Every attempt starts with `ServiceAttempt::begin`, a fresh
-  `bootstrap_look_up`; only the returned attempt can send or run the CLI fallback. An absent service
-  yields `MissingService` and sends/spawns nothing. The service can still exit between the lookup and
-  a CLI invocation (documented residual race). Stache never starts, restarts or kills a service, and
-  releasing the connection sends no mutation (no `width=0`); the service keeps the last settings.
-- **Rights.** `BordersConnection` owns one send right from the lookup, is `!Send`/`!Sync`, has no
-  statics, and deallocates the right exactly once (replace, `release`, or drop). The temporary
-  bootstrap-port right is deallocated after each lookup.
-- **Outcomes.** `Sent` (kernel accepted; not an acknowledgement of applied settings), `MissingService`,
-  `Rejected` (argv encoding failure or a message-validation code such as `MACH_SEND_TOO_LARGE`,
-  `NO_BUFFER`, `INVALID_DATA` or a filter code, proven not enqueued; the only case that allows the CLI
-  fallback). `MACH_SEND_INVALID_DEST` and `MACH_SEND_INVALID_RIGHT` prove the service is gone in this
-  attempt, so they map to `MissingService` (the right is released, no CLI fallback, because running
-  the `borders` CLI could itself become the service) and `Uncertain` (`MACH_SEND_TIMED_OUT`, interrupted, in progress or any unknown code; no
-  fallback or autonomous retry after it). Per-message timeout is clamped to 1-500 ms (legacy used 0/100
-  ms). Empty and NUL-containing arguments are rejected instead of splitting or truncating argv.
-- **What is proven.** `mach_msg_header_t` (24 B), body (4 B) and OOL descriptor (16 B) sizes/offsets
-  are compile-time asserted against `<mach/message.h>` (44 B message, 4-byte packing); encoding,
-  outcome mapping, right lifecycle and the CLI argv are covered with fakes (`FakeTransport`, a fake
-  kernel, a fake process factory). Default tests never look up a service, send a message or spawn a
-  process.
-- **What is not proven.** Compatibility with any real `JankyBorders` version or protocol, service
-  acknowledgement, and real send-timeout behavior against a full queue are unverified until the
-  approved manual protocol test in the Tiling validation plan.

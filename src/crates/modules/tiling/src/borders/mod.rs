@@ -1,23 +1,53 @@
-//! Optional external `JankyBorders` integration (Tiling part 09).
+//! Stache-drawn Tiling borders.
 //!
-//! `policy` is the pure argv and color policy ported from the legacy module.
-//! `runtime` is the owned latest-update runner thread and its lifecycle handle
-//! over the `stache_macos::borders` transport. Borders are default off: nothing
-//! here allocates, spawns or looks anything up until an accepted enabled
-//! configuration. Stache overwrites the shared settings it names under
-//! `borders.enabled`, never launches the service and leaves its last settings
-//! in place on stop.
+//! `appearance` maps the configuration to the overlay look, `model` decides
+//! which windows get a border, `motion` the animations, `engine` diffs them on
+//! the actor thread, `route` is the thread-safe half shared with the frame
+//! paths, `spaces`/`confirm` the Spaces and Mission Control gate, and
+//! `lifecycle` the stop-time ledger. Borders are default off: nothing native is
+//! created until an accepted enabled configuration, and the overlays are made
+//! lazily on the main thread.
 
-mod policy;
-mod runtime;
+mod appearance;
+mod blog;
+mod confirm;
+mod engine;
+mod lifecycle;
+mod model;
+#[allow(
+    dead_code,
+    reason = "the displayed-value sampler is used by a later part"
+)]
+mod motion;
+mod route;
+mod spaces;
 
 #[cfg(test)]
-pub mod fakes;
-#[cfg(test)]
-mod tests;
+mod engine_tests;
 
-pub use policy::{ANIMATION_FPS, FRAME_PERIOD, FocusInput};
-pub use runtime::{
-    BORDERS_THREAD_NAME, BordersControl, BordersParts, BordersWorker, ExecutorFactory,
-    FRAME_SEND_DEADLINE, Fault, FaultKind, FaultSink, JOIN_BOUND, REAP_BOUND, TransportFactory,
+pub use appearance::FocusInput;
+#[allow(
+    unused_imports,
+    reason = "the confirmation seam and its system implementation; the host composes the factory"
+)]
+pub use confirm::{ConfirmerFactory, OnScreenConfirm, system_confirmer_factory};
+#[allow(
+    unused_imports,
+    reason = "the seam the native Space confirmation implements"
+)]
+pub use engine::{ActiveSpaceConfirm, ConfirmAll, ConfirmFailed};
+#[allow(
+    unused_imports,
+    reason = "the budget constants are read by tests and docs"
+)]
+pub use engine::{BORDER_ACK_WAIT, MAIN_BUSY_DIAGNOSTIC};
+pub use engine::{BorderDiagnostics, BorderEngine};
+#[allow(
+    unused_imports,
+    reason = "some items are used by tests and the module only"
+)]
+pub use lifecycle::{
+    BORDERS_RELEASE_WAIT, BorderLifecycle, OWNERS_STOP_WAIT, Owe, RetainedOwner, Settle,
 };
+pub use model::border_model;
+pub use route::{BorderFrameKind, BorderFrames, NoteWaker, SharedBorderRoute, outcome_frame};

@@ -131,6 +131,9 @@ pub struct DragState {
     next_id: u64,
     /// The latest finished gesture.
     pub last: Option<DragRecord>,
+    /// The passive observer is not running: user gestures are invisible, so
+    /// no minimum size is inferred from a window growing on its own.
+    pub degraded: bool,
 }
 
 impl DragState {
@@ -144,6 +147,23 @@ impl DragState {
     /// The identity of the gesture in progress.
     #[must_use]
     pub fn gesture_id(&self) -> Option<u64> { self.gesture.as_ref().map(|g| g.id) }
+
+    /// The captured windows whose baseline frame contains the point where the
+    /// gesture's mouse went down, while the gesture lasts (mouse down until the
+    /// settled snapshot decided it). Read only: the border fallback (part 06)
+    /// reads it; `drag.rs` and this module stay the only drag decision.
+    #[must_use]
+    pub fn pressed(&self) -> Vec<WindowInstance> {
+        let Some(gesture) = &self.gesture else {
+            return Vec::new();
+        };
+        gesture
+            .windows
+            .iter()
+            .filter(|window| crate::drag::contains_inclusive(&window.original, gesture.started.0))
+            .map(|window| window.token)
+            .collect()
+    }
 }
 
 /// A read-only drag view for the snapshot.
@@ -171,6 +191,15 @@ pub(super) fn signal(state: &mut TilingState, signal: DragSignal, fx: &mut Vec<E
         }
         DragSignal::Up { button, at, epoch, time } => up(state, (button, at, epoch, time), fx),
         DragSignal::Lost(cause) => lost(state, cause),
+        // Not an observation loss (the observer never ran), so it is not
+        // counted in `drag_lost_observations` unless a gesture is in progress,
+        // which is voided as a stopped observation (none can exist in practice).
+        DragSignal::Unavailable => {
+            if state.drag.gesture.is_some() {
+                lost(state, LostCause::Stopped);
+            }
+            state.drag.degraded = true;
+        }
     }
 }
 

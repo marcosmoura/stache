@@ -207,6 +207,7 @@ impl Desktop {
             visibility: Arc::clone(&vis),
             actions: Some(actions),
             animation: Arc::clone(&rig.animation),
+            borders: None,
         };
         let mut engine = Engine::new(
             TilingState::new("com.stache.test"),
@@ -1008,6 +1009,37 @@ fn the_runtime_watches_application_lifecycle_and_the_frontmost_application() {
     wait_until("A hidden", || {
         runtime.snapshot().apps.iter().any(|a| a.info.application == ids[0] && a.hidden)
     });
+    // B's window leaves `AXWindows` (native fullscreen): its slot is released.
+    // The workspace's Space change then lists B again through the watch.
+    assert!(
+        backend.sink().expect("sink").push(feed.event(WindowEventKind::Window {
+            window: windows[1],
+            change: WindowChange::Suspended,
+        }))
+    );
+    let refreshes = || {
+        backend
+            .calls()
+            .iter()
+            .filter(|c| matches!(c, FakeBackendCall::Refresh(a) if *a == ids[1]))
+            .count()
+    };
+    wait_until("settle listing", || refreshes() == 1);
+    assert!(
+        backend
+            .sink()
+            .expect("sink")
+            .push(feed.event(WindowEventKind::EnumerationComplete {
+                application: ids[1],
+                windows: 0,
+                truncated: false,
+            }))
+    );
+    wait_until("slot released", || {
+        runtime.snapshot().diagnostics.tab_slots_released == 1
+    });
+    assert!(native.backend.deliver_space_change() > 0, "space watch");
+    wait_until("listed again on the Space change", || refreshes() == 2);
     runtime.shutdown();
 }
 
@@ -1622,4 +1654,595 @@ fn startup_focuses_the_window_the_frontmost_app_reports_not_the_first_listed() {
     assert_eq!(desk.workspace_of(second), "coding");
     assert_eq!(desk.snap().focus.window, Some(second));
     assert_eq!(desk.frontmost, CODE);
+}
+
+// ---------------------------------------------- native fullscreen enter and exit
+
+/// What a read of the Ghostty window returns: in native fullscreen (the whole
+/// display, on its own Space) or back at `frame`.
+fn ghostty_read(
+    desk: &Desktop,
+    window: WindowInstance,
+    fullscreen: bool,
+    frame: Rect,
+) -> stache_macos::windows::WindowSnapshot {
+    let mut read = desk.snapshot_of(window, "~", "AXStandardWindow", (frame.width, frame.height));
+    // The identity is the window's own; the read keeps the known `CGWindowID`.
+    read.cg_window_id = None;
+    read.fullscreen = AxReading::Value(fullscreen);
+    read.frame.position = AxReading::Value(AxPoint { x: frame.x, y: frame.y });
+    read
+}
+
+fn script_read(desk: &Desktop, read: stache_macos::windows::WindowSnapshot) {
+    desk.rig.backend.script_snapshot(
+        read.window,
+        stache_macos::windows::SnapshotOutcome::Snapshot(Box::new(read)),
+    );
+}
+
+/// The window's resize notification, flushed through the geometry coalescer.
+fn resized(desk: &mut Desktop, window: WindowInstance) {
+    desk.rig.push(WindowEventKind::Window {
+        window,
+        change: WindowChange::Resized,
+    });
+    desk.rig.pump();
+    desk.rig.clock.advance(Duration::from_millis(20));
+    desk.settle();
+}
+
+/// The split terminal with Ghostty in native fullscreen: the flag is observed,
+/// the window is out of the layout and Device Hub takes the workspace.
+fn ghostty_fullscreen() -> (Desktop, WindowInstance, WindowInstance, Rect) {
+    let (mut desk, ghostty, hub) = split_desktop(Delivery::Immediate);
+    let slot = desk.desired_of(ghostty);
+    let full = Rect::new(0.0, 0.0, 1920.0, 1080.0);
+    script_read(&desk, ghostty_read(&desk, ghostty, true, full));
+    let mark = desk.mark();
+    resized(&mut desk, ghostty);
+    let window = desk.snap().window(ghostty).expect("ghostty").clone();
+    assert!(window.observed.fullscreen, "the fullscreen flag is observed");
+    let writes = desk.writes_since(mark);
+    assert!(
+        writes.iter().all(|write| write.window != ghostty),
+        "a fullscreen window is never written: {writes:?}"
+    );
+    assert!(
+        desk.desired_of(hub).width > slot.width,
+        "Device Hub takes the workspace: {:?}",
+        desk.desired_of(hub)
+    );
+    (desk, ghostty, hub, slot)
+}
+
+fn assert_laid_out_again(desk: &Desktop, mark: usize, window: WindowInstance, slot: Rect) {
+    let state = desk.snap();
+    assert!(
+        !state.window(window).expect("window").observed.fullscreen,
+        "the fullscreen flag cleared"
+    );
+    let writes: Vec<Write> = desk
+        .writes_since(mark)
+        .into_iter()
+        .filter(|write| write.window == window)
+        .collect();
+    let last = writes.last().unwrap_or_else(|| panic!("the window is written again"));
+    assert!(
+        (last.target.x - slot.x).abs() < 1.5 && (last.target.width - slot.width).abs() < 1.5,
+        "back in its master slot: {last:?} vs {slot:?}"
+    );
+}
+
+#[test]
+fn a_window_leaving_native_fullscreen_is_laid_out_again() {
+    let (mut desk, ghostty, _hub, slot) = ghostty_fullscreen();
+    let mark = desk.mark();
+    script_read(
+        &desk,
+        ghostty_read(&desk, ghostty, false, Rect::new(40.0, 60.0, 1200.0, 800.0)),
+    );
+    resized(&mut desk, ghostty);
+    assert_laid_out_again(&desk, mark, ghostty, slot);
+}
+
+/// The exit's resize arrives while `AXFullScreen` still reads `true` (the exit
+/// happens on another Space and the flag flips at its end). A later move of the
+/// window shows the exit.
+#[test]
+fn a_fullscreen_exit_seen_only_by_a_later_move_is_laid_out_again() {
+    let (mut desk, ghostty, _hub, slot) = ghostty_fullscreen();
+    let back = Rect::new(40.0, 60.0, 1200.0, 800.0);
+    script_read(&desk, ghostty_read(&desk, ghostty, true, back));
+    resized(&mut desk, ghostty);
+    assert!(desk.snap().window(ghostty).expect("ghostty").observed.fullscreen);
+    let mark = desk.mark();
+    script_read(&desk, ghostty_read(&desk, ghostty, false, back));
+    desk.rig.push(WindowEventKind::Window {
+        window: ghostty,
+        change: WindowChange::Moved,
+    });
+    desk.rig.pump();
+    desk.rig.clock.advance(Duration::from_millis(20));
+    desk.settle();
+    assert_laid_out_again(&desk, mark, ghostty, slot);
+}
+
+/// The application re-creates the window on the exit: the fullscreen one is
+/// destroyed and a new identity appears, which is tiled like any new window
+/// (it joins the stack; the old identity's slot is gone with it).
+#[test]
+fn a_window_re_created_on_fullscreen_exit_is_laid_out() {
+    let (mut desk, ghostty, hub, _slot) = ghostty_fullscreen();
+    desk.rig.push(WindowEventKind::Window {
+        window: ghostty,
+        change: WindowChange::Destroyed,
+    });
+    desk.settle();
+    let mark = desk.mark();
+    let again = desk.window_with(
+        GHOSTTY,
+        "~",
+        "AXStandardWindow",
+        (1200.0, 800.0),
+        SnapshotOrigin::Created,
+    );
+    desk.settle();
+    assert!(
+        desk.snap().window(ghostty).is_none(),
+        "the fullscreen identity is gone"
+    );
+    let desired = desk.desired_of(again);
+    let writes: Vec<Write> = desk
+        .writes_since(mark)
+        .into_iter()
+        .filter(|write| write.window == again)
+        .collect();
+    let last = writes.last().unwrap_or_else(|| panic!("the new window is written"));
+    assert_eq!(last.target, desired, "written to its tile");
+    assert!(
+        desk.desired_of(hub).width < 1920.0 * 0.9,
+        "Device Hub shares the workspace again: {:?}",
+        desk.desired_of(hub)
+    );
+}
+
+// ------------------------------- a window unlisted by native fullscreen returns
+
+/// The active Space changed (the workspace notification names no application).
+fn space_changed(rig: &mut Rig) {
+    rig.ingress
+        .submit(Input::Lifecycle {
+            kind: LifecycleKind::SpaceChanged,
+            info: AppInfo {
+                application: app(999),
+                pid: 0,
+                bundle_id: String::new(),
+                name: String::new(),
+            },
+        })
+        .expect("space change");
+    rig.pump();
+}
+
+/// A one-window application whose window entered native fullscreen: the owner
+/// reports it unlisted and the settled listing releases its slot.
+fn unlisted_single() -> (super::tabs::Tabs, WindowInstance, WindowInstance, Rect) {
+    let (mut tabs, single, other) = super::tabs::Tabs::single();
+    let slot = tabs.slot(single);
+    tabs.suspend(single);
+    tabs.settled_listing(&[]);
+    assert!(tabs.suspended_of(single));
+    assert_eq!(tabs.order(), vec![other], "the slot was released");
+    assert_eq!(tabs.rig.snap().diagnostics.tab_slots_released, 1);
+    (tabs, single, other, slot)
+}
+
+fn written(tabs: &super::tabs::Tabs, window: WindowInstance) -> usize {
+    tabs.rig
+        .backend
+        .written_frames()
+        .iter()
+        .filter(|(token, _)| *token == window)
+        .count()
+}
+
+#[test]
+fn a_space_change_relists_an_unlisted_window_and_returns_it_to_its_slot() {
+    let (mut tabs, single, other, slot) = unlisted_single();
+    // Still unlisted (fullscreen): one refresh per Space change, nothing else.
+    let (refreshes, writes) = (tabs.refreshes(), tabs.writes());
+    space_changed(&mut tabs.rig);
+    assert_eq!(tabs.refreshes(), refreshes + 1, "one refresh");
+    tabs.end_listing();
+    assert!(tabs.suspended_of(single));
+    assert_eq!(tabs.order(), vec![other]);
+    assert_eq!(tabs.writes(), writes, "nothing moved");
+
+    // Fullscreen exited: the window rejoined `AXWindows` with no notification.
+    let before = written(&tabs, single);
+    space_changed(&mut tabs.rig);
+    assert_eq!(tabs.refreshes(), refreshes + 2);
+    tabs.listed(single, stache_macos::windows::TabBarRead::None, slot);
+    tabs.end_listing();
+    assert!(!tabs.suspended_of(single), "listed again");
+    assert!(tabs.order().contains(&single), "back in the layout");
+    assert!(written(&tabs, single) > before, "written to its slot");
+
+    // Nothing is unlisted any more: a Space change lists nothing.
+    let refreshes = tabs.refreshes();
+    space_changed(&mut tabs.rig);
+    tabs.rig.pump();
+    assert_eq!(tabs.refreshes(), refreshes);
+}
+
+/// The listing that finds a window back from native fullscreen, read with the
+/// given fullscreen flag at the frame it had in fullscreen.
+fn listed_back(tabs: &mut super::tabs::Tabs, window: WindowInstance, fullscreen: bool) {
+    let mut snapshot = super::tabs::Tabs::snapshot(
+        window,
+        stache_macos::windows::TabBarRead::None,
+        Some(Rect::new(0.0, 0.0, 1920.0, 1200.0)),
+    );
+    snapshot.fullscreen = AxReading::Value(fullscreen);
+    tabs.rig.push(WindowEventKind::Snapshot {
+        snapshot,
+        origin: SnapshotOrigin::Enumeration,
+    });
+    tabs.rig.pump();
+    tabs.end_listing();
+}
+
+/// Native run 6: Ghostty's single window is unlisted by native fullscreen, its
+/// slot released; the exit's Space change lists it again (off its tile, at the
+/// fullscreen frame) and it must be laid out and written to its tile again.
+#[test]
+fn native_run6_a_released_window_listed_again_by_the_space_change_is_written_to_its_tile() {
+    let (mut tabs, single, other, _slot) = unlisted_single();
+    space_changed(&mut tabs.rig);
+    tabs.end_listing();
+    assert!(tabs.suspended_of(single));
+    let before = written(&tabs, single);
+    space_changed(&mut tabs.rig);
+    listed_back(&mut tabs, single, false);
+    assert!(!tabs.suspended_of(single), "listed again");
+    assert!(tabs.order().contains(&single), "back in the layout");
+    assert!(tabs.order().contains(&other));
+    assert!(written(&tabs, single) > before, "written to its tile");
+    assert_ne!(tabs.slot(single), Rect::new(0.0, 0.0, 1920.0, 1200.0));
+}
+
+/// Native run 6, the read order macOS produces: the listing that finds the
+/// window again still reads `AXFullScreen` true (the exit's animation is not
+/// over and no later notification comes); a later read says false.
+#[test]
+fn native_run6_a_window_listed_again_while_still_fullscreen_is_read_again_and_laid_out() {
+    let (mut tabs, single, _other, _slot) = unlisted_single();
+    space_changed(&mut tabs.rig);
+    tabs.end_listing();
+    let before = written(&tabs, single);
+    space_changed(&mut tabs.rig);
+    listed_back(&mut tabs, single, true);
+    assert!(!tabs.suspended_of(single), "listed again");
+    assert!(tabs.order().contains(&single), "back in the layout");
+    // Still fullscreen on the next read: it is read again later (bounded).
+    let refreshes = tabs.refreshes();
+    tabs.settle_delay();
+    assert_eq!(tabs.refreshes(), refreshes + 1, "read again after the settle");
+    listed_back(&mut tabs, single, true);
+    assert_eq!(written(&tabs, single), before, "not written while fullscreen");
+    tabs.settle_delay();
+    assert_eq!(tabs.refreshes(), refreshes + 2, "read again once more");
+    listed_back(&mut tabs, single, false);
+    assert!(written(&tabs, single) > before, "written to its tile");
+    // Settled: nothing is read again.
+    let refreshes = tabs.refreshes();
+    tabs.settle_delay();
+    tabs.wait(Duration::from_secs(2));
+    assert_eq!(tabs.refreshes(), refreshes);
+}
+
+/// A window that stays fullscreen after it is listed again is read again a
+/// bounded number of times, then left to the next Space change.
+#[test]
+fn a_window_listed_again_that_stays_fullscreen_is_read_again_a_bounded_number_of_times() {
+    let (mut tabs, single, _other, _slot) = unlisted_single();
+    space_changed(&mut tabs.rig);
+    listed_back(&mut tabs, single, true);
+    let refreshes = tabs.refreshes();
+    let max = usize::from(crate::state::MAX_FULLSCREEN_RECHECKS);
+    for _ in 0..2 * max {
+        tabs.settle_delay();
+        listed_back(&mut tabs, single, true);
+    }
+    let reads = tabs.refreshes() - refreshes;
+    assert!(reads > 0 && reads <= max, "bounded re-reads: {reads}");
+}
+
+#[test]
+fn a_space_change_never_relists_an_inactive_native_tab() {
+    let (mut tabs, single, other) = super::tabs::Tabs::single();
+    let slot = tabs.slot(single);
+    // Command-T: the old window is an inactive member of the new tab's slot.
+    tabs.suspend(single);
+    let fresh = tabs.token(1);
+    tabs.created(fresh, super::tabs::bar(7, 2), slot);
+    tabs.settled_listing(&[(fresh, super::tabs::bar(7, 2))]);
+    assert!(tabs.suspended_of(single));
+    assert_eq!(tabs.order(), vec![fresh, other]);
+    let refreshes = tabs.refreshes();
+    space_changed(&mut tabs.rig);
+    tabs.wait(Duration::from_millis(500));
+    assert_eq!(tabs.refreshes(), refreshes, "an inactive tab triggers nothing");
+    assert!(tabs.suspended_of(single));
+}
+
+#[test]
+fn activating_an_application_with_an_unlisted_window_relists_it() {
+    let (mut tabs, single, _other, slot) = unlisted_single();
+    let refreshes = tabs.refreshes();
+    // The Space notification was missed; the user brings the application forward.
+    tabs.rig.ingress.submit(Input::Activated(app(1))).expect("activated");
+    tabs.rig.pump();
+    assert_eq!(tabs.refreshes(), refreshes + 1);
+    let before = written(&tabs, single);
+    tabs.listed(single, stache_macos::windows::TabBarRead::None, slot);
+    tabs.end_listing();
+    assert!(!tabs.suspended_of(single));
+    assert!(written(&tabs, single) > before);
+    // Activating it again with nothing unlisted lists nothing.
+    let refreshes = tabs.refreshes();
+    tabs.rig.ingress.submit(Input::Activated(app(1))).expect("activated");
+    tabs.rig.pump();
+    assert_eq!(tabs.refreshes(), refreshes);
+}
+
+/// The fullscreen flag flips after the last notification of the exit; the
+/// Space change of the exit re-reads the window. Nothing polls meanwhile.
+#[test]
+fn a_fullscreen_exit_without_any_later_notification_is_found_by_the_space_change() {
+    let (mut desk, ghostty, _hub, slot) = ghostty_fullscreen();
+    let back = Rect::new(40.0, 60.0, 1200.0, 800.0);
+    script_read(&desk, ghostty_read(&desk, ghostty, true, back));
+    resized(&mut desk, ghostty);
+    let reads = |desk: &Desktop| {
+        desk.rig
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, FakeBackendCall::Snapshot(w) if *w == ghostty))
+            .count()
+    };
+    // Idle while fullscreen: no deadline, no re-read however long it waits.
+    let before = reads(&desk);
+    desk.rig.clock.advance(Duration::from_secs(5));
+    let turn = desk.rig.engine.turn();
+    assert_eq!(turn.next_deadline, None, "no periodic work while fullscreen");
+    desk.settle();
+    assert_eq!(reads(&desk), before, "nothing polls");
+    // A Space change while the flag still reads `true`: one read.
+    space_changed(&mut desk.rig);
+    desk.settle();
+    assert_eq!(reads(&desk), before + 1, "one re-read per Space change");
+    assert!(desk.snap().window(ghostty).expect("ghostty").observed.fullscreen);
+    let mark = desk.mark();
+    script_read(&desk, ghostty_read(&desk, ghostty, false, back));
+    space_changed(&mut desk.rig);
+    desk.settle();
+    assert_laid_out_again(&desk, mark, ghostty, slot);
+    // Nothing is fullscreen any more: a Space change reads nothing.
+    let after = reads(&desk);
+    space_changed(&mut desk.rig);
+    desk.settle();
+    assert_eq!(reads(&desk), after);
+}
+
+/// Native run 7: the exit's Space change lists the application before the
+/// window rejoined `AXWindows`. The application is listed again after the
+/// settle delay until the window is back: found on the third retry (still
+/// reading fullscreen, windowed on the next read), it is written to its tile.
+#[test]
+fn native_run7_a_window_missing_from_the_space_change_listing_is_found_by_a_later_listing() {
+    let (mut tabs, single, other, _slot) = unlisted_single();
+    space_changed(&mut tabs.rig);
+    tabs.end_listing();
+    let before = written(&tabs, single);
+    let refreshes = tabs.refreshes();
+    space_changed(&mut tabs.rig);
+    assert_eq!(tabs.refreshes(), refreshes + 1);
+    // The immediate listing and the first two retries still lack the window.
+    tabs.end_listing();
+    for retry in 1..=2 {
+        tabs.settle_delay();
+        assert_eq!(tabs.refreshes(), refreshes + 1 + retry, "retry {retry}");
+        tabs.end_listing();
+        assert!(tabs.suspended_of(single), "still suspended, not untracked");
+        assert!(tabs.rig.snap().window(single).is_some());
+    }
+    tabs.settle_delay();
+    assert_eq!(tabs.refreshes(), refreshes + 4, "third retry");
+    listed_back(&mut tabs, single, true);
+    assert!(!tabs.suspended_of(single), "listed again");
+    tabs.settle_delay();
+    listed_back(&mut tabs, single, false);
+    assert!(tabs.order().contains(&single), "back in its slot");
+    assert!(tabs.order().contains(&other));
+    assert!(written(&tabs, single) > before, "written to its tile");
+    // Settled: nothing is listed again.
+    let refreshes = tabs.refreshes();
+    tabs.settle_delay();
+    tabs.wait(Duration::from_secs(5));
+    assert_eq!(tabs.refreshes(), refreshes);
+}
+
+/// A window that never rejoins `AXWindows` is listed for at most the bound,
+/// then nothing runs until the next trigger.
+#[test]
+fn a_window_that_never_returns_is_listed_again_a_bounded_number_of_times() {
+    let (mut tabs, single, _other, _slot) = unlisted_single();
+    space_changed(&mut tabs.rig);
+    tabs.end_listing();
+    let refreshes = tabs.refreshes();
+    let max = usize::from(crate::state::MAX_FULLSCREEN_RECHECKS);
+    for _ in 0..2 * max {
+        tabs.settle_delay();
+        tabs.end_listing();
+    }
+    let retries = tabs.refreshes() - refreshes;
+    assert!(retries > 0 && retries <= max, "bounded listings: {retries}");
+    assert!(tabs.suspended_of(single), "still suspended, not untracked");
+    let refreshes = tabs.refreshes();
+    tabs.wait(Duration::from_secs(5));
+    let turn = tabs.rig.engine.turn();
+    assert_eq!(turn.next_deadline, None, "no deadline while idle");
+    assert_eq!(tabs.refreshes(), refreshes, "nothing lists while idle");
+}
+
+#[test]
+fn a_space_change_never_retries_an_inactive_native_tab() {
+    let (mut tabs, single, _other) = super::tabs::Tabs::single();
+    let slot = tabs.slot(single);
+    tabs.suspend(single);
+    let fresh = tabs.token(1);
+    tabs.created(fresh, super::tabs::bar(7, 2), slot);
+    tabs.settled_listing(&[(fresh, super::tabs::bar(7, 2))]);
+    let refreshes = tabs.refreshes();
+    space_changed(&mut tabs.rig);
+    for _ in 0..4 {
+        tabs.settle_delay();
+    }
+    tabs.wait(Duration::from_secs(2));
+    assert_eq!(tabs.refreshes(), refreshes, "no retries for an inactive tab");
+    assert!(tabs.suspended_of(single));
+}
+
+/// Native run 8: the entry's Space change lists Ghostty's window again while it
+/// reads fullscreen, then it leaves `AXWindows` again (the fullscreen window
+/// flickers in the listings) and its slot is released. The exit's Space change
+/// lists it windowed: it is back in its workspace order and written to its
+/// tile.
+#[test]
+fn native_run8_a_window_that_flickers_while_fullscreen_is_laid_out_after_the_exit() {
+    let (mut tabs, single, other) = super::tabs::Tabs::single();
+    // Ghostty is frontmost and its window focused (no activation follows the
+    // exit: the application never stopped being frontmost).
+    tabs.rig.backend.script_focused(single.application(), single);
+    tabs.rig
+        .ingress
+        .submit(Input::Activated(single.application()))
+        .expect("activated");
+    tabs.rig.pump();
+    tabs.focus(single);
+    assert_eq!(tabs.rig.snap().focus.window, Some(single));
+    tabs.suspend(single);
+    tabs.settled_listing(&[]);
+    assert_eq!(tabs.order(), vec![other], "the slot was released");
+    // Entry Space change: listed while it reads fullscreen.
+    space_changed(&mut tabs.rig);
+    listed_back(&mut tabs, single, true);
+    for _ in 0..4 {
+        tabs.settle_delay();
+        listed_back(&mut tabs, single, true);
+    }
+    // It leaves `AXWindows` again; the settled listing releases the slot.
+    tabs.suspend(single);
+    tabs.settled_listing(&[]);
+    assert!(tabs.suspended_of(single));
+    for _ in 0..usize::from(crate::state::MAX_FULLSCREEN_RECHECKS) + 2 {
+        tabs.settle_delay();
+        tabs.end_listing();
+    }
+    let before = written(&tabs, single);
+    // Exit Space change: listed windowed.
+    space_changed(&mut tabs.rig);
+    listed_back(&mut tabs, single, false);
+    tabs.settle_delay();
+    assert!(!tabs.suspended_of(single), "listed again");
+    assert!(tabs.order().contains(&single), "back in its workspace order");
+    assert!(tabs.order().contains(&other));
+    assert!(written(&tabs, single) > before, "written to its tile");
+    assert_eq!(
+        tabs.rig.snap().focus.window,
+        Some(single),
+        "the frontmost application's returned window has the focus again"
+    );
+}
+
+/// A window that left `AXWindows` because it is on another macOS Space (not
+/// fullscreen) and never comes back: one bounded series runs; then each later
+/// activation lists its application once, while each Space change runs a
+/// bounded series again, then everything is quiet.
+#[test]
+fn a_window_on_another_space_is_listed_once_per_trigger_after_one_series() {
+    let (mut tabs, single, _other, _slot) = unlisted_single();
+    space_changed(&mut tabs.rig);
+    tabs.end_listing();
+    let max = usize::from(crate::state::MAX_FULLSCREEN_RECHECKS);
+    for _ in 0..max + 2 {
+        tabs.settle_delay();
+        tabs.end_listing();
+    }
+    assert!(tabs.suspended_of(single));
+    for trigger in 0..4 {
+        let refreshes = tabs.refreshes();
+        let activation = trigger % 2 == 0;
+        if activation {
+            tabs.rig.ingress.submit(Input::Activated(app(1))).expect("activated");
+            tabs.rig.pump();
+        } else {
+            space_changed(&mut tabs.rig);
+        }
+        tabs.end_listing();
+        for _ in 0..max + 4 {
+            tabs.settle_delay();
+            tabs.end_listing();
+        }
+        let listed = tabs.refreshes() - refreshes;
+        if activation {
+            assert_eq!(listed, 1, "one listing for activation {trigger}");
+        } else {
+            assert!(listed > 1 && listed <= max + 1, "a bounded series: {listed}");
+        }
+        assert!(tabs.suspended_of(single), "still suspended, not untracked");
+        // No idle work.
+        let refreshes = tabs.refreshes();
+        tabs.wait(Duration::from_secs(5));
+        assert_eq!(tabs.refreshes(), refreshes, "quiet after trigger {trigger}");
+    }
+}
+
+/// Native runs 4-7 (Ghostty): fullscreen entry unlists the window while it
+/// still reads windowed; the entry series runs out. On the exit Space change
+/// the window rejoins `AXWindows` only on the third retry: a full series runs
+/// again and finds it.
+#[test]
+fn a_spent_window_is_found_by_the_series_of_the_exit_space_change() {
+    let (mut tabs, single, other, _slot) = unlisted_single();
+    space_changed(&mut tabs.rig);
+    tabs.end_listing();
+    let max = usize::from(crate::state::MAX_FULLSCREEN_RECHECKS);
+    for _ in 0..max + 4 {
+        tabs.settle_delay();
+        tabs.end_listing();
+    }
+    let refreshes = tabs.refreshes();
+    tabs.settle_delay();
+    assert_eq!(tabs.refreshes(), refreshes, "the entry series ran out");
+    let before = written(&tabs, single);
+    space_changed(&mut tabs.rig);
+    assert_eq!(tabs.refreshes(), refreshes + 1);
+    tabs.end_listing();
+    for retry in 1..=2 {
+        tabs.settle_delay();
+        assert_eq!(tabs.refreshes(), refreshes + 1 + retry, "retry {retry}");
+        tabs.end_listing();
+        assert!(tabs.suspended_of(single));
+    }
+    tabs.settle_delay();
+    assert_eq!(tabs.refreshes(), refreshes + 4, "third retry");
+    listed_back(&mut tabs, single, false);
+    tabs.settle_delay();
+    assert!(!tabs.suspended_of(single), "listed again");
+    assert!(tabs.order().contains(&single), "back in its slot");
+    assert!(tabs.order().contains(&other));
+    assert!(written(&tabs, single) > before, "written to its tile");
 }

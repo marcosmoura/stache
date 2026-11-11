@@ -110,6 +110,10 @@ pub enum DragSignal {
     },
     /// Observation is lost; the current gesture, if any, is void.
     Lost(LostCause),
+    /// The passive observer could not be installed (drag is degraded): no
+    /// gesture will ever be seen, so a user resize is indistinguishable from a
+    /// window re-asserting its size.
+    Unavailable,
 }
 
 // ---------------------------------------------------------------- geometry

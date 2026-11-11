@@ -50,6 +50,8 @@ mod drag_tests;
 #[cfg(test)]
 mod frame_tests;
 #[cfg(test)]
+mod minimum_tests;
+#[cfg(test)]
 mod tab_tests;
 #[cfg(test)]
 mod tests;
@@ -173,6 +175,9 @@ pub enum Cause {
     /// A native tab group changed (a window opened, closed or was swapped); the
     /// application is listed again once `AppKit` settled.
     TabSettle,
+    /// The application has a window that left `AXWindows` without a
+    /// replacement; it is listed again after a Space change or an activation.
+    Unlisted,
 }
 
 /// Identity and metadata of a running application.
@@ -536,6 +541,16 @@ pub struct WindowState {
     /// A suspended window that was listed again and waits for its slot to be
     /// resolved (cleared when the listing completes).
     pub returning: bool,
+    /// Settle listings asked for a window listed again while it still reads
+    /// fullscreen (bounded by [`MAX_FULLSCREEN_RECHECKS`]); 0 once it reads
+    /// windowed.
+    pub fullscreen_rechecks: u8,
+    /// A whole re-list series ran out while this window stayed unlisted and
+    /// it was not observed fullscreen: it is taken to be on another macOS
+    /// Space. Later activations list its application once, without a new
+    /// series; a Space change clears it and starts a full series again.
+    /// Reset by every new suspension.
+    pub relists_spent: bool,
 }
 
 impl WindowState {
@@ -794,6 +809,12 @@ pub struct Reconcile {
     pub unsettled: BTreeSet<ApplicationId>,
 }
 
+/// How many settle listings re-read a window that was listed again (a native
+/// fullscreen exit) while it still reads fullscreen: macOS flips the flag after
+/// the exit's last notification, so nothing else reports it. 20 listings at
+/// the tab settle delay (150 ms) cover about 3 s of a slow exit animation.
+pub const MAX_FULLSCREEN_RECHECKS: u8 = 20;
+
 /// What the pure transition asks the actor shell to do with its clock: the
 /// shell owns time, the state never reads it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -918,6 +939,11 @@ pub struct TilingState {
     pub(crate) animation_fallback: BTreeSet<ApplicationId>,
     pub(crate) tabs: TabRegistry,
     pub(crate) tab_outbox: TabOutbox,
+    /// Applications listed again after a Space change or an activation because
+    /// a window left `AXWindows` without a replacement: the settle listings
+    /// asked so far while it stays unlisted (bounded by
+    /// [`MAX_FULLSCREEN_RECHECKS`]).
+    pub(crate) unlisted_relists: BTreeMap<ApplicationId, u8>,
     /// Mints the ids of slots (tab groups).
     pub(crate) next_tab_group: u64,
     pub(crate) reconcile: Reconcile,
@@ -998,6 +1024,7 @@ impl TilingState {
             animation_fallback: BTreeSet::new(),
             tabs: TabRegistry::default(),
             tab_outbox: TabOutbox::default(),
+            unlisted_relists: BTreeMap::new(),
             next_tab_group: 1,
             reconcile: Reconcile::default(),
             startup: Startup::default(),

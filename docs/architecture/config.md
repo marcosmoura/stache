@@ -94,14 +94,11 @@ and the Tiling module itself is registered **default disabled** (`enabled` is
 Wallpapers, Keybindings and Hold-to-Quit. Construction and registration are inert
 (no observer, worker, thread or native effect); only `enabled = true` starts the
 core and workspace runtime. `animations.enabled` starts one owned animation worker
-(see the Tiling feature doc). `borders.enabled = true` is the **explicit consent**
-for Stache to overwrite the shared JankyBorders settings width, style, hidpi,
-active/inactive colors and blacklist; their previous values are not read or
-restored, the service is never launched, restarted or killed, and its last
-settings stay in place when borders stop. The `enabled` schema description
-(generated from the config doc comment) states this; there is no separate
-ownership setting. Disabled (the default) sends nothing and allocates nothing.
-A missing service is a Tiling status diagnostic, never a failed module. `TilingConfig` (crate `stache-tiling`) keeps
+(see the Tiling feature doc). `borders.enabled = true` turns on borders that
+Stache draws itself around Tiling-managed windows; nothing external is started,
+changed or left behind (see [Tiling borders](../features/tiling.md#borders)).
+The `enabled` schema description (generated from the config doc comment) says
+so. Disabled (the default) creates nothing native. `TilingConfig` (crate `stache-tiling`) keeps
 every legacy shape: `enabled` (`false`), `default_layout` (one authoritative
 `dwindle` default; `dwindle|split|split_vertical|split_horizontal|monocle|master|grid|floating`),
 `workspaces` (`name`, optional `layout`, `screen` default `main`, `rules`, and the
@@ -112,11 +109,15 @@ inert exact-spelled `preset_on_open`), `ignore` rules (`app_id`, `title`,
 `floating` (`default_position` `center|default`, `presets` with pixel or `"50%"`
 dimensions, `x`/`y`/`center`), `master` (`ratio` 60, `position` `auto`) and
 `borders` (per-state `false`, solid, gradient with optional animation, or glow;
-per-layout overrides; `style` `round|square`; `hidpi`; `ignore`). User shapes
+per-layout overrides; `hidpi` (the removed `style` key is an unknown-key warning; borders are always round); `ignore`; and, read by
+the border engine, `transition` `{duration, easing = "ease_out"}`,
+`order` `below|above` and the gradient `animation.style`
+`ping_pong|once|loop`, all optional with the legacy meaning when omitted). User shapes
 round-trip unchanged. Validation rejects duplicate workspace names
 (exact case, matching workspace lookup) or preset names (case-insensitive), a `preset_on_open` naming no preset, `master.ratio` above 100,
 zero, negative, non-numeric or non-finite preset dimensions, gap sums that
-overflow, malformed colors, unsupported `style` and a bare `true` border state,
+overflow, malformed colors, unsupported `order` or `animation.style`
+and a bare `true` border state,
 with field paths; a rejected file leaves the module inactive and never falls back
 to enabled defaults. The grid cap of ten and the applied floating
 `default_position` now apply to the core runtime; animation, drag and

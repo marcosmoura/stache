@@ -403,8 +403,9 @@ pub fn resizable<A: WindowAx>(api: &A, element: &A::Element) -> AxReading<bool> 
     AxReading::classify(api.is_settable(element, GeometryAttribute::Size))
 }
 
-/// Writes position and size as two separate calls, position first, after
-/// setting [`PRESS_TIMEOUT`] on the exact element object.
+/// Writes position and size as separate calls after setting
+/// [`PRESS_TIMEOUT`] on the exact element object. A write of both halves is
+/// size, position, size; a single half is one call.
 ///
 /// AX has no atomic frame write. The outcome reports each half, so a partial
 /// write (one half applied, the other failed) is explicit and the caller can
@@ -418,7 +419,17 @@ pub fn write_frame<A: WindowAx>(
     if let Err(error) = api.set_messaging_timeout(element, PRESS_TIMEOUT) {
         return FrameWriteOutcome::NotSent(error);
     }
-    write_halves(api, element, position, size)
+    write_halves(api, element, position, size, WriteOrder::Settled)
+}
+
+/// How a write of both halves is ordered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WriteOrder {
+    /// Size, position, size (legacy): the frame the window must end at.
+    Settled,
+    /// Position, size: one intermediate frame of a motion, kept to two calls
+    /// so animation stays within its write budget.
+    Motion,
 }
 
 /// [`write_frame`] with a commit step that runs after the timeout is set and
@@ -432,6 +443,7 @@ pub fn write_frame_gated<A: WindowAx>(
     element: &A::Element,
     position: Option<AxPoint>,
     size: Option<AxSize>,
+    order: WriteOrder,
     commit: impl FnOnce() -> bool,
 ) -> Option<FrameWriteOutcome> {
     if let Err(error) = api.set_messaging_timeout(element, PRESS_TIMEOUT) {
@@ -440,7 +452,7 @@ pub fn write_frame_gated<A: WindowAx>(
     if !commit() {
         return None;
     }
-    Some(write_halves(api, element, position, size))
+    Some(write_halves(api, element, position, size, order))
 }
 
 fn write_halves<A: WindowAx>(
@@ -448,19 +460,53 @@ fn write_halves<A: WindowAx>(
     element: &A::Element,
     position: Option<AxPoint>,
     size: Option<AxSize>,
+    order: WriteOrder,
 ) -> FrameWriteOutcome {
+    let write_size = |size: AxSize| match api.set_size(element, size) {
+        Ok(()) => WriteStatus::Written,
+        Err(error) => WriteStatus::Failed(error),
+    };
+    // A combined write is size, position, size (as the legacy app did): the
+    // first size lets the move fit on the display, the last one is the
+    // authoritative size status.
+    let mut first_size = WriteStatus::NotRequested;
+    if order == WriteOrder::Settled
+        && let (Some(_), Some(size)) = (position, size)
+    {
+        first_size = write_size(size);
+        // The messaging timeout ran out (the application is hung): stop here so
+        // a hung application gets no further bounded write calls (the caller's
+        // readback still follows). Neither half is known to have landed.
+        if first_size == WriteStatus::Failed(AxError::CannotComplete) {
+            return FrameWriteOutcome::Attempted {
+                position: first_size,
+                size: first_size,
+            };
+        }
+    }
     let position = position.map_or(WriteStatus::NotRequested, |position| {
         match api.set_position(element, position) {
             Ok(()) => WriteStatus::Written,
             Err(error) => WriteStatus::Failed(error),
         }
     });
-    let size = size.map_or(WriteStatus::NotRequested, |size| {
-        match api.set_size(element, size) {
-            Ok(()) => WriteStatus::Written,
-            Err(error) => WriteStatus::Failed(error),
+    let size = match size.map_or(WriteStatus::NotRequested, write_size) {
+        // The same size was already accepted by the first step: the failed
+        // repeat does not undo it, so the size half is reported as written
+        // (acceptance only; the caller's readback decides whether it landed).
+        // A lost permission, a hung application or a gone element is never
+        // hidden: those are reported as the failure.
+        WriteStatus::Failed(error)
+            if first_size == WriteStatus::Written
+                && !matches!(
+                    error,
+                    AxError::ApiDisabled | AxError::CannotComplete | AxError::InvalidElement
+                ) =>
+        {
+            WriteStatus::Written
         }
-    });
+        status => status,
+    };
     FrameWriteOutcome::Attempted { position, size }
 }
 

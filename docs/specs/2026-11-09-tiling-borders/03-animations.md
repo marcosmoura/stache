@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 03 — Hyprland-style border animations
@@ -35,10 +35,10 @@ The legacy ping-pong is **kept**, not remapped: an existing `animation` table wi
 
 ## Acceptance criteria
 
-- [ ] TB-03-01: A pure evaluator `sample(motion, transition, t)` over a fake clock gives the displayed angle and colors at time `t`; tests cover `once` ending at `a`, `loop` periodicity across 3 turns, every easing, the 16 ms clamp, and `ping_pong` frames identical to today's `PingPong` at the same instants.
-- [ ] TB-03-02: The fake layer records one animation description per running motion; `ping_pong` only on the focused border; `once`/`loop` on every border whose state carries them; removal on hide, focus loss (`ping_pong`), state change and release; a resize rebuilds the rotation track with unchanged phase.
-- [ ] TB-03-03: Cross-fades start from the recorded presentation values, cover solid ↔ gradient ↔ glow, restart cleanly when interrupted, never delay a hide, and are absent when `transition` is absent or 0 ms.
-- [ ] TB-03-04: With fakes, Stache schedules no timer, display link or completion callback for any animation, and an idle engine with finished finite animations does no work.
+- [x] TB-03-01: A pure evaluator `sample(motion, transition, t)` over a fake clock gives the displayed angle and colors at time `t`; tests cover `once` ending at `a`, `loop` periodicity across 3 turns, every easing, the 16 ms clamp, and `ping_pong` frames identical to today's `PingPong` at the same instants.
+- [x] TB-03-02: The fake layer records one animation description per running motion; `ping_pong` only on the focused border; `once`/`loop` on every border whose state carries them; removal on hide, focus loss (`ping_pong`), state change and release; a resize rebuilds the rotation track with unchanged phase.
+- [x] TB-03-03: Cross-fades start from the recorded presentation values, cover solid ↔ gradient ↔ glow, restart cleanly when interrupted, never delay a hide, and are absent when `transition` is absent or 0 ms.
+- [x] TB-03-04: With fakes, Stache schedules no timer, display link or completion callback for any animation, and an idle engine with finished finite animations does no work.
 
 ## Tests
 
@@ -50,10 +50,12 @@ On owned test windows on a 2× and a 1× display: `loop` at 4 s per turn on 3 bo
 
 ## Review checklist
 
-- [ ] [Hard rule checklist](00-overview.md#hard-rule-review-checklist-every-part) passed: no JankyBorders or Hyprland code used; behavior reimplemented from the documented configuration.
+- [x] [Hard rule checklist](00-overview.md#hard-rule-review-checklist-every-part) passed: no JankyBorders or Hyprland code used; behavior reimplemented from the documented configuration.
 
 ## Notes
 
 - Rollback: drop the motion fields; part 02 draws statically.
 - Unverified: render-server cost of several looping gradients, keyframe smoothness on ProMotion displays.
+- Implemented (2026-11-10): the motion model lives in `macos/src/border_overlay/motion.rs`; Tiling maps `EasingType` and picks the motion per border in `borders/motion.rs` (`motion_to_install`, pure `sample`). `transition` is engine-wide (`OverlayControl::set_transition`). `Show` carries `AppearanceChange::{Reload, StateChange}`: only `StateChange` on a visible overlay cross-fades and restarts the motion. Rotation is a 361-keyframe `startPoint`/`endPoint` group with the easing baked into key times; a size change rebuilds it with the phase kept (`timeOffset` for loops, a past `beginTime` for a single turn). `ease_out_expo` uses control points (0.16, 1, 0.3, 1). Ping-pong is exact against the legacy cursor at leg-aligned instants.
+- Native gate: not run (needs per-run approval; combined with parts 01 and 02). Unverified natively: presentation reads, CGColor bridging, the keyframe group, hold-opacity fades and glow ↔ gradient fades.
 - Docs: none lasting until part 08 (config reference and feature doc).

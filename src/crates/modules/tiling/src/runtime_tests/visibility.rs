@@ -55,6 +55,7 @@ fn v() -> V {
         visibility: Arc::clone(&vis),
         actions: Some(Arc::new(actions)),
         animation: Arc::clone(&rig.animation),
+        borders: None,
     };
     let mut engine = Engine::new(
         TilingState::new(""),

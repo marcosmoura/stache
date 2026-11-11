@@ -93,6 +93,7 @@ impl Rig {
             visibility: Arc::new(crate::VisibilityControl::new()),
             actions: None,
             animation: Arc::clone(&animation),
+            borders: None,
         };
         let cell = Arc::new(SnapshotCell::default());
         let engine = Engine::new(
@@ -660,6 +661,7 @@ fn a_closed_runner_is_a_disconnect_health_fact() {
         visibility: Arc::new(crate::VisibilityControl::new()),
         actions: None,
         animation: Arc::clone(&rig.animation),
+        borders: None,
     };
     let runner = Arc::new(ThreadRunner::spawn(env, 4).expect("runner"));
     runner.close();
@@ -1563,6 +1565,7 @@ mod real_core {
 }
 
 mod animation;
+mod borders;
 mod drag;
 mod frames;
 mod scenarios;

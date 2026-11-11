@@ -1986,6 +1986,8 @@ fn tiling_untagged_unions_round_trip_through_toml() {
         // Integer and percentage dimensions, optional positions.
         "[floating]\n[[floating.presets]]\nname = \"wide\"\nwidth = \"80%\"\nheight = 600\nx = \"10%\"\ny = 20\n\n[[floating.presets]]\nname = \"tall\"\nwidth = 1440\nheight = \"100%\"\n",
         // Every border state form.
+        // Native border additions: transition, order and every animation style.
+        "[borders]\ntransition = { duration = 200, easing = \"ease_out\" }\norder = \"above\"\n[borders.focused]\nwidth = 4\ngradient = { from = \"#b4befe\", to = \"#cba6f7\", angle = 45 }\nanimation = { style = \"loop\", duration = 4000, easing = \"linear\" }\n[borders.unfocused]\nwidth = 4\ngradient = { from = \"#b4befe\", to = \"#cba6f7\" }\nanimation = { style = \"once\", duration = 1000 }\n[borders.monocle]\nwidth = 4\ngradient = { from = \"#b4befe\", to = \"#cba6f7\" }\nanimation = { style = \"ping_pong\", duration = 800 }\n",
         "[borders]\nenabled = true\nunfocused = false\n[borders.focused]\nwidth = 4\ncolor = \"#b4befe\"\n[borders.monocle]\nwidth = 3\n[borders.monocle.gradient]\nfrom = \"#b4befe\"\nto = \"#cba6f7\"\nangle = 45.5\n[borders.monocle.animation]\nduration = 800\neasing = \"ease_in_out\"\n[borders.floating]\nwidth = 2\nglow = \"#94e2d5\"\n",
     ];
     for text in cases {

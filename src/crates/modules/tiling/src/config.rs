@@ -9,7 +9,8 @@ mod layout;
 mod workspaces;
 
 pub use borders::{
-    BorderAnimationConfig, BorderStateConfig, BorderStyle, BordersConfig, GradientConfig,
+    BorderAnimationConfig, BorderAnimationStyle, BorderOrder, BorderStateConfig,
+    BorderTransitionConfig, BordersConfig, GradientConfig,
 };
 pub use dimension::DimensionValue;
 pub use floating::{FloatingConfig, FloatingPosition, FloatingPreset};
@@ -84,10 +85,22 @@ impl ModuleConfig for TilingConfig {
     /// Keeps every legacy shape and reports the intentional runtime
     /// corrections the migrated file will see once the runtime ships.
     fn migrate_legacy_section(section: &mut Value) -> Vec<String> {
-        let Some(object) = section.as_object() else {
-            return Vec::new();
-        };
         let mut notes = Vec::new();
+        // Borders are always round: the legacy `style` key is dropped rather
+        // than carried over as an unknown key.
+        if section
+            .get_mut("borders")
+            .and_then(Value::as_object_mut)
+            .and_then(|borders| borders.remove("style"))
+            .is_some_and(|style| style.as_str() == Some("square"))
+        {
+            notes.push(
+                "tiling borders.style `square` was removed: borders are always round".to_owned(),
+            );
+        }
+        let Some(object) = section.as_object() else {
+            return notes;
+        };
         let is_grid = |value: Option<&Value>| value.and_then(Value::as_str) == Some("grid");
         let uses_grid = is_grid(object.get("defaultLayout"))
             || object
