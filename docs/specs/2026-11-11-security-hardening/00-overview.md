@@ -147,12 +147,12 @@ and the alternative that was not taken after it.
 
 ## Parts
 
-| Part                                 | Summary                                                                                           | Status |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------- | ------ |
-| [01](01-ci-hardening.md)             | SHA-pinned actions, read-only token, no persisted credentials, pinned tools, lock guard           | draft  |
-| [02](02-media-adapter-provenance.md) | Media adapter from a pinned bottle with manifest, offline and upstream checks; release-spec facts | draft  |
-| [03](03-config-trust.md)             | Documented same-user trust model; non-fatal config ownership and mode warnings                    | draft  |
-| [04](04-release-panic-semantics.md)  | Truthful panic docs and comments under `panic = "abort"`, pinned by a test                        | draft  |
+| Part                                 | Summary                                                                                           | Status      |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------- | ----------- |
+| [01](01-ci-hardening.md)             | SHA-pinned actions, read-only token, no persisted credentials, pinned tools, lock guard           | in-progress |
+| [02](02-media-adapter-provenance.md) | Media adapter from a pinned bottle with manifest, offline and upstream checks; release-spec facts | draft       |
+| [03](03-config-trust.md)             | Documented same-user trust model; non-fatal config ownership and mode warnings                    | draft       |
+| [04](04-release-panic-semantics.md)  | Truthful panic docs and comments under `panic = "abort"`, pinned by a test                        | draft       |
 
 Parts are independent except that Part 02 adds a step to the workflow Part 01 hardens, and
 Part 01's pin test must cover it. Each commit must pass `bun run lint`,

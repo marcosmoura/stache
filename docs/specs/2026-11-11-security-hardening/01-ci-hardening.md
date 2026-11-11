@@ -1,5 +1,5 @@
 ---
-status: draft
+status: in-progress
 ---
 
 # 01 — CI hardening

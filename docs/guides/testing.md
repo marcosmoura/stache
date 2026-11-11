@@ -3,7 +3,8 @@
 Read when running checks or verifying tooling isolation.
 
 Use Bun 1.4.4, Node 26, the root Rust nightly and macOS 26+ with Xcode command-line tools.
-Install cargo-sort, cargo-nextest and (for audits) cargo-audit. CI uses macOS 26.
+Install cargo-sort 2.1.4, cargo-nextest 0.9.151 and (for audits) cargo-audit 0.22.2, the versions CI
+pins. CI uses macOS 26.
 
 ```sh
 bun install --frozen-lockfile
@@ -308,6 +309,19 @@ the real cache, runtime, configuration or legacy identity.
 
 ## Automated checks
 
+CI rules (`.github/workflows/`):
+
+- Every `uses:` pins a full 40-character commit SHA followed by a `# vX.Y.Z` comment naming that
+  release. Dependabot (`.github/dependabot.yml`) checks GitHub Actions weekly and opens one grouped
+  pull request that moves the SHAs and comments together.
+- The token is read-only: a top-level `permissions:` block grants only `contents: read`, no job
+  widens it, and `actions/checkout` sets `persist-credentials: false`.
+- Lock guard: `cargo fetch --locked` runs before any step that runs cargo or `bun run`, failing when
+  `Cargo.lock` does not match the manifests; the job ends with
+  `git diff --exit-code -- Cargo.lock bun.lock`. Local scripts are not locked.
+- `taiki-e/install-action` installs the exact cargo-sort, cargo-nextest and cargo-audit versions
+  listed above; every `tool:` entry carries `@<version>`.
+
 - `lint:ui`: strict typecheck of frontend, prepare script and root configs, then oxlint/stylelint.
   oxlint enforces `curly: all`: every `if`, `else`, `for` and `while` body uses braces, even for one
   statement. A blank line separates every `if`, loop, `switch`, `try` and bare block from the
@@ -329,7 +343,9 @@ the real cache, runtime, configuration or legacy identity.
   tooling under `scripts/`. The teardown collision guard uses injected fake queries only; no test
   reads the real process table, signals or launches a process. `scripts/measure/config.test.ts` pins
   the TOML that `writeNextConfigs` writes (`global.toml`, `proxyAudio.toml`) and that
-  `writeLegacyConfig` keeps writing JSONC for the legacy app.
+  `writeLegacyConfig` keeps writing JSONC for the legacy app. `scripts/ci/workflows.test.ts` reads
+  every `.github/workflows/*.yml` and `*.yaml` as text and enforces the CI rules above, naming file
+  and line.
 - `test:native`: cargo-nextest across only the root workspace with
   `--features stache-app/dev-tools`; checks desktop identity/window policy, the SDK lifecycle, config
   and window suites, app host races/permissions/shutdown, the proxyAudio policy and fake-backend
