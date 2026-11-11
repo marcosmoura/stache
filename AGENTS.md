@@ -36,6 +36,7 @@ see [docs/workflow.md](docs/workflow.md). Its only subagents are `worker` and `r
 
 - Never merge a branch with an unfinished part in `docs/specs/`.
 - When merging, always squash commits and preserve the original author.
+- After a merge into `main`, remove the branch's worktree and delete the branch.
 - Ask approval of the spec before implementing it; planned APIs are not shipped APIs.
 - Update behavior docs in the same change. Preserve archived historical instructions.
 - Never set git identity. Linked-worktree prepare must not change shared hook configuration.

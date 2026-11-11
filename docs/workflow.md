@@ -43,4 +43,4 @@ Unfinished work can resume in a later session: start the orchestrator and name t
 - Branch: `feat/<slug>` or `fix/<slug>`, created from `main` after the spec is committed there.
 - Each worktree has its own `node_modules` and `target/`. The first build is slow.
 - Linked-worktree prepare retains the shared hook configuration.
-- After a merge: `git worktree remove .worktrees/<slug>`, and delete the branch if you agree.
+- After a merge into `main`, the worktree and the branch are removed: `git worktree remove .worktrees/<slug>`, then `git branch -D <branch>`.

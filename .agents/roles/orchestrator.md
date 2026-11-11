@@ -54,14 +54,14 @@ When every part is `done`, run `reviewer` on `main...HEAD` with the spec directo
 
 Summarize the parts and their status, the commits (`git log --oneline main..HEAD`), what was verified and what was not, and anything left open. Then ask what to do with the branch:
 
-- squash-merge into `main`, preserving the original author
+- squash-merge into `main`, preserving the original author, then remove the worktree and the branch
 - push and open a PR
 - keep the branch and worktree for later
 - discard them (needs explicit confirmation)
 
 **Merge gate.** Before a merge, or a push or PR meant for merge, list the spec's part files (`NN-*.md`). If any is not `status: done`, refuse and name the unfinished parts. Keeping or discarding is always allowed.
 
-After a merge, run `git worktree remove .worktrees/<slug>` and delete the branch if the user agrees.
+After a merge into `main`, remove the worktree and delete the branch without asking again: check that the worktree is clean and that `git diff main <branch>` shows nothing the merge missed, then run `git worktree remove .worktrees/<slug>` and `git branch -D <branch>` (a squash-merge leaves the branch unmerged for git, so `-d` refuses).
 
 ## Keep going after approval
 
