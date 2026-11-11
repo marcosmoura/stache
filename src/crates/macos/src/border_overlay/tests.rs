@@ -560,21 +560,94 @@ fn the_collection_behavior_is_transient_and_ignores_cycle_only() {
 }
 
 #[test]
-fn the_radius_resolver_only_detects_the_symbol_and_never_calls_it() {
-    let missing = SystemCornerRadiusResolver::from_lookup(|_| std::ptr::null_mut());
+fn the_radius_resolver_needs_every_symbol_and_resolves_without_calling() {
+    let missing = unsafe { SystemCornerRadiusResolver::from_lookup(|_| std::ptr::null_mut()) };
     assert!(!missing.symbol_present());
-    let mut seen = None;
-    let present = SystemCornerRadiusResolver::from_lookup(|name: &CStr| {
-        seen = Some(name.to_owned());
-        std::ptr::NonNull::<u8>::dangling().as_ptr().cast()
-    });
-    assert!(present.symbol_present());
-    assert_eq!(seen.as_deref(), Some(c"SLSWindowIteratorGetCornerRadii"));
+    assert_eq!(missing.capability(), RadiusCapability::FallbackOnly);
+    assert_eq!(missing.missing_symbol(), Some(c"SLSMainConnectionID"));
+    assert_eq!(missing.corner_radius(1), None, "missing symbol: fallback");
+
+    // Only the corner-radii getter is missing: the whole capability is.
+    // SAFETY: the dummy addresses are never called (the lookup fails).
+    let partial = unsafe {
+        SystemCornerRadiusResolver::from_lookup(|name: &CStr| {
+            if name == c"SLSWindowIteratorGetCornerRadii" {
+                std::ptr::null_mut()
+            } else {
+                std::ptr::NonNull::<u8>::dangling().as_ptr().cast()
+            }
+        })
+    };
+    assert_eq!(partial.capability(), RadiusCapability::FallbackOnly);
     assert_eq!(
-        present.corner_radius(1),
-        None,
-        "the call is gated on the native check"
+        partial.missing_symbol(),
+        Some(c"SLSWindowIteratorGetCornerRadii")
     );
+    assert_eq!(partial.corner_radius(1), None);
+
+    let seen = std::sync::Mutex::new(Vec::new());
+    // SAFETY: the resolver is never queried, so the dummy addresses are never called.
+    let present = unsafe {
+        SystemCornerRadiusResolver::from_lookup(|name: &CStr| {
+            seen.lock().unwrap().push(name.to_owned());
+            std::ptr::NonNull::<u8>::dangling().as_ptr().cast()
+        })
+    };
+    assert!(present.symbol_present());
+    assert_eq!(present.capability(), RadiusCapability::Available);
+    let seen = seen.into_inner().unwrap();
+    assert_eq!(seen.len(), RADIUS_SYMBOLS.len());
+    assert!(seen.iter().any(|name| name.as_c_str() == c"SLSWindowIteratorGetCornerRadii"));
+    assert!(seen.iter().any(|name| name.as_c_str() == c"SLSWindowQueryWindows"));
+}
+
+#[test]
+fn the_radius_resolver_rejects_insane_values() {
+    for raw in [f64::NAN, f64::INFINITY, -1.0, MAX_SANE_RADIUS + 0.5, 1.0e9] {
+        let resolver = SystemCornerRadiusResolver::with_query(move |_| Some(raw));
+        assert_eq!(resolver.corner_radius(7), None, "{raw}");
+        assert_eq!(resolver.cached(), 0, "an insane value is not cached");
+    }
+    let none = SystemCornerRadiusResolver::with_query(|_| None);
+    assert_eq!(none.corner_radius(7), None);
+    for raw in [0.0, 12.0, MAX_SANE_RADIUS] {
+        let resolver = SystemCornerRadiusResolver::with_query(move |_| Some(raw));
+        assert_eq!(resolver.corner_radius(7), Some(raw));
+    }
+}
+
+#[test]
+fn the_radius_resolver_caches_per_window_until_forgotten() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let queries = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&queries);
+    let resolver = SystemCornerRadiusResolver::with_query(move |id| {
+        counter.fetch_add(1, Ordering::SeqCst);
+        Some(f64::from(id))
+    });
+    assert_eq!(resolver.corner_radius(10), Some(10.0));
+    assert_eq!(resolver.corner_radius(10), Some(10.0));
+    assert_eq!(resolver.corner_radius(20), Some(20.0));
+    assert_eq!(queries.load(Ordering::SeqCst), 2, "cached per window id");
+    resolver.forget(10);
+    assert_eq!(resolver.corner_radius(10), Some(10.0));
+    assert_eq!(queries.load(Ordering::SeqCst), 3, "forget re-queries");
+
+    // A failed query is not cached: it is retried.
+    let flaky = Arc::new(AtomicUsize::new(0));
+    let attempts = Arc::clone(&flaky);
+    let retried = SystemCornerRadiusResolver::with_query(move |_| {
+        (attempts.fetch_add(1, Ordering::SeqCst) > 0).then_some(14.0)
+    });
+    assert_eq!(retried.corner_radius(3), None);
+    assert_eq!(retried.corner_radius(3), Some(14.0));
+
+    // Bounded.
+    let bounded = SystemCornerRadiusResolver::with_query(|_| Some(8.0));
+    for id in 0..u32::try_from(RADIUS_CACHE_LIMIT * 2).unwrap() {
+        let _ = bounded.corner_radius(id);
+    }
+    assert!(bounded.cached() <= RADIUS_CACHE_LIMIT);
 }
 
 #[test]
@@ -582,23 +655,163 @@ fn the_lazy_radius_resolver_looks_nothing_up_until_first_use() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let lookups = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&lookups);
+    let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = Arc::clone(&observed);
     let lazy = super::LazyCornerRadiusResolver::with(move || {
         counter.fetch_add(1, Ordering::SeqCst);
-        SystemCornerRadiusResolver::from_lookup(|_| std::ptr::null_mut())
-    });
-    assert!(!lazy.is_resolved());
+        SystemCornerRadiusResolver::unavailable(c"SLSWindowIteratorGetCornerRadii")
+    })
+    .observed(move |capability| sink.lock().unwrap().push(capability));
+    lazy.forget(1);
+    assert!(!lazy.is_resolved(), "forget resolves nothing");
     assert_eq!(
         lookups.load(Ordering::SeqCst),
         0,
         "construction looks nothing up"
     );
+    assert!(observed.lock().unwrap().is_empty());
     assert_eq!(lazy.corner_radius(1), None);
     assert_eq!(lazy.corner_radius(2), None);
     assert!(lazy.is_resolved());
     assert_eq!(lookups.load(Ordering::SeqCst), 1, "looked up once, on first use");
+    assert_eq!(*observed.lock().unwrap(), vec![RadiusCapability::FallbackOnly]);
+
+    let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = Arc::clone(&observed);
+    let available = super::LazyCornerRadiusResolver::with(|| {
+        SystemCornerRadiusResolver::with_query(|_| Some(12.0))
+    })
+    .observed(move |capability| sink.lock().unwrap().push(capability));
+    assert_eq!(available.corner_radius(4), Some(12.0));
+    assert_eq!(*observed.lock().unwrap(), vec![RadiusCapability::Available]);
 }
 
-// ------------------------------------------------------------------ TB-01-03
+#[test]
+fn the_radius_capability_reaches_the_control_once_resolved() {
+    let rig = Rig::inline();
+    assert_eq!(rig.control.capabilities().radius, RadiusCapability::FallbackOnly);
+    assert_eq!(
+        rig.control.diagnostics().corner_radius,
+        Some(CORNER_RADIUS_DIAGNOSTIC)
+    );
+    rig.control.set_radius_capability(RadiusCapability::Available);
+    assert_eq!(rig.control.diagnostics().corner_radius, None);
+}
+
+/// A per-window fake resolver that counts queries and forgets.
+struct PerWindow {
+    radii: std::collections::HashMap<u32, f64>,
+    queries: std::sync::Mutex<Vec<u32>>,
+    forgets: std::sync::Mutex<Vec<u32>>,
+}
+
+impl CornerRadiusResolver for PerWindow {
+    fn corner_radius(&self, target_cg_id: u32) -> Option<f64> {
+        self.queries.lock().unwrap().push(target_cg_id);
+        self.radii.get(&target_cg_id).copied()
+    }
+
+    fn forget(&self, target_cg_id: u32) { self.forgets.lock().unwrap().push(target_cg_id); }
+}
+
+fn per_window_rig(radii: &[(u32, f64)]) -> (Rig, Arc<PerWindow>) {
+    let resolver = Arc::new(PerWindow {
+        radii: radii.iter().copied().collect(),
+        queries: std::sync::Mutex::new(Vec::new()),
+        forgets: std::sync::Mutex::new(Vec::new()),
+    });
+    let executor = Arc::new(ManualExecutor::new(true));
+    let backend = Arc::new(FakeOverlayBackend::with_resolver(
+        vec![OverlayScreen {
+            frame: OverlayRect::new(0.0, 0.0, 1000.0, 800.0),
+            scale: 2.0,
+        }],
+        Arc::clone(&resolver) as Arc<dyn CornerRadiusResolver>,
+    ));
+    let control = OverlayControl::new(
+        Arc::clone(&executor) as Arc<dyn stache_sdk::MainThreadExecutor>,
+        Arc::clone(&backend) as Arc<dyn OverlayBackend>,
+        OverlayCapabilities::default(),
+    );
+    (Rig { executor, backend, control }, resolver)
+}
+
+#[test]
+fn borders_use_each_windows_real_radius_plus_one_below_and_two_above() {
+    let (rig, resolver) = per_window_rig(&[(10, 26.0), (11, 12.0)]);
+    let frame = rect(100.0, 100.0, 300.0, 200.0);
+    let screens = vec![OverlayScreen {
+        frame: OverlayRect::new(0.0, 0.0, 1000.0, 800.0),
+        scale: 2.0,
+    }];
+    let mut above = appearance(4.0);
+    above.placement = BorderPlacement::Above;
+    let shows = [
+        (1, 10, appearance(4.0)),
+        (2, 11, appearance(4.0)),
+        (3, 12, appearance(4.0)),
+        (4, 10, above),
+    ];
+    for (handle, target, look) in shows {
+        let _ = rig.control.apply(OverlayBatch::new().with(h(handle), OverlayKind::Show {
+            target_cg_id: target,
+            frame,
+            appearance: look,
+            change: AppearanceChange::Reload,
+        }));
+    }
+    let expect = |target: Option<f64>, look: &BorderAppearance| {
+        plan_overlay(frame, look, target, 16.0, &screens)
+    };
+    for (panel, radius, look) in [
+        (1, Some(26.0), appearance(4.0)),
+        (2, Some(12.0), appearance(4.0)),
+        (3, None, appearance(4.0)),
+        (4, Some(26.0), above),
+    ] {
+        let tree = rig.backend.layer_tree(panel).expect("configured");
+        let plan = expect(radius, &look);
+        assert!(
+            (tree.inner_radius - plan.inner_radius).abs() < 1e-9,
+            "panel {panel}"
+        );
+        assert!(
+            (tree.outer_radius - plan.outer_radius).abs() < 1e-9,
+            "panel {panel}"
+        );
+    }
+    let below_real = expect(Some(26.0), &appearance(4.0));
+    assert!((below_real.target_radius - (26.0 + INNER_RADIUS_ADJUSTMENT)).abs() < 1e-9);
+    assert!((INNER_RADIUS_ADJUSTMENT - 1.0).abs() < f64::EPSILON);
+    let above_real = expect(Some(26.0), &above);
+    assert!((above_real.inner_radius - (26.0 + ABOVE_INNER_RADIUS_ADJUSTMENT)).abs() < 1e-9);
+    assert!((ABOVE_INNER_RADIUS_ADJUSTMENT - 2.0).abs() < f64::EPSILON);
+    let fallback = expect(None, &appearance(4.0));
+    assert!((fallback.target_radius - (16.0 + INNER_RADIUS_ADJUSTMENT)).abs() < 1e-9);
+    assert!(
+        rig.backend.layer_tree(1).unwrap().inner_radius
+            > rig.backend.layer_tree(2).unwrap().inner_radius,
+        "per-window radii differ"
+    );
+    // New handles forget their target first; each Show queried.
+    assert_eq!(*resolver.forgets.lock().unwrap(), vec![10, 11, 12, 10]);
+    assert_eq!(*resolver.queries.lock().unwrap(), vec![10, 11, 12, 10]);
+}
+
+#[test]
+fn order_requeries_the_radius_and_release_forgets_it() {
+    let (rig, resolver) = per_window_rig(&[(10, 20.0), (11, 30.0)]);
+    shown(&rig, show_with(appearance(4.0)));
+    resolver.forgets.lock().unwrap().clear();
+    resolver.queries.lock().unwrap().clear();
+    let _ = rig
+        .control
+        .apply(OverlayBatch::new().with(h(1), OverlayKind::Order { target_cg_id: 11 }));
+    assert_eq!(*resolver.forgets.lock().unwrap(), vec![11]);
+    assert_eq!(*resolver.queries.lock().unwrap(), vec![11]);
+    let _ = rig.control.apply(OverlayBatch::new().with(h(1), OverlayKind::Release));
+    assert_eq!(*resolver.forgets.lock().unwrap(), vec![11, 11]);
+}
 
 #[test]
 fn constructing_a_control_creates_nothing() {
@@ -1674,4 +1887,79 @@ fn the_glow_tile_is_independent_of_the_window_size() {
     assert_eq!(tiny.bounds, panel.bounds, "fallback: the panel bitmap");
     assert_eq!(tiny.center, OverlayRect::new(0.0, 0.0, 1.0, 1.0));
     assert_eq!(tiny.clip, panel.clip.expect("clip"));
+}
+
+// ------------------------------------------------------------ ordering storms
+
+fn ordering_events(backend: &FakeOverlayBackend) -> (usize, usize) {
+    let events = backend.events();
+    let relative = events.iter().filter(|e| matches!(e, FakeEvent::OrderRelative { .. })).count();
+    let out = events.iter().filter(|e| matches!(e, FakeEvent::OrderOut(_))).count();
+    (relative, out)
+}
+
+#[test]
+fn a_recolor_or_grow_of_a_visible_panel_never_reorders_it() {
+    let rig = Rig::inline();
+    let _ = rig
+        .control
+        .apply(OverlayBatch::new().with(h(1), show(10, rect(0.0, 0.0, 50.0, 50.0))));
+    assert_eq!(ordering_events(&rig.backend), (1, 0));
+    for change in [
+        AppearanceChange::StateChange,
+        AppearanceChange::Grow,
+        AppearanceChange::Reload,
+    ] {
+        let kind = OverlayKind::Show {
+            target_cg_id: 10,
+            frame: rect(0.0, 0.0, 50.0, 50.0),
+            appearance: BorderAppearance {
+                paint: BorderPaint::Solid(BLUE),
+                ..appearance(4.0)
+            },
+            change,
+        };
+        let _ = rig.control.apply(OverlayBatch::new().with(h(1), kind));
+    }
+    assert_eq!(
+        ordering_events(&rig.backend),
+        (1, 0),
+        "no re-order, no order-out"
+    );
+}
+
+#[test]
+fn an_order_of_a_visible_panel_orders_it_once_without_ordering_out_or_reconfiguring() {
+    let rig = Rig::inline();
+    let _ = rig
+        .control
+        .apply(OverlayBatch::new().with(h(1), show(10, rect(0.0, 0.0, 50.0, 50.0))));
+    let configured = configures(&rig.backend).len();
+    let _ = rig
+        .control
+        .apply(OverlayBatch::new().with(h(1), OverlayKind::Order { target_cg_id: 10 }));
+    assert_eq!(ordering_events(&rig.backend), (2, 0));
+    assert_eq!(
+        configures(&rig.backend).len(),
+        configured,
+        "an unchanged radius rewrites no layer"
+    );
+}
+
+#[test]
+fn the_control_records_each_panel_window_number_after_main_applied_its_show() {
+    let rig = Rig::queued();
+    let _ = rig
+        .control
+        .apply(OverlayBatch::new().with(h(1), show(10, rect(0.0, 0.0, 50.0, 50.0))));
+    assert_eq!(rig.control.window_number(h(1)), None, "not before the main job");
+    rig.drain();
+    let number = rig.control.window_number(h(1)).expect("recorded on main");
+    assert_eq!(
+        u64::from(number),
+        crate::border_overlay::testing::FAKE_WINDOW_BASE + 1
+    );
+    let _ = rig.control.apply(OverlayBatch::new().with(h(1), OverlayKind::Release));
+    rig.drain();
+    assert_eq!(rig.control.window_number(h(1)), None, "forgotten on release");
 }

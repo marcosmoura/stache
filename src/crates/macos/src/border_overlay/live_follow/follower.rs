@@ -28,18 +28,36 @@
 //!   it next. A window is never read twice within one display period. The period
 //!   is the interval between two observed ticks of its display, the timer period
 //!   until one was measured.
-//! * `Hide`, `Unhide`, `Reorder` and `Close` are **unverified and not acted on**
+//! * `Reorder` is forwarded to [`FollowSink::reorder`] (`act_on_reorder`, on by
+//!   default): Tiling re-orders an `above` border above its window when the
+//!   window server re-stacked it, coalesced and rate bounded on its side.
+//! * Fast reorder: when the owner passes an order function
+//!   ([`FollowCore::on_event_ordered`]), a `Reorder` of a target whose border
+//!   is `above`, shown under an open Space gate and whose panel window number
+//!   is known ([`FollowTarget::fast_panel`]) first re-stacks the panel above
+//!   the target with the private call, on the owner thread, at most
+//!   [`FAST_REORDER_CAP`] times per window per [`FAST_REORDER_WINDOW`]; the
+//!   sink's `reorder` is still called after it (the main-thread `Order` stays
+//!   authoritative). A missing symbol or refused call disables the fast path
+//!   for the run (reported once); `NotShown` (the main thread's record) is not
+//!   an error.
+//! * `Hide`, `Unhide` and `Close` are **unverified and not acted on**
 //!   (native run 2: the candidate hide event fired after nearly every show).
 //!   Each has its own flag in [`FollowTiming`], off by default, so a later
-//!   verified run can enable it alone. Tiling's own destroy path releases the
+//!   verified run can enable it alone.
+//! * Raw events ([`FollowCore::on_raw`]) only go to [`FollowSink::raw_events`]. Tiling's own destroy path releases the
 //!   border of a closed window and its focus/raise re-order places a border.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::slots::SlotEvent;
-use super::{FollowMove, FollowSink, FollowTarget, QUIET, WindowEventKind};
+use super::skylight::kind_of_event;
+use super::slots::{RawEvent, SlotEvent};
+use super::{
+    FAST_REORDER_CAP, FAST_REORDER_WINDOW, FastOrderResult, FastReorder, FollowMove, FollowSink,
+    FollowTarget, QUIET, RawWindowEvent, WindowEventKind,
+};
 use crate::DisplayId;
 use crate::border_overlay::OverlayRect;
 use crate::display_link::{FrameClock, FrameClockFactory, StuckClock, WakeFn};
@@ -59,7 +77,8 @@ pub struct FollowTiming {
     pub act_on_hide: bool,
     /// Act on the candidate private unhide event (unverified; off).
     pub act_on_unhide: bool,
-    /// Act on the candidate private reorder event (unverified; off).
+    /// Act on the candidate private reorder event (unverified; on: the sink
+    /// re-orders only `above` borders).
     pub act_on_reorder: bool,
     /// Act on the candidate private close event (unverified; off).
     pub act_on_close: bool,
@@ -73,7 +92,7 @@ impl Default for FollowTiming {
             clock_stop: Duration::from_millis(200),
             act_on_hide: false,
             act_on_unhide: false,
-            act_on_reorder: false,
+            act_on_reorder: true,
             act_on_close: false,
         }
     }
@@ -102,11 +121,27 @@ pub struct FollowCounters {
     pub clock_failures: u64,
     /// `Unhide` events acted on (never shown by themselves; flag off by default).
     pub unhides: u64,
+    /// Raw events handed to the sink for the debug log.
+    pub raw: u64,
     /// Hide, unhide, reorder and close events dropped because their flag is off.
     pub ignored: u64,
     /// Reads made at once for an event, ahead of the display tick.
     pub immediate: u64,
+    /// Fast reorders the window server accepted.
+    pub fast_orders: u64,
+    /// Fast reorders skipped because the main thread records the panel as not
+    /// shown.
+    pub fast_not_shown: u64,
+    /// Fast reorders dropped by the per-window cap.
+    pub fast_capped: u64,
+    /// Fast reorder calls that failed (the first one disables the path).
+    pub fast_failures: u64,
+    /// The fast path is disabled for the rest of the run.
+    pub fast_disabled: bool,
 }
+
+/// The private order call the owner hands the follower: `(panel, target)`.
+pub type FastOrderFn<'a> = &'a mut dyn FnMut(u32, u32) -> FastOrderResult;
 
 /// See the module documentation.
 pub struct FollowCore {
@@ -129,6 +164,8 @@ pub struct FollowCore {
     /// The last tick seen per display and the shortest interval between ticks.
     last_tick: BTreeMap<DisplayId, Instant>,
     periods: BTreeMap<DisplayId, Duration>,
+    /// Fast reorders per window within the last [`FAST_REORDER_WINDOW`].
+    fast_recent: BTreeMap<u32, VecDeque<Instant>>,
 }
 
 impl FollowCore {
@@ -155,6 +192,7 @@ impl FollowCore {
             waiting: BTreeSet::new(),
             last_tick: BTreeMap::new(),
             periods: BTreeMap::new(),
+            fast_recent: BTreeMap::new(),
         }
     }
 
@@ -186,6 +224,7 @@ impl FollowCore {
     }
 
     fn forget(&mut self, id: u32) {
+        self.fast_recent.remove(&id);
         self.moving.remove(&id);
         self.last_read.remove(&id);
         self.waiting.remove(&id);
@@ -238,13 +277,45 @@ impl FollowCore {
         moves.len()
     }
 
+    /// Hands the raw events drained at `now` to the sink, in order, stamped
+    /// with `now` (the owner-thread clock).
+    pub fn on_raw(&mut self, now: Instant, raw: &[RawEvent]) {
+        if raw.is_empty() {
+            return;
+        }
+        let stamped: Vec<RawWindowEvent> = raw
+            .iter()
+            .map(|event| RawWindowEvent {
+                event: event.event,
+                cg_window_id: event.cg_window_id,
+                kind: kind_of_event(event.event),
+                at: now,
+            })
+            .collect();
+        self.counters.raw += stamped.len() as u64;
+        self.sink.raw_events(&stamped);
+    }
+
     /// Handles one window's drained events at `now`. A move or resize with no
-    /// read in the current display period reads `bounds` at once.
+    /// read in the current display period reads `bounds` at once. No fast
+    /// reorder.
     pub fn on_event(
         &mut self,
         now: Instant,
         event: SlotEvent,
         bounds: &mut dyn FnMut(u32) -> Option<OverlayRect>,
+    ) {
+        self.on_event_ordered(now, event, bounds, None);
+    }
+
+    /// [`Self::on_event`] with the private order call for the fast reorder
+    /// (see the module documentation).
+    pub fn on_event_ordered(
+        &mut self,
+        now: Instant,
+        event: SlotEvent,
+        bounds: &mut dyn FnMut(u32) -> Option<OverlayRect>,
+        order: Option<FastOrderFn<'_>>,
     ) {
         let Some(target) = self.targets.get(&event.cg_window_id).copied() else {
             self.counters.unknown += 1;
@@ -278,6 +349,9 @@ impl FollowCore {
         }
         if event.has(WindowEventKind::Reorder) {
             if self.timing.act_on_reorder {
+                if let Some(order) = order {
+                    self.fast_reorder(now, &target, order);
+                }
                 self.sink.reorder(target.window);
             } else {
                 self.counters.ignored += 1;
@@ -299,6 +373,49 @@ impl FollowCore {
                 self.counters.immediate += 1;
             }
         }
+    }
+
+    /// The fast reorder of one `Reorder` event (at most once per drain pass:
+    /// the slots hold one event per window).
+    fn fast_reorder(&mut self, now: Instant, target: &FollowTarget, order: FastOrderFn<'_>) {
+        if self.counters.fast_disabled {
+            return;
+        }
+        let Some(panel) = target.fast_panel() else { return };
+        if panel == target.cg_window_id {
+            return;
+        }
+        let recent = self.fast_recent.entry(target.cg_window_id).or_default();
+        while recent
+            .front()
+            .is_some_and(|at| now.saturating_duration_since(*at) >= FAST_REORDER_WINDOW)
+        {
+            recent.pop_front();
+        }
+        if recent.len() >= FAST_REORDER_CAP {
+            self.counters.fast_capped += 1;
+            return;
+        }
+        let result = order(panel, target.cg_window_id);
+        let mut disabled = false;
+        match result {
+            FastOrderResult::Ordered => {
+                recent.push_back(now);
+                self.counters.fast_orders += 1;
+            }
+            FastOrderResult::NotShown => self.counters.fast_not_shown += 1,
+            FastOrderResult::Refused(_) | FastOrderResult::Missing(_) => {
+                self.counters.fast_failures += 1;
+                self.counters.fast_disabled = true;
+                disabled = true;
+            }
+        }
+        self.sink.fast_reorder(FastReorder {
+            cg_window_id: target.cg_window_id,
+            panel,
+            result,
+            disabled,
+        });
     }
 
     fn ensure_pacing(&mut self, display: DisplayId, now: Instant) {

@@ -38,6 +38,8 @@ pub trait OverlayHost {
     fn resolved_corner_radius(&self, target_cg_id: u32) -> Option<f64>;
     /// The per-OS fallback corner radius.
     fn fallback_corner_radius(&self) -> f64;
+    /// Drops any cached radius of the target, so the next query re-reads it.
+    fn forget_corner_radius(&self, _target_cg_id: u32) {}
     /// The target's window level (normal unless known otherwise).
     fn window_level(&self, target_cg_id: u32) -> isize;
     /// Places and draws the panel from a plan. Does not order it.
@@ -75,6 +77,8 @@ pub trait OverlayHost {
     fn set_layer_override(&mut self, panel: &mut Self::Panel, layer_override: LayerOverride);
     /// Closes the panel for good.
     fn close(&mut self, panel: Self::Panel);
+    /// The panel's window server number, once it has one (`None` by default).
+    fn window_number(&self, _panel: &Self::Panel) -> Option<u32> { None }
 }
 
 /// The thread-safe seam the control calls; both methods run on the main thread.
@@ -93,6 +97,9 @@ pub struct ApplyReport {
     /// Handles whose `Show` did not produce an overlay (cap or native failure);
     /// the control releases their reservation.
     pub dropped: Vec<OverlayHandle>,
+    /// The window number of each live panel a `Show` touched, as known after
+    /// the batch (the control records them for `window_number`).
+    pub windows: Vec<(OverlayHandle, u32)>,
 }
 
 /// One merged batch as the main thread applies it.
@@ -308,6 +315,11 @@ impl<H: OverlayHost> OverlayOwners<H> {
                     ordering,
                     report,
                 );
+                if let Some(live) = self.live.get(&handle)
+                    && let Some(number) = self.host.window_number(&live.panel)
+                {
+                    report.windows.push((handle, number));
+                }
             }
             OverlayKind::Move { frame } => {
                 if let Some(live) = self.live.get_mut(&handle) {
@@ -321,9 +333,19 @@ impl<H: OverlayHost> OverlayOwners<H> {
             OverlayKind::Order { target_cg_id } => {
                 if let Some(live) = self.live.get_mut(&handle) {
                     live.target = target_cg_id;
-                    live.resolved_radius = self.host.resolved_corner_radius(target_cg_id);
+                    // A radius can change (fullscreen, zoom): Order re-queries.
+                    self.host.forget_corner_radius(target_cg_id);
+                    let resolved = self.host.resolved_corner_radius(target_cg_id);
+                    let reshaped = resolved != live.resolved_radius;
+                    live.resolved_radius = resolved;
                     if live.visible {
-                        Self::redraw(&mut self.host, live, report);
+                        // Only a changed radius re-plans: an `Order` is a pure
+                        // re-stack and must not rewrite the layers.
+                        if reshaped {
+                            Self::redraw(&mut self.host, live, report);
+                        }
+                        // `orderWindow:relativeTo:` on a visible panel only:
+                        // never ordered out and in (no visible hide).
                         let level = self.host.window_level(target_cg_id);
                         let placement = live.appearance.placement;
                         self.host.order_relative(
@@ -349,6 +371,7 @@ impl<H: OverlayHost> OverlayOwners<H> {
             }
             OverlayKind::Release => {
                 if let Some(mut live) = self.live.remove(&handle) {
+                    self.host.forget_corner_radius(live.target);
                     Self::stop_animations(&mut self.host, &mut live);
                     self.host.order_out(&mut live.panel);
                     self.recycle(live.panel);
@@ -358,6 +381,9 @@ impl<H: OverlayHost> OverlayOwners<H> {
         }
     }
 
+    /// A `Show` orders the panel only when it is ordered in now, retargeted or
+    /// re-placed: re-ordering a visible panel on every focus recolor fought
+    /// the application's own raise (`above` blinked). Re-stacking is `Order`.
     fn show(
         &mut self,
         handle: OverlayHandle,
@@ -371,6 +397,8 @@ impl<H: OverlayHost> OverlayOwners<H> {
                 report.dropped.push(handle);
                 return;
             }
+            // A new handle (a window id may be reused): re-read the radius.
+            self.host.forget_corner_radius(target);
             let panel = if let Some(panel) = self.pool.pop() {
                 report.summary.reused += 1;
                 panel
@@ -424,15 +452,16 @@ impl<H: OverlayHost> OverlayOwners<H> {
             && transition.is_some_and(|fade| fade.effective().is_some()))
         .then(|| self.host.presented(&live.panel))
         .flatten();
-        live.target = target;
-        live.frame = frame;
-        live.appearance = appearance;
-        live.resolved_radius = resolved;
+        let moved = live.target != target || live.appearance.placement != appearance.placement;
+        let reorder = (!was_visible || moved).then_some(appearance.placement);
+        (live.target, live.frame) = (target, frame);
+        (live.appearance, live.resolved_radius) = (appearance, resolved);
         live.collapsed = false; // A later re-plan must not re-collapse it.
         let spec = Self::place(&mut self.host, live);
         if let Some(spec) = spec {
-            let placement = live.appearance.placement;
-            self.host.order_relative(&mut live.panel, target, level, ordering, placement);
+            if let Some(placement) = reorder {
+                self.host.order_relative(&mut live.panel, target, level, ordering, placement);
+            }
             live.visible = true;
             // A reload or a new state ends any running fade at once.
             Self::clear_fades(&mut self.host, live);

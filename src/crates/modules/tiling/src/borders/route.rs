@@ -38,8 +38,8 @@ use std::time::{Duration, Instant};
 use stache_macos::ApplicationId;
 use stache_macos::ax::FrameRead;
 use stache_macos::border_overlay::{
-    AckError, ApplyAck, FollowMove, FollowSink, OverlayBatch, OverlayControl, OverlayHandle,
-    OverlayKind, OverlayRect, OverlayTicket,
+    AckError, ApplyAck, FastReorder, FollowMove, FollowSink, OverlayBatch, OverlayControl,
+    OverlayHandle, OverlayKind, OverlayRect, OverlayTicket, RawWindowEvent,
 };
 use stache_macos::windows::{IssuedKind, WindowActionOutcome, WindowInstance};
 
@@ -83,6 +83,9 @@ pub struct LiveNotes {
     pub unhidden: Vec<WindowInstance>,
     /// Windows the window server destroyed.
     pub closed: Vec<WindowInstance>,
+    /// Windows the window server re-stacked (private reorder event): an
+    /// `above` border is re-ordered above its window, coalesced per frame.
+    pub reordered: Vec<WindowInstance>,
 }
 
 /// The bounded, non-blocking seam the frame paths report through.
@@ -187,6 +190,8 @@ struct Table {
     live_unhidden: Vec<WindowInstance>,
     /// Windows the window server destroyed since the engine last looked.
     live_closed: Vec<WindowInstance>,
+    /// Windows the window server re-stacked since the engine last looked.
+    live_reordered: Vec<WindowInstance>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -595,6 +600,7 @@ impl SharedBorderRoute {
             hidden: std::mem::take(&mut table.live_hidden),
             unhidden: std::mem::take(&mut table.live_unhidden),
             closed: std::mem::take(&mut table.live_closed),
+            reordered: std::mem::take(&mut table.live_reordered),
         }
     }
 
@@ -752,8 +758,46 @@ impl FollowSink for SharedBorderRoute {
     }
 
     fn reorder(&self, window: WindowInstance) {
-        self.note_raised(window);
+        // Not a Tiling raise: the engine decides (`above` only, coalesced per
+        // display frame, rate bounded).
+        {
+            let mut table = lock(&self.table);
+            if table.live_reordered.len() < MAX_RAISED && !table.live_reordered.contains(&window) {
+                table.live_reordered.push(window);
+            }
+        }
         self.notify();
+    }
+
+    fn raw_events(&self, events: &[RawWindowEvent]) {
+        // Owner thread, after the drain: never inside the private callback.
+        for raw in events {
+            self.log.debug(|| {
+                let kind = raw.kind.map_or_else(|| "-".to_owned(), |kind| format!("{kind:?}"));
+                format!(
+                    "live raw event id={} kind={kind} cg={}",
+                    raw.event, raw.cg_window_id
+                )
+            });
+        }
+    }
+
+    fn fast_reorder(&self, report: FastReorder) {
+        // Owner thread, right after the private call.
+        self.log.debug(|| {
+            format!(
+                "live fast reorder cg={} panel={} result={:?}",
+                report.cg_window_id, report.panel, report.result
+            )
+        });
+        if report.disabled {
+            self.log.info(|| {
+                format!(
+                    "live fast reorder disabled ({:?}); the main-thread Order path is kept",
+                    report.result
+                )
+            });
+        }
     }
 
     fn close(&self, window: WindowInstance) {

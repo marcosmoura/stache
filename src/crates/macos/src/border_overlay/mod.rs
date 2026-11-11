@@ -76,12 +76,14 @@ mod animation;
 #[cfg(test)]
 mod animation_tests;
 mod control;
+mod corner_radius;
 mod geometry;
 mod layers;
 pub mod live_follow;
 mod motion;
 pub mod native;
 mod owners;
+pub mod panel_registry;
 mod private_skylight;
 pub mod space_sources;
 pub mod spaces;
@@ -105,6 +107,9 @@ pub use control::{
     AckError, ApplyAck, ApplyReceipt, OverlayControl, OverlayCounters, OverlayTicket, Refusal,
     RefusalReason, ReleaseAck,
 };
+pub use corner_radius::{
+    MAX_SANE_RADIUS, RADIUS_CACHE_LIMIT, RADIUS_SYMBOLS, RawRadiusQuery, sane_radius,
+};
 pub use geometry::{
     ABOVE_INNER_RADIUS_ADJUSTMENT, INNER_RADIUS_ADJUSTMENT, OverlayPlan, UnitPoint,
     VISIBLE_FRACTION, appkit_frame_from_top_left, display_scale_for_frame, fallback_corner_radius,
@@ -113,10 +118,11 @@ pub use geometry::{
 };
 pub use layers::{ClipSpec, FillSpec, GLOW_PASSES, GlowRender, LayerSpec, RingShape};
 pub use live_follow::{
-    EventSlots, FollowCore, FollowCounters, FollowMove, FollowSink, FollowTarget, FollowTiming,
-    LiveFollow, LiveFollowFactory, LiveStatus, LiveUnavailable, QUIET, SessionMaker, SlotEvent,
-    SlotsCounters, SystemLiveFollow, UnavailableLiveFollow, WindowEventKind, WindowEventSession,
-    unavailable_message,
+    EventSlots, FAST_REORDER_CAP, FAST_REORDER_WINDOW, FastOrderResult, FastReorder, FollowCore,
+    FollowCounters, FollowMove, FollowSink, FollowTarget, FollowTiming, LiveFollow,
+    LiveFollowFactory, LiveStatus, LiveUnavailable, QUIET, RawEvent, RawWindowEvent, SessionMaker,
+    SlotEvent, SlotsCounters, SystemLiveFollow, UnavailableLiveFollow, WindowEventKind,
+    WindowEventSession, unavailable_message,
 };
 #[cfg(any(test, feature = "testing"))]
 pub use live_follow::{FakeLiveFollow, FakeSessionControl, FakeSink, SinkCall};

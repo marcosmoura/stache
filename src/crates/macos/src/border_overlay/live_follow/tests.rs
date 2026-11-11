@@ -12,10 +12,10 @@ use super::skylight::{
     window_id_from_payload,
 };
 use super::{
-    EventSlots, FakeLiveFollow, FakeSessionControl, FakeSink, FollowCore, FollowMove, FollowSink,
-    FollowTarget, FollowTiming, LiveFollow, LiveStatus, OWNER_THREAD_NAME, SinkCall, SlotEvent,
-    StopObserver, StopOutcome, SystemLiveFollow, WindowEventKind, forgotten_follow_owners,
-    unavailable_message,
+    EventSlots, FAST_REORDER_CAP, FakeLiveFollow, FakeSessionControl, FakeSink, FastOrderResult,
+    FastReorder, FollowCore, FollowMove, FollowSink, FollowTarget, FollowTiming, LiveFollow,
+    LiveStatus, OWNER_THREAD_NAME, SinkCall, SlotEvent, StopObserver, StopOutcome,
+    SystemLiveFollow, WindowEventKind, forgotten_follow_owners, unavailable_message,
 };
 use crate::border_overlay::{MAX_OVERLAYS, OverlayRect};
 use crate::display_link::testing::FakeFrameClockFactory;
@@ -43,6 +43,9 @@ fn target(n: u64, display: Option<DisplayId>) -> FollowTarget {
         cg_window_id: 100 + u32::try_from(n).unwrap(),
         display,
         owner_pid: Some(9_000),
+        overlay_window: None,
+        above: false,
+        fast_reorder: false,
     }
 }
 
@@ -499,19 +502,23 @@ fn a_window_owned_by_tiling_is_not_read() {
 }
 
 /// Native run 2: the candidate hide event fired after nearly every show and hid
-/// the border. Hide, unhide, reorder and close are not trusted; only move and
-/// resize act.
+/// the border. Hide, unhide and close are not trusted; move, resize and (for
+/// `above` borders, decided by Tiling) reorder act.
 #[test]
-fn private_hide_unhide_reorder_and_close_are_ignored_by_default() {
+fn private_hide_unhide_and_close_are_ignored_by_default_and_reorder_is_forwarded() {
     let mut rig = Rig::new();
     rig.core.set_targets(&[target(1, Some(D1)), target(2, Some(D1))]);
     rig.quiet_event(0, 101, &[WindowEventKind::Hide]);
     rig.quiet_event(0, 101, &[WindowEventKind::Unhide]);
     rig.quiet_event(0, 101, &[WindowEventKind::Reorder]);
     rig.quiet_event(1, 102, &[WindowEventKind::Close]);
-    assert_eq!(rig.sink.calls(), vec![], "nothing reaches the sink");
+    assert_eq!(
+        rig.sink.calls(),
+        vec![SinkCall::Reorder(window(1))],
+        "only the reorder reaches the sink"
+    );
     assert_eq!(rig.clocks.live(), 0, "none of these starts a clock");
-    assert_eq!(rig.core.counters().ignored, 4);
+    assert_eq!(rig.core.counters().ignored, 3);
     // A close does not forget the window: its moves are still followed, and
     // Tiling's destroy path releases the border.
     rig.event(2, 102, &[WindowEventKind::Move], &[(102, rect(3.0))]);
@@ -529,7 +536,10 @@ fn private_hide_unhide_reorder_and_close_are_ignored_by_default() {
 /// Each unverified event can be enabled alone by a later verified run.
 #[test]
 fn each_unverified_event_acts_only_behind_its_own_flag() {
-    let mut rig = Rig::with_timing(|timing| timing.act_on_hide = true);
+    let mut rig = Rig::with_timing(|timing| {
+        timing.act_on_hide = true;
+        timing.act_on_reorder = false;
+    });
     rig.core.set_targets(&[target(1, Some(D1))]);
     rig.quiet_event(0, 101, &[WindowEventKind::Hide]);
     rig.quiet_event(0, 101, &[WindowEventKind::Unhide]);
@@ -878,4 +888,321 @@ fn a_drop_whose_stop_times_out_forgets_the_owner_explicitly_and_reports_it() {
     assert_eq!(forgotten_follow_owners(), before + 1);
     sink.hold.store(false, Ordering::SeqCst);
     wait_until("the owner leaves", || !session.registered());
+}
+
+// ------------------------------------------------------- raw event logging
+
+#[test]
+fn raw_events_of_watched_windows_are_logged_in_order_including_unknown_ids() {
+    let slots = EventSlots::new(500);
+    let _ = slots.watch(&[(11, Some(900)), (12, Some(500))]);
+    slots.on_window_event(808, 11);
+    slots.on_window_event(823, 11); // logging-only candidate
+    slots.on_window_event(806, 11);
+    slots.on_window_event(808, 12); // own panel: never watched
+    slots.on_window_event(808, 77); // not bordered
+    assert_eq!(slots.drain_raw(), [
+        super::RawEvent { event: 808, cg_window_id: 11 },
+        super::RawEvent { event: 823, cg_window_id: 11 },
+        super::RawEvent { event: 806, cg_window_id: 11 },
+    ]);
+    assert!(slots.drain_raw().is_empty(), "a drain takes the log");
+    // Known ids still set their kind bit; the unknown one sets none.
+    assert_eq!(slots.drain(), [event(11, &[
+        WindowEventKind::Reorder,
+        WindowEventKind::Move
+    ])]);
+}
+
+#[test]
+fn the_raw_log_is_bounded_and_counts_what_it_drops() {
+    let slots = EventSlots::new(1);
+    let _ = slots.watch(&[(11, None)]);
+    for _ in 0..super::RAW_CAPACITY + 5 {
+        slots.on_window_event(825, 11);
+    }
+    assert_eq!(slots.drain_raw().len(), super::RAW_CAPACITY);
+    assert_eq!(slots.counters().raw_dropped, 5);
+}
+
+#[test]
+fn logging_only_ids_cover_800_to_830_except_the_known_ones() {
+    let extra = super::skylight::logging_only_events();
+    assert_eq!(extra.len(), 31 - WINDOW_EVENTS.len());
+    for (id, _) in WINDOW_EVENTS {
+        assert!(!extra.contains(&id));
+    }
+    assert!(extra.iter().all(|id| (800..=830).contains(id)));
+}
+
+#[test]
+fn the_owner_hands_raw_events_to_the_sink_in_order_on_its_thread() {
+    let mut live = live(60_000);
+    start(&mut live);
+    live.follow.set_targets(&[target(1, Some(D1))]);
+    wait_until("subscription", || !live.session.subscriptions().is_empty());
+    assert!(live.session.inject_raw(808, 101));
+    assert!(live.session.inject_raw(820, 101));
+    assert!(live.session.inject_raw(808, 555), "foreign window");
+    wait_until("raw events", || {
+        live.sink
+            .calls()
+            .iter()
+            .filter_map(|call| match call {
+                SinkCall::Raw(raw) => Some(raw.clone()),
+                _ => None,
+            })
+            .flatten()
+            .count()
+            >= 2
+    });
+    let raw: Vec<(u32, u32)> = live
+        .sink
+        .calls()
+        .into_iter()
+        .filter_map(|call| match call {
+            SinkCall::Raw(raw) => Some(raw),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(raw, [(808, 101), (820, 101)]);
+    assert!(live.follow.follow_counters().raw >= 2);
+    live.follow.stop();
+}
+
+// ------------------------------------------------------------ fast reorder
+
+const PANEL: u32 = 70_001;
+
+fn above_target(n: u64) -> FollowTarget {
+    FollowTarget {
+        overlay_window: Some(PANEL + u32::try_from(n).unwrap() - 1),
+        above: true,
+        fast_reorder: true,
+        ..target(n, Some(D1))
+    }
+}
+
+/// Drives one `Reorder` through the core with a recording order call that
+/// also notes how many sink calls existed at the time of the call.
+fn fast_event(
+    rig: &mut Rig,
+    ms: u64,
+    cg: u32,
+    result: FastOrderResult,
+    orders: &mut Vec<(u32, u32, usize)>,
+) {
+    let sink = rig.sink.clone();
+    let now = rig.base + Duration::from_millis(ms);
+    rig.core.on_event_ordered(
+        now,
+        event(cg, &[WindowEventKind::Reorder]),
+        &mut |_| None,
+        Some(&mut |panel, target| {
+            orders.push((panel, target, sink.calls().len()));
+            result
+        }),
+    );
+}
+
+fn fast_reports(sink: &FakeSink) -> Vec<FastReorder> {
+    sink.calls()
+        .into_iter()
+        .filter_map(|call| match call {
+            SinkCall::FastReorder(report) => Some(report),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_reorder_of_a_shown_above_target_orders_its_panel_before_the_sink_note() {
+    let mut rig = Rig::new();
+    rig.core.set_targets(&[above_target(1)]);
+    let mut orders = Vec::new();
+    fast_event(&mut rig, 0, 101, FastOrderResult::Ordered, &mut orders);
+    assert_eq!(orders, [(PANEL, 101, 0)], "one call, before any sink call");
+    assert_eq!(rig.sink.calls(), vec![
+        SinkCall::FastReorder(FastReorder {
+            cg_window_id: 101,
+            panel: PANEL,
+            result: FastOrderResult::Ordered,
+            disabled: false,
+        }),
+        SinkCall::Reorder(window(1)),
+    ]);
+    assert_eq!(rig.core.counters().fast_orders, 1);
+}
+
+#[test]
+fn below_hidden_suspended_or_unknown_panels_get_no_fast_order() {
+    let below = FollowTarget {
+        above: false,
+        ..above_target(1)
+    };
+    let hidden = FollowTarget {
+        fast_reorder: false,
+        ..above_target(2)
+    };
+    let unknown = FollowTarget {
+        overlay_window: None,
+        ..above_target(3)
+    };
+    let own_panel = FollowTarget {
+        overlay_window: Some(104),
+        ..above_target(4)
+    };
+    let mut rig = Rig::new();
+    rig.core.set_targets(&[below, hidden, unknown, own_panel]);
+    let mut orders = Vec::new();
+    for cg in 101..=104 {
+        fast_event(&mut rig, 0, cg, FastOrderResult::Ordered, &mut orders);
+    }
+    assert!(orders.is_empty(), "no fast call: {orders:?}");
+    assert_eq!(
+        rig.sink.calls().iter().filter(|c| matches!(c, SinkCall::Reorder(_))).count(),
+        4,
+        "the main-thread path is still notified"
+    );
+    // Without an order function (plain `on_event`) nothing is fast either.
+    rig.core.set_targets(&[above_target(1)]);
+    rig.quiet_event(0, 101, &[WindowEventKind::Reorder]);
+    assert_eq!(rig.core.counters().fast_orders, 0);
+}
+
+#[test]
+fn fast_reorders_are_capped_per_window_per_second() {
+    let mut rig = Rig::new();
+    rig.core.set_targets(&[above_target(1), above_target(2)]);
+    let mut orders = Vec::new();
+    for ms in 0..6 {
+        fast_event(&mut rig, ms * 10, 101, FastOrderResult::Ordered, &mut orders);
+    }
+    fast_event(&mut rig, 70, 102, FastOrderResult::Ordered, &mut orders);
+    assert_eq!(
+        orders.len(),
+        FAST_REORDER_CAP + 1,
+        "the other window is not capped"
+    );
+    assert_eq!(rig.core.counters().fast_capped, 2);
+    fast_event(&mut rig, 1_000, 101, FastOrderResult::Ordered, &mut orders);
+    assert_eq!(orders.len(), FAST_REORDER_CAP + 2, "the window slides");
+    assert_eq!(
+        rig.sink.calls().iter().filter(|c| matches!(c, SinkCall::Reorder(_))).count(),
+        8,
+        "every reorder still reaches the sink"
+    );
+}
+
+#[test]
+fn a_missing_symbol_or_refused_call_disables_the_fast_path_with_one_report() {
+    for failure in [
+        FastOrderResult::Missing("SLSOrderWindow"),
+        FastOrderResult::Refused(1000),
+    ] {
+        let mut rig = Rig::new();
+        rig.core.set_targets(&[above_target(1), above_target(2)]);
+        let mut orders = Vec::new();
+        fast_event(&mut rig, 0, 101, failure, &mut orders);
+        fast_event(&mut rig, 10, 102, FastOrderResult::Ordered, &mut orders);
+        fast_event(&mut rig, 20, 101, FastOrderResult::Ordered, &mut orders);
+        assert_eq!(orders.len(), 1, "disabled after the first failure");
+        let reports = fast_reports(&rig.sink);
+        assert_eq!(reports.len(), 1, "one diagnostic");
+        assert!(reports[0].disabled);
+        assert_eq!(reports[0].result, failure);
+        let counters = rig.core.counters();
+        assert!(counters.fast_disabled);
+        assert_eq!(counters.fast_failures, 1);
+        assert_eq!(
+            rig.sink.calls().iter().filter(|c| matches!(c, SinkCall::Reorder(_))).count(),
+            3,
+            "the main-thread path is kept"
+        );
+    }
+}
+
+#[test]
+fn a_panel_the_main_thread_records_as_not_shown_is_skipped_without_disabling() {
+    let mut rig = Rig::new();
+    rig.core.set_targets(&[above_target(1)]);
+    let mut orders = Vec::new();
+    fast_event(&mut rig, 0, 101, FastOrderResult::NotShown, &mut orders);
+    fast_event(&mut rig, 10, 101, FastOrderResult::Ordered, &mut orders);
+    assert_eq!(orders.len(), 2);
+    let counters = rig.core.counters();
+    assert_eq!((counters.fast_not_shown, counters.fast_orders), (1, 1));
+    assert!(!counters.fast_disabled);
+}
+
+#[test]
+fn the_owner_thread_makes_the_fast_order_from_the_targets_update() {
+    let mut live = live(60_000);
+    start(&mut live);
+    let own_pid = i32::try_from(std::process::id()).unwrap();
+    let own = FollowTarget {
+        owner_pid: Some(own_pid),
+        ..above_target(2)
+    };
+    let below = FollowTarget {
+        above: false,
+        ..above_target(3)
+    };
+    live.follow.set_targets(&[above_target(1), own, below]);
+    wait_until("subscription", || !live.session.subscriptions().is_empty());
+    assert!(live.session.inject_raw(808, 101));
+    assert!(live.session.inject_raw(808, 102), "own window: never watched");
+    assert!(live.session.inject_raw(808, 103));
+    wait_until("both reorders", || {
+        live.sink.calls().iter().filter(|c| matches!(c, SinkCall::Reorder(_))).count() >= 2
+    });
+    assert_eq!(live.session.orders(), [(PANEL, 101)]);
+    assert_eq!(live.session.order_threads(), [OWNER_THREAD_NAME]);
+    let calls = live.sink.calls();
+    let fast = calls.iter().position(|c| matches!(c, SinkCall::FastReorder(_))).unwrap();
+    let note = calls.iter().position(|c| *c == SinkCall::Reorder(window(1))).unwrap();
+    assert!(fast < note, "the fast order precedes the route note");
+    assert_eq!(live.follow.follow_counters().fast_orders, 1);
+    live.follow.stop();
+}
+
+#[test]
+fn the_owner_disables_the_fast_path_when_the_session_has_no_order_symbol() {
+    let mut live = live(60_000);
+    start(&mut live);
+    live.session.set_order_result(FastOrderResult::Missing("SLSOrderWindow"));
+    live.follow.set_targets(&[above_target(1)]);
+    wait_until("subscription", || !live.session.subscriptions().is_empty());
+    assert!(live.session.inject_raw(808, 101));
+    wait_until("the reorder", || {
+        live.sink.calls().contains(&SinkCall::Reorder(window(1)))
+    });
+    assert!(live.session.inject_raw(808, 101));
+    wait_until("the second reorder", || {
+        live.sink.calls().iter().filter(|c| matches!(c, SinkCall::Reorder(_))).count() >= 2
+    });
+    assert_eq!(live.session.orders().len(), 1);
+    assert_eq!(fast_reports(&live.sink).len(), 1);
+    assert!(live.follow.follow_counters().fast_disabled);
+    live.follow.stop();
+}
+
+static ORDER_LOOKUPS: AtomicBool = AtomicBool::new(false);
+
+fn order_lookup_missing(_: &CStr) -> *mut c_void {
+    ORDER_LOOKUPS.store(true, Ordering::SeqCst);
+    std::ptr::null_mut()
+}
+
+#[test]
+fn the_native_fast_order_needs_a_registered_connection_and_resolves_lazily() {
+    let mut notify =
+        SkyLightWindowNotify::with_order_lookup(WindowSymbols::missing(), order_lookup_missing);
+    assert_eq!(
+        notify.order_above(1, 2),
+        FastOrderResult::Missing("SLSMainConnectionID"),
+        "never registered: no connection, nothing looked up or called"
+    );
+    assert!(!ORDER_LOOKUPS.load(Ordering::SeqCst));
 }

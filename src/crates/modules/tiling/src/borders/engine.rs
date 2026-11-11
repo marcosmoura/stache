@@ -116,15 +116,15 @@
 //! [`FOLLOW_GRACE`] is not applied (the live bounds are newer than the
 //! coalesced sample) and holds nothing.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use stache_macos::border_overlay::{
-    AppearanceChange, ApplyAck, BorderAppearance, FollowSink, FollowTarget, LiveFollow, LiveStatus,
-    MAX_OVERLAYS, NoSpaceEvents, OverlayBatch, OverlayDiagnostics, OverlayHandle, OverlayKind,
-    OverlayTicket, Refusal, RefusalReason, SpaceEvents, SpaceFact, SpaceMailbox, SpaceWaker,
-    StopOutcome, Transition, UnknownCause,
+    AppearanceChange, ApplyAck, BorderAppearance, BorderPlacement, FollowSink, FollowTarget,
+    LiveFollow, LiveStatus, MAX_OVERLAYS, NoSpaceEvents, OverlayBatch, OverlayDiagnostics,
+    OverlayHandle, OverlayKind, OverlayTicket, Refusal, RefusalReason, SpaceEvents, SpaceFact,
+    SpaceMailbox, SpaceWaker, StopOutcome, Transition, UnknownCause,
 };
 use stache_macos::windows::WindowInstance;
 use stache_macos::{ApplicationId, DisplayId};
@@ -221,6 +221,14 @@ pub struct EngineCounters {
     pub fallback_holds: u64,
     /// External frame changes not applied because live follow owns the window.
     pub live_suppressed: u64,
+    /// `Order`s sent for a window-server reorder of an `above` window.
+    pub live_reorders: u64,
+    /// Reorder notifications folded into an `Order` already sent or due in
+    /// the same display frame.
+    pub live_reorders_coalesced: u64,
+    /// Reorder notifications dropped by the per-window rate cap
+    /// ([`LIVE_REORDER_CAP`] per [`LIVE_REORDER_WINDOW`]).
+    pub live_reorders_capped: u64,
 }
 
 /// Everything the status surface reports for borders.
@@ -391,10 +399,43 @@ pub struct BorderEngine {
     follow_grace: Duration,
     /// The live follow status last logged (change detection for the debug log).
     live_seen: Option<LiveStatus>,
+    /// The focused window the actor last reported.
+    focus: Option<WindowInstance>,
+    /// The one follow-up `Order` of the latest focus change (`above` only,
+    /// timer fallback while live follow is not active): the window and when it
+    /// is due.
+    settle: Option<(WindowInstance, Instant)>,
+    /// Window-server reorders of `above` windows (live follow), per window.
+    live_reorders: BTreeMap<WindowInstance, LiveReorder>,
     /// Every batch sent, for tests.
     #[cfg(test)]
     pub(super) sent: Vec<OverlayBatch>,
 }
+
+/// The per-window state of the reaction to window-server reorders.
+#[derive(Debug, Default)]
+struct LiveReorder {
+    /// When the `Order` for a reorder is due (coalesced per display frame).
+    pending: Option<Instant>,
+    /// When the last such `Order` was sent.
+    last: Option<Instant>,
+    /// The `Order`s sent within the last [`LIVE_REORDER_WINDOW`].
+    recent: VecDeque<Instant>,
+    /// The cap diagnostic was logged for the current burst.
+    capped: bool,
+}
+
+/// At most this many reorder-driven `Order`s per window per
+/// [`LIVE_REORDER_WINDOW`]: a feedback loop (our own `Order` re-stacking the
+/// window and notifying again) stops there with a diagnostic.
+pub const LIVE_REORDER_CAP: usize = 4;
+/// The window of [`LIVE_REORDER_CAP`].
+pub const LIVE_REORDER_WINDOW: Duration = Duration::from_secs(1);
+
+/// How long after a focus change (or the raise it caused) an `above` border is
+/// re-ordered once more: the focused application raises its own window
+/// asynchronously, and that raise can land after the first `Order`.
+pub const FOCUS_SETTLE: Duration = Duration::from_millis(80);
 
 impl BorderEngine {
     /// An engine over `route` (which owns the control) for `config`.
@@ -426,6 +467,9 @@ impl BorderEngine {
             to_release: Vec::new(),
             follow_grace: FOLLOW_GRACE,
             live_seen: None,
+            focus: None,
+            settle: None,
+            live_reorders: BTreeMap::new(),
             #[cfg(test)]
             sent: Vec::new(),
         }
@@ -488,6 +532,7 @@ impl BorderEngine {
     pub fn stop_live(&mut self) -> StopOutcome {
         self.holds.clear();
         self.live_hold.clear();
+        self.live_reorders.clear();
         let Some(live) = self.live.as_mut() else {
             return StopOutcome::NotRunning;
         };
@@ -614,7 +659,9 @@ impl BorderEngine {
             .min();
         let collapse =
             self.ledger.values().filter(|t| t.shown).filter_map(|t| t.collapse_until).min();
-        [ready, holds, ack, collapse].into_iter().flatten().min()
+        let settle = self.settle.map(|(_, at)| at);
+        let reorder = self.live_reorders.values().filter_map(|r| r.pending).min();
+        [ready, holds, ack, collapse, settle, reorder].into_iter().flatten().min()
     }
 
     // ---- inputs ------------------------------------------------------------
@@ -655,6 +702,8 @@ impl BorderEngine {
         let refused = self.flush(batch);
         self.after_flush(&refused, &mut shows);
         self.sync_live_targets();
+        self.live_reorders.retain(|w, _| self.model.entries.contains_key(w));
+        self.fire_live_reorders(now);
     }
 
     /// Recomputes appearances for a new configuration in place (instant, no
@@ -726,7 +775,144 @@ impl BorderEngine {
         let refused = self.flush(batch);
         self.after_flush(&refused, &mut shows);
         self.sync_live_targets();
+        self.fire_settle(now);
+        self.fire_live_reorders(now);
         count
+    }
+
+    /// Queues the `Order` for a window-server reorder of `window` (live
+    /// follow). Only an `above` border reacts; it is due at once, or at the end
+    /// of the display frame of the last such `Order` (several notifications in
+    /// one frame give one `Order`).
+    fn note_live_reorder(&mut self, window: WindowInstance) {
+        if !self.placement_above(window) || !self.ledger.contains_key(&window) {
+            return;
+        }
+        let frame = self.frame_period;
+        let now = self.now;
+        let state = self.live_reorders.entry(window).or_default();
+        if state.pending.is_some() {
+            self.counters.live_reorders_coalesced += 1;
+            return;
+        }
+        let due = state.last.map_or(now, |last| (last + frame).max(now));
+        if due > now {
+            self.counters.live_reorders_coalesced += 1;
+        }
+        state.pending = Some(due);
+    }
+
+    /// Sends the reorder `Order`s that are due, at most [`LIVE_REORDER_CAP`]
+    /// per window per [`LIVE_REORDER_WINDOW`] (then one diagnostic per burst).
+    /// Suspended (Space gate), `reorder` sends nothing.
+    fn fire_live_reorders(&mut self, now: Instant) {
+        let due: Vec<WindowInstance> = self
+            .live_reorders
+            .iter()
+            .filter(|(_, r)| r.pending.is_some_and(|at| at <= now))
+            .map(|(w, _)| *w)
+            .collect();
+        for window in due {
+            let Some(state) = self.live_reorders.get_mut(&window) else {
+                continue;
+            };
+            state.pending = None;
+            while state
+                .recent
+                .front()
+                .is_some_and(|at| now.saturating_duration_since(*at) >= LIVE_REORDER_WINDOW)
+            {
+                state.recent.pop_front();
+            }
+            if state.recent.len() >= LIVE_REORDER_CAP {
+                self.counters.live_reorders_capped += 1;
+                if !state.capped {
+                    state.capped = true;
+                    self.route.log().debug(|| {
+                        format!(
+                            "live reorder cap reached window={window:?} cap={LIVE_REORDER_CAP}/{}ms; further reorders dropped",
+                            LIVE_REORDER_WINDOW.as_millis()
+                        )
+                    });
+                }
+                continue;
+            }
+            state.capped = false;
+            if !self.placement_above(window) {
+                continue;
+            }
+            if self.reorder(window) {
+                self.counters.live_reorders += 1;
+                if let Some(state) = self.live_reorders.get_mut(&window) {
+                    state.last = Some(now);
+                    state.recent.push_back(now);
+                }
+            }
+        }
+    }
+
+    /// Sends the focus change's single follow-up `Order` once it is due, only
+    /// while that window is still focused.
+    fn fire_settle(&mut self, now: Instant) {
+        let Some((window, at)) = self.settle else { return };
+        if now < at {
+            return;
+        }
+        self.settle = None;
+        if self.focus == Some(window) && self.placement_above(window) {
+            self.reorder(window);
+        }
+    }
+
+    fn placement_above(&self, window: WindowInstance) -> bool {
+        self.model
+            .entries
+            .get(&window)
+            .is_some_and(|entry| entry.appearance.placement == BorderPlacement::Above)
+    }
+
+    /// The focused window changed: its border is ordered once now. While live
+    /// follow is active that is all: the window server's reorder notification
+    /// for the application's own (asynchronous) raise re-orders an `above`
+    /// border. Otherwise (timer fallback) an `above` border gets exactly one
+    /// more `Order` after [`FOCUS_SETTLE`] (plus a display frame); raises
+    /// reported for it meanwhile are folded into that follow-up. `below` keeps
+    /// the single `Order`.
+    pub fn note_focus(&mut self, now: Instant, window: Option<WindowInstance>) {
+        self.now = now;
+        self.focus = window;
+        self.settle = None;
+        let Some(window) = window else { return };
+        self.reorder(window);
+        if self.placement_above(window) && !self.live_active() {
+            self.settle = Some((window, now + self.frame_period + FOCUS_SETTLE));
+        }
+    }
+
+    /// A raise of the focused window that changed no Tiling focus (a mouse up
+    /// in it, or its application's activation): an `above` border is
+    /// re-asserted with one `Order` now and one settle `Order`, coalesced with
+    /// any pending settle (the latest event wins). Anything else (not focused,
+    /// `below`, not shown, suspended) sends nothing. Timer fallback only: while
+    /// live follow is active the reorder notification does this, so nothing
+    /// is sent here (a timer `Order` raced the window server's own raise).
+    pub fn note_raise_intent(&mut self, now: Instant, window: WindowInstance) {
+        self.now = now;
+        if self.live_active() || self.focus != Some(window) || !self.placement_above(window) {
+            return;
+        }
+        if self.reorder(window) {
+            self.settle = Some((window, now + self.frame_period + FOCUS_SETTLE));
+        }
+    }
+
+    /// The frontmost application changed to `application`: when it owns the
+    /// focused window, that window's raise is re-asserted
+    /// ([`Self::note_raise_intent`]).
+    pub fn note_activation(&mut self, now: Instant, application: ApplicationId) {
+        if let Some(window) = self.focus.filter(|w| w.application() == application) {
+            self.note_raise_intent(now, window);
+        }
     }
 
     /// The application's windows are shown again (`Observation::Shown`).
@@ -786,8 +972,20 @@ impl BorderEngine {
 
     /// Re-orders the overlays of the windows Tiling raised since the last call
     /// (the effects thread reports them through the route).
-    pub fn reorder_raised(&mut self) {
+    /// Also sends the due window-server reorder `Order`s (live follow).
+    pub fn reorder_raised(&mut self, now: Instant) {
+        self.now = now;
+        self.reconcile_route();
+        self.fire_live_reorders(now);
         for window in self.route.drain_raised() {
+            // A raise of the focused window while its follow-up is pending is
+            // folded into it, measured from this raise (no `Order` storm).
+            if let Some((pending, _)) = self.settle
+                && pending == window
+            {
+                self.settle = Some((window, self.now + self.frame_period + FOCUS_SETTLE));
+                continue;
+            }
             self.reorder(window);
         }
     }
@@ -1114,11 +1312,15 @@ impl BorderEngine {
             }
         }
         let notes = self.route.drain_live();
-        if !(notes.hidden.is_empty() && notes.unhidden.is_empty() && notes.closed.is_empty()) {
+        if !(notes.hidden.is_empty()
+            && notes.unhidden.is_empty()
+            && notes.closed.is_empty()
+            && notes.reordered.is_empty())
+        {
             self.route.log().debug(|| {
                 format!(
-                    "live notes drained hidden={:?} unhidden={:?} closed={:?}",
-                    notes.hidden, notes.unhidden, notes.closed
+                    "live notes drained hidden={:?} unhidden={:?} closed={:?} reordered={:?}",
+                    notes.hidden, notes.unhidden, notes.closed, notes.reordered
                 )
             });
         }
@@ -1131,6 +1333,9 @@ impl BorderEngine {
         }
         for window in notes.unhidden {
             self.live_hold.remove(&window);
+        }
+        for window in notes.reordered {
+            self.note_live_reorder(window);
         }
         for window in notes.closed {
             if self.ledger.contains_key(&window) {
@@ -1230,9 +1435,9 @@ impl BorderEngine {
     /// Tells the live follow source which windows are bordered, only when the
     /// set changed. Bounded by the source to `MAX_OVERLAYS`.
     fn sync_live_targets(&mut self) {
-        let Some(live) = self.live.as_mut().filter(|live| live.started) else {
+        if !self.live.as_ref().is_some_and(|live| live.started) {
             return;
-        };
+        }
         let targets: Vec<FollowTarget> = self
             .ledger
             .iter()
@@ -1245,8 +1450,16 @@ impl BorderEngine {
                 cg_window_id: tracked.cg,
                 display: tracked.display,
                 owner_pid: Some(tracked.owner_pid),
+                overlay_window: tracked.handle.and_then(|h| self.route.control().window_number(h)),
+                above: self.placement_above(*window),
+                // Shown under a known, open gate; anything else (unknown,
+                // suspended, window-blocked, hidden) never fast-reorders.
+                fast_reorder: tracked.shown
+                    && !self.gate.suspended()
+                    && !self.gate.window_blocked(*window),
             })
             .collect();
+        let Some(live) = self.live.as_mut() else { return };
         if targets != live.targets {
             live.source.set_targets(&targets);
             live.targets = targets;
@@ -1669,6 +1882,17 @@ impl BorderEngine {
         }
         if batch.hide_all.is_none() && batch.commands.is_empty() {
             return Vec::new();
+        }
+        // A batch that hides anything first withdraws the fast reorder of the
+        // live-follow owner (best effort; the main thread's panel record is
+        // the hard guard, see `panel_registry`).
+        if batch.hide_all.is_some()
+            || batch
+                .commands
+                .iter()
+                .any(|command| matches!(command.kind, OverlayKind::Hide | OverlayKind::Release))
+        {
+            self.sync_live_targets();
         }
         #[cfg(test)]
         self.sent.push(batch.clone());

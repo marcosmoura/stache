@@ -10,7 +10,9 @@ use std::time::Duration;
 use core_foundation::runloop::{CFRunLoop, kCFRunLoopDefaultMode};
 
 use super::skylight::SkyLightWindowNotify;
-use super::{EventSlots, LiveUnavailable, LoopWaker, SessionMaker, WindowEventSession};
+use super::{
+    EventSlots, FastOrderResult, LiveUnavailable, LoopWaker, SessionMaker, WindowEventSession,
+};
 use crate::border_overlay::OverlayRect;
 use crate::border_overlay::wake::WakeSource;
 
@@ -64,6 +66,10 @@ impl WindowEventSession for NativeWindowSession {
 
     fn bounds(&mut self, cg_window_id: u32) -> Option<OverlayRect> {
         self.notify.bounds(cg_window_id)
+    }
+
+    fn order_above(&mut self, panel: u32, target: u32) -> FastOrderResult {
+        self.notify.order_above(panel, target)
     }
 
     fn pump(&mut self, timeout: Duration) {

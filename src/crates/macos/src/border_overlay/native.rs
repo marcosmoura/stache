@@ -4,7 +4,6 @@
 //! [`NativeHost`]; they use the fake host in `testing.rs`.
 
 use std::cell::RefCell;
-use std::ffi::{CStr, c_char, c_int, c_void};
 use std::sync::Arc;
 
 use objc2::rc::Retained;
@@ -29,6 +28,9 @@ use objc2_quartz_core::{
     CATransaction, kCAFillRuleEvenOdd,
 };
 
+pub use super::corner_radius::{
+    CornerRadiusResolver, LazyCornerRadiusResolver, SystemCornerRadiusResolver,
+};
 use super::{
     AnimKind, AnimLayer, AnimProperty, AnimRepeat, AnimValue, ApplyReport, ApplySummary,
     BorderColor, BorderPlacement, FillSpec, GLOW_PASSES, GlowRender, LayerAnimation, LayerOverride,
@@ -46,117 +48,6 @@ use super::{
 /// flag on macOS 26 is verified by the native gate.
 pub const COLLECTION_BEHAVIOR: NSWindowCollectionBehavior =
     NSWindowCollectionBehavior::Transient.union(NSWindowCollectionBehavior::IgnoresCycle);
-
-/// Answers a target window's corner radius.
-///
-/// Implementations are read on the main thread. A missing capability returns
-/// `None`, which is a capability fact, never an error.
-pub trait CornerRadiusResolver: Send + Sync {
-    /// The queried radius in points, or `None` when it cannot be queried.
-    fn corner_radius(&self, target_cg_id: u32) -> Option<f64>;
-}
-
-/// Symbol presence detection for the private `SLSWindowIteratorGetCornerRadii`.
-///
-/// # Inventory (private API)
-///
-/// - Symbol: `SLSWindowIteratorGetCornerRadii`, exported by `SkyLight`
-///   (macOS 26 and later). It is not in any public header.
-/// - Missing public equivalent: no public API reports another application's
-///   window corner radius.
-/// - Minimum need: the border's inner edge should follow the target's corner.
-///
-/// The symbol is never linked: [`Self::system`] looks it up with
-/// `dlopen`/`dlsym` (the same policy as `_AXUIElementGetWindow`) and only
-/// records whether it exists. **The call itself is deliberately not wired.**
-/// The signature and the iterator protocol around it are not documented by
-/// Apple and are not justified from public knowledge here, so calling it would
-/// be a guess behind `unsafe`. The wiring is gated on the native check; until
-/// then [`CornerRadiusResolver::corner_radius`] returns `None` and the
-/// per-OS fallback radius is used.
-#[derive(Clone, Copy, Debug)]
-pub struct SystemCornerRadiusResolver {
-    symbol_present: bool,
-}
-
-const SYMBOL: &CStr = c"SLSWindowIteratorGetCornerRadii";
-const IMAGE: &CStr = c"/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight";
-const RTLD_LAZY: c_int = 0x1;
-const RTLD_LOCAL: c_int = 0x4;
-
-unsafe extern "C" {
-    fn dlopen(path: *const c_char, mode: c_int) -> *mut c_void;
-    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
-}
-
-impl SystemCornerRadiusResolver {
-    /// Looks the symbol up on the `SkyLight` image. Creates no connection.
-    #[must_use]
-    pub fn system() -> Self {
-        Self::from_lookup(|symbol| {
-            // SAFETY: `IMAGE` is a NUL-terminated path literal; the handle is
-            // intentionally never closed (the image stays loaded).
-            let handle = unsafe { dlopen(IMAGE.as_ptr(), RTLD_LAZY | RTLD_LOCAL) };
-            if handle.is_null() {
-                return std::ptr::null_mut();
-            }
-            // SAFETY: `handle` is a live image handle and `symbol` a
-            // NUL-terminated name. The address is only compared with null.
-            unsafe { dlsym(handle, symbol.as_ptr()) }
-        })
-    }
-
-    /// Resolves through an injected lookup (tests inject a missing or a present symbol).
-    #[must_use]
-    pub fn from_lookup(lookup: impl FnOnce(&CStr) -> *mut c_void) -> Self {
-        Self {
-            symbol_present: !lookup(SYMBOL).is_null(),
-        }
-    }
-
-    /// Whether the private symbol exists on this system.
-    #[must_use]
-    pub const fn symbol_present(&self) -> bool { self.symbol_present }
-}
-
-impl CornerRadiusResolver for SystemCornerRadiusResolver {
-    fn corner_radius(&self, _target_cg_id: u32) -> Option<f64> { None }
-}
-
-/// A [`CornerRadiusResolver`] that resolves its inner resolver on first use.
-///
-/// Constructing it (host start, borders disabled) does nothing native: the
-/// `dlopen`/`dlsym` lookup of [`SystemCornerRadiusResolver::system`] runs only
-/// when an overlay first asks for a radius.
-pub struct LazyCornerRadiusResolver {
-    resolve: Box<dyn Fn() -> SystemCornerRadiusResolver + Send + Sync>,
-    resolved: std::sync::OnceLock<SystemCornerRadiusResolver>,
-}
-
-impl LazyCornerRadiusResolver {
-    /// The system resolver, looked up on first use.
-    #[must_use]
-    pub fn system() -> Self { Self::with(SystemCornerRadiusResolver::system) }
-
-    /// Resolves through `resolve` on first use (tests count the calls).
-    #[must_use]
-    pub fn with(resolve: impl Fn() -> SystemCornerRadiusResolver + Send + Sync + 'static) -> Self {
-        Self {
-            resolve: Box::new(resolve),
-            resolved: std::sync::OnceLock::new(),
-        }
-    }
-
-    /// Whether the inner resolver was resolved yet.
-    #[must_use]
-    pub fn is_resolved(&self) -> bool { self.resolved.get().is_some() }
-}
-
-impl CornerRadiusResolver for LazyCornerRadiusResolver {
-    fn corner_radius(&self, target_cg_id: u32) -> Option<f64> {
-        self.resolved.get_or_init(|| (self.resolve)()).corner_radius(target_cg_id)
-    }
-}
 
 define_class!(
     /// A panel that can never take key or main status.
@@ -303,6 +194,8 @@ impl OverlayHost for NativeHost {
         self.resolver.corner_radius(target_cg_id)
     }
 
+    fn forget_corner_radius(&self, target_cg_id: u32) { self.resolver.forget(target_cg_id); }
+
     fn fallback_corner_radius(&self) -> f64 { self.fallback_radius }
 
     fn window_level(&self, _target_cg_id: u32) -> isize {
@@ -329,7 +222,10 @@ impl OverlayHost for NativeHost {
         mode: OrderingMode,
         placement: BorderPlacement,
     ) {
-        panel.window.setLevel(level);
+        // An unchanged level is not set again (a level change re-stacks).
+        if panel.window.level() != level {
+            panel.window.setLevel(level);
+        }
         let relative_to = match mode {
             OrderingMode::RelativeToTarget => isize::try_from(target_cg_id).unwrap_or(0),
             // 0 orders relative to the panel's own level: to the front of it
@@ -341,13 +237,32 @@ impl OverlayHost for NativeHost {
             BorderPlacement::Below => NSWindowOrderingMode::Below,
             BorderPlacement::Above => NSWindowOrderingMode::Above,
         };
+        let number = window_number(panel);
+        // Ineligible while AppKit re-stacks it; eligible again only when it is
+        // now visible directly above its own target.
+        if let Some(number) = number {
+            super::panel_registry::mark_ineligible(number);
+        }
         panel.window.orderWindow_relativeTo(ordering, relative_to);
+        if let Some(number) = number
+            && placement == BorderPlacement::Above
+            && mode == OrderingMode::RelativeToTarget
+            && panel.window.isVisible()
+        {
+            super::panel_registry::mark_eligible(number, target_cg_id);
+        }
     }
 
     fn order_out(&mut self, panel: &mut NativePanel) {
+        // Before the order out: no fast order may re-stack (order in) it.
+        if let Some(number) = window_number(panel) {
+            super::panel_registry::mark_ineligible(number);
+        }
         let none: Option<&AnyObject> = None;
         panel.window.orderOut(none);
     }
+
+    fn window_number(&self, panel: &NativePanel) -> Option<u32> { window_number(panel) }
 
     fn media_time(&self) -> f64 { CACurrentMediaTime() }
 
@@ -377,6 +292,9 @@ impl OverlayHost for NativeHost {
     }
 
     fn close(&mut self, panel: NativePanel) {
+        if let Some(number) = window_number(&panel) {
+            super::panel_registry::mark_ineligible(number);
+        }
         panel.ring.removeAllAnimations();
         panel.gradient.removeAllAnimations();
         panel.glow.removeAllAnimations();
@@ -384,6 +302,12 @@ impl OverlayHost for NativeHost {
         panel.window.close();
         panel.container.removeFromSuperlayer();
     }
+}
+
+/// The panel's window server number (positive once it has a window device;
+/// `None` before).
+fn window_number(panel: &NativePanel) -> Option<u32> {
+    u32::try_from(panel.window.windowNumber()).ok().filter(|n| *n > 0)
 }
 
 fn layer_for(panel: &NativePanel, layer: AnimLayer) -> &CALayer {
@@ -890,6 +814,7 @@ impl OverlayBackend for SystemOverlayBackend {
                 ..ApplySummary::default()
             },
             dropped: Vec::new(),
+            windows: Vec::new(),
         })
     }
 

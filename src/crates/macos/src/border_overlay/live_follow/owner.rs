@@ -324,8 +324,17 @@ fn run_owner(
             }
         }
         if usable {
+            core.on_raw(now, &slots.drain_raw());
             for event in slots.drain() {
-                core.on_event(now, event, &mut |id| session.bounds(id));
+                // One session borrow for both seams: the closures run in turn,
+                // never together.
+                let session = std::cell::RefCell::new(&mut session);
+                core.on_event_ordered(
+                    now,
+                    event,
+                    &mut |id| session.borrow_mut().bounds(id),
+                    Some(&mut |panel, target| session.borrow_mut().order_above(panel, target)),
+                );
             }
             core.tick(now, &mut |id| session.bounds(id));
         }

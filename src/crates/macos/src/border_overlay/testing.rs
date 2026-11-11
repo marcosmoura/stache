@@ -79,6 +79,9 @@ pub enum FakeEvent {
     Close(u64),
 }
 
+/// A fake panel's window number is this plus its id.
+pub const FAKE_WINDOW_BASE: u64 = 50_000;
+
 /// A fake panel: only an id.
 #[derive(Debug)]
 pub struct FakePanel {
@@ -129,7 +132,7 @@ pub struct FakeHost {
     records: Arc<Mutex<Records>>,
     next_panel: u64,
     screens: Vec<OverlayScreen>,
-    resolver: FakeRadiusResolver,
+    resolver: Arc<dyn CornerRadiusResolver>,
     fail_create: Arc<AtomicBool>,
 }
 
@@ -149,6 +152,10 @@ impl OverlayHost for FakeHost {
         Ok(FakePanel { id })
     }
 
+    fn window_number(&self, panel: &FakePanel) -> Option<u32> {
+        u32::try_from(FAKE_WINDOW_BASE + panel.id).ok()
+    }
+
     fn begin_transaction(&mut self) {
         let mut records = lock(&self.records);
         records.in_transaction = true;
@@ -166,6 +173,8 @@ impl OverlayHost for FakeHost {
     fn resolved_corner_radius(&self, target_cg_id: u32) -> Option<f64> {
         self.resolver.corner_radius(target_cg_id)
     }
+
+    fn forget_corner_radius(&self, target_cg_id: u32) { self.resolver.forget(target_cg_id); }
 
     fn fallback_corner_radius(&self) -> f64 { 16.0 }
 
@@ -292,13 +301,22 @@ impl FakeOverlayBackend {
     /// A backend over `screens` (primary first) with a corner radius answer.
     #[must_use]
     pub fn new(screens: Vec<OverlayScreen>, radius: Option<f64>) -> Self {
+        Self::with_resolver(screens, Arc::new(FakeRadiusResolver(radius)))
+    }
+
+    /// A backend over `screens` whose radius answers come from `resolver`.
+    #[must_use]
+    pub fn with_resolver(
+        screens: Vec<OverlayScreen>,
+        resolver: Arc<dyn CornerRadiusResolver>,
+    ) -> Self {
         let records = Arc::new(Mutex::new(Records::default()));
         let fail_create = Arc::new(AtomicBool::new(false));
         let host = FakeHost {
             records: Arc::clone(&records),
             next_panel: 0,
             screens,
-            resolver: FakeRadiusResolver(radius),
+            resolver,
             fail_create: Arc::clone(&fail_create),
         };
         Self {

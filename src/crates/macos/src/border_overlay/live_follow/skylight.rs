@@ -22,6 +22,13 @@
 //!   fact, which is the lag this part fixes.
 //! - Minimum need: notifications for move, resize, reorder, hide, unhide and
 //!   close of the bordered windows, and one bounds read per window per tick.
+//! - Fast reorder (optional, not part of the registration): `SLSOrderWindow`,
+//!   looked up lazily on the first fast reorder. **Not observed to resolve on
+//!   macOS 26 and its signature is unverified** (see
+//!   [`SkyLightWindowNotify::order_above`]). Public equivalent: `AppKit`'s
+//!   `orderWindow:relativeTo:`, main thread only, which is the slower path the
+//!   fast reorder shortens. A missing symbol or a non-zero result disables the
+//!   fast path for the run (one diagnostic); the main-thread `Order` stays.
 //!
 //! # Signatures: assumptions (none observed)
 //!
@@ -51,7 +58,7 @@
 use std::ffi::{c_int, c_void};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use super::{EventSlots, LiveUnavailable, WindowEventKind};
+use super::{EventSlots, FastOrderResult, LiveUnavailable, WindowEventKind};
 use crate::border_overlay::OverlayRect;
 use crate::border_overlay::private_skylight::{SkyLightSymbols, system_lookup};
 
@@ -80,9 +87,16 @@ pub const WINDOW_EVENTS: [(u32, WindowEventKind); 6] = [
 
 const SYM_REQUEST: &std::ffi::CStr = c"SLSRequestNotificationsForWindows";
 const SYM_BOUNDS: &std::ffi::CStr = c"SLSGetWindowBounds";
+/// The private order call of the fast reorder (see [`SkyLightWindowNotify::order_above`]).
+pub const SYM_ORDER: &std::ffi::CStr = c"SLSOrderWindow";
+/// `SLSOrderWindow` mode: directly above the relative window (assumed `1`,
+/// like the public `kCGSOrderAbove`/`NSWindowAbove`; `-1` is below and `0`
+/// out, never used here).
+pub const ORDER_ABOVE: c_int = 1;
 
 type RequestFn = unsafe extern "C" fn(c_int, *const u32, c_int) -> c_int;
 type BoundsFn = unsafe extern "C" fn(c_int, u32, *mut CgRect) -> c_int;
+type OrderFn = unsafe extern "C" fn(c_int, u32, c_int, u32) -> c_int;
 
 /// `CGRect` as the window server writes it (`CGFloat` is `f64` on 64-bit).
 #[repr(C)]
@@ -92,6 +106,17 @@ struct CgRect {
     y: f64,
     width: f64,
     height: f64,
+}
+
+/// Extra candidate ids registered **for logging only** (unverified).
+///
+/// Never acted on: every id of 800..=830 not in [`WINDOW_EVENTS`]. Their events go only to
+/// the raw log the owner drains ([`EventSlots::on_window_event`]), so a native
+/// run shows which ids the window server really sends on a click or a raise. A
+/// refused logging-only registration is skipped, never an error.
+#[must_use]
+pub fn logging_only_events() -> Vec<u32> {
+    (800..=830).filter(|id| kind_of_event(*id).is_none()).collect()
 }
 
 /// The kind a registered event id reports.
@@ -183,7 +208,8 @@ impl WindowSymbols {
 /// slot, because the private callback receives no context we read.
 static ACTIVE_SLOTS: Mutex<Option<Arc<EventSlots>>> = Mutex::new(None);
 
-/// The notify proc. Copies `(event, window id)` into the slots: allocates
+/// The notify proc. Copies `(event, window id)` into the slots (raw log and,
+/// for a known id, the kind bit): allocates
 /// nothing, reads no AX state, and holds the slot lock only to clone the `Arc`.
 unsafe extern "C" fn window_event(
     event: u32,
@@ -193,14 +219,14 @@ unsafe extern "C" fn window_event(
     _connection: c_int,
 ) {
     let _ = std::panic::catch_unwind(|| {
-        let Some(kind) = kind_of_event(event) else { return };
         // SAFETY: the window server passes a payload of `length` bytes (or null).
         let Some(id) = (unsafe { window_id_from_payload(data.cast_const(), length) }) else {
             return;
         };
         let slots = ACTIVE_SLOTS.lock().unwrap_or_else(PoisonError::into_inner).clone();
         if let Some(slots) = slots {
-            slots.record(kind, id);
+            // Raw log (any registered id) plus the kind's slot bit.
+            slots.on_window_event(event, id);
         }
     });
 }
@@ -210,6 +236,10 @@ pub struct SkyLightWindowNotify {
     symbols: WindowSymbols,
     connection: Option<c_int>,
     registered: Vec<u32>,
+    /// `SLSOrderWindow`, looked up on the first fast reorder (`None` before,
+    /// empty inner value when missing). Never needed by live follow itself.
+    order: std::cell::OnceCell<Option<OrderFn>>,
+    lookup: fn(&std::ffi::CStr) -> *mut c_void,
 }
 
 impl SkyLightWindowNotify {
@@ -224,7 +254,65 @@ impl SkyLightWindowNotify {
             symbols,
             connection: None,
             registered: Vec::new(),
+            order: std::cell::OnceCell::new(),
+            lookup: system_lookup,
         }
+    }
+
+    /// Over injected symbols and an injected lookup for `SLSOrderWindow`
+    /// (tests: a missing symbol).
+    #[cfg(test)]
+    pub(crate) const fn with_order_lookup(
+        symbols: WindowSymbols,
+        lookup: fn(&std::ffi::CStr) -> *mut c_void,
+    ) -> Self {
+        Self {
+            symbols,
+            connection: None,
+            registered: Vec::new(),
+            order: std::cell::OnceCell::new(),
+            lookup,
+        }
+    }
+
+    /// The fast reorder: orders our overlay panel `panel` directly above
+    /// `target` on our main connection (the connection that owns the panel),
+    /// only while the main thread records the panel as visible above that
+    /// target (`panel_registry`, lock held across the call). Never orders a
+    /// panel in.
+    ///
+    /// Assumed, **unverified** signature (written from the author's
+    /// recollection of the C shape, not from any border tool or yabai header):
+    /// `CGError SLSOrderWindow(int connection, uint32_t window, int mode,
+    /// uint32_t relative_to_window)` with mode above = 1, below = -1, out = 0;
+    /// a window of another connection is accepted as `relative_to_window`.
+    pub fn order_above(&mut self, panel: u32, target: u32) -> FastOrderResult {
+        let Some(connection) = self.connection else {
+            return FastOrderResult::Missing("SLSMainConnectionID");
+        };
+        let lookup = self.lookup;
+        let order = *self.order.get_or_init(|| {
+            let address = lookup(SYM_ORDER);
+            // SAFETY: the `dlsym` address of the exact named symbol, with the
+            // documented (assumed) shape; data and function pointers have the
+            // same size on every supported target.
+            (!address.is_null())
+                .then(|| unsafe { std::mem::transmute::<*mut c_void, OrderFn>(address) })
+        });
+        let Some(order) = order else {
+            return FastOrderResult::Missing("SLSOrderWindow");
+        };
+        crate::border_overlay::panel_registry::with_eligible(panel, target, || {
+            // SAFETY: resolved symbol with the documented shape; plain values.
+            unsafe { order(connection, panel, ORDER_ABOVE, target) }
+        })
+        .map_or(FastOrderResult::NotShown, |code| {
+            if code == 0 {
+                FastOrderResult::Ordered
+            } else {
+                FastOrderResult::Refused(code)
+            }
+        })
     }
 
     /// Registers every window event. Total: a missing symbol or any refusal is
@@ -255,6 +343,12 @@ impl SkyLightWindowNotify {
                 )));
             }
             self.registered.push(event);
+        }
+        // Logging-only candidates: best effort, a refusal is not an error.
+        for event in logging_only_events() {
+            if self.symbols.base.register_proc(connection, window_event, event) == Some(0) {
+                self.registered.push(event);
+            }
         }
         self.connection = Some(connection);
         Ok(())

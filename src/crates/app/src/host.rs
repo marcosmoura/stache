@@ -814,20 +814,29 @@ impl TilingFactory {
                 RadiusCapability, SystemOverlayBackend, SystemSpaceEvents,
             };
             // Looked up lazily (first overlay radius request), so nothing native
-            // happens here while borders are disabled. The private radius call
-            // is detected but not wired until its native check, so every round
-            // border uses the fallback radius for now.
+            // happens here while borders are disabled. The capability starts as
+            // FallbackOnly (true until known) and becomes Available when every
+            // private radius symbol resolves; a missing one keeps the fallback
+            // radius and its one diagnostic.
             let capabilities = OverlayCapabilities {
                 radius: RadiusCapability::FallbackOnly,
                 ..OverlayCapabilities::default()
             };
-            parts.overlay = Some(Arc::new(OverlayControl::new(
+            let control_slot: Arc<std::sync::OnceLock<std::sync::Weak<OverlayControl>>> =
+                Arc::new(std::sync::OnceLock::new());
+            let observer_slot = Arc::clone(&control_slot);
+            let resolver = LazyCornerRadiusResolver::system().observed(move |capability| {
+                if let Some(control) = observer_slot.get().and_then(std::sync::Weak::upgrade) {
+                    control.set_radius_capability(capability);
+                }
+            });
+            let control = Arc::new(OverlayControl::new(
                 overlay_executor,
-                Arc::new(SystemOverlayBackend::new(Arc::new(
-                    LazyCornerRadiusResolver::system(),
-                ))) as Arc<dyn OverlayBackend>,
+                Arc::new(SystemOverlayBackend::new(Arc::new(resolver))) as Arc<dyn OverlayBackend>,
                 capabilities,
-            )));
+            ));
+            let _ = control_slot.set(Arc::downgrade(&control));
+            parts.overlay = Some(control);
             // The Space and Mission Control sources and the active-Space
             // confirmation are factories: nothing native exists until the border
             // engine starts (borders enabled); the owner thread then registers

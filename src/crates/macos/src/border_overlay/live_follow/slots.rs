@@ -13,6 +13,14 @@
 //! slot that was just reassigned: the new window then gets one spurious event,
 //! which costs one bounds read and nothing else.
 //!
+//! Raw evidence: [`EventSlots::on_window_event`] (what the callback calls) also
+//! appends `(event id, window id)` of every event for a watched window to a
+//! bounded raw log, in arrival order, including ids that map to no
+//! [`WindowEventKind`] (registered for logging only). The log is preallocated
+//! ([`RAW_CAPACITY`]); a full log drops and counts. The owner drains it with
+//! [`EventSlots::drain_raw`] and stamps it with its own clock: nothing is
+//! formatted or logged inside a callback.
+//!
 //! [`EventSlots::close`] is the "close first" step of a stop: it refuses new
 //! records and waits (bounded) for the callbacks in progress, so after it
 //! returns `true` no callback touches the slots.
@@ -23,6 +31,19 @@ use std::time::{Duration, Instant};
 
 use super::{LoopWaker, WindowEventKind};
 use crate::border_overlay::MAX_OVERLAYS;
+use crate::border_overlay::live_follow::skylight::kind_of_event;
+
+/// How many raw events the log holds between two owner drains.
+pub const RAW_CAPACITY: usize = 256;
+
+/// One raw private event for a watched window, as received.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RawEvent {
+    /// The private event id (known or logging-only).
+    pub event: u32,
+    /// The window server id.
+    pub cg_window_id: u32,
+}
 
 /// One window's pending events, taken by [`EventSlots::drain`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,6 +73,8 @@ pub struct SlotsCounters {
     pub own_dropped: u64,
     /// Windows left out of the watched set because the cap was reached.
     pub capped: u64,
+    /// Raw events dropped because the raw log was full.
+    pub raw_dropped: u64,
 }
 
 struct Entry {
@@ -71,6 +94,8 @@ pub struct EventSlots {
     refused: AtomicU64,
     own_dropped: AtomicU64,
     capped: AtomicU64,
+    raw: Mutex<Vec<RawEvent>>,
+    raw_dropped: AtomicU64,
 }
 
 impl EventSlots {
@@ -91,6 +116,8 @@ impl EventSlots {
             refused: AtomicU64::new(0),
             own_dropped: AtomicU64::new(0),
             capped: AtomicU64::new(0),
+            raw: Mutex::new(Vec::with_capacity(RAW_CAPACITY)),
+            raw_dropped: AtomicU64::new(0),
         }
     }
 
@@ -111,6 +138,46 @@ impl EventSlots {
         if let Some(waker) = waker {
             waker();
         }
+    }
+
+    /// The callback side for one private event id: appends it to the raw log
+    /// (watched windows only) and records its kind when the id maps to one.
+    /// Allocates nothing (the raw log is preallocated) and calls out only to
+    /// wake the owner, with no lock held.
+    pub fn on_window_event(&self, event: u32, cg_window_id: u32) {
+        self.in_flight.fetch_add(1, Ordering::SeqCst);
+        if self.accepting.load(Ordering::SeqCst) && self.is_watched(cg_window_id) {
+            let mut raw = self.raw.lock().unwrap_or_else(PoisonError::into_inner);
+            let full = raw.len() >= RAW_CAPACITY;
+            if !full {
+                raw.push(RawEvent { event, cg_window_id });
+            }
+            drop(raw);
+            if full {
+                self.raw_dropped.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        self.in_flight.fetch_sub(1, Ordering::SeqCst);
+        match kind_of_event(event) {
+            Some(kind) => self.record(kind, cg_window_id),
+            // A logging-only id: wake the owner so the log is drained promptly.
+            None if self.is_watched(cg_window_id) => self.wake(),
+            None => {}
+        }
+    }
+
+    fn is_watched(&self, cg_window_id: u32) -> bool {
+        cg_window_id != 0
+            && self.entries.iter().any(|e| e.id.load(Ordering::SeqCst) == cg_window_id)
+    }
+
+    /// Takes the raw events logged since the last call (owner side), in order.
+    #[must_use]
+    pub fn drain_raw(&self) -> Vec<RawEvent> {
+        let mut raw = self.raw.lock().unwrap_or_else(PoisonError::into_inner);
+        let taken = raw.clone();
+        raw.clear();
+        taken
     }
 
     /// The callback side: records one event for `cg_window_id`.
@@ -229,6 +296,7 @@ impl EventSlots {
             refused: self.refused.load(Ordering::Relaxed),
             own_dropped: self.own_dropped.load(Ordering::Relaxed),
             capped: self.capped.load(Ordering::Relaxed),
+            raw_dropped: self.raw_dropped.load(Ordering::Relaxed),
         }
     }
 

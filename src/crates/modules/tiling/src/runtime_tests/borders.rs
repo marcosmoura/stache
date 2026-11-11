@@ -2185,6 +2185,140 @@ mod live {
         });
         assert!(reads(&anim) >= 1);
     }
+
+    fn click_at(frame: Rect) -> [DragSignal; 2] {
+        let at = DragPoint {
+            x: frame.x + frame.width / 2.0,
+            y: frame.y + frame.height / 2.0,
+        };
+        [
+            DragSignal::Down {
+                button: 0,
+                at,
+                epoch: 1,
+                time: Duration::ZERO,
+            },
+            DragSignal::Up {
+                button: 0,
+                at,
+                epoch: 1,
+                time: Duration::from_millis(80),
+            },
+        ]
+    }
+
+    fn orders_of(events: &[Ev], handle: OverlayHandle) -> usize {
+        events.iter().filter(|e| matches!(e, Ev::Order(h, _) if *h == handle)).count()
+    }
+
+    /// Native run 15: a click inside the already-focused window (no Tiling
+    /// focus change) re-orders its `above` overlay once at the mouse up and
+    /// once after the settle; nothing hides or orders out. The application's
+    /// activation without a focus change re-asserts the same way. `below`
+    /// re-asserts nothing.
+    #[test]
+    fn a_click_in_the_focused_window_reorders_its_above_overlay() {
+        let (mut desk, [w1, w2, _w3]) = Desk::started();
+        let cg1 = Desk::cg(0, 1);
+        let h1 = desk.handle(cg1);
+        let tile = tile_of(&desk, w1);
+
+        desk.reload(&json!({ "enabled": true, "order": "above" }), 0);
+        for _ in 0..10 {
+            desk.frame();
+        }
+        // The snapshots the up queues read the windows where they are.
+        untouched(&desk, w1, cg1);
+        untouched(&desk, w2, Desk::cg(1, 1));
+        desk.mark("click");
+        let [down, up] = click_at(tile);
+        signal(&desk, down);
+        desk.rig.pump();
+        assert_eq!(orders_of(&desk.since("click"), h1), 0, "nothing on the down");
+        signal(&desk, up);
+        desk.rig.pump();
+        let after = desk.since("click");
+        assert!(
+            after.contains(&Ev::Order(h1, cg1)),
+            "re-ordered at the up: {after:#?}"
+        );
+        assert_eq!(orders_of(&after, h1), 1);
+        for _ in 0..10 {
+            desk.frame();
+        }
+        let after = desk.since("click");
+        assert_eq!(orders_of(&after, h1), 2, "one settle order: {after:#?}");
+        assert!(
+            !after.iter().any(|e| matches!(e, Ev::Hide(_) | Ev::Release(_))),
+            "{after:#?}"
+        );
+
+        desk.mark("activation");
+        desk.rig.ingress.submit(Input::Activated(w1.application())).expect("activated");
+        desk.rig.pump();
+        for _ in 0..10 {
+            desk.frame();
+        }
+        let after = desk.since("activation");
+        assert_eq!(orders_of(&after, h1), 2, "activation re-asserts: {after:#?}");
+        assert!(!after.iter().any(|e| matches!(e, Ev::Hide(_) | Ev::Release(_))));
+    }
+
+    /// With live follow active the timers are gone: a focus change orders the
+    /// new focus once (no settle), a click or an activation inside the focused
+    /// window orders nothing, and the window server's reorder notification for
+    /// the window (its own raise) puts the `above` border back on top, once.
+    #[test]
+    fn with_live_follow_active_above_is_kept_by_the_reorder_event_not_timers() {
+        let live = FakeLiveFollow::active();
+        let (mut desk, [w1, w2, _w3]) = Desk::started_with(Some(Box::new(live.clone())));
+        let (cg1, cg2) = (Desk::cg(0, 1), Desk::cg(1, 1));
+        let (h1, h2) = (desk.handle(cg1), desk.handle(cg2));
+        let tile = tile_of(&desk, w1);
+        desk.reload(&json!({ "enabled": true, "order": "above" }), 0);
+        for _ in 0..10 {
+            desk.frame();
+        }
+
+        desk.mark("focus");
+        desk.focus(w2);
+        for _ in 0..20 {
+            desk.frame();
+        }
+        let after = desk.since("focus");
+        assert_eq!(orders_of(&after, h2), 1, "one order, no settle: {after:#?}");
+        desk.focus(w1);
+        for _ in 0..10 {
+            desk.frame();
+        }
+
+        untouched(&desk, w1, cg1);
+        untouched(&desk, w2, cg2);
+        desk.mark("click");
+        let [down, up] = click_at(tile);
+        signal(&desk, down);
+        desk.rig.pump();
+        signal(&desk, up);
+        desk.rig.pump();
+        desk.rig.ingress.submit(Input::Activated(w1.application())).expect("activated");
+        desk.rig.pump();
+        for _ in 0..20 {
+            desk.frame();
+        }
+        let after = desk.since("click");
+        assert_eq!(orders_of(&after, h1), 0, "no timer re-order: {after:#?}");
+
+        desk.mark("reorder");
+        live.sink().expect("sink").reorder(w1);
+        desk.rig.pump();
+        for _ in 0..10 {
+            desk.frame();
+        }
+        let after = desk.since("reorder");
+        assert_eq!(orders_of(&after, h1), 1, "restored above once: {after:#?}");
+        assert!(after.contains(&Ev::Order(h1, cg1)));
+        assert!(!after.iter().any(|e| matches!(e, Ev::Hide(_) | Ev::Release(_))));
+    }
 }
 
 // ------------------------------------------------- native fullscreen enter/exit

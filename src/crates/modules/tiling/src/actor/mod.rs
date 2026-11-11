@@ -925,6 +925,13 @@ impl Engine {
             },
             _ => None,
         };
+        // A raise Tiling did not cause: re-asserted for the focused `above`
+        // border after the borders update (drag.rs still decides the drag).
+        let raise = match &input {
+            Input::Drag(DragSignal::Up { .. }) => Some(None),
+            Input::Activated(application) => Some(Some(*application)),
+            _ => None,
+        };
         let terminated = match &input {
             Input::Lifecycle {
                 kind: LifecycleKind::Terminated,
@@ -946,6 +953,9 @@ impl Engine {
         // Borders first: an overlay of a window that left the visible workspace
         // is ordered out before this input's frame writes are queued.
         self.update_borders(now);
+        if let (Some(application), Some(side)) = (raise, &mut self.border_side) {
+            side.raise_intent(now, application);
+        }
         self.dispatch(effects);
         if retime {
             self.retime(now);

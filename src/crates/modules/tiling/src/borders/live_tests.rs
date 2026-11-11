@@ -19,7 +19,7 @@
 use stache_macos::border_overlay::{FakeLiveFollow, OverlayRect, unavailable_message};
 
 use super::*;
-use crate::borders::engine::{FOLLOW_GRACE, HOLD_QUIET};
+use crate::borders::engine::{FOLLOW_GRACE, HOLD_QUIET, LIVE_REORDER_CAP};
 
 const MISSING: &str = "missing symbol SLSGetWindowBounds";
 
@@ -306,12 +306,11 @@ fn unhide_never_shows_by_itself() {
 }
 
 #[test]
-fn private_reorder_re_orders_the_border_and_not_while_suspended() {
-    let live = FakeLiveFollow::active();
-    let (mut rig, w) = live_rig(&live);
+fn private_reorder_re_orders_an_above_border_and_not_while_suspended() {
+    let (mut rig, live, w) = reorder_rig(BorderPlacement::Above);
     let sink = live.sink().expect("sink");
     sink.reorder(w);
-    rig.engine.reorder_raised();
+    rig.engine.reorder_raised(rig.at(1000));
     assert!(matches!(
         rig.engine.sent.last().expect("batch").commands[0].kind,
         OverlayKind::Order { target_cg_id: 11 }
@@ -319,7 +318,7 @@ fn private_reorder_re_orders_the_border_and_not_while_suspended() {
     let orders = rig.count(|k| matches!(k, OverlayKind::Order { .. }));
     rig.engine.suspend(SuspendReason::MissionControl);
     sink.reorder(w);
-    rig.engine.reorder_raised();
+    rig.engine.reorder_raised(rig.at(1000));
     assert_eq!(
         rig.count(|k| matches!(k, OverlayKind::Order { .. })),
         orders,
@@ -524,4 +523,174 @@ fn without_a_live_source_the_engine_behaves_as_before_part_06() {
     assert_eq!(moves(&rig), 1);
     assert!(rig.engine.live_status().is_none());
     assert!(rig.engine.diagnostics().live.is_none());
+}
+
+// ------------------------------------------- window-server reorder (`above`)
+
+/// An engine with an active live follow and one shown border placed `placement`.
+fn reorder_rig(placement: BorderPlacement) -> (Rig, FakeLiveFollow, WindowInstance) {
+    let live = FakeLiveFollow::active();
+    let mut rig = Rig::inline();
+    rig.engine.set_live_follow(Box::new(live.clone()));
+    rig.engine.start_live();
+    let e = placed_entry(&rig, 1, 11, placement);
+    let w = e.window;
+    show_all(&mut rig, vec![e]);
+    rig.engine.note_focus(rig.at(50), Some(w));
+    (rig, live, w)
+}
+
+fn order_count(rig: &Rig) -> usize { rig.count(|k| matches!(k, OverlayKind::Order { .. })) }
+
+#[test]
+fn a_reorder_event_for_an_above_window_orders_its_overlay_once() {
+    let (mut rig, live, w) = reorder_rig(BorderPlacement::Above);
+    let before = order_count(&rig);
+    live.sink().expect("sink").reorder(w);
+    rig.engine.tick(rig.at(1000));
+    assert_eq!(order_count(&rig) - before, 1);
+    assert_eq!(rig.engine.diagnostics().engine.live_reorders, 1);
+    rig.engine.tick(rig.at(2000));
+    assert_eq!(order_count(&rig) - before, 1, "nothing repeats by itself");
+    assert_eq!(rig.engine.next_deadline(), None);
+    assert_eq!(rig.order_outs(), 0);
+}
+
+#[test]
+fn several_reorder_events_in_one_frame_give_one_order() {
+    let (mut rig, live, w) = reorder_rig(BorderPlacement::Above);
+    let sink = live.sink().expect("sink");
+    let before = order_count(&rig);
+    sink.reorder(w);
+    sink.reorder(w);
+    rig.engine.tick(rig.at(1000));
+    // More notifications inside the same display frame fold into one `Order`
+    // at the end of that frame.
+    sink.reorder(w);
+    rig.engine.tick(rig.at(1001));
+    sink.reorder(w);
+    rig.engine.tick(rig.at(1002));
+    assert_eq!(order_count(&rig) - before, 1, "one order inside the frame");
+    let due = rig.engine.next_deadline().expect("the frame's follow-up");
+    assert_eq!(due, rig.at(1000) + FRAME);
+    rig.engine.tick(due);
+    rig.engine.tick(due + Duration::from_millis(500));
+    assert_eq!(
+        order_count(&rig) - before,
+        2,
+        "one more at the next frame, never a storm"
+    );
+}
+
+#[test]
+fn a_reorder_feedback_loop_is_capped_with_a_diagnostic() {
+    let (mut rig, live, w) = reorder_rig(BorderPlacement::Above);
+    let sink = live.sink().expect("sink");
+    let before = order_count(&rig);
+    // Our own `Order` re-stacks the window and notifies again, every frame.
+    for i in 0..20_u64 {
+        sink.reorder(w);
+        rig.engine.tick(rig.at(1000 + i * 20));
+    }
+    assert_eq!(order_count(&rig) - before, LIVE_REORDER_CAP);
+    assert!(rig.engine.diagnostics().engine.live_reorders_capped > 0);
+    // After the window the cap lifts again.
+    sink.reorder(w);
+    rig.engine.tick(rig.at(5000));
+    assert_eq!(order_count(&rig) - before, LIVE_REORDER_CAP + 1);
+}
+
+#[test]
+fn a_reorder_event_for_a_below_window_orders_nothing() {
+    let (mut rig, live, w) = reorder_rig(BorderPlacement::Below);
+    let before = order_count(&rig);
+    live.sink().expect("sink").reorder(w);
+    rig.engine.tick(rig.at(1000));
+    assert_eq!(order_count(&rig) - before, 0);
+    assert_eq!(rig.engine.next_deadline(), None);
+}
+
+#[test]
+fn a_reorder_event_while_suspended_orders_nothing() {
+    let (mut rig, live, w) = reorder_rig(BorderPlacement::Above);
+    rig.engine.suspend(SuspendReason::MissionControl);
+    let before = order_count(&rig);
+    live.sink().expect("sink").reorder(w);
+    rig.engine.tick(rig.at(1000));
+    rig.engine.tick(rig.at(3000));
+    assert_eq!(order_count(&rig) - before, 0);
+}
+
+#[test]
+fn a_reorder_event_for_an_unbordered_window_orders_nothing() {
+    let (mut rig, live, _) = reorder_rig(BorderPlacement::Above);
+    let before = order_count(&rig);
+    live.sink().expect("sink").reorder(rig.window(9, 9));
+    rig.engine.tick(rig.at(1000));
+    assert_eq!(order_count(&rig) - before, 0);
+}
+
+#[test]
+fn with_live_follow_active_a_focus_change_orders_once_and_schedules_no_settle() {
+    let live = FakeLiveFollow::active();
+    let mut rig = Rig::inline();
+    rig.engine.set_live_follow(Box::new(live));
+    rig.engine.start_live();
+    let e = placed_entry(&rig, 1, 11, BorderPlacement::Above);
+    let w = e.window;
+    show_all(&mut rig, vec![e]);
+    let before = order_count(&rig);
+    rig.engine.note_focus(rig.at(100), Some(w));
+    assert_eq!(order_count(&rig) - before, 1);
+    assert_eq!(rig.engine.next_deadline(), None, "no settle timer");
+    rig.engine.tick(rig.at(2000));
+    assert_eq!(order_count(&rig) - before, 1);
+}
+
+#[test]
+fn with_live_follow_active_a_click_orders_nothing_until_the_reorder_event() {
+    let (mut rig, live, w) = reorder_rig(BorderPlacement::Above);
+    rig.engine.tick(rig.at(1000));
+    let before = order_count(&rig);
+    // Mouse up and activation inside the focused window: no timer re-order.
+    rig.engine.note_raise_intent(rig.at(1100), w);
+    rig.engine.note_activation(rig.at(1101), w.application());
+    rig.engine.tick(rig.at(1200));
+    assert_eq!(order_count(&rig) - before, 0);
+    assert_eq!(rig.engine.next_deadline(), None);
+    // The window server raised the window over the border: its reorder
+    // notification puts the border back above.
+    live.sink().expect("sink").reorder(w);
+    rig.engine.tick(rig.at(1300));
+    assert_eq!(order_count(&rig) - before, 1);
+}
+
+// ------------------------------------------ fast reorder (owner-thread) facts
+
+#[test]
+fn the_targets_update_carries_the_panel_number_placement_and_fast_reorder_permission() {
+    let (mut rig, live, w) = reorder_rig(BorderPlacement::Above);
+    rig.engine.tick(rig.at(100));
+    let last = live.target_sets().last().unwrap().clone();
+    let target = last.iter().find(|t| t.window == w).expect("bordered");
+    assert!(
+        target.overlay_window.is_some(),
+        "the main thread's window number"
+    );
+    assert!(target.above);
+    assert!(target.fast_reorder, "shown under an open gate");
+    assert_eq!(target.fast_panel(), target.overlay_window);
+    // A suspension withdraws the permission with the hiding batch itself.
+    rig.engine.suspend(SuspendReason::MissionControl);
+    let last = live.target_sets().last().unwrap().clone();
+    let target = last.iter().find(|t| t.window == w).expect("still bordered");
+    assert!(!target.fast_reorder, "suspended: no fast reorder");
+    assert_eq!(target.fast_panel(), None);
+
+    let (mut rig, live, w) = reorder_rig(BorderPlacement::Below);
+    rig.engine.tick(rig.at(100));
+    let last = live.target_sets().last().unwrap().clone();
+    let target = last.iter().find(|t| t.window == w).expect("bordered");
+    assert!(!target.above);
+    assert_eq!(target.fast_panel(), None, "below never fast-reorders");
 }

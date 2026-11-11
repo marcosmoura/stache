@@ -7,8 +7,9 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use super::{
-    EventSlots, FollowMove, FollowSink, FollowTarget, LiveFollow, LiveStatus, LiveUnavailable,
-    LoopWaker, SessionMaker, StopOutcome, WindowEventKind, WindowEventSession,
+    EventSlots, FastOrderResult, FastReorder, FollowMove, FollowSink, FollowTarget, LiveFollow,
+    LiveStatus, LiveUnavailable, LoopWaker, SessionMaker, StopOutcome, WindowEventKind,
+    WindowEventSession,
 };
 use crate::border_overlay::OverlayRect;
 use crate::windows::WindowInstance;
@@ -32,6 +33,12 @@ struct SessionState {
     created: usize,
     woken: bool,
     pump_threads: Vec<String>,
+    /// What `order_above` returns (`Ordered` by default).
+    order_result: Option<FastOrderResult>,
+    /// Every `order_above` call `(panel, target)`, in order.
+    orders: Vec<(u32, u32)>,
+    /// Threads that made the order calls.
+    order_threads: Vec<String>,
 }
 
 #[derive(Default)]
@@ -89,6 +96,18 @@ impl FakeSessionControl {
         })
     }
 
+    /// Injects one raw private event id as the native callback would (raw log
+    /// plus the kind bit for a known id). `false` when no callback is
+    /// registered.
+    #[allow(clippy::must_use_candidate)]
+    pub fn inject_raw(&self, event: u32, cg: u32) -> bool {
+        let slots = self.state().slots.clone();
+        slots.is_some_and(|slots| {
+            slots.on_window_event(event, cg);
+            true
+        })
+    }
+
     /// The slots the registered callback records into.
     #[must_use]
     pub fn slots(&self) -> Option<Arc<EventSlots>> { self.state().slots.clone() }
@@ -112,6 +131,19 @@ impl FakeSessionControl {
     /// Every bounds read, in order.
     #[must_use]
     pub fn bounds_reads(&self) -> Vec<u32> { self.state().bounds_reads.clone() }
+
+    /// Makes every later `order_above` return `result`.
+    pub fn set_order_result(&self, result: FastOrderResult) {
+        self.state().order_result = Some(result);
+    }
+
+    /// Every private order call `(panel, target)`, in order.
+    #[must_use]
+    pub fn orders(&self) -> Vec<(u32, u32)> { self.state().orders.clone() }
+
+    /// Names of the threads that made the order calls.
+    #[must_use]
+    pub fn order_threads(&self) -> Vec<String> { self.state().order_threads.clone() }
 
     /// Names of the threads that pumped (the owner thread).
     #[must_use]
@@ -157,6 +189,15 @@ impl WindowEventSession for FakeSession {
         state.bounds.get(&cg_window_id).copied()
     }
 
+    fn order_above(&mut self, panel: u32, target: u32) -> FastOrderResult {
+        let mut state = lock(&self.shared.state);
+        state.orders.push((panel, target));
+        state
+            .order_threads
+            .push(std::thread::current().name().unwrap_or("unnamed").to_owned());
+        state.order_result.unwrap_or(FastOrderResult::Ordered)
+    }
+
     fn pump(&mut self, timeout: Duration) {
         lock(&self.shared.state)
             .pump_threads
@@ -195,6 +236,10 @@ pub enum SinkCall {
     Reorder(WindowInstance),
     /// A private close.
     Close(WindowInstance),
+    /// Raw events of one owner pass (`(event id, window id)`, in order).
+    Raw(Vec<(u32, u32)>),
+    /// One fast reorder attempt.
+    FastReorder(FastReorder),
 }
 
 #[derive(Default)]
@@ -267,6 +312,15 @@ impl FollowSink for FakeSink {
 
     fn close(&self, window: WindowInstance) {
         lock(&self.state).calls.push(SinkCall::Close(window));
+    }
+
+    fn fast_reorder(&self, report: FastReorder) {
+        lock(&self.state).calls.push(SinkCall::FastReorder(report));
+    }
+
+    fn raw_events(&self, events: &[super::RawWindowEvent]) {
+        let raw = events.iter().map(|e| (e.event, e.cg_window_id)).collect();
+        lock(&self.state).calls.push(SinkCall::Raw(raw));
     }
 }
 

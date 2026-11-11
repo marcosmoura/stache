@@ -11,11 +11,17 @@
 //! display period, coalesced into one batch per tick. The clock stops after
 //! [`QUIET`] without events; idle owns no clock.
 //!
-//! Only move and resize events act. The hide, unhide, reorder and close
-//! candidates stay **unverified and are not acted on** (native run 2: the
-//! candidate hide event fired after nearly every show and hid the border); each
-//! has its own flag in [`FollowTiming`], off by default, for a later verified
-//! run. Without the private symbols the engine falls back to hiding the
+//! Move and resize events act, and so does the reorder candidate (forwarded to
+//! the sink, which re-orders only an `above` border; see Tiling's engine). The
+//! hide, unhide and close candidates stay **unverified and are not acted on**
+//! (native run 2: the candidate hide event fired after nearly every show and
+//! hid the border); each has its own flag in [`FollowTiming`], off by default,
+//! for a later verified run.
+//!
+//! Every raw private event of a watched window (its id, including the
+//! logging-only candidates 800..=830, and the window id) is drained on the owner
+//! thread, stamped with the owner's clock and handed to
+//! [`FollowSink::raw_events`] for the debug log (never logged in a callback). Without the private symbols the engine falls back to hiding the
 //! border while its window moves (public fallback, Tiling side).
 //!
 //! Approach only, never code (decision 5): the reference border tool's `src/events.c`
@@ -81,13 +87,13 @@ mod tests;
 
 use std::fmt;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[cfg(any(test, feature = "testing"))]
 pub use fakes::{FakeLiveFollow, FakeSessionControl, FakeSink, SinkCall};
-pub use follower::{FollowCore, FollowCounters, FollowTiming};
+pub use follower::{FastOrderFn, FollowCore, FollowCounters, FollowTiming};
 pub use owner::{SessionMaker, SystemLiveFollow, forgotten_follow_owners};
-pub use slots::{EventSlots, SlotEvent, SlotsCounters};
+pub use slots::{EventSlots, RAW_CAPACITY, RawEvent, SlotEvent, SlotsCounters};
 
 use super::OverlayRect;
 pub use super::space_sources::{LoopWaker, StopObserver, StopOutcome};
@@ -107,7 +113,7 @@ pub enum WindowEventKind {
     /// The window was resized.
     Resize,
     /// The window was re-ordered in the window server's stack (candidate id,
-    /// unverified, not acted on).
+    /// unverified; forwarded to the sink, which re-orders `above` borders).
     Reorder,
     /// The window was ordered out or hidden (candidate id, unverified, not acted
     /// on: it fired after nearly every show in native run 2).
@@ -156,6 +162,63 @@ pub struct FollowTarget {
     pub display: Option<DisplayId>,
     /// The owner process, to drop Stache's own windows.
     pub owner_pid: Option<i32>,
+    /// The window number of the border's overlay panel (recorded on the main
+    /// thread after the panel was created; `None` until known). Only the fast
+    /// reorder path uses it.
+    pub overlay_window: Option<u32>,
+    /// The border is placed `above` its window.
+    pub above: bool,
+    /// The engine's verdict that the fast reorder may re-stack the panel now:
+    /// the border is shown and the Space gate is known and open (not
+    /// suspended, not window-blocked). `false` when unknown.
+    pub fast_reorder: bool,
+}
+
+impl FollowTarget {
+    /// The overlay panel the fast reorder may re-stack, if every condition
+    /// holds (`above`, shown under an open gate, window number known).
+    #[must_use]
+    pub const fn fast_panel(&self) -> Option<u32> {
+        if self.above && self.fast_reorder {
+            self.overlay_window
+        } else {
+            None
+        }
+    }
+}
+
+/// At most this many fast reorders per window per [`FAST_REORDER_WINDOW`] (the
+/// same bound as Tiling's reorder loop guard).
+pub const FAST_REORDER_CAP: usize = 4;
+/// The window of [`FAST_REORDER_CAP`].
+pub const FAST_REORDER_WINDOW: Duration = Duration::from_secs(1);
+
+/// The outcome of one private fast order call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FastOrderResult {
+    /// The window server accepted the order.
+    Ordered,
+    /// The main thread's record says the panel is not shown (ordered out,
+    /// hidden, released or never registered): nothing was called.
+    NotShown,
+    /// The call returned this non-zero `CGError`.
+    Refused(i32),
+    /// The private symbol (named) or the connection is unavailable.
+    Missing(&'static str),
+}
+
+/// One fast reorder attempt, reported to the sink on the owner thread.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FastReorder {
+    /// The target window server id.
+    pub cg_window_id: u32,
+    /// The overlay panel's window number.
+    pub panel: u32,
+    /// What the call did.
+    pub result: FastOrderResult,
+    /// `true` when this result disabled the fast path for the rest of the run
+    /// (reported once).
+    pub disabled: bool,
 }
 
 /// One bounds sample of a moving window.
@@ -167,6 +230,19 @@ pub struct FollowMove {
     pub bounds: OverlayRect,
     /// The authority stamp [`FollowSink::authority`] returned before the read.
     pub stamp: u64,
+}
+
+/// One raw private event of a watched window, stamped on the owner thread.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RawWindowEvent {
+    /// The private event id as received.
+    pub event: u32,
+    /// The window server id.
+    pub cg_window_id: u32,
+    /// The kind the id maps to; `None` for a logging-only id.
+    pub kind: Option<WindowEventKind>,
+    /// When the owner drained it (owner-thread clock).
+    pub at: Instant,
 }
 
 /// What the follower reports into. Implemented by the Tiling route. Every method
@@ -188,6 +264,12 @@ pub trait FollowSink: Send + Sync {
     fn reorder(&self, window: WindowInstance);
     /// The window was destroyed: release its border.
     fn close(&self, window: WindowInstance);
+    /// The raw events drained in one owner pass, in arrival order (debug
+    /// evidence only; called on the owner thread, never in a callback).
+    fn raw_events(&self, events: &[RawWindowEvent]) { let _ = events; }
+    /// One fast reorder attempt (debug evidence; called on the owner thread
+    /// right after the call, before [`Self::reorder`]).
+    fn fast_reorder(&self, report: FastReorder) { let _ = report; }
 }
 
 /// Whether live follow works.
@@ -259,6 +341,14 @@ pub trait WindowEventSession {
     fn subscribe(&mut self, ids: &[u32]) -> Result<(), LiveUnavailable>;
     /// One private bounds read, global top-left points.
     fn bounds(&mut self, cg_window_id: u32) -> Option<OverlayRect>;
+    /// Orders the overlay panel `panel` (a window of this process) directly
+    /// above `target` with a private window-server call, only when the main
+    /// thread records `panel` as shown. Never orders a panel in. The default
+    /// has no private call.
+    fn order_above(&mut self, panel: u32, target: u32) -> FastOrderResult {
+        let _ = (panel, target);
+        FastOrderResult::Missing("order_above")
+    }
     /// Runs the run loop until it is woken, a source was handled or `timeout`.
     fn pump(&mut self, timeout: Duration);
     /// Removes every registration (idempotent).

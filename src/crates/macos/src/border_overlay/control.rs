@@ -1,6 +1,6 @@
 //! The `Send + Sync` control: one pending batch, latest-wins merge, tickets.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -317,6 +317,9 @@ struct State {
     transition: Option<Transition>,
     /// Whether the last batch that touched animations failed to describe one.
     animation_failed: bool,
+    /// The panel window number of each live handle, as the main thread
+    /// reported it after a `Show` (read by [`OverlayControl::window_number`]).
+    windows: BTreeMap<OverlayHandle, u32>,
 }
 
 struct Shared {
@@ -351,6 +354,7 @@ impl OverlayControl {
                     counters: OverlayCounters::default(),
                     transition: None,
                     animation_failed: false,
+                    windows: BTreeMap::new(),
                 }),
             }),
         }
@@ -359,6 +363,11 @@ impl OverlayControl {
     /// Sets the ordering mode (the native gate's verdict).
     pub fn set_ordering_mode(&self, mode: OrderingMode) {
         lock(&self.shared.state).capabilities.ordering = mode;
+    }
+
+    /// Sets the corner radius capability (learned when the lazy resolver resolves).
+    pub fn set_radius_capability(&self, capability: super::RadiusCapability) {
+        lock(&self.shared.state).capabilities.radius = capability;
     }
 
     /// Sets the Space capability.
@@ -395,6 +404,14 @@ impl OverlayControl {
     /// The counters.
     #[must_use]
     pub fn counters(&self) -> OverlayCounters { lock(&self.shared.state).counters }
+
+    /// The window number of `handle`'s panel, recorded after the main thread
+    /// applied its `Show`; `None` before, after its release, or when the host
+    /// has none. Never waits for the main thread.
+    #[must_use]
+    pub fn window_number(&self, handle: OverlayHandle) -> Option<u32> {
+        lock(&self.shared.state).windows.get(&handle).copied()
+    }
 
     /// Merges a batch into the pending batch and returns at once.
     ///
@@ -479,6 +496,7 @@ impl OverlayControl {
             state.epoch += 1;
             state.job_queued = false;
             state.reserved.clear();
+            state.windows.clear();
             (handles, state.pending.take())
         };
         if let Some(pending) = superseded {
@@ -569,6 +587,7 @@ fn run_job(shared: &Shared, epoch: u64) {
         for (handle, entry) in pending.entries {
             if matches!(entry, Entry::Release) {
                 state.reserved.remove(&handle);
+                state.windows.remove(&handle);
             }
             commands.extend(entry.commands(handle));
         }
@@ -587,6 +606,16 @@ fn run_job(shared: &Shared, epoch: u64) {
     };
     let guard = SlotGuard(slot);
     let report = shared.backend.apply(&work);
+    if !report.windows.is_empty() {
+        let mut state = lock(&shared.state);
+        if state.epoch == epoch {
+            for (handle, number) in &report.windows {
+                if state.reserved.contains(handle) {
+                    state.windows.insert(*handle, *number);
+                }
+            }
+        }
+    }
     if !report.dropped.is_empty() {
         let mut state = lock(&shared.state);
         for handle in &report.dropped {
@@ -596,6 +625,7 @@ fn run_job(shared: &Shared, epoch: u64) {
                 .is_some_and(|pending| pending.entries.iter().any(|(entry, _)| entry == handle));
             if !queued {
                 state.reserved.remove(handle);
+                state.windows.remove(handle);
             }
         }
     }
