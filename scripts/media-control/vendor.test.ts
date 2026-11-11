@@ -20,6 +20,7 @@ import {
   type Fetch,
   listTarGz,
   type Manifest,
+  REPO_ROOT,
   RESOURCE_DIR,
   readManifest,
   refresh,
@@ -415,7 +416,7 @@ describe('media-control --refresh (synthetic bottle, no network)', () => {
     return tarGz(entries);
   }
 
-  function setup(archive: Buffer, stable: string) {
+  function setup(archive: Buffer, stable: string, tagRevision: string | null = adapterRevision) {
     const work = tempDir('media-control-refresh-');
     const root = path.join(work, 'media-control');
     const manifestPath = path.join(work, 'manifest.json');
@@ -431,6 +432,12 @@ describe('media-control --refresh (synthetic bottle, no network)', () => {
 
       if (url.startsWith('https://api.github.com/repos/ungive/media-control/contents/')) {
         return Response.json({ sha: adapterRevision });
+      }
+
+      if (url === `https://api.github.com/repos/ungive/mediaremote-adapter/commits/v${stable}`) {
+        return tagRevision
+          ? Response.json({ sha: tagRevision })
+          : new Response('', { status: 404 });
       }
 
       if (url.startsWith('https://ghcr.io/token')) {
@@ -459,7 +466,7 @@ describe('media-control --refresh (synthetic bottle, no network)', () => {
     const archive = nextBottle();
     const { fetch, root, manifestPath, tmpRoot } = setup(archive, '0.7.8');
 
-    await refresh({
+    const notes = await refresh({
       fetch,
       root,
       manifestPath,
@@ -482,8 +489,77 @@ describe('media-control --refresh (synthetic bottle, no network)', () => {
     expect(plist!.bottlePath).toContain('/0.7.8/');
     expect(plist!.sha256).toBe(sha256(Buffer.from('<plist>new</plist>\n')));
     expect(readFileSync(path.join(root, plist!.path), 'utf8')).toBe('<plist>new</plist>\n');
+    expect(written.upstream.mediaremoteAdapter.tag).toBe('v0.7.8');
     expect(checkDirectory(root, written)).toEqual([]);
+    expect(notes).toEqual([]);
     expect(readdirSync(tmpRoot)).toEqual([]);
+  });
+
+  it('notes a bottle file the manifest does not list, without failing', async () => {
+    const entries = gunzipSync(nextBottle());
+    const extra = tarGz([
+      { name: 'media-control/0.7.8/lib/media-control/new-helper', data: Buffer.from('x') },
+    ]);
+    // Append the extra entry by rebuilding: drop the trailing zero blocks of the first archive.
+    const archive = gzipSync(
+      Buffer.concat([entries.subarray(0, entries.length - 1024), gunzipSync(extra)]),
+    );
+    const { fetch, root, manifestPath, tmpRoot } = setup(archive, '0.7.8');
+    const notes = await refresh({
+      fetch,
+      root,
+      manifestPath,
+      tmpRoot,
+      bottleTag: 'arm64_tahoe',
+      version: '0.7.8',
+    });
+
+    expect(notes).toEqual([
+      'media-control/0.7.8/lib/media-control/new-helper: in the bottle but not in the manifest; it was not vendored',
+    ]);
+    expect(checkDirectory(root, readManifest(manifestPath))).toEqual([]);
+  });
+
+  it('writes nothing when the bottle lacks a manifest path', async () => {
+    const lacking = bottleEntries({
+      ...real,
+      files: real.files.map((file) => ({
+        ...file,
+        bottlePath: file.bottlePath.replace('/0.7.7/', '/0.7.8/'),
+      })),
+      symlinks: real.symlinks.map((link) => ({
+        ...link,
+        bottlePath: link.bottlePath.replace('/0.7.7/', '/0.7.8/'),
+      })),
+    }).filter((entry) => !entry.name.endsWith('/Info.plist'));
+    const { fetch, root, manifestPath, tmpRoot } = setup(tarGz(lacking), '0.7.8');
+
+    await expect(
+      refresh({ fetch, root, manifestPath, tmpRoot, bottleTag: 'arm64_tahoe', version: '0.7.8' }),
+    ).rejects.toThrow(/Info\.plist: missing from the bottle .*nothing written/);
+    expect(readdirSync(root)).toEqual([]);
+    expect(readManifest(manifestPath)).toEqual(real);
+    expect(readdirSync(tmpRoot)).toEqual([]);
+  });
+
+  it.each([
+    ['points at another commit', 'c'.repeat(40), /is c{40}, not the submodule revision/],
+    ['does not exist', null, /does not exist/],
+  ])('writes nothing when the adapter tag %s', async (_label, tagRevision, message) => {
+    const { fetch, root, manifestPath, tmpRoot } = setup(nextBottle(), '0.7.8', tagRevision);
+    const run = refresh({
+      fetch,
+      root,
+      manifestPath,
+      tmpRoot,
+      bottleTag: 'arm64_tahoe',
+      version: '0.7.8',
+    });
+
+    await expect(run).rejects.toThrow(message);
+    await expect(run).rejects.toThrow(/adapter tag must be set by hand/);
+    expect(readdirSync(root)).toEqual([]);
+    expect(readManifest(manifestPath)).toEqual(real);
   });
 
   it('writes nothing when the formula is at another version', async () => {
@@ -494,5 +570,30 @@ describe('media-control --refresh (synthetic bottle, no network)', () => {
     ).rejects.toThrow(/is at 0\.7\.9, not 0\.7\.8/);
     expect(readdirSync(root)).toEqual([]);
     expect(readManifest(manifestPath)).toEqual(real);
+  });
+});
+
+describe('media-control human-readable records', () => {
+  const manifest = readManifest();
+
+  it('PROVENANCE.md and bar.md name what the manifest pins (update them by hand after a refresh)', () => {
+    const provenance = readFileSync(path.join(RESOURCE_DIR, 'PROVENANCE.md'), 'utf8');
+    const bar = readFileSync(path.join(REPO_ROOT, 'docs/features/bar.md'), 'utf8');
+    const pinned = [
+      manifest.formula.version,
+      manifest.formula.bottleTag,
+      manifest.formula.blobDigest,
+      manifest.upstream.mediaControl.revision,
+      manifest.upstream.mediaremoteAdapter.revision,
+      ...manifest.files.map((file) => file.sha256),
+    ];
+
+    for (const value of pinned) {
+      expect(provenance, `PROVENANCE.md lacks ${value}`).toContain(value);
+    }
+
+    expect(bar).toContain(
+      `media-control ${manifest.formula.version}\` \`${manifest.formula.bottleTag}\``,
+    );
   });
 });

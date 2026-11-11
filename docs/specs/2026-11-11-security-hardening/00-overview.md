@@ -5,7 +5,7 @@ branch: fix/security-hardening
 # Security hardening
 
 Read when changing CI pinning, the vendored media adapter, the configuration trust model or
-panic-safety claims. **PLANNED, NOT SHIPPED.** Every part is `draft`. Base: `main` at `d8366a4`.
+panic-safety claims. Status is in the parts table. Base when written: `main` at `d8366a4`.
 
 ## Goal
 

@@ -17,8 +17,8 @@
 //!
 //! Menu items carry only an index into the target's token table (`NSMenuItem`
 //! `tag`); the action callback maps it to an [`ActionToken`], contains panics
-//! (unwind-enabled builds only; release aborts)
-//! and only calls the selection sink. It performs no AX call and no wait.
+//! (unwind-enabled builds only; release aborts) and only calls the selection
+//! sink. It performs no AX call and no wait.
 //!
 //! The pure [`plan`] turns a [`MenuSnapshot`] into a [`RenderPlan`] (what to
 //! draw and which items carry actions) so the rendering rules are testable
@@ -272,8 +272,8 @@ mod system {
 
         impl ActionTarget {
             /// Selects the token for the item's tag; panics are contained
-            /// (unwind-enabled builds only; release aborts) and
-            /// nothing else happens (no AX, no wait).
+            /// (unwind-enabled builds only; release aborts) and nothing else
+            /// happens (no AX, no wait).
             #[unsafe(method(stacheMenuItemSelected:))]
             fn selected(&self, sender: &NSMenuItem) {
                 let ivars = self.ivars();

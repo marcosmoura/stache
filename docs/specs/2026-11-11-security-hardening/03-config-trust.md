@@ -93,6 +93,12 @@ rules and the watcher do not change.
 
 ## Notes
 
+- Changed after review (2026-11-11): the directory holding a symlinked file's target is not
+  flagged for group or world write when it has the sticky bit, because nobody else can replace
+  the file there (a Nix store, `/Users/Shared`). The configuration directory keeps the rule even
+  when sticky, since a missing file could be created in it. ACLs are not inspected; the docs say
+  so.
+
 - Root is accepted as an owner because only root can write a root-owned `0644` file, and root
   can already do anything to the user. This mirrors OpenSSH `StrictModes`.
 - Ancestors above the configuration directory and above a symlink target's directory are not

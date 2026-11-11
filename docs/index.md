@@ -33,6 +33,7 @@ Read when navigating the shipped foundation, explicitly planned rewrites or the 
 | Tiling–Bar strip (shipped, default off)     | [feature](features/bar.md#tiling-strip-data), [spec](specs/2026-11-08-tiling-bar/00-overview.md)            |
 | Coordinated teardown                        | [spec](specs/2026-11-03-teardown/00-overview.md)                                                            |
 | Release/packaging (planned)                 | [spec](specs/2026-11-03-release/00-overview.md)                                                             |
+| Security hardening (CI, adapter, trust)     | [spec](specs/2026-11-11-security-hardening/00-overview.md), [trust](architecture/config.md#trust-model)     |
 | Old application/features                    | [legacy docs](../_legacy/docs/index.md), [legacy build](../_legacy/README.md)                               |
 | Tray menu and actions (shipped)             | [features/tray.md](features/tray.md)                                                                        |
 

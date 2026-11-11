@@ -2504,9 +2504,9 @@ impl ApplicationBackend for SystemApplicationBackend {
             }
             let queue = NSOperationQueue::mainQueue();
             let block = RcBlock::new(move |_notification: NonNull<NSNotification>| {
-                // Contain panics (unwind-enabled builds only; release aborts); only invalidate and
-                // enqueue. No query, wait or
-                // policy runs here: the block may be running inside a native send.
+                // Contain panics (unwind-enabled builds only; release aborts); only
+                // invalidate and enqueue. No query, wait or policy runs here: the block
+                // may be running inside a native send.
                 let _ = catch_unwind(AssertUnwindSafe(|| {
                     let installed = OBSERVERS
                         .with(|cell| cell.borrow().get(&handle).map(|state| state.generation));

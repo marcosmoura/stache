@@ -314,13 +314,17 @@ CI rules (`.github/workflows/`):
 - Every `uses:` pins a full 40-character commit SHA followed by a `# vX.Y.Z` comment naming that
   release. Dependabot (`.github/dependabot.yml`) checks GitHub Actions weekly and opens one grouped
   pull request that moves the SHAs and comments together.
-- The token is read-only: a top-level `permissions:` block grants only `contents: read`, no job
-  widens it, and `actions/checkout` sets `persist-credentials: false`.
-- Lock guard: `cargo fetch --locked` runs before any step that runs cargo or `bun run`, failing when
+- The token is read-only by default: a top-level `permissions:` block grants only `contents: read`,
+  and a job that needs more declares it on that job alone (`quality.yml` has none).
+  `actions/checkout` sets `persist-credentials: false`.
+- Lock guard: in each job, `cargo fetch --locked` runs before the first step that runs cargo, the
+  Tauri CLI, `bunx`, `npx` or a `bun <script>` other than `install`, `audit` or `pm`, failing when
   `Cargo.lock` does not match the manifests; the job ends with
   `git diff --exit-code -- Cargo.lock bun.lock`. Local scripts are not locked.
 - `taiki-e/install-action` installs the exact cargo-sort, cargo-nextest and cargo-audit versions
-  listed above; every `tool:` entry carries `@<version>`.
+  listed above; every `tool:` entry carries `@<version>`. Dependabot moves the action SHAs, but
+  these `tool:` versions are bumped by hand.
+- The pin test also rejects local actions, quoted `uses:` values and flow-style steps, by design.
 
 - `lint:ui`: strict typecheck of frontend, prepare script and root configs, then oxlint/stylelint.
   oxlint enforces `curly: all`: every `if`, `else`, `for` and `while` body uses braces, even for one

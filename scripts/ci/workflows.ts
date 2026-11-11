@@ -18,10 +18,13 @@ const RUN = /^(\s*)(?:-\s+)?run:\s*(.*)$/;
 const GUARD = 'cargo fetch --locked';
 
 /**
- * A step runs cargo when a `run:` command calls `cargo` directly or calls `bun run`, because any
- * package script may build or test the Rust workspace.
+ * A step runs cargo when a `run:` command calls `cargo` or the Tauri CLI directly, calls `bunx` or
+ * `npx`, or calls `bun <script>`, because any package or script may build or test the Rust
+ * workspace. Only the Bun built-ins that cannot build Rust (`install`, `audit`, `pm`, `--version`,
+ * `-v`) are exempt.
  */
-const CARGO_RUNNING = /(^|[\s;&|(])(cargo|bun run)\s/;
+const CARGO_RUNNING =
+  /(?:^|[\s;&|(])(?:(?:cargo|bunx|npx|\S*node_modules\/\.bin\/tauri)(?=\s|$)|bun\s+(?!(?:install|audit|pm|--version|-v)(?:\s|$))\S)/m;
 
 function indentOf(line: string): number {
   return line.length - line.trimStart().length;
@@ -57,6 +60,44 @@ function stepLines(lines: string[], at: number): number[] {
   return result;
 }
 
+/** Index of the job each line belongs to: the keys directly under `jobs:`; -1 outside a job. */
+function jobOf(lines: string[]): number[] {
+  const jobs = Array.from({ length: lines.length }, () => -1);
+  const top = lines.findIndex((line) => /^jobs:\s*$/.test(line));
+
+  if (top < 0) {
+    return jobs;
+  }
+
+  let keyIndent = -1;
+  let current = -1;
+
+  for (let index = top + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+
+    if (line.trim() === '' || line.trimStart().startsWith('#')) {
+      jobs[index] = current;
+      continue;
+    }
+
+    if (indentOf(line) === 0) {
+      break;
+    }
+
+    if (keyIndent < 0) {
+      keyIndent = indentOf(line);
+    }
+
+    if (indentOf(line) === keyIndent && /^\s*[\w-]+:/.test(line)) {
+      current = index;
+    }
+
+    jobs[index] = current;
+  }
+
+  return jobs;
+}
+
 /** Commands of each `run:`, with the line they start on; block scalars are joined. */
 function runCommands(lines: string[]): { line: number; command: string }[] {
   const commands: { line: number; command: string }[] = [];
@@ -72,7 +113,7 @@ function runCommands(lines: string[]): { line: number; command: string }[] {
     const own = indentOf(lines[index]);
     let command = match[2];
 
-    if (command === '|' || command === '>') {
+    if (command.startsWith('|') || command.startsWith('>')) {
       const body: string[] = [];
 
       while (index + 1 < lines.length) {
@@ -122,6 +163,10 @@ export function checkWorkflow({ file, text }: WorkflowFile): string[] {
       }
     }
 
+    if (/^\s*-\s*\{/.test(line)) {
+      at(index, 'flow-style steps ("- { ... }") are not supported; write the step as a block');
+    }
+
     const tool = /^\s*tool:\s*(.+)$/.exec(line);
 
     if (tool) {
@@ -134,8 +179,6 @@ export function checkWorkflow({ file, text }: WorkflowFile): string[] {
 
     if (/^permissions:/.test(line)) {
       topPermissions = index;
-    } else if (/^\s+permissions:/.test(line)) {
-      at(index, 'job-level permissions are not allowed; use the top-level block only');
     }
   });
 
@@ -168,13 +211,20 @@ export function checkWorkflow({ file, text }: WorkflowFile): string[] {
     }
   }
 
+  const jobs = jobOf(lines);
   const commands = runCommands(lines);
-  const guard = commands.find(({ command }) => command.trim() === GUARD);
-  const first = commands.find(
-    ({ command }) => command.trim() !== GUARD && CARGO_RUNNING.test(`${command} `),
-  );
 
-  if (first) {
+  for (const job of new Set(commands.map(({ line }) => jobs[line]))) {
+    const own = commands.filter(({ line }) => jobs[line] === job);
+    const guard = own.find(({ command }) => command.trim() === GUARD);
+    const first = own.find(
+      ({ command }) => command.trim() !== GUARD && CARGO_RUNNING.test(command),
+    );
+
+    if (!first) {
+      continue;
+    }
+
     if (!guard) {
       at(first.line, `no "${GUARD}" step before this cargo-running step`);
     } else if (first.line < guard.line) {

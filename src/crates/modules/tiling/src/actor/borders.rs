@@ -11,12 +11,12 @@
 //! # Stopping
 //!
 //! Disabling the borders (a reload), the end of the actor and a panic in the
-//! engine (unwind-enabled builds only; release aborts) all run the same ordered retire: stop the
-//! live-follow owner, stop the
-//! Spaces owner (typed outcomes), retire the engine's handle ledger, ask the
-//! control to `release_all` and record the ticket in the shared
-//! [`BorderLifecycle`]. The actor never waits for the main thread: the stop (off
-//! main) or a later turn reads the acknowledgement.
+//! engine (unwind-enabled builds only; release aborts) all run the same ordered
+//! retire: stop the live-follow owner, stop the Spaces owner (typed outcomes),
+//! retire the engine's handle ledger, ask the control to `release_all` and
+//! record the ticket in the shared [`BorderLifecycle`]. The actor never waits
+//! for the main thread: the stop (off main) or a later turn reads the
+//! acknowledgement.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex, PoisonError};

@@ -30,17 +30,24 @@ directory is Stache code; it is third-party material shipped unmodified.
   makes `--check` report an unexpected entry; delete it, it is untracked.
 - **Refresh.** `bun run vendor:media-control -- --refresh --bottle <tag> --version <v>` resolves
   the bottle digest and revisions from `formulae.brew.sh` (and the submodule revision from the
-  GitHub API), rewrites these files and the manifest. The result must pass `--verify-upstream`
-  and an approved live adapter probe before it is committed.
+  GitHub API), requires the adapter tag to resolve to that submodule revision, reads every
+  manifest path from the bottle before writing anything, then rewrites these files and the
+  manifest and notes any bottle file the manifest does not list. This file and
+  `docs/features/bar.md` must then be updated by hand; a test in
+  `scripts/media-control/vendor.test.ts` fails until they name the manifest's version, bottle
+  tag, digest, revisions and hashes. The result must pass `--verify-upstream` and an approved
+  live adapter probe before it is committed.
 - **Architecture:** arm64 only (`MediaRemoteAdapterTestClient` and
   `MediaRemoteAdapter.framework/Versions/A/MediaRemoteAdapter` are thin arm64 Mach-O).
   The app reports `unsupportedArchitecture` on other hosts without spawning anything.
 - **Minimum macOS:** both Mach-O files carry `LC_BUILD_VERSION minos 26.0`, matching the app's
   `minimumSystemVersion`.
-- **Signatures:** both Mach-O files carry upstream's ad-hoc signatures, which verify for their
-  own bytes. The framework fails `codesign --verify --strict` ("code has no resources but
-  signature indicates they must be present"); that failure comes from the upstream build and is
-  present in the bottle itself. Release signing re-signs the nested code.
+- **Signatures:** both Mach-O files carry upstream's ad-hoc signatures.
+  `MediaRemoteAdapterTestClient` verifies in place. In place, the framework and its binary fail
+  even plain `codesign --verify` ("code has no resources but signature indicates they must be
+  present"); only a copy of the binary outside the framework verifies. That failure comes from
+  the upstream build and is present in the bottle itself. Release signing re-signs the nested
+  code.
 - **Layout kept:** `Versions/A`, `Versions/Current -> A` and the top-level
   `MediaRemoteAdapter` and `Resources` links are stored in git as symlinks. Tauri's
   `bundle.resources` flattens them in the `.app` (see `docs/features/bar.md`).

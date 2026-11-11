@@ -87,6 +87,13 @@ true. No product code changes.
 
 ## Notes
 
+- Changed after review (2026-11-11): the pin test allows a job-level `permissions:` block, so a
+  later workflow can raise one job above the read-only default; the top-level rule is unchanged
+  and `quality.yml` has no job-level block. The lock guard is checked per job, block scalars with
+  chomping indicators (`|-`, `>-`) are read, `bunx`, `npx`, `node_modules/.bin/tauri` and
+  `bun <script>` count as cargo-running, flow-style steps are rejected and `.yaml` files are
+  covered.
+
 - `HUSKY: '0'` and `--frozen-lockfile` stay as they are.
 - `cargo fetch --locked` warms the same registry cache `rust-cache` restores, so the extra cost
   is small. If it proves slow, `cargo metadata --locked --format-version 1 > /dev/null` is an

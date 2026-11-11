@@ -1,12 +1,11 @@
 //! The selected-keyboard-input-source change observer.
 //!
 //! A distributed notification is delivery-at-best: the callback ignores the
-//! payload, contains panics (unwind-enabled builds only; release aborts) and only calls the
-//! supplied hint closure, which the
-//! hotkey owner turns into a coalesced refresh request. It never queries the
-//! layout, registers a hotkey or waits. The observer object is `!Send`
-//! (`MainThreadOnly`), so it lives in the main-owned native layer and is removed
-//! there.
+//! payload, contains panics (unwind-enabled builds only; release aborts) and
+//! only calls the supplied hint closure, which the hotkey owner turns into a
+//! coalesced refresh request. It never queries the layout, registers a hotkey
+//! or waits. The observer object is `!Send` (`MainThreadOnly`), so it lives in
+//! the main-owned native layer and is removed there.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;

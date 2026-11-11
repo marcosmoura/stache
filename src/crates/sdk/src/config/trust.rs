@@ -77,17 +77,21 @@ impl fmt::Display for TrustWarning {
 /// target. Metadata follows symlinks.
 ///
 /// A path is flagged when its owner is neither `owner` nor root, or its mode
-/// is group- or world-writable. Missing paths and metadata errors are
-/// skipped. Warnings name canonical paths; each is reported once, in
-/// examination order: the directory, then each file followed by its target
-/// directory.
+/// is group- or world-writable. A symlink target's directory with the sticky
+/// bit is not flagged for group or world write: others cannot replace or
+/// remove the file there. The configuration directory is flagged even when
+/// sticky, because someone else could create a missing file in it. Missing
+/// paths and metadata errors are skipped. Warnings name canonical paths; each
+/// is reported once, in examination order: the directory, then each file
+/// followed by its target directory.
 #[must_use]
 pub fn inspect_trust(
     paths: &ConfigPaths,
     files: impl IntoIterator<Item = PathBuf>,
     owner: u32,
 ) -> Vec<TrustWarning> {
-    let mut candidates = vec![paths.directory().to_path_buf()];
+    // Each candidate carries whether the sticky bit exempts it from the write check.
+    let mut candidates = vec![(paths.directory().to_path_buf(), false)];
     for file in files {
         let is_link = fs::symlink_metadata(&file).is_ok_and(|meta| meta.file_type().is_symlink());
         let target_directory = if is_link {
@@ -97,18 +101,18 @@ pub fn inspect_trust(
         } else {
             None
         };
-        candidates.push(file);
-        candidates.extend(target_directory);
+        candidates.push((file, false));
+        candidates.extend(target_directory.map(|directory| (directory, true)));
     }
     let mut seen = HashSet::new();
     let mut warnings = Vec::new();
-    for path in candidates {
+    for (path, sticky_exempt) in candidates {
         let Ok(metadata) = fs::metadata(&path) else { continue };
         let path = fs::canonicalize(&path).unwrap_or(path);
         if !seen.insert(path.clone()) {
             continue;
         }
-        if let Some(warning) = check(path, &metadata, owner) {
+        if let Some(warning) = check(path, &metadata, owner, sticky_exempt) {
             warnings.push(warning);
         }
     }
@@ -125,17 +129,23 @@ pub fn inspect_catalog_trust(
     inspect_trust(paths, files, current_owner())
 }
 
-fn check(path: PathBuf, metadata: &fs::Metadata, owner: u32) -> Option<TrustWarning> {
+fn check(
+    path: PathBuf,
+    metadata: &fs::Metadata,
+    owner: u32,
+    sticky_exempt: bool,
+) -> Option<TrustWarning> {
     let mode = metadata.mode() & 0o7777;
     let uid = metadata.uid();
     let mut reasons = Vec::new();
     if uid != owner && uid != 0 {
         reasons.push(TrustReason::ForeignOwner { uid });
     }
-    if mode & 0o020 != 0 {
+    let writable_checked = !(sticky_exempt && mode & 0o1000 != 0);
+    if writable_checked && mode & 0o020 != 0 {
         reasons.push(TrustReason::GroupWritable);
     }
-    if mode & 0o002 != 0 {
+    if writable_checked && mode & 0o002 != 0 {
         reasons.push(TrustReason::WorldWritable);
     }
     (!reasons.is_empty()).then_some(TrustWarning { path, reasons, mode, uid })
@@ -253,6 +263,35 @@ mod tests {
         let warnings = inspect_trust(&paths, [link], me());
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].path, real(&dotfiles));
+    }
+
+    #[test]
+    fn a_sticky_target_directory_is_not_flagged_for_write() {
+        let (root, paths, _file) = layout();
+        let shared = root.path().join("shared");
+        fs::create_dir(&shared).expect("shared");
+        chmod(&shared, 0o1777);
+        let target = shared.join("b.toml");
+        fs::write(&target, "").expect("target");
+        chmod(&target, 0o644);
+        let link = paths.directory().join("b.toml");
+        symlink(&target, &link).expect("link");
+        assert!(inspect_trust(&paths, [link.clone()], me()).is_empty());
+
+        chmod(&shared, 0o777);
+        let warnings = inspect_trust(&paths, [link], me());
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].path, real(&shared));
+    }
+
+    #[test]
+    fn a_sticky_configuration_directory_is_still_flagged() {
+        let (_root, paths, file) = layout();
+        chmod(paths.directory(), 0o1777);
+        let warnings = inspect_trust(&paths, [file], me());
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].path, real(paths.directory()));
+        assert_eq!(warnings[0].mode, 0o1777);
     }
 
     #[test]

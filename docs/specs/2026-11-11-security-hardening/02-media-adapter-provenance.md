@@ -142,6 +142,14 @@ spec on `main` (Decision 3). Do not change how the adapter is run or resolved.
 
 ## Notes
 
+- Changed after review (2026-11-11): the tool calls `/usr/bin/tar`; `--refresh` writes nothing
+  unless every manifest path exists in the new bottle, checks the adapter tag against the
+  submodule revision and reports bottle files the manifest does not list; a test keeps
+  `PROVENANCE.md` and `bar.md` in step with the manifest. The framework and its binary fail
+  plain `codesign --verify` in place, not only `--strict`; only a copy of the binary outside the
+  framework verifies. Two more stale release-spec statements were corrected under Decision 3:
+  "the only executable" (now "in `Contents/MacOS`") and the signing order in Part 03.
+
 - Homebrew bottles carry build-provenance attestations. If `gh attestation verify <bottle>
   --repo Homebrew/homebrew-core` works without new credentials, record its result in
   `PROVENANCE.md`. It is optional evidence, not a criterion.

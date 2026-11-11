@@ -390,7 +390,7 @@ export function upstreamUrl(manifest: Manifest, file: string): string {
 
 /**
  * Verifies `archive` against `digest` before anything touches the disk, validates its listing,
- * extracts it with the system `tar` into a fresh directory under `tmpRoot`, runs `inspect` on the
+ * extracts it with `/usr/bin/tar` (bsdtar, which refuses to extract through a symlink) into a fresh directory under `tmpRoot`, runs `inspect` on the
  * extraction root and always removes the directory.
  */
 export function withVerifiedBottle<T>(
@@ -419,7 +419,7 @@ export function withVerifiedBottle<T>(
 
     mkdirSync(extracted);
     writeFileSync(archivePath, archive);
-    execFileSync('tar', ['-xzf', archivePath, '-C', extracted], { cwd: tmpRoot });
+    execFileSync('/usr/bin/tar', ['-xzf', archivePath, '-C', extracted], { cwd: tmpRoot });
 
     return inspect(extracted);
   } finally {
@@ -558,7 +558,9 @@ interface FormulaInfo {
 
 /**
  * Rewrites the resource directory and the manifest from a new bottle. File names and symlinks are
- * taken from the current manifest; the bottle paths follow the new version.
+ * taken from the current manifest; the bottle paths follow the new version. Nothing is written
+ * unless every manifest path exists in the bottle. Returns one note per regular bottle file under
+ * `lib/media-control/` or the framework that the manifest does not list.
  */
 export async function refresh(options: {
   fetch: Fetch;
@@ -567,7 +569,7 @@ export async function refresh(options: {
   tmpRoot: string;
   bottleTag: string;
   version: string;
-}): Promise<void> {
+}): Promise<string[]> {
   const { fetch: fetchFn, root, manifestPath, tmpRoot, bottleTag, version } = options;
   const current = readManifest(manifestPath);
   const formulaName = current.formula.name;
@@ -593,6 +595,25 @@ export async function refresh(options: {
       `https://api.github.com/repos/${current.upstream.mediaControl.repository}/contents/mediaremote-adapter?ref=${revision}`,
     )
   ).json()) as { sha: string };
+  const adapterRepository = current.upstream.mediaremoteAdapter.repository;
+  let tagged: string | null = null;
+
+  try {
+    tagged = (
+      (await (
+        await fetchOk(fetchFn, `https://api.github.com/repos/${adapterRepository}/commits/${tag}`)
+      ).json()) as { sha: string }
+    ).sha;
+  } catch {
+    tagged = null;
+  }
+
+  if (tagged !== submodule.sha) {
+    throw new Error(
+      `${adapterRepository} tag ${tag} ${tagged ? `is ${tagged}` : 'does not exist'}, not the submodule revision ${submodule.sha}; the adapter tag must be set by hand`,
+    );
+  }
+
   const digest = `sha256:${bottle.sha256}`;
   const oldPrefix = `${formulaName}/${current.formula.version}/`;
   const newPrefix = `${formulaName}/${version}/`;
@@ -613,13 +634,39 @@ export async function refresh(options: {
     })),
   };
   const archive = await downloadBottle(fetchFn, next.formula.repository, digest);
+  const license = Buffer.from(
+    await (await fetchOk(fetchFn, upstreamUrl(next, next.license.upstreamPath))).arrayBuffer(),
+  );
 
-  withVerifiedBottle(archive, digest, tmpRoot, (extracted) => {
-    for (const file of next.files) {
+  return withVerifiedBottle(archive, digest, tmpRoot, (extracted) => {
+    // Read everything first so a bottle that lacks a manifest path leaves the repository untouched.
+    const files = next.files.map((file) => {
       const source = path.join(extracted, file.bottlePath);
-      const bytes = readFileSync(source);
+
+      try {
+        return {
+          file,
+          bytes: readFileSync(source),
+          executable: isExecutable(lstatSync(source).mode),
+        };
+      } catch {
+        throw new Error(
+          `${file.path}: missing from the bottle at ${file.bottlePath}; nothing written`,
+        );
+      }
+    });
+    const links = next.symlinks.map((link) => {
+      try {
+        return { link, target: readlinkSync(path.join(extracted, link.bottlePath)) };
+      } catch {
+        throw new Error(
+          `${link.path}: symlink missing from the bottle at ${link.bottlePath}; nothing written`,
+        );
+      }
+    });
+
+    for (const { file, bytes, executable } of files) {
       const target = path.join(root, file.path);
-      const executable = isExecutable(lstatSync(source).mode);
 
       mkdirSync(path.dirname(target), { recursive: true });
       writeFileSync(target, bytes);
@@ -628,22 +675,51 @@ export async function refresh(options: {
       file.mode = executable ? '100755' : '100644';
     }
 
-    for (const link of next.symlinks) {
+    for (const { link, target: linkTarget } of links) {
       const target = path.join(root, link.path);
 
-      link.target = readlinkSync(path.join(extracted, link.bottlePath));
+      link.target = linkTarget;
       rmSync(target, { force: true });
       symlinkSync(link.target, target);
     }
+
+    writeFileSync(path.join(root, next.license.path), license);
+    next.license.sha256 = sha256(license);
+    writeFileSync(manifestPath, `${JSON.stringify(next, null, 2)}\n`);
+
+    return unlistedBottleFiles(extracted, next);
   });
+}
 
-  const license = Buffer.from(
-    await (await fetchOk(fetchFn, upstreamUrl(next, next.license.upstreamPath))).arrayBuffer(),
-  );
+/** Regular bottle files under `lib/media-control/` and the framework that the manifest omits. */
+function unlistedBottleFiles(extracted: string, manifest: Manifest): string[] {
+  const prefix = `${manifest.formula.name}/${manifest.formula.version}`;
+  const known = new Set(manifest.files.map((file) => file.bottlePath));
+  const notes: string[] = [];
+  const walk = (relative: string): void => {
+    let entries;
 
-  writeFileSync(path.join(root, next.license.path), license);
-  next.license.sha256 = sha256(license);
-  writeFileSync(manifestPath, `${JSON.stringify(next, null, 2)}\n`);
+    try {
+      entries = readdirSync(path.join(extracted, relative), { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      const child = `${relative}/${entry.name}`;
+
+      if (entry.isDirectory()) {
+        walk(child);
+      } else if (entry.isFile() && !known.has(child)) {
+        notes.push(`${child}: in the bottle but not in the manifest; it was not vendored`);
+      }
+    }
+  };
+
+  walk(`${prefix}/lib/media-control`);
+  walk(`${prefix}/Frameworks/MediaRemoteAdapter.framework`);
+
+  return notes;
 }
 
 function argument(args: string[], name: string): string {
@@ -680,7 +756,7 @@ async function main(args: string[]): Promise<number> {
   }
 
   if (args.includes('--refresh')) {
-    await refresh({
+    const notes = await refresh({
       fetch,
       root: RESOURCE_DIR,
       manifestPath: MANIFEST_PATH,
@@ -688,7 +764,14 @@ async function main(args: string[]): Promise<number> {
       bottleTag: argument(args, '--bottle'),
       version: argument(args, '--version'),
     });
-    console.log('Refreshed. Run --verify-upstream and the live probe before committing.');
+
+    for (const note of notes) {
+      console.log(`note: ${note}`);
+    }
+
+    console.log(
+      'Refreshed. Update PROVENANCE.md and docs/features/bar.md by hand, then run --verify-upstream and the live probe before committing.',
+    );
 
     return report('media-control --check', checkDirectory(RESOURCE_DIR, readManifest()));
   }

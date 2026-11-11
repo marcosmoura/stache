@@ -773,9 +773,8 @@ impl AssertionOwner {
     ///
     /// An empty prefix releases nothing, so the caller has nothing to publish
     /// and the callback is dropped without being called. A panic from the
-    /// callback is contained (unwind-enabled builds only; release aborts) so the rollback still
-    /// runs; the panic
-    /// resumes only afterwards.
+    /// callback is contained (unwind-enabled builds only; release aborts) so
+    /// the rollback still runs; the panic resumes only afterwards.
     fn rollback_after_hook<F: FnOnce()>(
         &self,
         generation: u64,

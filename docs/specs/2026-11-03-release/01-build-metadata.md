@@ -34,7 +34,7 @@ statement below concerns the base `tauri.conf.json`, the only config a package i
   displays it. `icons/64x64.png` is referenced by nothing in the new tree; remove it, or
   reference it if a real use exists. Do not change the visual identity.
 - **Bundle contents.** The expected `.app` is `Contents/MacOS/stache` as the only
-  executable, `Contents/Info.plist`, `Contents/Resources/icon.icns` and `_CodeSignature`.
+  executable in `Contents/MacOS`, `Contents/Info.plist`, `Contents/Resources/icon.icns` and `_CodeSignature`.
   Frontend assets are embedded in the binary by `custom-protocol`, so no separate frontend
   directory is expected. `Contents/Resources/media-control/` holds exactly the files and symlink
   targets in `scripts/media-control/manifest.json` (flattened by Tauri), plus `PROVENANCE.md` and

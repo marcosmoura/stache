@@ -407,7 +407,12 @@ examines, following symlinks:
 
 A path is flagged when its owner is neither the effective user nor root, or its
 mode is group-writable (`0o020`) or world-writable (`0o002`). Group write is
-flagged even though macOS users share `staff`. Missing files and metadata errors
+flagged even though macOS users share `staff`. A symlink target's directory with
+the sticky bit (`0o1000`, as in a Nix store or `/Users/Shared`) is not flagged
+for group or world write, since others cannot replace or remove the file there;
+its owner is still checked, and the configuration directory is flagged even when
+sticky because someone else could create a missing file in it. ACLs are not
+inspected: only owner and mode bits are. Missing files and metadata errors
 are skipped; the loader reports I/O problems. Ancestors are not walked. Each
 path is reported once, by its canonical spelling, so a symlinked
 `~/.config/stache` names the real dotfiles directory. A dotfiles layout with

@@ -36,7 +36,7 @@ do not satisfy it, and the script must refuse them.
   The script then Developer ID re-signs the bundle Tauri built and is the single authority for
   the final signature and notarization; there is not a single signer across all build stages.
 - **Signing.** `codesign --force --options runtime --timestamp` with the Developer ID identity,
-  on the single executable and then the bundle. `--deep` is **never** used to sign, so an
+  on each nested `media-control` Mach-O (see Notes), then the main executable and then the bundle. `--deep` is **never** used to sign, so an
   unexpected nested binary fails verification instead of being silently covered. Verification
   does use `codesign --verify --strict --deep`.
 - **Ad-hoc dry run.** With `--dry-run-signing`, the same step order runs with identity `-`,
@@ -116,7 +116,7 @@ is `RELEASE-06-03`.
 - Nested code: `Contents/Resources/media-control/` holds two Mach-O files,
   `MediaRemoteAdapterTestClient` and `MediaRemoteAdapter.framework/Versions/A/MediaRemoteAdapter`
   (listed in `scripts/media-control/manifest.json`), plus `mediaremote-adapter.pl`. Upstream's
-  build ad-hoc signs them and its framework already fails strict verification. Each nested Mach-O
+  build ad-hoc signs them and its framework already fails `codesign --verify`, strict or not. Each nested Mach-O
   must be signed individually, inside out, with the Developer ID, hardened runtime and a timestamp
   before the app itself is signed. Tauri flattens the framework symlinks in the bundle (the
   top-level `MediaRemoteAdapter` becomes a regular copy of the binary and `Versions/Current` and

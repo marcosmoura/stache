@@ -105,15 +105,28 @@ describe('checkWorkflow', () => {
     ]);
   });
 
-  it('rejects a job-level permissions block', () => {
+  it('accepts a job-level permissions block while the top-level block stays read-only', () => {
     const text = valid.replace(
       '    runs-on: macos-26\n',
       '    runs-on: macos-26\n    permissions:\n      contents: write\n',
     );
 
-    expect(check(text)).toContain(
-      `fixture.yml:${lineOf(text, '    permissions:')}: job-level permissions are not allowed; use the top-level block only`,
+    expect(check(text)).toEqual([]);
+    expect(check(text.replace('  contents: read\n', '  contents: write\n'))).toEqual([
+      `fixture.yml:${lineOf(text, '  contents: read')}: top-level permissions grant "contents: write"; only "contents: read" is allowed`,
+    ]);
+  });
+
+  it('rejects a flow-style step', () => {
+    const text = valid.replace(
+      '      - run: git diff',
+      `      - { uses: actions/cache@${SHA} }\n      - {run: git status}\n      - run: git diff`,
     );
+
+    expect(check(text)).toEqual([
+      `fixture.yml:${lineOf(text, '- { uses')}: flow-style steps ("- { ... }") are not supported; write the step as a block`,
+      `fixture.yml:${lineOf(text, '- {run')}: flow-style steps ("- { ... }") are not supported; write the step as a block`,
+    ]);
   });
 
   it('rejects persisted checkout credentials', () => {
@@ -172,6 +185,63 @@ describe('checkWorkflow', () => {
 
     expect(check(text)).toEqual([
       `fixture.yml:${lineOf(text, 'bun run lint')}: no "cargo fetch --locked" step before this cargo-running step`,
+    ]);
+  });
+
+  const unguarded = (step: string) =>
+    valid
+      .replace('      - name: Lockfile matches manifests\n        run: cargo fetch --locked\n', '')
+      .replace('      - run: bun run lint\n', '')
+      .replace(
+        '      - name: Audit\n        run: |\n          bun audit\n          cargo audit\n',
+        '',
+      )
+      .replace(
+        '      - run: git diff',
+        `${step}\n      - run: cargo fetch --locked\n      - run: git diff`,
+      );
+
+  it.each([
+    ['a "|-" block scalar', '      - run: |-\n          cargo build', 'run: |-'],
+    ['a ">+" block scalar', '      - run: >+\n          cargo build', 'run: >+'],
+    ['bunx', '      - run: bunx tauri build', 'bunx'],
+    ['npx', '      - run: npx tauri build', 'npx'],
+    [
+      'the Tauri CLI under node_modules',
+      '      - run: ./node_modules/.bin/tauri build',
+      'tauri build',
+    ],
+    ['a bun script', '      - run: bun test:scripts', 'bun test:scripts'],
+    ['bun run', '      - run: bun run lint', 'bun run lint'],
+  ])('rejects %s before the lock guard', (_name, step, needle) => {
+    const text = unguarded(step);
+
+    expect(check(text)).toEqual([
+      `fixture.yml:${lineOf(text, needle)}: cargo-running step comes before the "cargo fetch --locked" step on line ${lineOf(text, 'cargo fetch')}`,
+    ]);
+  });
+
+  it.each([
+    'bun install --frozen-lockfile',
+    'bun audit',
+    'bun pm ls',
+    'bun --version',
+    'bun -v',
+    'node_modules/.bin/playwright install webkit',
+  ])('allows "%s" before the lock guard', (command) => {
+    expect(check(unguarded(`      - run: ${command}`))).toEqual([]);
+  });
+
+  it('requires the lock guard in every job that runs cargo', () => {
+    const text = `${valid}
+  test:
+    runs-on: macos-26
+    steps:
+      - run: cargo build
+`;
+
+    expect(check(text)).toEqual([
+      `fixture.yml:${lineOf(text, 'cargo build')}: no "cargo fetch --locked" step before this cargo-running step`,
     ]);
   });
 });

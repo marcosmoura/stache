@@ -205,12 +205,11 @@ impl NativeInput for SystemInput {
             TapKind::Suppressing => CGEventTapOptions::Default,
             TapKind::ListenOnly => CGEventTapOptions::ListenOnly,
         };
-        // SAFETY: `tap_callback` has the exact `CGEventTapCallBack`
-        // signature and contains every panic (unwind-enabled builds only; release aborts).
-        // `user_info` points into the boxed
-        // context stored in `parts`, which lives until `teardown` has
-        // invalidated the port and removed the source on this same thread, and
-        // it is never mutated while shared.
+        // SAFETY: `tap_callback` has the exact `CGEventTapCallBack` signature
+        // and contains every panic (unwind-enabled builds only; release
+        // aborts). `user_info` points into the boxed context stored in `parts`,
+        // which lives until `teardown` has invalidated the port and removed the
+        // source on this same thread, and it is never mutated while shared.
         let port = unsafe {
             CGEvent::tap_create(
                 CGEventTapLocation::HIDEventTap,

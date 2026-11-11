@@ -276,10 +276,10 @@ pub(super) fn preflight_on_main(
 /// Change notifications for a host that republishes frontmost state elsewhere.
 ///
 /// Registered through [`ApplicationObservation::watch_frontmost_observed`].
-/// Both callbacks are contained (unwind-enabled builds only; release aborts): a panic is caught and
-/// never reaches the
-/// activation sink or the main refresh. Neither runs while the publication cell
-/// is locked, so an implementation may call [`FrontmostWatch::snapshot`].
+/// Both callbacks are contained (unwind-enabled builds only; release aborts): a
+/// panic is caught and never reaches the activation sink or the main refresh.
+/// Neither runs while the publication cell is locked, so an implementation may
+/// call [`FrontmostWatch::snapshot`].
 pub trait FrontmostListener: Send + Sync {
     /// An activation was ingested and the epoch advanced to `epoch`; the
     /// previous confirmation is already stale.
