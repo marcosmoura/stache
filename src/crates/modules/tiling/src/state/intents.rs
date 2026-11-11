@@ -796,39 +796,25 @@ fn resize_master(
 
 // --------------------------------------------------------------------- send
 
-/// Moves `token` to `destination` (appended, legacy) and repairs focus.
-fn move_window(
-    state: &mut TilingState,
-    token: WindowInstance,
-    destination: WorkspaceId,
-    fx: &mut Vec<Effect>,
-) {
-    let Some(source) = state.windows.get(&token).and_then(|w| w.desired.workspace) else {
-        return;
-    };
-    let was_focused = state.focus.window == Some(token);
-    if let Some(workspace) = state.workspaces.iter_mut().find(|ws| ws.id == source) {
+/// Takes `token` out of workspace `id`'s order; when it was that workspace's
+/// focused window, the most recently focused window still there takes over.
+pub(super) fn leave_workspace(state: &mut TilingState, id: WorkspaceId, token: WindowInstance) {
+    let history = &state.focus_history;
+    if let Some(workspace) = state.workspaces.iter_mut().find(|ws| ws.id == id) {
         workspace.order.retain(|held| *held != token);
         if workspace.focused_window == Some(token) {
-            workspace.focused_window = state
-                .focus_history
+            workspace.focused_window = history
                 .iter()
                 .rev()
                 .find(|held| **held != token && workspace.order.contains(held))
                 .copied();
         }
     }
-    if let Some(workspace) = state.workspaces.iter_mut().find(|ws| ws.id == destination) {
-        workspace.order.push(token);
-    }
-    if let Some(window) = state.windows.get_mut(&token) {
-        window.desired.workspace = Some(destination);
-    }
-    state.frames.pinned.remove(&token);
-    if !was_focused {
-        return;
-    }
-    // Focus stays in the workspace it was in, on its next window.
+}
+
+/// Focus stays in workspace `source` after its focused window left: its next
+/// window takes the focus (state and native).
+pub(super) fn refocus_in(state: &mut TilingState, source: WorkspaceId, fx: &mut Vec<Effect>) {
     let replacement = state
         .workspaces
         .iter()
@@ -845,6 +831,30 @@ fn move_window(
             ws.focused_window = Some(next);
         }
         request_focus(state, next, fx);
+    }
+}
+
+/// Moves `token` to `destination` (appended, legacy) and repairs focus.
+fn move_window(
+    state: &mut TilingState,
+    token: WindowInstance,
+    destination: WorkspaceId,
+    fx: &mut Vec<Effect>,
+) {
+    let Some(source) = state.windows.get(&token).and_then(|w| w.desired.workspace) else {
+        return;
+    };
+    let was_focused = state.focus.window == Some(token);
+    leave_workspace(state, source, token);
+    if let Some(workspace) = state.workspaces.iter_mut().find(|ws| ws.id == destination) {
+        workspace.order.push(token);
+    }
+    if let Some(window) = state.windows.get_mut(&token) {
+        window.desired.workspace = Some(destination);
+    }
+    state.frames.pinned.remove(&token);
+    if was_focused {
+        refocus_in(state, source, fx);
     }
 }
 

@@ -98,6 +98,8 @@ struct RecordingRunner {
     writes: Arc<Mutex<Vec<Write>>>,
     /// Application lists requested.
     lists: Arc<std::sync::atomic::AtomicUsize>,
+    /// Native focus requests queued (`Effect::Focus`).
+    focuses: Arc<Mutex<Vec<WindowInstance>>>,
 }
 
 /// One queued frame write.
@@ -113,6 +115,9 @@ impl EffectRunner for RecordingRunner {
         if let Effect::WriteFrame { window, target, animate, .. } = effect {
             self.writes.lock().expect("writes").push(Write { window, target, animate });
         }
+        if let Effect::Focus { window, .. } = effect {
+            self.focuses.lock().expect("focuses").push(window);
+        }
         if matches!(effect, Effect::ListApplications { .. }) {
             self.lists.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
@@ -124,6 +129,7 @@ impl EffectRunner for RecordingRunner {
 
 struct Desktop {
     writes: Arc<Mutex<Vec<Write>>>,
+    focuses: Arc<Mutex<Vec<WindowInstance>>>,
     lists: Arc<std::sync::atomic::AtomicUsize>,
     /// Whether a Device Hub window joins Ghostty on the terminal workspace.
     hub: bool,
@@ -184,6 +190,7 @@ impl Desktop {
         order: Option<Order>,
     ) -> Self {
         let writes = Arc::new(Mutex::new(Vec::new()));
+        let focuses = Arc::new(Mutex::new(Vec::new()));
         let lists = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let native = Arc::new(Native::new(Duration::from_millis(500)));
         let bundles: Vec<&str> = APPS.iter().map(|(bundle, _)| *bundle).collect();
@@ -217,6 +224,7 @@ impl Desktop {
                 inner: InlineRunner::new(env),
                 writes: Arc::clone(&writes),
                 lists: Arc::clone(&lists),
+                focuses: Arc::clone(&focuses),
             }),
             Arc::clone(&rig.sink),
             Arc::clone(&rig.clock) as Arc<dyn crate::actor::Clock>,
@@ -226,6 +234,7 @@ impl Desktop {
         rig.engine = engine;
         let mut desktop = Self {
             writes,
+            focuses,
             lists,
             hub,
             animations,
@@ -2245,4 +2254,425 @@ fn a_spent_window_is_found_by_the_series_of_the_exit_space_change() {
     assert!(tabs.order().contains(&single), "back in its slot");
     assert!(tabs.order().contains(&other));
     assert!(written(&tabs, single) > before, "written to its tile");
+}
+
+// ------------------------------------------------- reload re-evaluates windows
+
+impl Desktop {
+    /// An accepted `tiling.toml` reload, as the module submits it.
+    fn reload(&mut self, revision: u64, value: serde_json::Value) {
+        self.release_late();
+        let config: TilingConfig = serde_json::from_value(value).expect("config");
+        self.submit(Input::Config {
+            revision,
+            config: Arc::new(config),
+        });
+        self.settle();
+    }
+
+    /// The published `tilingState` strip: workspace names in order.
+    fn strip(&self) -> Vec<String> {
+        let published = crate::published::project(&self.snap());
+        published.workspaces.iter().map(|ws| ws.name.clone()).collect()
+    }
+
+    fn published_workspace_of(&self, window: WindowInstance) -> Option<String> {
+        let published = crate::published::project(&self.snap());
+        let key = crate::published::window_key(window);
+        published
+            .windows
+            .iter()
+            .find(|w| w.key == key)
+            .and_then(|w| w.workspace.clone())
+    }
+
+    fn focused_workspace(&self) -> Option<String> {
+        crate::published::project(&self.snap()).focus.workspace
+    }
+}
+
+fn ab(extra: &serde_json::Value) -> serde_json::Value {
+    let mut value = json!({
+        "enabled": true,
+        "workspaces": [
+            { "name": "a", "rules": [{ "app_id": "com.mitchellh.ghostty" }] },
+            { "name": "b", "rules": [{ "app_id": "com.microsoft.VSCode" }] },
+        ],
+    });
+    if let (Some(map), Some(more)) = (value.as_object_mut(), extra.as_object()) {
+        for (key, item) in more {
+            map.insert(key.clone(), item.clone());
+        }
+    }
+    value
+}
+
+/// Workspaces `a` (rule: Ghostty = X) and `b` (rule: Code = Y); the unmatched
+/// Spotify, `WhatsApp` and Chrome (Z) in `a`, which is focused and visible.
+fn ab_desktop() -> Desktop {
+    let mut desk = Desktop::boot(Delivery::Immediate, GHOSTTY);
+    desk.reload(2, ab(&json!({})));
+    assert_eq!(desk.strip(), ["a", "b"]);
+    assert_eq!(desk.workspace_of(desk.token(GHOSTTY, 1)), "a");
+    assert_eq!(desk.workspace_of(desk.token(CODE, 2)), "b");
+    for (app, serial) in [(SPOTIFY, 3), (WHATSAPP, 4), (CHROME, 5)] {
+        assert_eq!(
+            desk.workspace_of(desk.token(app, serial)),
+            "a",
+            "{}",
+            APPS[app].1
+        );
+    }
+    assert_eq!(desk.visible_workspace(), "a");
+    assert_eq!(desk.focused_workspace().as_deref(), Some("a"));
+    assert!(!desk.shown[CODE] && desk.shown[GHOSTTY] && desk.shown[SPOTIFY]);
+    desk
+}
+
+#[test]
+fn reload_a_new_workspace_takes_an_existing_window_by_its_rule() {
+    let mut desk = ab_desktop();
+    let code = desk.token(CODE, 2);
+    desk.reload(
+        3,
+        json!({
+            "enabled": true,
+            "workspaces": [
+                { "name": "a", "rules": [{ "app_id": "com.mitchellh.ghostty" }] },
+                { "name": "b" },
+                { "name": "c", "rules": [{ "app_id": "com.microsoft.VSCode" }] },
+            ],
+        }),
+    );
+    assert_eq!(desk.strip(), ["a", "b", "c"]);
+    assert_eq!(desk.workspace_of(code), "c");
+    assert_eq!(desk.published_workspace_of(code).as_deref(), Some("c"));
+    assert_eq!(desk.workspace_of(desk.token(SPOTIFY, 3)), "a");
+    assert_eq!(desk.visible_workspace(), "a");
+    assert_eq!(desk.focused_workspace().as_deref(), Some("a"));
+    assert!(!desk.shown[CODE], "a window on a hidden workspace stays hidden");
+    desk.focus_workspace("c");
+    assert!(desk.shown[CODE] && !desk.shown[GHOSTTY]);
+}
+
+#[test]
+fn reload_removing_the_visible_workspace_places_its_windows_and_lays_them_out() {
+    let mut desk = ab_desktop();
+    let mark = desk.mark();
+    desk.reload(
+        3,
+        json!({
+            "enabled": true,
+            "workspaces": [{ "name": "b", "rules": [{ "app_id": "com.microsoft.VSCode" }] }],
+        }),
+    );
+    assert_eq!(desk.strip(), ["b"]);
+    for (app, serial) in [
+        (GHOSTTY, 1),
+        (CODE, 2),
+        (SPOTIFY, 3),
+        (WHATSAPP, 4),
+        (CHROME, 5),
+    ] {
+        assert_eq!(
+            desk.workspace_of(desk.token(app, serial)),
+            "b",
+            "{}",
+            APPS[app].1
+        );
+        assert!(desk.shown[app], "{} is on the visible workspace", APPS[app].1);
+    }
+    assert_eq!(desk.visible_workspace(), "b");
+    assert_eq!(desk.focused_workspace().as_deref(), Some("b"));
+    let written: Vec<_> = desk.writes_since(mark).iter().map(|w| w.window).collect();
+    assert!(
+        written.contains(&desk.token(CODE, 2)),
+        "the visible workspace is laid out"
+    );
+    assert!(written.contains(&desk.token(GHOSTTY, 1)));
+}
+
+#[test]
+fn reload_reversing_the_order_moves_nothing_and_writes_nothing() {
+    let mut desk = ab_desktop();
+    let mark = desk.mark();
+    let requests = desk.native.backend.visibility_requests().len();
+    desk.reload(
+        3,
+        json!({
+            "enabled": true,
+            "workspaces": [
+                { "name": "b", "rules": [{ "app_id": "com.microsoft.VSCode" }] },
+                { "name": "a", "rules": [{ "app_id": "com.mitchellh.ghostty" }] },
+            ],
+        }),
+    );
+    assert_eq!(desk.strip(), ["b", "a"]);
+    let snap = desk.snap();
+    let names: Vec<_> = snap.workspaces.iter().map(|ws| ws.name.as_str()).collect();
+    assert_eq!(names, ["b", "a"], "the query order is the configuration order");
+    assert_eq!(desk.workspace_of(desk.token(CODE, 2)), "b");
+    assert_eq!(desk.workspace_of(desk.token(SPOTIFY, 3)), "a");
+    assert_eq!(desk.visible_workspace(), "a");
+    assert_eq!(desk.focused_workspace().as_deref(), Some("a"));
+    assert!(desk.writes_since(mark).is_empty());
+    assert_eq!(desk.native.backend.visibility_requests().len(), requests);
+}
+
+#[test]
+fn reload_renaming_a_workspace_takes_its_windows_by_rule() {
+    let mut desk = ab_desktop();
+    let code = desk.token(CODE, 2);
+    desk.reload(
+        3,
+        json!({
+            "enabled": true,
+            "workspaces": [
+                { "name": "a", "rules": [{ "app_id": "com.mitchellh.ghostty" }] },
+                { "name": "b2", "rules": [{ "app_id": "com.microsoft.VSCode" }] },
+            ],
+        }),
+    );
+    assert_eq!(desk.strip(), ["a", "b2"]);
+    assert_eq!(desk.workspace_of(code), "b2");
+    assert_eq!(desk.visible_workspace(), "a");
+    assert!(!desk.shown[CODE]);
+    assert_eq!(desk.focused_workspace().as_deref(), Some("a"));
+}
+
+#[test]
+fn reload_of_a_non_workspace_key_re_evaluates_nothing() {
+    let mut desk = ab_desktop();
+    // A rule-matching window sent elsewhere by hand would be moved back by a
+    // re-evaluation: it must stay.
+    let ghostty = desk.token(GHOSTTY, 1);
+    desk.submit(Input::Intent(Intent::SendWindowToWorkspace {
+        window: Some(ghostty),
+        workspace: "b".into(),
+    }));
+    desk.settle();
+    assert_eq!(desk.workspace_of(ghostty), "b");
+    let before = desk.snap();
+    let mark = desk.mark();
+    let requests = desk.native.backend.visibility_requests().len();
+    desk.reload(3, ab(&json!({ "animations": { "duration": 350 } })));
+    let after = desk.snap();
+    assert_eq!(after.workspaces, before.workspaces);
+    assert_eq!(after.focus, before.focus);
+    assert_eq!(desk.workspace_of(ghostty), "b");
+    assert!(desk.writes_since(mark).is_empty(), "no frame write");
+    assert_eq!(
+        desk.native.backend.visibility_requests().len(),
+        requests,
+        "no hide or unhide"
+    );
+}
+
+#[test]
+fn the_users_reload_of_nine_workspaces_places_running_apps_without_a_restart() {
+    let mut desk = Desktop::boot_with(Delivery::Immediate, GHOSTTY, true, false);
+    let hub = desk.token(DEVICE_HUB, 6);
+    let spotify = desk.token(SPOTIFY, 3);
+    assert_eq!(desk.workspace_of(hub), "terminal");
+    assert_eq!(desk.workspace_of(spotify), "music");
+    assert_eq!(desk.strip(), [
+        "terminal",
+        "coding",
+        "browser",
+        "music",
+        "communication",
+        "misc",
+        "guitar",
+        "files",
+        "tasks"
+    ]);
+    assert!(desk.shown[DEVICE_HUB]);
+    desk.reload(
+        2,
+        json!({
+            "enabled": true,
+            "master": { "position": "left", "ratio": 75 },
+            "ignore": [
+                { "app_id": "com.apple.finder", "title": "Copy" },
+                { "app_name": "Raycast" },
+            ],
+            "workspaces": [
+                { "name": "files", "layout": "grid", "screen": "main",
+                  "rules": [{ "app_id": "com.apple.finder" }] },
+                { "name": "terminal", "layout": "master", "screen": "main",
+                  "rules": [{ "app_id": "com.mitchellh.ghostty" }] },
+                { "name": "coding", "layout": "monocle", "screen": "main",
+                  "rules": [{ "app_id": "com.microsoft.VSCode" }, { "app_id": "dev.zed.Zed" }] },
+                { "name": "browser", "layout": "monocle", "screen": "secondary",
+                  "rules": [{ "app_id": "com.google.Chrome" }] },
+                { "name": "design", "layout": "floating", "screen": "main",
+                  "rules": [{ "app_id": "com.example.DeviceHub" }] },
+                { "name": "communication", "layout": "floating", "screen": "main",
+                  "rules": [{ "app_id": "net.whatsapp.WhatsApp" }, { "app_id": "com.hnc.Discord" }] },
+                { "name": "media", "layout": "monocle", "screen": "main",
+                  "rules": [{ "app_id": "com.spotify.client" }] },
+                { "name": "misc", "layout": "floating", "screen": "main" },
+                { "name": "tasks", "layout": "grid", "screen": "main" },
+            ],
+        }),
+    );
+    assert_eq!(desk.strip(), [
+        "files",
+        "terminal",
+        "coding",
+        "browser",
+        "design",
+        "communication",
+        "media",
+        "misc",
+        "tasks"
+    ]);
+    assert_eq!(
+        desk.workspace_of(hub),
+        "design",
+        "the moved rule places the running app"
+    );
+    assert_eq!(desk.published_workspace_of(hub).as_deref(), Some("design"));
+    assert_eq!(
+        desk.workspace_of(spotify),
+        "media",
+        "the renamed workspace's app"
+    );
+    assert_eq!(desk.workspace_of(desk.token(GHOSTTY, 1)), "terminal");
+    assert_eq!(desk.workspace_of(desk.token(CODE, 2)), "coding");
+    assert_eq!(desk.workspace_of(desk.token(WHATSAPP, 4)), "communication");
+    assert_eq!(desk.workspace_of(desk.token(CHROME, 5)), "browser");
+    assert_eq!(desk.visible_workspace(), "terminal");
+    assert_eq!(desk.focused_workspace().as_deref(), Some("terminal"));
+    assert!(desk.shown[GHOSTTY]);
+    assert!(!desk.shown[DEVICE_HUB], "moved to a hidden workspace: hidden");
+    desk.focus_workspace("design");
+    assert!(desk.shown[DEVICE_HUB] && !desk.shown[GHOSTTY]);
+    desk.focus_workspace("media");
+    assert!(desk.shown[SPOTIFY] && !desk.shown[DEVICE_HUB]);
+}
+
+impl Desktop {
+    /// Native focus requests queued so far.
+    fn focus_mark(&self) -> usize { self.focuses.lock().expect("focuses").len() }
+
+    fn focuses_since(&self, mark: usize) -> Vec<WindowInstance> {
+        self.focuses.lock().expect("focuses")[mark..].to_vec()
+    }
+
+    fn published_focus_window(&self) -> Option<WindowInstance> {
+        let snap = self.snap();
+        let key = crate::published::project(&snap).focus.window?;
+        crate::published::resolve_window_key(&snap, &key)
+    }
+}
+
+#[test]
+fn reload_moving_the_focused_window_to_a_hidden_workspace_refocuses_natively() {
+    let mut desk = ab_desktop();
+    let ghostty = desk.token(GHOSTTY, 1);
+    // A second Ghostty window stays on the visible workspace: the application
+    // is only partly moved and must stay shown.
+    let scratch = desk.window_with(
+        GHOSTTY,
+        "scratch",
+        "AXStandardWindow",
+        (1200.0, 800.0),
+        SnapshotOrigin::Created,
+    );
+    desk.settle();
+    desk.app_focuses(GHOSTTY, ghostty);
+    desk.cmd_tab(GHOSTTY);
+    assert_eq!(desk.published_focus_window(), Some(ghostty));
+    assert_eq!(desk.workspace_of(scratch), "a");
+    let mark = desk.focus_mark();
+    desk.reload(
+        3,
+        json!({
+            "enabled": true,
+            "workspaces": [
+                { "name": "a" },
+                { "name": "b", "rules": [{ "app_id": "com.microsoft.VSCode" }] },
+                { "name": "c", "rules": [{ "title": "~" }] },
+            ],
+        }),
+    );
+    assert_eq!(desk.workspace_of(ghostty), "c");
+    assert_eq!(desk.workspace_of(scratch), "a");
+    assert_eq!(desk.focused_workspace().as_deref(), Some("a"));
+    let focused = desk.published_focus_window().expect("a focused window");
+    assert_ne!(focused, ghostty);
+    assert_eq!(desk.workspace_of(focused), "a");
+    assert_eq!(
+        desk.focuses_since(mark),
+        vec![focused],
+        "one native focus request, for the published focus"
+    );
+    assert!(
+        desk.shown[GHOSTTY],
+        "Ghostty keeps a window on the visible workspace"
+    );
+}
+
+#[test]
+fn reload_moving_the_focused_window_to_a_visible_workspace_keeps_the_focus() {
+    let mut desk = ab_desktop();
+    let ghostty = desk.token(GHOSTTY, 1);
+    desk.submit(Input::Displays(Arc::new(stache_macos::DisplayLayout::new(
+        vec![
+            crate::test_support::display(1, true, Some(60.0), 0.0),
+            crate::test_support::display(2, false, Some(60.0), 1920.0),
+        ],
+    ))));
+    desk.settle();
+    assert_eq!(desk.published_focus_window(), Some(ghostty));
+    let mark = desk.focus_mark();
+    desk.reload(
+        3,
+        json!({
+            "enabled": true,
+            "workspaces": [
+                { "name": "a", "screen": "main" },
+                { "name": "b", "screen": "main",
+                  "rules": [{ "app_id": "com.microsoft.VSCode" }] },
+                { "name": "c", "screen": "secondary",
+                  "rules": [{ "app_id": "com.mitchellh.ghostty" }] },
+            ],
+        }),
+    );
+    assert_eq!(desk.workspace_of(ghostty), "c");
+    assert_eq!(
+        desk.focused_workspace().as_deref(),
+        Some("c"),
+        "focus follows the window"
+    );
+    assert_eq!(desk.published_focus_window(), Some(ghostty));
+    assert!(desk.focuses_since(mark).is_empty(), "it still has native focus");
+    assert!(desk.shown[GHOSTTY]);
+    let snap = desk.snap();
+    let visible: Vec<_> = snap
+        .workspaces
+        .iter()
+        .filter(|ws| ws.visible)
+        .map(|ws| ws.name.as_str())
+        .collect();
+    assert_eq!(visible, ["a", "c"]);
+}
+
+#[test]
+fn a_reload_without_re_evaluation_requests_no_native_focus() {
+    let mut desk = ab_desktop();
+    let mark = desk.focus_mark();
+    desk.reload(3, ab(&json!({ "animations": { "duration": 350 } })));
+    desk.reload(
+        4,
+        json!({
+            "enabled": true,
+            "workspaces": [
+                { "name": "a", "layout": "grid", "rules": [{ "app_id": "com.mitchellh.ghostty" }] },
+                { "name": "b", "rules": [{ "app_id": "com.microsoft.VSCode" }] },
+            ],
+        }),
+    );
+    assert!(desk.focuses_since(mark).is_empty());
 }

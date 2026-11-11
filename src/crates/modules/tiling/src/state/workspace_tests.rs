@@ -1353,7 +1353,7 @@ fn reload_moves_a_workspace_when_its_screen_assignment_changes() {
 }
 
 #[test]
-fn reload_rule_edits_change_eligibility_but_reassign_no_existing_window() {
+fn reload_rule_edits_reassign_existing_windows_by_the_new_rules() {
     let mut world = World::new(
         Some(serde_json::json!({"workspaces": [
             {"name": "a"}, {"name": "docs", "rules": [{"title": "docs"}]}
@@ -1366,15 +1366,159 @@ fn reload_rule_edits_change_eligibility_but_reassign_no_existing_window() {
         {"name": "a", "rules": [{"title": "docs"}]}, {"name": "docs"}
     ]}));
     assert_eq!(
-        world.order("docs"),
+        world.order("a"),
         vec![first],
-        "no rule edit reassigns an existing window"
+        "an existing window follows the moved rule, as a fresh start would"
     );
+    assert!(world.order("docs").is_empty());
     let second = world.add(1, 2, "docs", 0.0);
     assert_eq!(
         world.order("a"),
-        vec![second],
+        vec![first, second],
         "new windows follow the new rules"
+    );
+}
+
+/// Workspaces `a` (rule: Editor) and `b` (rule: Browser); Editor, Browser and
+/// an unmatched Terminal window, the Terminal in `a`.
+fn reeval_world() -> (World, [WindowInstance; 3]) {
+    let mut world = World::new(
+        Some(serde_json::json!({"workspaces": [
+            {"name": "a", "rules": [{"app_id": "com.editor"}]},
+            {"name": "b", "rules": [{"app_id": "com.browser"}]},
+        ]})),
+        false,
+    );
+    world.enable();
+    let x = world.add(1, 1, "x", 0.0);
+    let y = world.add(2, 1, "y", 0.0);
+    let z = world.add(3, 1, "z", 0.0);
+    world.focus(x);
+    assert_eq!(world.order("a"), vec![x, z]);
+    assert_eq!(world.order("b"), vec![y]);
+    (world, [x, y, z])
+}
+
+fn names(world: &World) -> Vec<String> {
+    world.state.workspaces.iter().map(|ws| ws.name.clone()).collect()
+}
+
+#[test]
+fn reload_moves_a_window_to_a_new_workspace_that_took_its_rule() {
+    let (mut world, [x, y, z]) = reeval_world();
+    world.reload(serde_json::json!({"workspaces": [
+        {"name": "a", "rules": [{"app_id": "com.editor"}]},
+        {"name": "b"},
+        {"name": "c", "rules": [{"app_id": "com.browser"}]},
+    ]}));
+    assert_eq!(names(&world), ["a", "b", "c"]);
+    assert_eq!(world.order("a"), vec![x, z]);
+    assert!(world.order("b").is_empty());
+    assert_eq!(world.order("c"), vec![y]);
+    assert_eq!(world.state.windows[&y].desired.workspace, Some(world.ws("c").id));
+    assert_eq!(world.state.focus.workspace, Some(world.ws("a").id));
+    assert_eq!(world.state.focus.window, Some(x));
+}
+
+#[test]
+fn reload_places_windows_of_a_removed_workspace_by_rule_else_by_the_startup_fallback() {
+    let (mut world, [x, y, z]) = reeval_world();
+    world.reload(serde_json::json!({"workspaces": [
+        {"name": "b", "rules": [{"app_id": "com.browser"}]},
+        {"name": "c", "rules": [{"app_id": "com.editor"}]},
+    ]}));
+    assert_eq!(names(&world), ["b", "c"]);
+    assert_eq!(world.order("c"), vec![x], "the rule decides");
+    assert_eq!(
+        world.order("b"),
+        vec![y, z],
+        "no rule: the display's focused/visible workspace, as at startup"
+    );
+    assert!(world.ws("b").visible && world.ws("b").focused);
+    assert_eq!(world.state.focus.workspace, Some(world.ws("b").id));
+    assert_eq!(
+        world.state.focus.window,
+        Some(y),
+        "the focused window moved away: the workspace's own choice"
+    );
+}
+
+#[test]
+fn reload_keeps_an_unmatched_window_that_was_sent_by_hand() {
+    let (mut world, [_, y, z]) = reeval_world();
+    world.intent(Intent::SendWindowToWorkspace {
+        window: Some(z),
+        workspace: "b".into(),
+    });
+    assert_eq!(world.order("b"), vec![y, z]);
+    world.reload(serde_json::json!({"workspaces": [
+        {"name": "a", "rules": [{"app_id": "com.editor"}]},
+        {"name": "b", "rules": [{"app_id": "com.browser"}]},
+        {"name": "c"},
+    ]}));
+    assert_eq!(
+        world.order("b"),
+        vec![y, z],
+        "an unrelated reload undoes nothing"
+    );
+}
+
+#[test]
+fn reload_order_follows_the_configuration_and_focus_stays() {
+    let (mut world, [x, y, z]) = reeval_world();
+    world.reload(serde_json::json!({"workspaces": [
+        {"name": "b", "rules": [{"app_id": "com.browser"}]},
+        {"name": "a", "rules": [{"app_id": "com.editor"}]},
+    ]}));
+    assert_eq!(names(&world), ["b", "a"]);
+    assert_eq!(world.order("a"), vec![x, z]);
+    assert_eq!(world.order("b"), vec![y]);
+    assert_eq!(world.state.focus.workspace, Some(world.ws("a").id));
+    assert_eq!(world.state.focus.window, Some(x));
+    assert!(world.ws("a").visible && !world.ws("b").visible);
+}
+
+#[test]
+fn reload_rename_places_windows_by_rule_and_keeps_focus_on_a_surviving_workspace() {
+    let (mut world, [x, y, z]) = reeval_world();
+    world.reload(serde_json::json!({"workspaces": [
+        {"name": "a", "rules": [{"app_id": "com.editor"}]},
+        {"name": "b2", "rules": [{"app_id": "com.browser"}]},
+    ]}));
+    assert_eq!(names(&world), ["a", "b2"]);
+    assert_eq!(world.order("b2"), vec![y]);
+    assert_eq!(world.order("a"), vec![x, z]);
+    assert_eq!(world.state.focus.workspace, Some(world.ws("a").id));
+}
+
+#[test]
+fn a_reload_without_workspace_changes_reassigns_nothing() {
+    let (mut world, [x, _, _]) = reeval_world();
+    // A rule-matching window sent elsewhere by hand stays there.
+    world.intent(Intent::SendWindowToWorkspace {
+        window: Some(x),
+        workspace: "b".into(),
+    });
+    let before: Vec<_> = world.state.workspaces.clone();
+    let focus = world.state.focus;
+    let effects = world.reload(serde_json::json!({
+        "animations": {"duration": 350},
+        "workspaces": [
+            {"name": "a", "rules": [{"app_id": "com.editor"}]},
+            {"name": "b", "rules": [{"app_id": "com.browser"}]},
+        ]
+    }));
+    assert_eq!(world.state.workspaces, before);
+    assert_eq!(world.state.focus, focus);
+    // Frames still unacknowledged here are re-planned for the new revision as
+    // before this change; the runtime scenario counts native effects on a
+    // settled desktop.
+    assert!(
+        !effects.iter().any(|e| matches!(
+            e,
+            Effect::Focus { .. } | Effect::HideApp { .. } | Effect::UnhideApp { .. }
+        )),
+        "{effects:?}"
     );
 }
 
@@ -1479,4 +1623,254 @@ fn reload_preparation_is_pure_and_deterministic() {
     );
     assert_eq!(first.moved, second.moved);
     assert_eq!(first.next_workspace, second.next_workspace);
+}
+
+// ------------------------------------------- reload re-evaluation: triggers
+
+const AB: [(&str, &str); 2] = [("a", "com.editor"), ("b", "com.browser")];
+
+/// The `reeval_world` configuration, with `edit` applied to each workspace.
+fn ab_with(edit: impl Fn(&str, &mut serde_json::Value)) -> serde_json::Value {
+    let workspaces: Vec<_> = AB
+        .iter()
+        .map(|(name, app)| {
+            let mut ws = serde_json::json!({"name": name, "rules": [{"app_id": app}]});
+            edit(name, &mut ws);
+            ws
+        })
+        .collect();
+    serde_json::json!({ "workspaces": workspaces })
+}
+
+/// `reeval_world` with the rule-matching Editor window sent to `b` by hand.
+fn hand_moved() -> (World, WindowInstance) {
+    let (mut world, [x, _, _]) = reeval_world();
+    world.intent(Intent::SendWindowToWorkspace {
+        window: Some(x),
+        workspace: "b".into(),
+    });
+    assert_eq!(world.state.windows[&x].desired.workspace, Some(world.ws("b").id));
+    (world, x)
+}
+
+#[test]
+fn layout_and_screen_edits_do_not_re_evaluate_windows() {
+    for edit in ["layout", "screen"] {
+        let (mut world, x) = hand_moved();
+        let before = world.state.focus;
+        let effects = world.reload(ab_with(|name, ws| {
+            if name == "b" {
+                if edit == "layout" {
+                    ws["layout"] = "grid".into();
+                } else {
+                    ws["screen"] = "primary".into();
+                }
+            }
+        }));
+        assert_eq!(
+            world.order("b").last(),
+            Some(&x),
+            "{edit}: the manual move stays"
+        );
+        assert_eq!(world.state.focus, before, "{edit}");
+        assert!(
+            !effects.iter().any(|e| matches!(e, Effect::Focus { .. })),
+            "{edit}: {effects:?}"
+        );
+    }
+}
+
+#[test]
+fn names_order_and_rule_edits_re_evaluate_windows() {
+    let cases: Vec<(&str, serde_json::Value)> = vec![
+        (
+            "rules",
+            ab_with(|name, ws| {
+                if name == "b" {
+                    ws["rules"] =
+                        serde_json::json!([{"app_id": "com.browser"}, {"title": "nothing"}]);
+                }
+            }),
+        ),
+        (
+            "order",
+            serde_json::json!({"workspaces": [
+                {"name": "b", "rules": [{"app_id": "com.browser"}]},
+                {"name": "a", "rules": [{"app_id": "com.editor"}]},
+            ]}),
+        ),
+        (
+            "added",
+            serde_json::json!({"workspaces": [
+                {"name": "a", "rules": [{"app_id": "com.editor"}]},
+                {"name": "b", "rules": [{"app_id": "com.browser"}]},
+                {"name": "c"},
+            ]}),
+        ),
+        (
+            "removed",
+            serde_json::json!({"workspaces": [
+                {"name": "a", "rules": [{"app_id": "com.editor"}]},
+            ]}),
+        ),
+        (
+            "renamed",
+            serde_json::json!({"workspaces": [
+                {"name": "a", "rules": [{"app_id": "com.editor"}]},
+                {"name": "b2", "rules": [{"app_id": "com.browser"}]},
+            ]}),
+        ),
+    ];
+    for (what, config) in cases {
+        let (mut world, x) = hand_moved();
+        world.reload(config);
+        assert_eq!(
+            world.state.windows[&x].desired.workspace,
+            Some(world.ws("a").id),
+            "{what}: the rule places the window again"
+        );
+        assert!(world.order("a").contains(&x), "{what}");
+    }
+}
+
+#[test]
+fn a_window_leaving_hands_its_workspace_focus_to_the_most_recent_one() {
+    let (mut world, [x, _, z]) = reeval_world();
+    let w = world.add(3, 2, "w", 0.0);
+    world.focus(z);
+    world.focus(x);
+    assert_eq!(world.order("a").len(), 3);
+    assert!(world.order("a").contains(&w));
+    let effects = world.reload(serde_json::json!({"workspaces": [
+        {"name": "a"},
+        {"name": "b", "rules": [{"app_id": "com.browser"}]},
+        {"name": "c", "rules": [{"app_id": "com.editor"}]},
+    ]}));
+    assert_eq!(world.order("c"), vec![x]);
+    assert_eq!(
+        world.ws("a").focused_window,
+        Some(z),
+        "the focus history decides"
+    );
+    assert_eq!(world.state.focus.window, Some(z));
+    assert_eq!(world.state.focus.workspace, Some(world.ws("a").id));
+    assert_eq!(focuses(&effects), vec![z], "native focus follows the state");
+}
+
+#[test]
+fn a_focused_window_moved_to_a_visible_workspace_keeps_the_focus() {
+    let mut world = World::new(
+        Some(serde_json::json!({"workspaces": [
+            {"name": "m", "screen": "main", "rules": [{"app_id": "com.editor"}]},
+            {"name": "s", "screen": "secondary"},
+        ]})),
+        true,
+    );
+    world.enable();
+    let x = world.add(1, 1, "x", 0.0);
+    let other = world.add(3, 1, "o", 0.0);
+    world.focus(x);
+    let effects = world.reload(serde_json::json!({"workspaces": [
+        {"name": "m", "screen": "main"},
+        {"name": "s", "screen": "secondary", "rules": [{"app_id": "com.editor"}]},
+    ]}));
+    assert_eq!(world.order("s"), vec![x]);
+    assert_eq!(world.order("m"), vec![other]);
+    assert_eq!(world.state.focus.window, Some(x));
+    assert_eq!(world.state.focus.workspace, Some(world.ws("s").id));
+    assert!(world.ws("s").focused && world.ws("s").visible && world.ws("m").visible);
+    assert!(focuses(&effects).is_empty(), "it is still natively focused");
+}
+
+#[test]
+fn rule_and_fallback_targets_on_a_second_display() {
+    let mut world = World::new(
+        Some(serde_json::json!({"workspaces": [
+            {"name": "m", "screen": "main"},
+            {"name": "s", "screen": "secondary"},
+            {"name": "gone", "screen": "secondary"},
+        ]})),
+        true,
+    );
+    let side = world.add(3, 1, "side", 1920.0);
+    world.intent(Intent::SendWindowToWorkspace {
+        window: Some(side),
+        workspace: "gone".into(),
+    });
+    let browser = world.add(2, 1, "b", 0.0);
+    assert_eq!(world.order("m"), vec![browser]);
+    world.reload(serde_json::json!({"workspaces": [
+        {"name": "m", "screen": "main"},
+        {"name": "s", "screen": "secondary"},
+        {"name": "s2", "screen": "secondary", "rules": [{"app_id": "com.browser"}]},
+    ]}));
+    assert_eq!(
+        world.order("s2"),
+        vec![browser],
+        "a rule target on the second display"
+    );
+    assert_eq!(world.ws("s2").screen, d(2));
+    assert_eq!(
+        world.order("s"),
+        vec![side],
+        "the fallback: the visible workspace of the window's own display"
+    );
+}
+
+#[test]
+fn a_screen_edit_moves_the_workspace_without_re_evaluating() {
+    let mut world = World::new(
+        Some(serde_json::json!({"workspaces": [
+            {"name": "m", "screen": "main", "rules": [{"app_id": "com.browser"}]},
+            {"name": "s", "screen": "secondary"},
+        ]})),
+        true,
+    );
+    let browser = world.add(2, 1, "b", 0.0);
+    world.intent(Intent::SendWindowToWorkspace {
+        window: Some(browser),
+        workspace: "s".into(),
+    });
+    world.reload(serde_json::json!({"workspaces": [
+        {"name": "m", "screen": "main", "rules": [{"app_id": "com.browser"}]},
+        {"name": "s", "screen": "main"},
+    ]}));
+    assert_eq!(world.ws("s").screen, d(1), "the workspace moves as before");
+    assert_eq!(world.order("s"), vec![browser], "the manual move stays");
+}
+
+#[test]
+fn floating_pinned_and_minimized_windows_are_re_evaluated() {
+    let (mut world, [x, y, z]) = reeval_world();
+    world.focus(z);
+    world.intent(Intent::ToggleFloating);
+    assert!(world.state.windows[&z].desired.floating);
+    let pin = Rect {
+        x: 1.0,
+        y: 2.0,
+        width: 300.0,
+        height: 200.0,
+    };
+    world.state.frames.pinned.insert(z, pin);
+    world.state.frames.pinned.insert(x, pin);
+    let input = world.feed.change(y, WindowChange::Miniaturized);
+    world.send(input);
+    assert!(world.state.windows[&y].observed.minimized);
+    world.reload(serde_json::json!({"workspaces": [
+        {"name": "a", "rules": [{"app_id": "com.term"}]},
+        {"name": "c", "rules": [{"app_id": "com.editor"}, {"app_id": "com.browser"}]},
+    ]}));
+    assert_eq!(world.order("c"), vec![x, y], "minimized windows move too");
+    assert_eq!(world.order("a"), vec![z]);
+    assert!(world.state.windows[&y].observed.minimized, "still minimized");
+    assert!(world.state.windows[&z].desired.floating, "floating is kept");
+    assert!(
+        !world.state.frames.pinned.contains_key(&x),
+        "a moved window's pin is cleared"
+    );
+    assert_eq!(
+        world.state.frames.pinned.get(&z),
+        Some(&pin),
+        "a window that stays keeps its pin"
+    );
 }

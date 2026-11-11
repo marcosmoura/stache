@@ -472,8 +472,9 @@ fn carry(
 /// configured layout is unchanged), floating state, order and focus. Added
 /// workspaces use the configured layout. Windows of a removed workspace move,
 /// in their stable order, to the visible (else first) workspace of the same
-/// display, with the main display as fallback. Rule and ignore edits apply
-/// eligibility immediately but reassign no existing window.
+/// display, with the main display as fallback. Ignore edits apply eligibility
+/// immediately. When the workspace definitions change, the commit step then
+/// re-evaluates every managed window with the startup assignment.
 ///
 /// # Errors
 ///
