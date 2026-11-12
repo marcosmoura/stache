@@ -10,8 +10,8 @@ use stache_macos::windows::WindowInstance;
 
 use super::transition::on_focused;
 use super::{
-    Effect, FOCUS_HISTORY_CAPACITY, FocusState, TilingState, WORKSPACE_HISTORY_CAPACITY,
-    WorkspaceId, frames,
+    Effect, FOCUS_HISTORY_CAPACITY, FocusState, RefusedFocus, TilingState,
+    WORKSPACE_HISTORY_CAPACITY, WorkspaceId, frames,
 };
 use crate::config::LayoutType;
 use crate::geometry::Rect;
@@ -182,6 +182,11 @@ fn focus_workspace(state: &mut TilingState, name: &str, fx: &mut Vec<Effect>) ->
         return noop(IntentNoOp::Unchanged);
     }
     let id = workspace.id;
+    if refuses_focus(state, name) {
+        let serial = state.refused_focus.map_or(1, |refused| refused.serial.wrapping_add(1));
+        state.refused_focus = Some(RefusedFocus { workspace: id, serial });
+        return reject(IntentRejection::InactiveWorkspace);
+    }
     switch_to(state, id, fx);
     IntentOutcome::Applied
 }
@@ -191,10 +196,11 @@ fn cycle_workspace(state: &mut TilingState, cycle: Cycle, fx: &mut Vec<Effect>) 
         return noop(IntentNoOp::NoFocusedWorkspace);
     };
     let screen = state.workspaces[index].screen;
+    let unreachable = unreachable_now(state);
     let on_screen: Vec<WorkspaceId> = state
         .workspaces
         .iter()
-        .filter(|ws| ws.screen == screen)
+        .filter(|ws| ws.screen == screen && !unreachable.contains(&ws.id))
         .map(|ws| ws.id)
         .collect();
     if on_screen.len() < 2 {
@@ -204,6 +210,18 @@ fn cycle_workspace(state: &mut TilingState, cycle: Cycle, fx: &mut Vec<Effect>) 
     let next = step(current, on_screen.len(), cycle);
     switch_to(state, on_screen[next], fx);
     IntentOutcome::Applied
+}
+
+/// Whether `FocusWorkspace(name)` is refused as inactive in this state: the
+/// workspace exists, is not the visible focused one, and is unreachable.
+pub(super) fn refuses_focus(state: &TilingState, name: &str) -> bool {
+    state.workspaces.iter().find(|ws| ws.name == name).is_some_and(|workspace| {
+        !(workspace.visible && workspace.focused) && unreachable_now(state).contains(&workspace.id)
+    })
+}
+
+fn unreachable_now(state: &TilingState) -> Vec<WorkspaceId> {
+    crate::workspaces::unreachable(state, &crate::workspaces::visibility_requirement(state))
 }
 
 const fn step(current: usize, len: usize, cycle: Cycle) -> usize {

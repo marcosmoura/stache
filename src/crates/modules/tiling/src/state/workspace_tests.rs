@@ -49,6 +49,9 @@ impl World {
             info(1, "com.editor", "Editor"),
             info(2, "com.browser", "Browser"),
             info(3, "com.term", "Terminal"),
+            // A windowless Finder hosts the desktop: empty workspaces are
+            // reachable (not inactive).
+            info(9, "com.apple.finder", "Finder"),
         ];
         let state = ready("com.stache.app", &apps, &mut feed);
         let mut world = Self { state, feed, revision: 0 };

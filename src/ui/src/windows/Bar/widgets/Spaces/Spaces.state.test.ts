@@ -7,7 +7,9 @@ import { barAvailable, barUnavailable } from '../../../../../tests/fixtures';
 import {
   appView,
   isFocusedWorkspace,
+  isInactiveWorkspace,
   listApps,
+  refusalIdentity,
   renderedStrip,
   revealDuration,
   selectTiling,
@@ -24,12 +26,13 @@ const strip = (
   generation: '3',
   sequence: '7',
   workspaces: [
-    { name: 'coding', focused: false },
-    { name: 'terminal', focused: true },
+    { name: 'coding', focused: false, inactive: false },
+    { name: 'terminal', focused: true, inactive: false },
   ],
   apps: [app('1', 'Ghostty', 'zsh'), app('2', 'Code', 'a.ts')],
   focusedApp: app('1', 'Ghostty', 'zsh'),
   focusedWorkspace: 'terminal',
+  refusedFocus: null,
   ...overrides,
 });
 
@@ -44,7 +47,9 @@ describe('Spaces state', () => {
 
   it('keeps the workspaces in the published order, unknown names included', () => {
     const names = ['zeta', 'tasks', 'files', 'Alpha', 'terminal', 'media', 'coding'];
-    const tiling = strip({ workspaces: names.map((name) => ({ name, focused: false })) });
+    const tiling = strip({
+      workspaces: names.map((name) => ({ name, focused: false, inactive: false })),
+    });
 
     expect(stripShape(barAvailable('1', { tiling }), false)).toMatchObject({ workspaces: names });
   });
@@ -123,5 +128,50 @@ describe('Spaces state', () => {
   it('scales the reveal with the label length', () => {
     expect(revealDuration('Code', 0.15)).toBe(0.15);
     expect(revealDuration('x'.repeat(30), 0.15)).toBeCloseTo(0.3);
+  });
+});
+
+describe('inactive workspaces and refusals', () => {
+  const workspaces = [
+    { name: 'coding', focused: false, inactive: true },
+    { name: 'terminal', focused: true, inactive: true },
+    { name: 'files', focused: false, inactive: false },
+  ];
+
+  it('a workspace is inactive when Tiling marks it, unless it is focused', () => {
+    const outcome = barAvailable('1', { tiling: strip({ workspaces }) });
+
+    expect(isInactiveWorkspace(outcome, 'coding')).toBe(true);
+    expect(isInactiveWorkspace(outcome, 'terminal')).toBe(false);
+    expect(isInactiveWorkspace(outcome, 'files')).toBe(false);
+    expect(isInactiveWorkspace(outcome, 'unknown')).toBe(false);
+    expect(isInactiveWorkspace(barAvailable('1', { tiling: { kind: 'loading' } }), 'coding')).toBe(
+      false,
+    );
+    expect(isInactiveWorkspace(barUnavailable('1'), 'coding')).toBe(false);
+  });
+
+  it("a refusal's identity is the generation and serial, only for its workspace", () => {
+    const outcome = barAvailable('1', {
+      tiling: strip({ workspaces, refusedFocus: { workspace: 'coding', serial: 2 } }),
+    });
+
+    expect(refusalIdentity(outcome, 'coding')).toBe('3:2');
+    expect(refusalIdentity(outcome, 'files')).toBeNull();
+    expect(
+      refusalIdentity(
+        barAvailable('1', {
+          tiling: strip({ generation: '4', refusedFocus: { workspace: 'coding', serial: 2 } }),
+        }),
+        'coding',
+      ),
+    ).toBe('4:2');
+    expect(
+      refusalIdentity(barAvailable('1', { tiling: strip({ workspaces }) }), 'coding'),
+    ).toBeNull();
+    expect(
+      refusalIdentity(barAvailable('1', { tiling: { kind: 'loading' } }), 'coding'),
+    ).toBeNull();
+    expect(refusalIdentity(barUnavailable('1'), 'coding')).toBeNull();
   });
 });

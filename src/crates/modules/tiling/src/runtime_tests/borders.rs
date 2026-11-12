@@ -409,6 +409,17 @@ impl Desk {
         token
     }
 
+    /// A window created on the visible workspace, then sent to `workspace`
+    /// (an empty workspace is inactive, so it is not focused to create it).
+    fn window_on(&mut self, app: usize, serial: u64, workspace: &str) -> WindowInstance {
+        let token = self.window(app, serial);
+        self.intent(Intent::SendWindowToWorkspace {
+            window: Some(token),
+            workspace: workspace.into(),
+        });
+        token
+    }
+
     const fn cg(app: usize, serial: u64) -> u32 { 100 * (app as u32 + 1) + serial as u32 }
 
     fn authorize(&mut self) {
@@ -499,9 +510,7 @@ impl Desk {
         let mut desk = Self::build(live);
         let w1 = desk.window(0, 1);
         let w2 = desk.window(1, 1);
-        desk.workspace("b");
-        let w3 = desk.window(1, 2);
-        desk.workspace("a");
+        let w3 = desk.window_on(1, 2, "b");
         desk.focus(w1);
         desk.authorize();
         desk.frame();
@@ -519,9 +528,7 @@ fn startup_borders_only_the_visible_workspace_after_one_frame() {
     let mut desk = Desk::new();
     let w1 = desk.window(0, 1);
     let _w2 = desk.window(1, 1);
-    desk.workspace("b");
-    let _w3 = desk.window(1, 2);
-    desk.workspace("a");
+    let _w3 = desk.window_on(1, 2, "b");
     desk.focus(w1);
     assert!(
         Desk::shows_in(&desk.log(), 101).is_empty(),

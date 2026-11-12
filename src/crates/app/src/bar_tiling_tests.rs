@@ -32,6 +32,7 @@ fn workspace(name: &str, focused: bool, order: u32) -> PublishedWorkspace {
         visible: focused,
         focused,
         order,
+        inactive: false,
     }
 }
 
@@ -81,6 +82,7 @@ fn state() -> TilingPublishedState {
             workspace: Some("coding".to_owned()),
             window: Some("20".to_owned()),
         },
+        refused_focus: None,
     }
 }
 
@@ -329,6 +331,7 @@ fn the_strip_keeps_legacy_filters_and_published_order() {
         apps,
         focused_app,
         focused_workspace,
+        refused_focus,
     } = view
     else {
         panic!("available")
@@ -339,15 +342,18 @@ fn the_strip_keeps_legacy_filters_and_published_order() {
         vec![
             StripWorkspace {
                 name: "terminal".to_owned(),
-                focused: false
+                focused: false,
+                inactive: false,
             },
             StripWorkspace {
                 name: "coding".to_owned(),
-                focused: true
+                focused: true,
+                inactive: false,
             },
             StripWorkspace {
                 name: "browser".to_owned(),
-                focused: false
+                focused: false,
+                inactive: false,
             },
         ],
         "every workspace, published order; the UI sorts"
@@ -359,6 +365,7 @@ fn the_strip_keeps_legacy_filters_and_published_order() {
         "minimized, hidden, inactive tabs and other workspaces are excluded"
     );
     assert_eq!(focused_workspace.as_deref(), Some("coding"));
+    assert_eq!(refused_focus, None);
     // The focused window comes from all windows, even another workspace.
     assert_eq!(
         focused_app,
@@ -555,4 +562,35 @@ fn decimals_are_exact_and_rendered_state_is_revalidated() {
         10
     ));
     assert!(!rendered_is_current(&StateReading::Absent, 4, 10));
+}
+
+#[test]
+fn the_strip_carries_the_inactive_flags_and_the_refused_focus() {
+    let mut published = state();
+    published.workspaces[2].inactive = true;
+    published.refused_focus = Some(stache_tiling::PublishedRefusedFocus {
+        workspace: "browser".to_owned(),
+        serial: 4,
+    });
+    let TilingStripView::Available { workspaces, refused_focus, .. } = strip_of(7, 3, &published)
+    else {
+        panic!("available")
+    };
+    let flags: Vec<_> = workspaces.iter().map(|ws| (ws.name.as_str(), ws.inactive)).collect();
+    assert_eq!(flags, [
+        ("terminal", false),
+        ("coding", false),
+        ("browser", true)
+    ]);
+    assert_eq!(
+        refused_focus,
+        Some(crate::bar_tiling::StripRefusedFocus {
+            workspace: "browser".to_owned(),
+            serial: 4,
+        })
+    );
+    let json = serde_json::to_value(strip_of(7, 3, &published)).expect("encode");
+    assert_eq!(json["workspaces"][2]["inactive"], true);
+    assert_eq!(json["refusedFocus"]["workspace"], "browser");
+    assert_eq!(json["refusedFocus"]["serial"], 4);
 }

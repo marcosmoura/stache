@@ -28,10 +28,15 @@ const TILING: TilingStripView_Serialize = {
   kind: 'available',
   generation: '1',
   sequence: '1',
-  workspaces: USER_WORKSPACES.map((name) => ({ name, focused: name === 'coding' })),
+  workspaces: USER_WORKSPACES.map((name) => ({
+    name,
+    focused: name === 'coding',
+    inactive: false,
+  })),
   apps: APPS,
   focusedApp: APPS[1]!,
   focusedWorkspace: 'coding',
+  refusedFocus: null,
 };
 
 const snapshot: BarSnapshotOutcome_Serialize = {
@@ -81,6 +86,44 @@ for (const [mode, width] of Object.entries(WIDTHS)) {
       await expect(strip.locator('[data-label]')).toHaveCSS('opacity', '1');
       await page.evaluate(() => document.fonts.ready.then(() => undefined));
       await expect(strip).toHaveScreenshot(`spaces-${mode}-${scheme}.png`);
+    });
+  }
+}
+
+/* The same strip with `tasks` and `misc` inactive (dimmed); `coding` stays focused. */
+const INACTIVE: BarSnapshotOutcome_Serialize = {
+  ...snapshot,
+  view: {
+    ...(snapshot as Extract<BarSnapshotOutcome_Serialize, { kind: 'available' }>).view,
+    tiling: {
+      ...TILING,
+      workspaces: USER_WORKSPACES.map((name) => ({
+        name,
+        focused: name === 'coding',
+        inactive: name === 'tasks' || name === 'misc',
+      })),
+    },
+  },
+};
+
+for (const [mode, width] of Object.entries(WIDTHS)) {
+  for (const scheme of ['dark', 'light'] as const) {
+    test(`spaces inactive ${mode} (${scheme})`, async ({ page, host }) => {
+      await page.setViewportSize({ width, height: 120 });
+      host.answerBarSnapshot(INACTIVE);
+      await page.emulateMedia({ colorScheme: scheme, reducedMotion: 'reduce' });
+      await page.goto('/index.html?surface=bar');
+      await skipWithoutMapleMono(page);
+
+      const strip = page.locator('[data-spaces]');
+      const focused = strip.locator('[data-app="2"] > button');
+
+      await expect(strip.locator('[data-inactive]')).toHaveCount(2);
+      await expect(strip.locator('[data-highlight]')).toHaveCount(1);
+      await expect(focused).toHaveCSS('opacity', '1');
+      await expect(strip.locator('[data-label]')).toHaveCSS('opacity', '1');
+      await page.evaluate(() => document.fonts.ready.then(() => undefined));
+      await expect(strip).toHaveScreenshot(`spaces-inactive-${mode}-${scheme}.png`);
     });
   }
 }

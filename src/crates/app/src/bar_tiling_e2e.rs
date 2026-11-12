@@ -419,6 +419,7 @@ fn strip(view: &TilingStripView) -> Option<Strip> {
             apps,
             focused_app,
             focused_workspace,
+            ..
         } => Some(Strip {
             generation: crate::bar_tiling::exact_decimal(generation).expect("a decimal generation"),
             sequence: crate::bar_tiling::exact_decimal(sequence).expect("a decimal sequence"),
@@ -549,15 +550,18 @@ fn e2e_tiling_plans_under_the_bar_and_the_ui_receives_the_strip_and_clicks_round
     assert_eq!(first.workspaces, vec![
         StripWorkspace {
             name: "terminal".to_owned(),
-            focused: true
+            focused: true,
+            inactive: false,
         },
         StripWorkspace {
             name: "coding".to_owned(),
-            focused: false
+            focused: false,
+            inactive: false,
         },
         StripWorkspace {
             name: "browser".to_owned(),
-            focused: false
+            focused: false,
+            inactive: false,
         },
     ]);
     assert_eq!(first.apps, vec![app(ghostty, "Ghostty", "~/Projects")]);
@@ -1617,5 +1621,136 @@ fn e2e_the_strip_lists_only_the_active_native_tab_and_follows_a_switch() {
     kit.wait_frame(finder, RIGHT);
     kit.wait_frame(zed, LEFT);
     assert_strictly_increasing(&event_sequences(&rig));
+    let _ = rig.registry.shutdown();
+}
+
+/// The user's nine workspaces, all on the built-in primary.
+const NINE: &str = r#"enabled = true
+
+[[workspaces]]
+name = "files"
+screen = "main"
+rules = [{ app_id = "com.apple.finder" }]
+
+[[workspaces]]
+name = "terminal"
+screen = "main"
+rules = [{ app_id = "com.mitchellh.ghostty" }]
+
+[[workspaces]]
+name = "coding"
+screen = "main"
+rules = [{ app_id = "dev.zed.Zed" }]
+
+[[workspaces]]
+name = "browser"
+screen = "main"
+rules = [{ app_id = "com.google.Chrome" }]
+
+[[workspaces]]
+name = "design"
+screen = "main"
+
+[[workspaces]]
+name = "communication"
+screen = "main"
+
+[[workspaces]]
+name = "media"
+screen = "main"
+
+[[workspaces]]
+name = "misc"
+screen = "main"
+
+[[workspaces]]
+name = "tasks"
+screen = "main"
+"#;
+
+/// The strip's inactive workspaces and its refused focus (name, serial).
+type Inactive = (Vec<String>, Option<(String, u32)>);
+
+/// The strip's inactive workspaces and its refused focus.
+fn inactive_of(view: &TilingStripView) -> Option<Inactive> {
+    match view {
+        TilingStripView::Available { workspaces, refused_focus, .. } => Some((
+            workspaces.iter().filter(|ws| ws.inactive).map(|ws| ws.name.clone()).collect(),
+            refused_focus
+                .as_ref()
+                .map(|refused| (refused.workspace.clone(), refused.serial)),
+        )),
+        TilingStripView::Absent | TilingStripView::Loading => None,
+    }
+}
+
+/// The user's session through the strip: every application has a window and
+/// Finder's is on the hidden `files`, so the empty workspaces are inactive and
+/// a click on one is refused; once the Finder window closes they are not.
+#[test]
+fn e2e_an_inactive_workspace_click_is_refused_until_finder_closes_its_window() {
+    let rig = Rig::new(Some(BAR));
+    let kit = rig.add_tiling_with(Some(NINE), None);
+    rig.start();
+    wait_for("tiling tracks the applications", || {
+        kit.windows
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, FakeBackendCall::Track(..)))
+            .count()
+            >= 4
+    });
+    let ghostty = kit.open(GHOSTTY, 1, "~/Projects", 11);
+    kit.open(ZED, 2, "main.rs — stache", 21);
+    let finder = kit.open(FINDER, 3, "Downloads", 31);
+    kit.open(CHROME, 4, "Docs", 41);
+    for bundle in [GHOSTTY, ZED, FINDER, CHROME] {
+        kit.enumerated(bundle, 1);
+    }
+    wait_for("enumeration completes", || {
+        kit.snapshot().phase == stache_tiling::Phase::Complete
+    });
+    rig.wait_loaded();
+    rig.wait_strip("the first published strip", |view| strip(view).is_some());
+    assert_eq!(rig.click(focus_workspace("terminal")), BarTilingOutcome::Applied);
+    let empty: Vec<String> = ["design", "communication", "media", "misc", "tasks"]
+        .map(str::to_owned)
+        .to_vec();
+    rig.wait_strip("terminal focused, the empty workspaces inactive", |view| {
+        strip(view).is_some_and(|strip| strip.focused_workspace.as_deref() == Some("terminal"))
+            && inactive_of(view) == Some((empty.clone(), None))
+    });
+
+    // A click on `tasks` is refused and recorded; nothing switches.
+    assert_eq!(rig.click(focus_workspace("tasks")), BarTilingOutcome::Refused);
+    rig.wait_strip("the refused focus", |view| {
+        inactive_of(view) == Some((empty.clone(), Some(("tasks".to_owned(), 1))))
+    });
+    let after = strip(&rig.tiling_strip().expect("resolved")).expect("available");
+    assert_eq!(after.focused_workspace.as_deref(), Some("terminal"));
+    assert_eq!(after.apps, vec![app(ghostty, "Ghostty", "~/Projects")]);
+    assert_eq!(rig.click(focus_workspace("tasks")), BarTilingOutcome::Refused);
+    rig.wait_strip("the second refusal", |view| {
+        inactive_of(view).is_some_and(|(_, refused)| refused == Some(("tasks".to_owned(), 2)))
+    });
+
+    // The Finder window closes: Finder hosts the desktop, nothing is inactive.
+    kit.change(finder, WindowChange::Destroyed);
+    rig.wait_strip("the flags flip", |view| {
+        inactive_of(view) == Some((Vec::new(), Some(("tasks".to_owned(), 2))))
+    });
+    assert_eq!(rig.click(focus_workspace("tasks")), BarTilingOutcome::Applied);
+    rig.wait_strip("tasks focused", |view| {
+        strip(view).is_some_and(|strip| {
+            strip.focused_workspace.as_deref() == Some("tasks") && strip.apps.is_empty()
+        })
+    });
+    assert_eq!(rig.click(focus_workspace("terminal")), BarTilingOutcome::Applied);
+    rig.wait_strip("terminal again", |view| {
+        strip(view).is_some_and(|strip| {
+            strip.focused_workspace.as_deref() == Some("terminal")
+                && strip.apps == vec![app(ghostty, "Ghostty", "~/Projects")]
+        })
+    });
     let _ = rig.registry.shutdown();
 }

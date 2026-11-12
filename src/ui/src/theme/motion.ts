@@ -17,6 +17,8 @@ export const durations = {
   fadeIn: 0.275,
   /** The Spaces indicator spring. */
   spring: 0.5,
+  /** A Spaces workspace's refusal flash. */
+  flash: 0.5,
   /** The Accessibility guide panel's entrance (CSS keyframes). */
   panelIn: 0.4,
   /** The guide's content fade on a state change (CSS keyframes). */
@@ -48,6 +50,8 @@ export const transitions = {
   fadeIn: { duration: durations.fadeIn, ease: easings.inOut },
   /** The Spaces indicator: a spring without bounce. */
   spring: { type: 'spring', bounce: 0, duration: durations.spring },
+  /** A Spaces workspace's refusal flash: a tint fading in and out once. */
+  flash: { duration: durations.flash, ease: easings.inOut },
 } as const satisfies Record<string, Transition>;
 
 /**

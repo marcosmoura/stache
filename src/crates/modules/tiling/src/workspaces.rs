@@ -379,12 +379,7 @@ pub fn visibility_requirement(state: &TilingState) -> VisibilityRequirement {
             host: false,
         });
     }
-    let finder = state
-        .apps
-        .iter()
-        .filter(|(_, record)| record.info.bundle_id.eq_ignore_ascii_case(FINDER_BUNDLE_ID))
-        .map(|(application, _)| *application);
-    for application in finder {
+    for application in finders(state) {
         match out.apps.iter().position(|app| app.application == application) {
             Some(index) => out.finder_held |= out.apps[index].hide_wanted,
             // Only once every listed application was tried: a Finder window
@@ -450,6 +445,15 @@ fn last_visible(state: &TilingState, out: &VisibilityRequirement) -> Option<Appl
 /// Finder's bundle identifier: the desktop host.
 const FINDER_BUNDLE_ID: &str = "com.apple.finder";
 
+/// The running Finder instances Tiling knows.
+fn finders(state: &TilingState) -> impl Iterator<Item = ApplicationId> + '_ {
+    state
+        .apps
+        .iter()
+        .filter(|(_, record)| record.info.bundle_id.eq_ignore_ascii_case(FINDER_BUNDLE_ID))
+        .map(|(application, _)| *application)
+}
+
 /// The desktop host when Finder cannot be one: needed only once startup has
 /// tried every application, when Finder is held hidden, no visible workspace
 /// needs an application and something is wanted hidden (a switch would leave
@@ -472,6 +476,13 @@ fn windowless_host(state: &TilingState, out: &VisibilityRequirement) -> Option<A
     {
         return None;
     }
+    windowless_candidate(state)
+}
+
+/// The windowless host candidate of [`windowless_host`], without the
+/// planner's "a hide is wanted now" preconditions: whether some application
+/// could host an empty desktop in this state.
+fn windowless_candidate(state: &TilingState) -> Option<ApplicationId> {
     let startup = &state.startup;
     state
         .apps
@@ -496,6 +507,48 @@ fn windowless_host(state: &TilingState, out: &VisibilityRequirement) -> Option<A
             )
         })
         .map(|(application, _)| *application)
+}
+
+/// The workspaces Stache cannot show as an empty desktop (published as
+/// `inactive`): no live window is assigned to it, it is not visible on its
+/// display and it is not reachable. A workspace is reachable once startup has
+/// tried every listed application and a workspace visible on another display
+/// holds a window, Finder hosts the desktop (it runs without a tracked window)
+/// or, while Finder is running, the windowless host selection finds a
+/// candidate (the planner uses a windowless host only once Finder is held
+/// hidden, so without a running Finder it would pick none). Before startup
+/// completes only the other-display rule applies. `requirement` is
+/// [`visibility_requirement`] of the same state: its Finder host entry is the
+/// Finder rule.
+#[must_use]
+pub fn unreachable(state: &TilingState, requirement: &VisibilityRequirement) -> Vec<WorkspaceId> {
+    let live = |id: WorkspaceId| {
+        state.windows.values().any(|window| {
+            window.departing.is_none()
+                && (window.desired.workspace == Some(id)
+                    || state
+                        .workspaces
+                        .iter()
+                        .any(|ws| ws.id == id && ws.order.contains(&window.token)))
+        })
+    };
+    // The planner picks a windowless host only while Finder is held, which
+    // needs a running Finder: without one, rule 3 does not apply.
+    let host = state.completed_once
+        && (requirement.apps.iter().any(|app| app.host)
+            || (finders(state).next().is_some() && windowless_candidate(state).is_some()));
+    state
+        .workspaces
+        .iter()
+        .filter(|workspace| !workspace.visible && !live(workspace.id) && !host)
+        .filter(|workspace| {
+            !state
+                .workspaces
+                .iter()
+                .any(|other| other.visible && other.screen != workspace.screen && live(other.id))
+        })
+        .map(|workspace| workspace.id)
+        .collect()
 }
 
 /// Whether `application` is the frontmost one and its focused window is not

@@ -3,6 +3,7 @@ import type { Page } from '@playwright/test';
 import type {
   BarSnapshotOutcome_Serialize,
   StripApp,
+  StripRefusedFocus,
   TilingStripView_Serialize,
 } from '../../src/ipc/bindings.gen';
 import { USER_WORKSPACES } from '../../tests/workspaces';
@@ -39,10 +40,15 @@ const strip = (
   kind: 'available',
   generation,
   sequence,
-  workspaces: WORKSPACES.map((name) => ({ name, focused: name === focusedWorkspace })),
+  workspaces: WORKSPACES.map((name) => ({
+    name,
+    focused: name === focusedWorkspace,
+    inactive: false,
+  })),
   apps,
   focusedApp,
   focusedWorkspace,
+  refusedFocus: null,
 });
 
 function available(
@@ -220,5 +226,134 @@ test.describe('Spaces', () => {
       },
     });
     expect(consoleErrors).toEqual([]);
+  });
+
+  test('inactive workspaces: dimmed, refused clicks flash, a reload does not replay, then active', async ({
+    page,
+    host,
+    consoleErrors,
+  }) => {
+    // Counts every refusal flash that starts, per workspace, from the first script on each load.
+    await page.addInitScript(() => {
+      const flashes: string[] = [];
+
+      (window as unknown as { __flashes: string[] }).__flashes = flashes;
+      new MutationObserver((records) => {
+        for (const record of records) {
+          for (const node of record.addedNodes) {
+            if (node instanceof HTMLElement && node.matches('[data-flash]')) {
+              flashes.push(node.parentElement?.getAttribute('aria-label') ?? '');
+            }
+          }
+        }
+      }).observe(document, { childList: true, subtree: true });
+    });
+    const flashes = () =>
+      page.evaluate(() => [...(window as unknown as { __flashes: string[] }).__flashes]);
+    const actions = () =>
+      host.calls.filter((call) => call.command === 'bar_tiling_action').map((call) => call.args);
+    const tasks = () => start(page).getByRole('button', { name: 'tasks' });
+
+    // The user's workspaces: files holds a Finder window, terminal is focused,
+    // tasks and misc are empty and cannot be shown as empty desktops.
+    const withInactive = (
+      sequence: string,
+      inactive: string[],
+      refusedFocus: StripRefusedFocus | null,
+    ): Extract<TilingStripView_Serialize, { kind: 'available' }> => ({
+      ...(strip('7', sequence, 'terminal', [GHOSTTY], GHOSTTY) as Extract<
+        TilingStripView_Serialize,
+        { kind: 'available' }
+      >),
+      workspaces: WORKSPACES.map((name) => ({
+        name,
+        focused: name === 'terminal',
+        inactive: inactive.includes(name),
+      })),
+      refusedFocus,
+    });
+
+    host.answer('bar_tiling_action', { kind: 'refused' });
+    host.answerBarSnapshot(available('1', withInactive('1', ['tasks', 'misc'], null)));
+    await page.goto(PRODUCTION);
+
+    await expect.poll(() => workspaceNames(page)).toEqual(USER_WORKSPACES);
+
+    for (const name of ['tasks', 'misc']) {
+      const item = start(page).getByRole('button', { name });
+
+      await expect(item).toHaveAttribute('aria-disabled', 'true');
+      await expect(item).toHaveAttribute('data-inactive', 'true');
+      await expect(item.locator('svg')).toHaveCSS('opacity', '0.4');
+    }
+
+    await expect(start(page).locator('[data-inactive]')).toHaveCount(2);
+
+    // Click tasks: the request goes to Tiling, which refuses and publishes the refusal.
+    // (`force`: Playwright will not click an `aria-disabled` element; a user can.)
+    await tasks().click({ force: true });
+    await expect.poll(actions).toEqual([
+      {
+        request: {
+          generation: '7',
+          sequence: '1',
+          action: { kind: 'focusWorkspace', name: 'tasks' },
+        },
+      },
+    ]);
+    await emit(host, withInactive('2', ['tasks', 'misc'], { workspace: 'tasks', serial: 1 }));
+    await expect.poll(flashes).toEqual(['tasks']);
+    await expect(tasks()).not.toHaveAttribute('data-flashing');
+    expect(await pressed(page)).toBe('terminal');
+
+    // A second refusal flashes again.
+    await tasks().click({ force: true });
+    await expect.poll(() => actions().length).toBe(2);
+    await emit(host, withInactive('3', ['tasks', 'misc'], { workspace: 'tasks', serial: 2 }));
+    await expect.poll(flashes).toEqual(['tasks', 'tasks']);
+    await expect(tasks()).not.toHaveAttribute('data-flashing');
+
+    // A fresh load carrying the same refusal does not replay it, nor does a later strip.
+    host.answerBarSnapshot(
+      available('1', withInactive('3', ['tasks', 'misc'], { workspace: 'tasks', serial: 2 })),
+    );
+    await page.reload();
+    await expect(tasks()).toHaveAttribute('data-inactive', 'true');
+    await emit(host, withInactive('4', ['tasks', 'misc'], { workspace: 'tasks', serial: 2 }));
+    await expect
+      .poll(() => page.evaluate(() => document.querySelectorAll('[data-inactive]').length))
+      .toBe(2);
+    expect(await flashes()).toEqual([]);
+
+    // A window moves to tasks: it becomes active and a click focuses it.
+    await emit(host, withInactive('5', ['misc'], { workspace: 'tasks', serial: 2 }));
+    await expect(tasks()).not.toHaveAttribute('aria-disabled');
+    await expect(tasks()).not.toHaveAttribute('data-inactive');
+    await expect(tasks().locator('svg')).toHaveCSS('opacity', '1');
+    host.answer('bar_tiling_action', { kind: 'applied' });
+    await tasks().click();
+    await expect.poll(() => actions().length).toBe(3);
+    expect(actions()[2]).toEqual({
+      request: {
+        generation: '7',
+        sequence: '5',
+        action: { kind: 'focusWorkspace', name: 'tasks' },
+      },
+    });
+    await emit(host, {
+      ...withInactive('6', ['misc'], { workspace: 'tasks', serial: 2 }),
+      focusedWorkspace: 'tasks',
+      workspaces: WORKSPACES.map((name) => ({
+        name,
+        focused: name === 'tasks',
+        inactive: name === 'misc',
+      })),
+      apps: [],
+      focusedApp: null,
+    });
+    await expect.poll(() => pressed(page)).toBe('tasks');
+    expect(await flashes()).toEqual([]);
+    expect(consoleErrors).toEqual([]);
+    expect(host.unanswered).toEqual([]);
   });
 });

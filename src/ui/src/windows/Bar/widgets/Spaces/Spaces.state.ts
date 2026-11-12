@@ -88,6 +88,32 @@ export function isFocusedWorkspace(outcome: BarSnapshotOutcome, name: string): b
   return tiling?.kind === 'available' && tiling.focusedWorkspace === name;
 }
 
+/**
+ * Whether `name` is an inactive workspace of an available strip: Tiling marks
+ * it inactive and it is not the focused workspace (which is never drawn inactive).
+ */
+export function isInactiveWorkspace(outcome: BarSnapshotOutcome, name: string): boolean {
+  const tiling = selectTiling(outcome);
+
+  return (
+    tiling?.kind === 'available' &&
+    tiling.focusedWorkspace !== name &&
+    tiling.workspaces.some((workspace) => workspace.name === name && workspace.inactive)
+  );
+}
+
+/**
+ * The identity of the last refused focus of `name` (the strip's generation and
+ * the refusal's serial), or `null` when the last refusal is not for `name`.
+ */
+export function refusalIdentity(outcome: BarSnapshotOutcome, name: string): string | null {
+  const tiling = selectTiling(outcome);
+
+  return tiling?.kind === 'available' && tiling.refusedFocus?.workspace === name
+    ? `${tiling.generation}:${tiling.refusedFocus.serial}`
+    : null;
+}
+
 /** One app item: its listing and whether it is the focused window. */
 export type AppView = ListedApp & { focused: boolean };
 

@@ -45,4 +45,23 @@ export const styles = stylex.create({
     borderRadius: bar.itemRadius,
     backgroundColor: color.surfaceActive,
   },
+  /** An inactive workspace: no hover surface, the default cursor. */
+  inactive: {
+    cursor: 'default',
+    borderColor: 'transparent',
+    backgroundColor: 'transparent',
+  },
+  /** An inactive workspace's icon, dimmed. */
+  inactiveIcon: {
+    opacity: bar.inactiveOpacity,
+  },
+  /** The refusal flash: an attention tint over the item, faded in and out by Motion. */
+  flash: {
+    pointerEvents: 'none',
+    position: 'absolute',
+    zIndex: -1,
+    inset: 0,
+    borderRadius: bar.itemRadius,
+    backgroundColor: color.attention,
+  },
 });

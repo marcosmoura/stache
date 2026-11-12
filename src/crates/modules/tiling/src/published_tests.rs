@@ -143,6 +143,7 @@ fn every_workspace_projects_in_order_with_screen_visibility_and_focus() {
         visible: true,
         focused: false,
         order: 1,
+        inactive: false,
     });
     assert!(state.workspaces[0].focused && state.workspaces[0].visible);
     assert!(!state.workspaces[2].visible);
@@ -303,4 +304,70 @@ fn an_ambiguous_key_resolves_to_nothing() {
     let twin = token(AdapterId::for_testing(), 3, 9, a.serial());
     snapshot.windows.push(window(twin, Some(1), "Twin"));
     assert_eq!(resolve_window_key(&snapshot, &window_key(a)), None);
+}
+
+#[test]
+fn inactive_and_the_refused_focus_are_copied_from_the_snapshot() {
+    let Fixture { mut snapshot, .. } = fixture();
+    snapshot.unreachable = vec![WorkspaceId(3)];
+    snapshot.refused_focus = Some(crate::state::RefusedFocus {
+        workspace: WorkspaceId(3),
+        serial: 7,
+    });
+    let state = project(&snapshot);
+    let flags: Vec<_> = state.workspaces.iter().map(|ws| ws.inactive).collect();
+    assert_eq!(flags, [false, false, true]);
+    assert_eq!(
+        state.refused_focus,
+        Some(PublishedRefusedFocus {
+            workspace: "misc".to_owned(),
+            serial: 7,
+        })
+    );
+    let json = serde_json::to_value(&state).expect("encode");
+    assert_eq!(json["workspaces"][2]["inactive"], true);
+    assert_eq!(json["refusedFocus"]["workspace"], "misc");
+    assert_eq!(json["refusedFocus"]["serial"], 7);
+    // A workspace that no longer exists publishes no refusal.
+    snapshot.workspaces.pop();
+    assert_eq!(project(&snapshot).refused_focus, None);
+}
+
+#[test]
+fn a_payload_without_the_new_fields_decodes_with_their_defaults() {
+    let mut json = serde_json::to_value(project(&fixture().snapshot)).expect("encode");
+    json.as_object_mut().expect("object").remove("refusedFocus");
+    for workspace in json["workspaces"].as_array_mut().expect("array") {
+        workspace.as_object_mut().expect("object").remove("inactive");
+    }
+    let back: TilingPublishedState = serde_json::from_value(json).expect("decode");
+    assert_eq!(back.refused_focus, None);
+    assert!(back.workspaces.iter().all(|ws| !ws.inactive));
+}
+
+#[test]
+fn each_refusal_publishes_once() {
+    let Fixture { mut snapshot, .. } = fixture();
+    snapshot.unreachable = vec![WorkspaceId(3)];
+    let mut gate = PublishGate::default();
+    let mut publications = 0;
+    let mut step = |gate: &mut PublishGate, snapshot: &TilingSnapshot| {
+        if let Some((_, state)) = gate.next(snapshot) {
+            gate.committed(state);
+            publications += 1;
+        }
+        publications
+    };
+    assert_eq!(step(&mut gate, &snapshot), 1);
+    for serial in 1..=3 {
+        snapshot.refused_focus = Some(crate::state::RefusedFocus {
+            workspace: WorkspaceId(3),
+            serial,
+        });
+        snapshot.sequence += 1;
+        assert_eq!(step(&mut gate, &snapshot), 1 + serial);
+        assert_eq!(step(&mut gate, &snapshot), 1 + serial, "the same refusal again");
+    }
+    snapshot.unreachable.clear();
+    assert_eq!(step(&mut gate, &snapshot), 5, "the flag flips");
 }

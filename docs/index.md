@@ -31,6 +31,7 @@ Read when navigating the shipped foundation, explicitly planned rewrites or the 
 | Tiling animation pipeline (shipped)         | [feature](features/tiling.md#animation), [spec](specs/2026-11-09-tiling-animation/00-overview.md)           |
 | Tiling borders (shipped, default off)       | [feature](features/tiling.md#borders), [spec](specs/2026-11-09-tiling-borders/00-overview.md)               |
 | Tiling–Bar strip (data shipped, UI rebuilt) | [feature](features/bar.md#tiling-strip-data), [spec](specs/2026-11-08-tiling-bar/00-overview.md)            |
+| Tiling inactive workspaces (shipped)        | [feature](features/tiling.md), [spec](specs/2026-11-12-inactive-workspaces/00-overview.md)                  |
 | Coordinated teardown                        | [spec](specs/2026-11-03-teardown/00-overview.md)                                                            |
 | Release/packaging (planned)                 | [spec](specs/2026-11-03-release/00-overview.md)                                                             |
 | Old application/features                    | [legacy docs](../_legacy/docs/index.md), [legacy build](../_legacy/README.md)                               |

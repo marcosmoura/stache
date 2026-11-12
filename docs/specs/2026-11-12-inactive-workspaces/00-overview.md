@@ -32,7 +32,7 @@ macOS never hides the last visible regular application. A switch to an empty wor
 - **D1. Definition.** A workspace is inactive when all of these hold: no live window is assigned to it; it is not visible on its display; and it is not reachable. It is reachable when startup has tried every listed application and at least one of these holds:
   1. a workspace that is visible on another display has at least one window;
   2. Finder is running and has no window Stache tracks (Finder hosts the desktop);
-  3. the planner's windowless host selection finds a host (another running application with no window Stache has listed).
+  3. the planner's windowless host selection finds a host (another running application with no window Stache has listed; only while Finder is running, because the planner uses such a host only while Finder is held hidden).
 - **D2. One source of truth.** One pure function in the Tiling state decides. The focus intent, the workspace cycle and the published state all use it, so the Bar never shows a workspace as active that a key press would refuse, or the reverse. Rules 2 and 3 use the same host selection as the visibility planner; if the planner's rule changes, the definition changes with it.
 - **D3. Refusal.** `FocusWorkspace` on an inactive workspace is rejected. Nothing changes and nothing native is sent. The state records the refusal (the workspace and a counter) and publishes it, which is what the Bar flashes on. The CLI answers with a typed error; a Bar click answers `refused`.
 - **D4. Other ways in stay open.** Sending a window to an inactive workspace and a rule that assigns a new window to it work as today. The workspace then has a window and is no longer inactive.
@@ -45,8 +45,8 @@ macOS never hides the last visible regular application. A switch to an empty wor
 
 | Part                               | Summary                                                                             | Status |
 | ---------------------------------- | ----------------------------------------------------------------------------------- | ------ |
-| [01](01-tiling-reachability.md)    | Tiling: the reachability rule, the refused focus, published and strip data, the CLI | draft  |
-| [02](02-bar-inactive-workspace.md) | Bar: the dimmed workspace item and the refusal flash                                | draft  |
+| [01](01-tiling-reachability.md)    | Tiling: the reachability rule, the refused focus, published and strip data, the CLI | done   |
+| [02](02-bar-inactive-workspace.md) | Bar: the dimmed workspace item and the refusal flash                                | done   |
 
 After part 02 the user tries it in the running app; the steps are in part 02's notes. All native behaviour stays unverified until then.
 

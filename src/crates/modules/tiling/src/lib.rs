@@ -128,8 +128,8 @@ pub use presets::{
     find_preset, preset_frame, resolve_dimension, resolve_preset,
 };
 pub use published::{
-    PublishedFocus, PublishedWindow, PublishedWorkspace, TilingPublishedState,
-    project as project_published, resolve_window_key, window_key,
+    PublishedFocus, PublishedRefusedFocus, PublishedWindow, PublishedWorkspace,
+    TilingPublishedState, project as project_published, resolve_window_key, window_key,
 };
 pub use reservations::{
     DisplayProjection, HostDisplay, HostLookup, HostReservations, MAX_HOST_DISPLAYS,
@@ -145,8 +145,9 @@ pub use state::{
     AppInfo, AppRecord, AttemptStatus, Binding, Cause, CompletionResult, DesiredWindow,
     Diagnostics, DragOutcome, DragRecord, DragReport, Effect, FocusState, FrameAttempt, FrameBook,
     FrameRecord, FrameStatus, Health, HealthFault, Input, MAX_EXTERNAL_ATTEMPTS,
-    MAX_IN_FLIGHT_FRAMES, MAX_INFERENCES, NoFrameReason, ObservedWindow, Phase, Scope, ScreenState,
-    Stamp, TilingSnapshot, TilingState, WindowState, WorkspaceId, WorkspaceState, transition,
+    MAX_IN_FLIGHT_FRAMES, MAX_INFERENCES, NoFrameReason, ObservedWindow, Phase, RefusedFocus,
+    Scope, ScreenState, Stamp, TilingSnapshot, TilingState, WindowState, WorkspaceId,
+    WorkspaceState, transition,
 };
 pub use status::{
     TilingRuntimeState, TilingRuntimeStatus, TilingStatusSource, unsupported_features,

@@ -30,7 +30,7 @@ use crate::intent::{
     FocusDirection, FocusTarget, Intent, ResizeDimension, ScreenTarget, SwapDirection,
 };
 use crate::ipc::{IpcTiming, LifecycleFailure, body};
-use crate::ipc_tests::{Built, Mode, Rig, config, module, quiet_pause, standard};
+use crate::ipc_tests::{Built, Mode, Rig, config, inactive_b, module, quiet_pause, standard};
 
 struct HostCore {
     directory: PathBuf,
@@ -995,6 +995,16 @@ fn semantic_handler_errors_are_stderr_ipc_errors_with_exit_one() {
     assert_eq!(intents(&stage), vec![Intent::FocusWorkspace(
         "missing".to_owned()
     )]);
+}
+
+#[test]
+fn an_inactive_workspace_is_an_ipc_error_with_exit_one() {
+    let stage = Stage::new(Rig::new(inactive_b().state));
+    action_error(
+        &stage.run(&["tiling", "workspace", "--focus", "b", "--layout", "grid"]),
+        "stache: IPC error: Workspace is inactive",
+    );
+    assert_eq!(intents(&stage), vec![Intent::FocusWorkspace("b".to_owned())]);
 }
 
 #[test]

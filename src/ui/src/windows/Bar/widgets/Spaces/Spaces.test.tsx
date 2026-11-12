@@ -121,6 +121,7 @@ describe('Spaces states', () => {
           workspaces: ['zeta', 'files', 'Alpha', 'coding', 'terminal'].map((name) => ({
             name,
             focused: name === 'coding',
+            inactive: false,
           })),
           apps: [app('1', 'Ghostty'), app('2', 'Code', 'a.ts'), app('3', 'Safari')],
           focusedApp: app('2', 'Code', 'a.ts'),
@@ -232,6 +233,36 @@ describe('Spaces clicks', () => {
         generation: '12',
         sequence: '18446744073709551615',
         action: { kind: 'focusWorkspace', name: 'coding' },
+      },
+    });
+  });
+
+  it('an inactive workspace click sends the same focusWorkspace request', async () => {
+    const host = mockHost().answer('bar_tiling_action', { kind: 'refused' });
+    const { screen } = await renderStrip(
+      tilingStrip({
+        generation: '5',
+        sequence: '9',
+        workspaces: USER_WORKSPACES.map((name) => ({
+          name,
+          focused: name === 'terminal',
+          inactive: name === 'tasks' || name === 'misc',
+        })),
+      }),
+    );
+    const tasks = screen.getByRole('button', { name: 'tasks' });
+
+    await expect.element(tasks).toHaveAttribute('aria-disabled', 'true');
+    // A user's click (Playwright refuses to click an `aria-disabled` element).
+    (tasks.element() as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(host.callsOf('bar_tiling_action')).toHaveLength(1));
+    await settle();
+    expect(host.callsOf('bar_tiling_action')).toHaveLength(1);
+    expect(host.callsOf('bar_tiling_action')[0]!.args).toEqual({
+      request: {
+        generation: '5',
+        sequence: '9',
+        action: { kind: 'focusWorkspace', name: 'tasks' },
       },
     });
   });
@@ -448,7 +479,11 @@ describe('Spaces render cost', () => {
     await page.viewport(2400, 200);
     const apps = [app('1', 'Ghostty'), app('2', 'Code'), app('3', 'Safari')];
     const base = {
-      workspaces: ['terminal', 'coding', 'browser'].map((name) => ({ name, focused: false })),
+      workspaces: ['terminal', 'coding', 'browser'].map((name) => ({
+        name,
+        focused: false,
+        inactive: false,
+      })),
       apps,
       focusedApp: apps[0],
     };
@@ -487,5 +522,40 @@ describe('Spaces render cost', () => {
     await settle(50);
     expect(renders.app.size).toBe(0);
     expect([...renders.workspace.keys()].sort()).toEqual(['coding', 'terminal']);
+  });
+
+  it('an inactive change or a refusal re-renders only the workspace it touches', async () => {
+    mockHost();
+    const workspaces = (inactive: string[]) =>
+      ['terminal', 'coding', 'tasks'].map((name) => ({
+        name,
+        focused: name === 'terminal',
+        inactive: inactive.includes(name),
+      }));
+    const { setView } = await renderStrip(tilingStrip({ workspaces: workspaces([]) }));
+    const tasks = () => document.querySelector<HTMLElement>('button[aria-label="tasks"]')!;
+
+    await vi.waitFor(() => expect(highlight('terminal')).not.toBeNull());
+    await settle(50);
+    renders.app.clear();
+    renders.workspace.clear();
+
+    setView({ tiling: tilingStrip({ sequence: '8', workspaces: workspaces(['tasks']) }) });
+    await vi.waitFor(() => expect(tasks().dataset.inactive).toBe('true'));
+    await settle(50);
+    expect(renders.app.size).toBe(0);
+    expect([...renders.workspace.keys()]).toEqual(['tasks']);
+    renders.workspace.clear();
+
+    setView({
+      tiling: tilingStrip({
+        sequence: '9',
+        workspaces: workspaces(['tasks']),
+        refusedFocus: { workspace: 'tasks', serial: 1 },
+      }),
+    });
+    await settle(100);
+    expect(renders.app.size).toBe(0);
+    expect([...renders.workspace.keys()]).toEqual(['tasks']);
   });
 });

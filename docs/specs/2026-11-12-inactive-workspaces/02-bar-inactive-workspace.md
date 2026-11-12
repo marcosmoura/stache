@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 02 — Bar: the dimmed workspace item and the refusal flash
@@ -20,14 +20,14 @@ The Spaces widget in `src/ui/src/windows/Bar/widgets/Spaces/`: an inactive works
 
 ## Acceptance criteria
 
-- [ ] IW-02-01: An inactive workspace renders dimmed with `aria-disabled` and `data-inactive`; an active one is unchanged; the focused one is never inactive.
-- [ ] IW-02-02: Clicking an inactive item sends exactly the `focusWorkspace` request with the rendered generation and sequence.
-- [ ] IW-02-03: A new refusal identity flashes the item once; a second refusal flashes again; the identity at first render does not; another workspace's refusal does nothing to this item.
-- [ ] IW-02-04: Under reduced motion nothing interpolates and the tint still shows and goes.
-- [ ] IW-02-05: Render counts hold as specified.
-- [ ] IW-02-06: Screenshot baselines show a strip with inactive workspaces in dark and light, wide and compact.
-- [ ] IW-02-07: `docs/features/bar.md` describes the shipped behaviour.
-- [ ] IW-02-08: `bun run lint`, `bun run format:check`, `bun run test` and `bun run build` pass.
+- [x] IW-02-01: An inactive workspace renders dimmed with `aria-disabled` and `data-inactive`; an active one is unchanged; the focused one is never inactive.
+- [x] IW-02-02: Clicking an inactive item sends exactly the `focusWorkspace` request with the rendered generation and sequence.
+- [x] IW-02-03: A new refusal identity flashes the item once; a second refusal flashes again; the identity at first render does not; another workspace's refusal does nothing to this item.
+- [x] IW-02-04: Under reduced motion nothing interpolates and the tint still shows and goes.
+- [x] IW-02-05: Render counts hold as specified.
+- [x] IW-02-06: Screenshot baselines show a strip with inactive workspaces in dark and light, wide and compact.
+- [x] IW-02-07: `docs/features/bar.md` describes the shipped behaviour.
+- [x] IW-02-08: `bun run lint`, `bun run format:check`, `bun run test` and `bun run build` pass.
 
 ## Tests
 
@@ -44,3 +44,6 @@ The Spaces widget in `src/ui/src/windows/Bar/widgets/Spaces/`: an inactive works
   3. Open the Finder window again from `files` and leave: the empty workspaces dim again.
   4. Send a window to a dimmed workspace (`Option+Shift+<n>`): it becomes active.
 - The opacity value and the flash are judged by eye on the screenshot baselines and in the app; the user may ask for different values.
+- Outcome: tokens `bar.inactiveOpacity` (0.4) and `duration.flash` / `durations.flash` (500 ms), transition `transitions.flash`. The flash peaks at full opacity in `color.attention`, behind the icon.
+- Outcome: the item keeps the refusal identity it first rendered with in state and compares it during render; a new identity starts the flash and a `key` restarts it. Under reduced motion a timer removes the tint after the flash's duration.
+- Outcome: Playwright does not click an `aria-disabled` element, so the end-to-end test forces the click; a real click is unaffected.

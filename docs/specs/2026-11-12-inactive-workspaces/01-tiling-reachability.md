@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 01 — Tiling: reachability, refusal and published data
@@ -30,15 +30,15 @@ Files expected to change: `src/crates/modules/tiling/src/{workspaces.rs, intent.
 
 ## Acceptance criteria
 
-- [ ] IW-01-01: The rule matches D1 for each of these states: no windows anywhere; Finder without a window; Finder with a window on a hidden workspace and no windowless application; the same with a windowless application; two displays with and without a window on the other display's visible workspace; the target visible; the target holding only a minimized window; startup not complete.
-- [ ] IW-01-02: Focusing an inactive workspace is rejected, changes nothing but the refusal record, sends no native request and adds no history entry. The counter increases on every refusal.
-- [ ] IW-01-03: For every state of IW-01-01, `inactive` in the published state is true exactly when `FocusWorkspace` is rejected as inactive.
-- [ ] IW-01-04: With the scenario desktop that keeps the last visible application, focusing an empty workspace that is not inactive ends with only the host on screen, and never logs `cannot show an empty desktop` or `hide abandoned`.
-- [ ] IW-01-05: Sending a window to an inactive workspace works and makes it active; a rule-assigned new window does the same; the cycle skips inactive workspaces.
-- [ ] IW-01-06: The published state and the strip carry `inactive` and the refused focus; a refusal publishes once; a removed workspace clears the refused focus; a new generation starts without one.
-- [ ] IW-01-07: The CLI and `bar_tiling_action` answer as specified.
-- [ ] IW-01-08: Bindings are regenerated, UI fixtures compile, and the docs describe the shipped behaviour.
-- [ ] IW-01-09: `bun run lint`, `bun run format:check`, `bun run check:generated` and `bun run test` pass.
+- [x] IW-01-01: The rule matches D1 for each of these states: no windows anywhere; Finder without a window; Finder with a window on a hidden workspace and no windowless application; the same with a windowless application; two displays with and without a window on the other display's visible workspace; the target visible; the target holding only a minimized window; startup not complete.
+- [x] IW-01-02: Focusing an inactive workspace is rejected, changes nothing but the refusal record, sends no native request and adds no history entry. The counter increases on every refusal.
+- [x] IW-01-03: For every state of IW-01-01, `inactive` in the published state is true exactly when `FocusWorkspace` is rejected as inactive.
+- [x] IW-01-04: With the scenario desktop that keeps the last visible application, focusing an empty workspace that is not inactive ends with only the host on screen, and never logs `cannot show an empty desktop` or `hide abandoned`.
+- [x] IW-01-05: Sending a window to an inactive workspace works and makes it active; a rule-assigned new window does the same; the cycle skips inactive workspaces.
+- [x] IW-01-06: The published state and the strip carry `inactive` and the refused focus; a refusal publishes once; a removed workspace clears the refused focus; a new generation starts without one.
+- [x] IW-01-07: The CLI and `bar_tiling_action` answer as specified.
+- [x] IW-01-08: Bindings are regenerated, UI fixtures compile, and the docs describe the shipped behaviour.
+- [x] IW-01-09: `bun run lint`, `bun run format:check`, `bun run check:generated` and `bun run test` pass.
 
 ## Tests
 
@@ -54,3 +54,6 @@ Files expected to change: `src/crates/modules/tiling/src/{workspaces.rs, intent.
 
 - The planner already handles the state this part prevents users from entering by a switch (`kept_last`, the abandoned-hide retry). It stays for the routes the non-goals name.
 - The windowless host rule has not been exercised on a real desktop yet. If it is removed before this part starts, rule 3 goes with it and IW-01-01 loses that case.
+- Outcome: `tilingState` stays v1. The new fields are additive with serde defaults and a test decodes a payload without them; `docs/architecture/sdk.md` has no stricter rule.
+- Outcome: three existing scenarios and the borders test desk reached their state by focusing an empty workspace that is now inactive. They now reach it by sending windows away; their assertions about hides, the kept application and the retry are unchanged.
+- Outcome: a refusal record is not cleared by a later successful focus; it changes only at the next refusal.

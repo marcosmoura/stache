@@ -86,6 +86,19 @@ pub struct StripWorkspace {
     pub name: String,
     /// The globally focused workspace.
     pub focused: bool,
+    /// It has no window and Tiling cannot show it as an empty desktop, so a
+    /// focus request is refused.
+    pub inactive: bool,
+}
+
+/// The last focus request Tiling refused because its workspace was inactive.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct StripRefusedFocus {
+    /// The workspace name.
+    pub workspace: String,
+    /// Increases by one on every refusal of a Tiling generation.
+    pub serial: u32,
 }
 
 /// One application window of the strip.
@@ -102,6 +115,10 @@ pub struct StripApp {
 }
 
 /// What the Bar strip renders for Tiling.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "a view value built once per publication and serialized to the UI"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum TilingStripView {
@@ -125,6 +142,8 @@ pub enum TilingStripView {
         focused_app: Option<StripApp>,
         /// The focused workspace name.
         focused_workspace: Option<String>,
+        /// The last focus request refused because its workspace was inactive.
+        refused_focus: Option<StripRefusedFocus>,
     },
 }
 
@@ -339,11 +358,16 @@ pub fn strip_of(generation: u64, sequence: u64, state: &TilingPublishedState) ->
             .map(|workspace| StripWorkspace {
                 name: workspace.name.clone(),
                 focused: workspace.focused,
+                inactive: workspace.inactive,
             })
             .collect(),
         apps,
         focused_app,
         focused_workspace,
+        refused_focus: state.refused_focus.as_ref().map(|refused| StripRefusedFocus {
+            workspace: refused.workspace.clone(),
+            serial: refused.serial,
+        }),
     }
 }
 

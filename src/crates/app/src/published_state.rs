@@ -541,6 +541,7 @@ mod tests {
                 visible: true,
                 focused: true,
                 order: 0,
+                inactive: false,
             }],
             windows: vec![stache_tiling::PublishedWindow {
                 key: "18446744073709551617".to_owned(),
@@ -555,6 +556,7 @@ mod tests {
                 workspace: Some("coding".to_owned()),
                 window: Some("18446744073709551617".to_owned()),
             },
+            refused_focus: None,
         }
     }
 

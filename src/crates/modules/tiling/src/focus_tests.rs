@@ -12,9 +12,10 @@ use stache_sdk::ipc::IpcHandler as _;
 
 use crate::intent::{FocusTarget, Intent};
 use crate::ipc::{
-    ActionLane, ExactFocus, ExactFocusOutcome, FocusUnavailable, IpcTiming, TilingFocus, TilingIpc,
+    ActionLane, ActorPort as _, ExactFocus, ExactFocusOutcome, FocusUnavailable, IpcTiming,
+    TilingFocus, TilingIpc,
 };
-use crate::ipc_tests::{Built, Mode, Rig, config, fast, module};
+use crate::ipc_tests::{Built, Mode, Rig, config, fast, inactive_b, module};
 use crate::published::window_key;
 use crate::state::{Health, HealthFault, TilingState};
 
@@ -272,4 +273,21 @@ fn a_held_lane_is_busy_and_never_queues() {
         ExactFocusOutcome::NoOp,
         "the lane is free again"
     );
+}
+
+#[test]
+fn an_inactive_workspace_is_refused_and_recorded() {
+    let rig = Rig::new(inactive_b().state);
+    let focus = focus(&rig);
+    for serial in 1..=2 {
+        assert_eq!(
+            focus.focus(&ExactFocus::Workspace("b".to_owned())),
+            ExactFocusOutcome::Refused
+        );
+        let snapshot = rig.actor.snapshot().expect("snapshot");
+        assert_eq!(
+            snapshot.refused_focus.map(|refused| refused.serial),
+            Some(serial)
+        );
+    }
 }

@@ -892,8 +892,18 @@ impl Engine {
     /// Applies one input; `false` when the actor halted.
     fn apply(&mut self, input: Input, now: Instant) -> bool {
         let retime = matches!(input, Input::Displays(_));
-        // A switch (intent or native activation) retries abandoned hides.
+        // A switch (intent or native activation) retries abandoned hides. A
+        // focus refused because its workspace is inactive is no switch: it
+        // sends nothing native (decided before the transition, with the
+        // intent's own rule, so every other input keeps its order).
+        let refused = match (&input, &self.state) {
+            (Input::Intent(crate::intent::Intent::FocusWorkspace(name)), Some(state)) => {
+                state.refuses_focus(name)
+            }
+            _ => false,
+        };
         if matches!(input, Input::Intent(_) | Input::Activated(_))
+            && !refused
             && let Some(visibility) = &self.visibility
         {
             visibility.rearm_abandoned();

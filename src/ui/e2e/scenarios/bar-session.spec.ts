@@ -72,10 +72,15 @@ const strip = (
   kind: 'available',
   generation: '5',
   sequence,
-  workspaces: USER_WORKSPACES.map((name) => ({ name, focused: name === focusedWorkspace })),
+  workspaces: USER_WORKSPACES.map((name) => ({
+    name,
+    focused: name === focusedWorkspace,
+    inactive: false,
+  })),
   apps,
   focusedApp,
   focusedWorkspace,
+  refusedFocus: null,
 });
 
 const track = (overrides: Partial<MediaReading_Serialize> = {}): MediaReading_Serialize => ({

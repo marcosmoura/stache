@@ -123,10 +123,15 @@ export function tilingStrip(
     kind: 'available',
     generation: '3',
     sequence: '7',
-    workspaces: USER_WORKSPACES.map((name) => ({ name, focused: name === 'terminal' })),
+    workspaces: USER_WORKSPACES.map((name) => ({
+      name,
+      focused: name === 'terminal',
+      inactive: false,
+    })),
     apps: [{ key: '100', appName: 'Ghostty', title: 'zsh' }],
     focusedApp: { key: '100', appName: 'Ghostty', title: 'zsh' },
     focusedWorkspace: 'terminal',
+    refusedFocus: null,
     ...overrides,
   };
 }

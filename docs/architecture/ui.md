@@ -143,7 +143,8 @@ Token files are `src/ui/src/theme/*.stylex.ts` and export only `defineVars` /
   icons), `labelMaxWidth` 256px and `labelMaxWidthCompact` 160px (the widest
   a widget's text label grows before it scrolls), and Media's `mediaIconSize`
   22px, `mediaArtworkSize` 24px, `mediaLabelMaxWidth` 560px and
-  `mediaLabelMaxWidthCompact` 400px). Every color is `light-dark(<latte>, <mocha>)`,
+  `mediaLabelMaxWidthCompact` 400px, `inactiveOpacity` 0.4: an inactive Spaces
+  workspace's icon). Every color is `light-dark(<latte>, <mocha>)`,
   composed at compile time from the palette consts.
 - **Bar values.** Today's Bar (on `main`) maps onto the tokens as follows; dark
   is the Mocha value, light its Latte counterpart: item rest surface
@@ -209,7 +210,9 @@ the StyleX `duration`/`easing` consts hold the same values as CSS strings and
 `theme/motion.test.ts` keeps them equal. Today's Bar motion: `easings.inOut`
 (`cubic-bezier(0.42, 0, 0.58, 1)`), `durations.bar` (150 ms: slide-away and item
 hover), `transitions.fadeIn` (275 ms opacity, item mount) and
-`transitions.spring` (a spring with `bounce: 0` over 500 ms, for Spaces).
+`transitions.spring` (a spring with `bounce: 0` over 500 ms, for Spaces) and
+`transitions.flash` (`durations.flash`, 500 ms with `easings.inOut`: a Spaces
+workspace's refusal flash).
 `scrolling` holds `ScrollingLabel`'s marquee values: speed (60 px/s) and the
 gap between copies as a fraction of the box width (0.5). With reduced motion requested, Motion
 skips transform animations.

@@ -112,6 +112,8 @@ export const bar = stylex.defineVars({
   mediaLabelMaxWidth: '560px',
   /** `mediaLabelMaxWidth` in compact mode. */
   mediaLabelMaxWidthCompact: '400px',
+  /** The icon opacity of an inactive Spaces workspace. */
+  inactiveOpacity: '0.4',
 });
 
 /**
@@ -183,6 +185,7 @@ export const duration = stylex.defineConsts({
   bar: '150ms',
   fadeIn: '275ms',
   spring: '500ms',
+  flash: '500ms',
   panelIn: '400ms',
   fade: '150ms',
   pulse: '1600ms',

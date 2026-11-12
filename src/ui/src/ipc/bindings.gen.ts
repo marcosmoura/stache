@@ -3007,12 +3007,25 @@ export type StripApp = {
 	title: string,
 };
 
+/**  The last focus request Tiling refused because its workspace was inactive. */
+export type StripRefusedFocus = {
+	/**  The workspace name. */
+	workspace: string,
+	/**  Increases by one on every refusal of a Tiling generation. */
+	serial: number,
+};
+
 /**  One workspace of the strip. */
 export type StripWorkspace = {
 	/**  The configured name. */
 	name: string,
 	/**  The globally focused workspace. */
 	focused: boolean,
+	/**
+	 *  It has no window and Tiling cannot show it as an empty desktop, so a
+	 *  focus request is refused.
+	 */
+	inactive: boolean,
 };
 
 /**  The shared tap as this module needs it. */
@@ -3209,7 +3222,9 @@ apps: StripApp[];
 /**  The focused window, from any workspace. */
 focusedApp?: StripApp | null;
 /**  The focused workspace name. */
-focusedWorkspace?: string | null };
+focusedWorkspace?: string | null;
+/**  The last focus request refused because its workspace was inactive. */
+refusedFocus?: StripRefusedFocus | null };
 
 /**  What the Bar strip renders for Tiling. */
 export type TilingStripView_Serialize =
@@ -3233,7 +3248,9 @@ apps: StripApp[];
 /**  The focused window, from any workspace. */
 focusedApp: StripApp | null;
 /**  The focused workspace name. */
-focusedWorkspace: string | null };
+focusedWorkspace: string | null;
+/**  The last focus request refused because its workspace was inactive. */
+refusedFocus: StripRefusedFocus | null };
 
 /**  User interface settings shared by every window. */
 export type UiConfig = UiConfig_Serialize | UiConfig_Deserialize;

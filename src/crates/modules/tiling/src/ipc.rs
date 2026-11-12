@@ -224,6 +224,8 @@ pub mod body {
     pub const NO_FOCUSED_WINDOW: &str = "No focused window";
     /// No workspace has that name.
     pub const WORKSPACE_NOT_FOUND: &str = "Workspace not found";
+    /// The workspace has no window and cannot be shown as an empty desktop.
+    pub const WORKSPACE_INACTIVE: &str = "Workspace is inactive";
     /// No display matches.
     pub const SCREEN_NOT_FOUND: &str = "Screen not found";
     /// The display has no visible workspace.
@@ -1250,6 +1252,7 @@ impl Planned {
             IntentOutcome::NoOp(_) => Ok(ActionStatus::AdmittedUnchanged),
             IntentOutcome::Rejected(rejection) => Err(HandlerError::handler(match rejection {
                 IntentRejection::UnknownWorkspace => body::WORKSPACE_NOT_FOUND.to_owned(),
+                IntentRejection::InactiveWorkspace => body::WORKSPACE_INACTIVE.to_owned(),
                 IntentRejection::UnknownWindow => self
                     .numeric
                     .map_or_else(|| body::NO_FOCUSED_WINDOW.to_owned(), body::window_not_found),
