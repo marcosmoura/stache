@@ -67,6 +67,28 @@ impl StartupCommands {
     pub fn is_empty(&self) -> bool { self.commands().is_empty() }
 }
 
+/// The native appearance of every Stache window and panel.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum Appearance {
+    /// Follow the system appearance.
+    #[default]
+    System,
+    /// Always light.
+    Light,
+    /// Always dark.
+    Dark,
+}
+
+/// User interface settings shared by every window.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Type)]
+#[serde(default, rename_all = "snake_case")]
+pub struct UiConfig {
+    /// Light or dark appearance: `"system"` follows macOS, `"light"` and
+    /// `"dark"` force it for every window and panel.
+    pub appearance: Appearance,
+}
+
 /// The global configuration shared by every module.
 ///
 /// The registry never hosts this type as a module; it is a catalog entry whose
@@ -79,6 +101,8 @@ pub struct GlobalConfig {
     pub logging: LoggingConfig,
     /// Commands to execute once per desktop launch.
     pub exec_on_startup: StartupCommands,
+    /// User interface settings.
+    pub ui: UiConfig,
 }
 
 impl GlobalConfig {
@@ -120,6 +144,34 @@ mod tests {
         )
         .expect("list");
         assert_eq!(list.exec_on_startup.commands(), ["one", "two"]);
+    }
+
+    fn decode(text: &str) -> Result<GlobalConfig, crate::config::diagnostics::ConfigDiagnostic> {
+        loader::decode(ConfigFileId::Global, Path::new("global.toml"), text)
+    }
+
+    #[test]
+    fn ui_appearance_defaults_to_system_and_decodes_each_value() {
+        assert_eq!(GlobalConfig::default().ui.appearance, Appearance::System);
+        assert_eq!(
+            decode("# defaults\n").expect("comment only").ui.appearance,
+            Appearance::System
+        );
+        for (text, expected) in [
+            ("system", Appearance::System),
+            ("light", Appearance::Light),
+            ("dark", Appearance::Dark),
+        ] {
+            let config = decode(&format!("[ui]\nappearance = \"{text}\"\n")).expect(text);
+            assert_eq!(config.ui.appearance, expected);
+        }
+    }
+
+    #[test]
+    fn an_unknown_ui_appearance_names_the_field() {
+        let error = decode("[ui]\nappearance = \"sepia\"\n").expect_err("rejected");
+        let text = error.to_string();
+        assert!(text.contains("ui.appearance"), "{text}");
     }
 
     #[test]

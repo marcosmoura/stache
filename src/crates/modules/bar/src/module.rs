@@ -160,7 +160,7 @@ impl Module for BarModule {
         })?;
         let run_id = inner.next_run();
         inner.status.generation(run_id);
-        inner.status.accepted(config.height, config.padding);
+        inner.status.accepted(config.height, config.padding, config.layout.normalized());
         let reading = lease.read();
         let seen = reading.revision;
         let converged = {
@@ -232,7 +232,9 @@ impl Module for BarModule {
                 }
             }
         }
-        self.inner.status.accepted(config.height, config.padding);
+        self.inner
+            .status
+            .accepted(config.height, config.padding, config.layout.normalized());
         self.config = Some(config.clone());
         Ok(())
     }

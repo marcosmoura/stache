@@ -22,13 +22,16 @@
 //! 1. Verify the main thread, that the object is an `NSWindow`, that it has a
 //!    content view and at least one subview (wry's `WryWebView`).
 //! 2. Create the panel at the Tauri window's frame, non-opaque, clear, no
-//!    shadow, dark appearance, collection behavior `canJoinAllSpaces |
+//!    shadow, collection behavior `canJoinAllSpaces |
 //!    stationary` (never `fullScreenAuxiliary`), `hidesOnDeactivate = false`.
 //!    `setFloatingPanel:` is never called.
 //! 3. Move every subview into a plain container view that is the panel's
 //!    content view, autoresizing with the panel.
 //! 4. Install one tracking area so hover works while the app is inactive.
 //! 5. Hide Tauri's window, set level `-1` last, `orderFrontRegardless`.
+//!
+//! The panel sets no appearance of its own: it inherits the application
+//! appearance, which the app host sets from `[ui] appearance`.
 //!
 //! [`PanelAdapter::unhost`] reverses the view move and closes the panel; it
 //! must run before Tauri closes a hosted window. No private API is used.
@@ -43,10 +46,9 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{AnyThread, ClassType, MainThreadMarker, msg_send};
 use objc2_app_kit::{
-    NSAppearance, NSAppearanceCustomization, NSAppearanceNameDarkAqua, NSAutoresizingMaskOptions,
-    NSBackingStoreType, NSColor, NSPanel, NSRunningApplication, NSTrackingArea,
-    NSTrackingAreaOptions, NSView, NSWindow, NSWindowCollectionBehavior, NSWindowLevel,
-    NSWindowStyleMask, NSWorkspace,
+    NSAutoresizingMaskOptions, NSBackingStoreType, NSColor, NSPanel, NSRunningApplication,
+    NSTrackingArea, NSTrackingAreaOptions, NSView, NSWindow, NSWindowCollectionBehavior,
+    NSWindowLevel, NSWindowStyleMask, NSWorkspace,
 };
 use objc2_core_foundation::CGRect;
 
@@ -279,9 +281,7 @@ fn build_host(main: MainThreadMarker, window: &NSWindow) -> Result<HostedPanel, 
     pw.setOpaque(false);
     pw.setBackgroundColor(Some(&NSColor::clearColor()));
     pw.setHasShadow(false);
-    // SAFETY: reading the AppKit-provided constant name.
-    let dark = NSAppearance::appearanceNamed(unsafe { NSAppearanceNameDarkAqua });
-    pw.setAppearance(dark.as_deref());
+    // No appearance here: the panel inherits the application appearance.
     pw.setCollectionBehavior(PANEL_COLLECTION_BEHAVIOR);
     pw.setHidesOnDeactivate(false);
     panel.setWorksWhenModal(true);

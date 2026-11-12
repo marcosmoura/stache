@@ -294,7 +294,7 @@ app are unaffected.
 ## Bar data bridge (Tauri IPC)
 
 Not the control socket: the Bar webview talks to the host through one generated
-command and one generated event (`src/ui/src/sdk/bindings.gen.ts`).
+command and one generated event (`src/ui/src/ipc/bindings.gen.ts`).
 
 - `bar_snapshot()` returns `BarSnapshotOutcome`, tagged by `kind`: `available`
   (`view`: `generation`, `sequence`, `configRevision` as decimal strings, `panel`,

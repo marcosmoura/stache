@@ -357,6 +357,11 @@ pub trait WindowBackend: Send + Sync {
         ))
     }
 
+    /// Applies the configured native appearance to every live window and
+    /// panel and to every window built afterwards, without recreating any.
+    /// Like `open`, this only queues native work. The default does nothing.
+    fn set_appearance(&self, _appearance: crate::config::Appearance) {}
+
     /// The shared lifecycle tracker this backend reports into, if any.
     ///
     /// A backend without one never reports more than [`WindowPhase::Requested`].

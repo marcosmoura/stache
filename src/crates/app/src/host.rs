@@ -1964,6 +1964,14 @@ impl Runner {
             settings.config.clone(),
             Arc::clone(&services.log_filter),
         ));
+        // Every accepted `global.toml` (first load and applied reloads)
+        // applies `[ui] appearance` to the whole application (live and future
+        // windows and panels inherit it); a rejected or unchanged reload never
+        // reaches the backend.
+        let windows = Arc::clone(&services.windows);
+        store.on_global_accepted(Arc::new(move |config: &stache_sdk::GlobalConfig| {
+            windows.set_appearance(config.ui.appearance);
+        }));
         let schedule = PollSchedule::new(services.poll);
         let permissions = PermissionManager::new(Arc::clone(&services.permissions));
         let gated = services

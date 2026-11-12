@@ -23,7 +23,7 @@ pub use accepted::{AcceptedConfig, AcceptedSubscription, AcceptedWait, AcceptedW
 pub use catalog::{CatalogError, ConfigCatalog, DecodedConfig};
 pub use diagnostics::{ConfigDiagnostic, ConfigFileId, DiagnosticKind, SourceLocation};
 pub use edit::{ConfigEdit, ConfigEditError, set_enabled};
-pub use global::{GlobalConfig, LoggingConfig, StartupCommands};
+pub use global::{Appearance, GlobalConfig, LoggingConfig, StartupCommands, UiConfig};
 pub use paths::{ConfigEnvironment, ConfigPaths, PathError, stale_jsonc_hint};
 pub use store::{
     ConfigStore, ConfigStoreError, FileOutcome, Initial, PathEntry, PathReport, PathState,

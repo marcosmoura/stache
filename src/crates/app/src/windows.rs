@@ -14,9 +14,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use stache_macos::{NativeWindowHandle, PanelAdapter, SystemPanelAdapter};
 use stache_sdk::{
-    LogLevel, LogRecord, Logger, MainThreadExecutor, ModuleId, Operation, SurfaceId, WindowBackend,
-    WindowError, WindowFrame, WindowId, WindowKind, WindowOrigin, WindowPhase, WindowPhases,
-    WindowRequest,
+    Appearance, LogLevel, LogRecord, Logger, MainThreadExecutor, ModuleId, Operation, SurfaceId,
+    WindowBackend, WindowError, WindowFrame, WindowId, WindowKind, WindowOrigin, WindowPhase,
+    WindowPhases, WindowRequest,
 };
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
@@ -85,6 +85,16 @@ pub fn chrome_for(surface: SurfaceId) -> WindowChrome {
     }
 }
 
+/// Maps `[ui] appearance` to the application theme: `None` follows the system.
+#[must_use]
+pub const fn theme_for(appearance: Appearance) -> Option<tauri::Theme> {
+    match appearance {
+        Appearance::System => None,
+        Appearance::Light => Some(tauri::Theme::Light),
+        Appearance::Dark => Some(tauri::Theme::Dark),
+    }
+}
+
 /// The host-owned request for the Accessibility guidance window.
 ///
 /// # Errors
@@ -118,6 +128,10 @@ pub trait WindowHost: Send + Sync {
     /// Registers where page-load and failure events go. Called once by
     /// [`NativeWindows::new`]; fake hosts ignore it.
     fn attach_events(&self, _events: std::sync::Weak<dyn WindowEvents>) {}
+    /// Sets the application-wide native appearance (`NSApp.appearance`;
+    /// `System` clears it). Every live and later window and panel inherits it,
+    /// so no window carries an appearance of its own.
+    fn apply_appearance(&self, _appearance: Appearance) {}
     /// Closes an existing window and reports what happened to it.
     fn close(&self, label: &str) -> CloseOutcome;
     /// The OS destroyed this window (its `Destroyed` event). Called on the main
@@ -296,6 +310,8 @@ impl WindowHost for TauriWindowHost {
         .transparent(spec.chrome.transparent)
         .resizable(spec.chrome.resizable)
         .shadow(spec.chrome.shadow);
+        // No `.theme(..)`: in tao it sets the whole application's appearance,
+        // which `apply_appearance` owns. Windows inherit it.
         let builder = if panel {
             let origin = spec.origin.unwrap_or(WindowOrigin { x: 0, y: 0 });
             builder
@@ -306,7 +322,6 @@ impl WindowHost for TauriWindowHost {
                 .skip_taskbar(true)
                 .visible_on_all_workspaces(true)
                 .always_on_bottom(true)
-                .theme(Some(tauri::Theme::Dark))
                 .closable(false)
                 .minimizable(false)
                 .maximizable(false)
@@ -381,6 +396,12 @@ impl WindowHost for TauriWindowHost {
                 self.panels.reposition(label, window.ns_window());
             }
         }
+    }
+
+    fn apply_appearance(&self, appearance: Appearance) {
+        // App-level: tao sets `NSApp.appearance` (nil for `None`) and
+        // refreshes each window's cached theme.
+        self.app.set_theme(theme_for(appearance));
     }
 
     fn close(&self, label: &str) -> CloseOutcome {
@@ -469,6 +490,9 @@ struct WindowShared {
     next: AtomicU64,
     phases: Arc<WindowPhases>,
     state: Mutex<WindowState>,
+    /// The last accepted `[ui] appearance`, applied application-wide; `None`
+    /// until the first accepted value so startup always applies it.
+    appearance: Mutex<Option<Appearance>>,
 }
 
 impl NativeWindows {
@@ -486,6 +510,7 @@ impl NativeWindows {
             next: AtomicU64::new(0),
             phases: WindowPhases::new(),
             state: Mutex::new(WindowState::default()),
+            appearance: Mutex::new(None),
         });
         let events: Arc<dyn WindowEvents> = shared.clone();
         shared.host.attach_events(Arc::downgrade(&events));
@@ -612,6 +637,10 @@ impl WindowShared {
     }
 
     fn is_live(&self, id: WindowId) -> bool { self.lock().by_id.contains_key(&id) }
+
+    fn appearance(&self) -> Option<Appearance> {
+        *self.appearance.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 
     fn forget(&self, id: WindowId) {
         let mut state = self.lock();
@@ -867,6 +896,44 @@ impl WindowBackend for NativeWindows {
 
     fn phases(&self) -> Option<Arc<WindowPhases>> { Some(Arc::clone(&self.shared.phases)) }
 
+    fn set_appearance(&self, appearance: Appearance) {
+        let previous = {
+            let mut current =
+                self.shared.appearance.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if *current == Some(appearance) {
+                return;
+            }
+            current.replace(appearance)
+        };
+        // Applied to the application whether or not a window is live: every
+        // live window and panel and every later build inherits it.
+        let shared = Arc::clone(&self.shared);
+        let dispatched = self.shared.dispatch(move |host| {
+            // A newer value queued after this one wins; a stale job does nothing.
+            if shared.appearance() == Some(appearance) {
+                host.apply_appearance(appearance);
+            }
+        });
+        if let Err(error) = dispatched {
+            // Nothing was applied: restore the previous value (unless a newer
+            // call replaced it) so a later call with this value retries.
+            {
+                let mut current = self
+                    .shared
+                    .appearance
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if *current == Some(appearance) {
+                    *current = previous;
+                }
+            }
+            self.shared.log(
+                LogLevel::Warn,
+                format!("application appearance dispatch failed: {error}"),
+            );
+        }
+    }
+
     fn close(&self, window: WindowId) {
         let entry = {
             let mut state = self.shared.lock();
@@ -959,6 +1026,9 @@ mod tests {
         fail_close: AtomicBool,
         gone: AtomicBool,
         moved: Mutex<Vec<(String, WindowFrame)>>,
+        appearances: Mutex<Vec<Appearance>>,
+        /// Opens and appearance applications, in main-thread order.
+        order: Mutex<Vec<String>>,
         events: Mutex<Option<std::sync::Weak<dyn WindowEvents>>>,
     }
 
@@ -984,6 +1054,7 @@ mod tests {
 
         fn open(&self, spec: &NativeWindowSpec) -> Result<(), String> {
             self.opened.lock().expect("opened").push(spec.clone());
+            self.order.lock().expect("order").push("open".to_owned());
             if self.fail_next.swap(false, Ordering::SeqCst) {
                 return Err("injected creation failure".to_owned());
             }
@@ -992,6 +1063,11 @@ mod tests {
 
         fn focus(&self, label: &str) {
             self.focused.lock().expect("focused").push(label.to_owned());
+        }
+
+        fn apply_appearance(&self, appearance: Appearance) {
+            self.appearances.lock().expect("appearances").push(appearance);
+            self.order.lock().expect("order").push(format!("apply {appearance:?}"));
         }
 
         fn destroyed(&self, label: &str) {
@@ -1624,6 +1700,103 @@ mod tests {
         let label = host.opened.lock().expect("opened")[0].label.clone();
         windows.window_closed(&label);
         assert_eq!(*host.destroyed.lock().expect("destroyed"), [label]);
+    }
+
+    #[test]
+    fn appearance_maps_to_the_tauri_theme() {
+        assert_eq!(theme_for(Appearance::System), None);
+        assert_eq!(theme_for(Appearance::Light), Some(tauri::Theme::Light));
+        assert_eq!(theme_for(Appearance::Dark), Some(tauri::Theme::Dark));
+    }
+
+    fn applied(host: &FakeHost) -> Vec<Appearance> {
+        host.appearances.lock().expect("appearances").clone()
+    }
+
+    #[test]
+    fn a_change_with_no_live_window_reaches_the_application_before_a_later_build() {
+        let queued = Arc::new(Queued::default());
+        let (windows, host) = windows_with(queued.clone());
+        windows.set_appearance(Appearance::Dark);
+        assert!(
+            applied(&host).is_empty(),
+            "native work waits for the main thread"
+        );
+        windows.open(ModuleId::new("one"), &request("test", "a")).expect("open");
+        queued.run();
+        assert_eq!(*host.order.lock().expect("order"), ["apply Dark", "open"]);
+    }
+
+    #[test]
+    fn dark_then_system_with_no_window_live_clears_the_application_appearance() {
+        let (windows, host) = windows();
+        windows.set_appearance(Appearance::Dark);
+        let id = windows.open(ModuleId::new("one"), &request("test", "a")).expect("open");
+        windows.close(id);
+        windows.set_appearance(Appearance::System);
+        windows.open(ModuleId::new("two"), &request("test", "b")).expect("reopen");
+        assert_eq!(*host.order.lock().expect("order"), [
+            "apply Dark",
+            "open",
+            "apply System",
+            "open"
+        ]);
+    }
+
+    #[test]
+    fn the_first_value_is_always_applied_and_an_unchanged_value_does_nothing() {
+        let (windows, host) = windows();
+        windows.set_appearance(Appearance::System);
+        windows.set_appearance(Appearance::System);
+        assert_eq!(applied(&host), [Appearance::System]);
+        windows.open(ModuleId::new("one"), &request("test", "a")).expect("open");
+        windows.set_appearance(Appearance::System);
+        assert_eq!(applied(&host), [Appearance::System]);
+        // A change reaches the application; live windows are never recreated.
+        windows.set_appearance(Appearance::Light);
+        assert_eq!(applied(&host), [Appearance::System, Appearance::Light]);
+        assert_eq!(host.opened.lock().expect("opened").len(), 1);
+        assert!(host.closed.lock().expect("closed").is_empty());
+    }
+
+    #[test]
+    fn a_superseded_queued_value_is_not_applied() {
+        let queued = Arc::new(Queued::default());
+        let (windows, host) = windows_with(queued.clone());
+        windows.set_appearance(Appearance::Light);
+        windows.set_appearance(Appearance::Dark);
+        queued.run();
+        assert_eq!(applied(&host), [Appearance::Dark]);
+    }
+
+    /// Runs jobs inline, or refuses them while `refuse` is set.
+    #[derive(Default)]
+    struct Refusing {
+        refuse: AtomicBool,
+    }
+
+    impl MainThreadExecutor for Refusing {
+        fn is_main_thread(&self) -> bool { true }
+
+        fn execute(&self, job: Box<dyn FnOnce() + Send + 'static>) -> Result<(), ThreadError> {
+            if self.refuse.load(Ordering::SeqCst) {
+                return Err(ThreadError::GroupStopped);
+            }
+            job();
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_failed_dispatch_is_retried_by_the_same_value() {
+        let executor = Arc::new(Refusing::default());
+        let (windows, host) = windows_with(executor.clone());
+        executor.refuse.store(true, Ordering::SeqCst);
+        windows.set_appearance(Appearance::Dark);
+        assert!(applied(&host).is_empty());
+        executor.refuse.store(false, Ordering::SeqCst);
+        windows.set_appearance(Appearance::Dark);
+        assert_eq!(applied(&host), [Appearance::Dark]);
     }
 
     #[derive(Default)]

@@ -1,11 +1,6 @@
-**/*.ts
-**/*.tsx
-**/dist/**/*.css
-**/coverage/**/*.css
-!**/*.styles.tsx
+**/dist/**
+**/coverage/**
 _legacy/**
 .worktrees/**
 target/**
-src/ui/dist/**
-src/ui/coverage/**
-src/ui/tests/bar-reference/reference.css
+node_modules/**

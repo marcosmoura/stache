@@ -17,9 +17,36 @@
         "debug": false,
         "level": "info"
       }
+    },
+    "ui": {
+      "description": "User interface settings.",
+      "$ref": "#/$defs/UiConfig",
+      "default": {
+        "appearance": "system"
+      }
     }
   },
   "$defs": {
+    "Appearance": {
+      "description": "The native appearance of every Stache window and panel.",
+      "oneOf": [
+        {
+          "description": "Follow the system appearance.",
+          "type": "string",
+          "const": "system"
+        },
+        {
+          "description": "Always light.",
+          "type": "string",
+          "const": "light"
+        },
+        {
+          "description": "Always dark.",
+          "type": "string",
+          "const": "dark"
+        }
+      ]
+    },
     "LogLevel": {
       "description": "Severity of one log record.",
       "oneOf": [
@@ -76,6 +103,17 @@
           }
         }
       ]
+    },
+    "UiConfig": {
+      "description": "User interface settings shared by every window.",
+      "type": "object",
+      "properties": {
+        "appearance": {
+          "description": "Light or dark appearance: `\"system\"` follows macOS, `\"light\"` and\n`\"dark\"` force it for every window and panel.",
+          "$ref": "#/$defs/Appearance",
+          "default": "system"
+        }
+      }
     }
   }
 }

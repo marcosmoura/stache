@@ -1368,6 +1368,131 @@ fn the_published_view_carries_exact_identity_and_the_accepted_config() {
 }
 
 #[test]
+fn an_accepted_layout_reload_publishes_the_new_layout_without_touching_the_panel() {
+    use crate::{BarLayoutConfig, BarLayoutEntry, BarLayoutEntryTable, BarWidgetKind as K};
+    let h = Harness::new(Native::Auto, config(28, 14), vec![builtin()]);
+    h.start();
+    let first = h.runtime.status().published();
+    assert_eq!(first.layout, BarLayoutConfig::default().normalized());
+    assert_eq!(
+        first.layout.end.last().map(crate::BarLayoutItem::id),
+        Some("clock")
+    );
+
+    let layout = BarLayoutConfig {
+        start: vec![BarLayoutEntry::Widget(K::Clock)],
+        center: vec![],
+        end: vec![
+            BarLayoutEntry::Widget(K::Cpu),
+            BarLayoutEntry::Table(BarLayoutEntryTable::new(K::Cpu, Some("cpu_b".to_owned()))),
+        ],
+    };
+    h.reload(BarConfig {
+        layout: layout.clone(),
+        ..config(28, 14)
+    });
+    let second = h.runtime.status().published();
+    assert!(second.sequence > first.sequence);
+    assert_eq!(second.layout, layout.normalized());
+    assert_eq!(second.generation, first.generation, "no restart");
+    assert_eq!(second.state, BarRuntimeState::Running);
+    assert_eq!(h.windows.opened(), 1, "the panel is not recreated");
+    assert!(lock(&h.windows.moved).is_empty());
+    assert!(lock(&h.windows.closed).is_empty());
+
+    // A rejected file (duplicate explicit id) changes nothing.
+    let duplicate = BarLayoutConfig {
+        start: vec![BarLayoutEntry::Table(BarLayoutEntryTable::new(
+            K::Wifi,
+            Some("x".to_owned()),
+        ))],
+        center: vec![BarLayoutEntry::Table(BarLayoutEntryTable::new(
+            K::Media,
+            Some("x".to_owned()),
+        ))],
+        end: vec![],
+    };
+    let rejected = h.registry.reload(h.handle, BarConfig {
+        layout: duplicate,
+        ..config(28, 14)
+    });
+    assert!(rejected.is_err());
+    let third = h.runtime.status().published();
+    // The sequence is not compared: a provider reading may publish meanwhile.
+    assert_eq!(third.layout, second.layout);
+    assert_eq!(third.generation, second.generation);
+}
+
+#[test]
+fn an_options_reload_publishes_resolved_options_and_a_rejected_one_publishes_nothing() {
+    use crate::{
+        BarEntryFields, BarLayoutConfig, BarLayoutEntry, BarLayoutEntryTable, BarLayoutItem,
+        BarWidgetKind as K, ClockOptions, CpuOptions, HourCycle,
+    };
+    let base = BarLayoutConfig {
+        start: vec![],
+        center: vec![],
+        end: vec![
+            BarLayoutEntry::Widget(K::Cpu),
+            BarLayoutEntry::Widget(K::Clock),
+        ],
+    };
+    let h = Harness::new(Native::Auto, BarConfig { layout: base, ..config(28, 14) }, vec![
+        builtin(),
+    ]);
+    h.start();
+    let first = h.runtime.status().published();
+    let with = |alert: u8| BarConfig {
+        layout: BarLayoutConfig {
+            start: vec![],
+            center: vec![],
+            end: vec![
+                BarLayoutEntry::Table(BarLayoutEntryTable::Cpu(BarEntryFields {
+                    id: None,
+                    options: CpuOptions { temperature_alert: alert },
+                })),
+                BarLayoutEntry::Table(BarLayoutEntryTable::Clock(BarEntryFields {
+                    id: None,
+                    options: ClockOptions {
+                        show_seconds: false,
+                        hour_cycle: HourCycle::H12,
+                        ..ClockOptions::default()
+                    },
+                })),
+            ],
+        },
+        ..config(28, 14)
+    };
+    h.reload(with(95));
+    let second = h.runtime.status().published();
+    assert!(second.sequence > first.sequence);
+    assert_eq!(second.layout.end, [
+        BarLayoutItem::Cpu {
+            id: "cpu".into(),
+            options: CpuOptions { temperature_alert: 95 }
+        },
+        BarLayoutItem::Clock {
+            id: "clock".into(),
+            options: ClockOptions {
+                show_date: true,
+                show_seconds: false,
+                hour_cycle: HourCycle::H12,
+            },
+        },
+    ]);
+    assert_eq!(second.generation, first.generation, "no restart");
+    assert_eq!(h.windows.opened(), 1, "the panel is not recreated");
+    assert!(lock(&h.windows.closed).is_empty());
+
+    let rejected = h.registry.reload(h.handle, with(0));
+    assert!(rejected.is_err(), "an out-of-range option is rejected");
+    let third = h.runtime.status().published();
+    // The sequence is not compared: a provider reading may publish meanwhile.
+    assert_eq!(third.layout, second.layout);
+    assert_eq!(third.generation, second.generation);
+}
+
+#[test]
 fn a_stalled_main_queue_bounds_the_menu_worker_end_and_keeps_it_owned() {
     struct Stalled(AtomicBool);
     impl MainThreadExecutor for Stalled {

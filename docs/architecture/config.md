@@ -54,6 +54,21 @@ Every file starts with `#:schema <url>`, the Taplo/Tombi convention that points
 an editor at `schemas/<id>.schema.json`. It is an ordinary comment to the parser;
 there is no `$schema` data key.
 
+`global.toml` holds `logging`, `exec_on_startup` and `[ui]`. `[ui] appearance`
+is `"system"` (default), `"light"` or `"dark"`; any other value is a type error at
+`ui.appearance`. The effect is app-wide: the host sets the application
+appearance (`AppHandle::set_theme`, i.e. `NSApp.appearance` = nil, Aqua or Dark
+Aqua), and every window and the Bar `NSPanel` set none of their own and inherit
+it. In tao a per-window theme also sets the application appearance, and a build
+with no theme does not reset it, so no window is built with a theme. The webview's `prefers-color-scheme` follows that native appearance,
+so the UI's `light-dark()` tokens pick Latte or Mocha with no script (see
+[ui.md](ui.md#tokens-and-themes)). No window is forced dark.
+
+```toml
+[ui]
+appearance = "system" # "light" | "dark"
+```
+
 `bar.toml` is registered for configuration, schema, template and migration
 only (`enabled` default `false`, `height` 28, `padding` 12, and `weather` with
 `provider` `auto`|`visual_crossing`|`open_meteo`, `api_keys`, `default_location` and
@@ -66,6 +81,50 @@ expands injected `~`/`~/`, resolves anything else under the configuration
 directory and never expands shell or environment syntax or uses the process
 working directory. The Bar weather path reads `VISUAL_CROSSING_API_KEY` from that file on each
 `bar_weather` call (no watcher). See [bar.md](../features/bar.md).
+
+`bar.toml` `[layout]` (`BarLayoutConfig`, `src/crates/modules/bar/src/layout.rs`)
+has three ordered zones, `start`, `center` and `end`. An entry is a widget name
+(the closed snake_case enum `BarWidgetKind`: `spaces`, `media`, `weather`,
+`cpu`, `battery`, `keep_awake`, `wifi`, `clock`) or a table with `widget`
+(required), an optional `id` and that widget's options as flat keys
+(`{ widget = "clock", show_seconds = false }`). Options: `clock` has
+`show_date` and `show_seconds` (booleans, default `true`) and `hour_cycle`
+(`"h23"` or `"h12"`, default `"h23"`); `cpu` has `temperature_alert` (integer
+degrees Celsius, 1 to 150, default 85); the other widgets have none. A name and
+a table without option keys both mean the defaults. A missing `[layout]`
+is the default `start = ["spaces"]`, `center = ["media"]`,
+`end = ["weather", "cpu", "battery", "keep_awake", "wifi", "clock"]`; a zone
+missing from a present `[layout]` is empty.
+
+The "string or table" shape is a hand-written serde visitor, not an untagged or
+internally tagged derive (both buffer the value and lose paths), so type errors
+keep their exact path (`layout.end[2]`, `layout.end[2].widget`,
+`layout.start[0].id`, `layout.end[1].temperature_alert`): an option of the wrong
+type, out of range or with an unknown enum spelling rejects the file. Keys may
+come in any order. The decoder reads a table's keys alphabetically (the JSON
+map), so options arrive before `widget`; each option name belongs to exactly
+one widget and is decoded in place for its owner. Another widget's option on an
+entry is an unknown key: `ModuleConfig::prune_section`, a catalog hook run
+before every decode (default no-op), removes it from the JSON value and reports
+its path (`layout.end.1.show_seconds`) with the unknown-key warnings; other
+unknown keys reach `serde_ignored` as usual. The config type is
+`BarLayoutEntryTable`, internally tagged by `widget` with one variant per
+widget over `BarEntryFields<Options>` (`id` plus the flattened options;
+`NoOptions` for a widget without options). The schema describes an entry as an
+`anyOf` of a widget name and a `oneOf` with one object per widget (`widget` a
+`const`, only that widget's properties with their defaults and ranges; `id` a
+plain optional string with `minLength` 1 and the pattern `^[A-Za-z0-9_-]+$`).
+`BarConfig::validate` rejects a duplicate explicit id, naming both paths, and a
+`temperature_alert` out of range in a configuration built in code.
+`BarLayoutConfig::normalized()` assigns ids (an explicit id is kept; otherwise
+the widget name, then `<name>_2`, `<name>_3`, ... in file order across all
+zones, skipping explicit ids), resolves options and is what the host publishes
+as `BarView.layout`: items `BarLayoutItem`, tagged by `widget`, of
+`{ id, widget, options }` with every option resolved (`{}` for a widget without
+options); the generated TypeScript is a discriminated union on `widget`. The
+template shows the default under `[layout]` with a commented example that
+includes an option; migration writes no `[layout]`, so a migrated file uses
+the default.
 
 `notunes.toml` is registered for configuration, schema, template and migration,
 and backs the shipped blocker runtime: enabling it installs application
@@ -273,7 +332,15 @@ diagnostic; the next changed configuration retries. Deleting a file retains the
 last good runtime until a valid replacement is written.
 
 `global.toml` updates the injected `LogFilter` immediately, so level changes
-are live. `exec_on_startup` is read once by the desktop host, never by config
+are live. Every accepted `global.toml` (the first load, including the
+default for a missing file, and every applied reload) reaches the store's
+`on_global_accepted` observers; the host's observer calls
+`WindowBackend::set_appearance`. The first accepted value and every change
+queue one main-thread job that applies it to the application
+(`WindowHost::apply_appearance`), whether or not a window is live; live windows
+and panels follow at once and later builds inherit it, nothing is recreated, and
+`"system"` clears the override so the system appearance is followed again.
+A job superseded by a newer value does nothing. A rejected or unchanged reload calls no observer and changes nothing. `exec_on_startup` is read once by the desktop host, never by config
 loading, reload or CLI. The host starts it once after initial setup (after
 registry start, socket and watcher) on its own owned thread, sequentially with
 legacy quoting rules, stopping at the first failure; shutdown cancels it, kills

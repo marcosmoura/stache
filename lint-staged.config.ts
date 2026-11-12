@@ -15,7 +15,7 @@ const ignoredDirectories = [
   'test-results',
 ];
 
-const ignoredFiles = ['bun.lock', 'Cargo.lock', 'src/ui/src/sdk/bindings.gen.ts'];
+const ignoredFiles = ['bun.lock', 'Cargo.lock', 'src/ui/src/ipc/bindings.gen.ts'];
 
 const formattedExtensions = [
   '.js',
@@ -69,7 +69,7 @@ export default {
         .filter(isActiveFile);
       const formatted = files.filter((file) => formattedExtensions.includes(path.extname(file)));
       const scripts = files.filter((file) => scriptExtensions.includes(path.extname(file)));
-      const styles = files.filter((file) => file.endsWith('.styles.tsx') || file.endsWith('.css'));
+      const styles = files.filter((file) => file.endsWith('.css'));
 
       if (formatted.length) {
         run('oxfmt', ['--check', '--disable-nested-config', '--', ...formatted]);

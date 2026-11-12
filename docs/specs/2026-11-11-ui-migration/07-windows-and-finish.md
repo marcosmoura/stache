@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 07 — Other windows and finish
@@ -36,14 +36,14 @@ The Accessibility guide and the test window as real windows, the exhaustive regi
 
 ## Acceptance criteria
 
-- [ ] MIG-07-01: The guide renders every state, including the unbundled variant and the error line, and closes itself on `open`.
-- [ ] MIG-07-02: Each guide action sends its command once, disables while pending, and Escape and Close close the window.
-- [ ] MIG-07-03: The test window renders every state with the distinct labels and never parses `revision`.
-- [ ] MIG-07-04: `?surface=access` and `?surface=test` render the new windows and make only the calls their capabilities allow.
-- [ ] MIG-07-05: The registry is exhaustive at the type level.
-- [ ] MIG-07-06: The full Bar session passes with no console error and no unanswered command.
-- [ ] MIG-07-07: Docs describe the shipped UI; no document says the UI is being rebuilt.
-- [ ] MIG-07-08: `bun run lint`, `bun run format:check`, `bun run test`, `bun run build` and `bun run test:ui:coverage` pass.
+- [x] MIG-07-01: The guide renders every state, including the unbundled variant and the error line, and closes itself on `open`.
+- [x] MIG-07-02: Each guide action sends its command once, disables while pending, and Escape and Close close the window.
+- [x] MIG-07-03: The test window renders every state with the distinct labels and never parses `revision`.
+- [x] MIG-07-04: `?surface=access` and `?surface=test` render the new windows and make only the calls their capabilities allow.
+- [x] MIG-07-05: The registry is exhaustive at the type level.
+- [x] MIG-07-06: The full Bar session passes with no console error and no unanswered command.
+- [x] MIG-07-07: Docs describe the shipped UI; no document says the UI is being rebuilt.
+- [x] MIG-07-08: `bun run lint`, `bun run format:check`, `bun run test`, `bun run build` and `bun run test:ui:coverage` pass.
 
 ## Tests
 

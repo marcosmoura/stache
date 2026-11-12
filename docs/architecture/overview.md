@@ -129,12 +129,10 @@ Read when changing the shipped foundation boundaries.
   planned. See [wallpapers.md](../features/wallpapers.md).
 - `src/crates/cli`: built-in `config`/`cache`/`reload`/`schema`/`completions` implementation and
   command composition; it imports the SDK, never the app or a module crate.
-- `src/ui/src/shell`: the `Shell` window router (`Shell.tsx`), `windows/` (one directory per surface, including the
-  development-only `Placeholder`) and `components/` (reusable UI, created with the first shared component); each directory has a colocated test,
-  Linaria `.styles.tsx` file and index export. React Compiler/Vite process the frontend.
-- `src/ui/src/sdk`: generated command/event bindings plus the React Query status feed, client wrappers and tokens used by the test window.
-- `src/ui/main.tsx` bootstraps the app exported by `src/ui/index.tsx`; `main.css` owns global CSS.
-- `src/ui/tests` contains setup/support only; real tests are colocated under `src/ui/src`.
+- `src/ui`: the React UI (StyleX, TanStack Query, Motion). `index.html` loads
+  `src/main.tsx`; `src/router.ts` maps `?surface=` to a lazily loaded window under `src/windows/`;
+  `src/ipc/` holds the generated bindings and is the only code allowed to import `@tauri-apps/*`;
+  `tests/` and `e2e/` hold the Vitest and Playwright harnesses. See [ui.md](ui.md).
 - `_legacy`: independent Cargo/pnpm application, excluded from root workspace and quality tools.
 
 ## Desktop host

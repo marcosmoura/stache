@@ -9,7 +9,7 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-const COMMITTED: &str = "src/ui/src/sdk/bindings.gen.ts";
+const COMMITTED: &str = "src/ui/src/ipc/bindings.gen.ts";
 
 fn main() -> ExitCode {
     let mut check = false;

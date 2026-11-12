@@ -1,0 +1,181 @@
+import * as stylex from '@stylexjs/stylex';
+
+import { color, duration, easing, font, guide, media, space, zIndex } from '@/theme/tokens.stylex';
+
+const panelIn = stylex.keyframes({
+  from: { transform: 'scale(0.97)', opacity: 0 },
+  to: { transform: 'scale(1)', opacity: 1 },
+});
+
+const fadeIn = stylex.keyframes({
+  from: { opacity: 0 },
+  to: { opacity: 1 },
+});
+
+export const styles = stylex.create({
+  /** One rounded panel filling the transparent window. */
+  panel: {
+    userSelect: 'none',
+    position: 'relative',
+    display: 'grid',
+    gridTemplateRows: 'auto minmax(0, 1fr) auto auto',
+    boxSizing: 'border-box',
+    width: '100%',
+    height: '100vh',
+    margin: 0,
+    borderRadius: guide.panelRadius,
+    fontFamily: font.family,
+    fontSize: guide.fontSize,
+    fontWeight: guide.fontWeight,
+    fontVariantNumeric: 'tabular-nums',
+    lineHeight: guide.lineHeight,
+    color: color.text,
+    backgroundColor: color.surfaceSunken,
+    animationName: { default: panelIn, [media.reducedMotion]: 'none' },
+    animationDuration: duration.panelIn,
+    animationTimingFunction: easing.inOut,
+    animationFillMode: 'both',
+    // The ring sits above the content, so scrolled text never covers it.
+    '::after': {
+      pointerEvents: 'none',
+      content: "''",
+      position: 'absolute',
+      zIndex: zIndex.raised,
+      inset: 0,
+      borderRadius: guide.panelRadius,
+      boxShadow: `inset 0 0 0 1px ${color.divider}`,
+    },
+  },
+  header: {
+    display: 'flex',
+    gap: space.md,
+    alignItems: 'center',
+    height: guide.headerHeight,
+    paddingBlock: 0,
+    paddingRight: space.lg,
+    paddingLeft: space.xxl,
+  },
+  dragRegion: {
+    display: 'flex',
+    flexGrow: 1,
+    gap: space.md,
+    alignItems: 'center',
+    height: '100%',
+  },
+  /** Children of the drag region never take the press, so the drag starts. */
+  passThrough: {
+    pointerEvents: 'none',
+  },
+  glyph: {
+    display: 'grid',
+    placeItems: 'center',
+    width: guide.markSize,
+    height: guide.markSize,
+    borderRadius: space.md,
+    color: color.accent,
+    backgroundColor: `color-mix(in srgb, ${color.accent} 16%, ${color.surfaceSunken})`,
+  },
+  appName: {
+    fontSize: font.sizeMd,
+    color: color.textMuted,
+  },
+  close: {
+    cursor: 'pointer',
+    display: 'grid',
+    placeItems: 'center',
+    width: guide.closeSize,
+    height: guide.closeSize,
+    padding: 0,
+    borderColor: { default: 'transparent', ':hover': color.surface },
+    borderStyle: 'solid',
+    borderWidth: '1px',
+    borderRadius: guide.controlRadius,
+    color: { default: color.textMuted, ':hover': color.text },
+    appearance: 'none',
+    backgroundColor: { default: 'transparent', ':hover': color.surfaceActive },
+    outline: {
+      default: 'none',
+      ':focus-visible': `2px solid ${color.focus}`,
+    },
+    outlineOffset: '1px',
+    transitionTimingFunction: easing.inOut,
+    transitionDuration: { default: duration.fade, [media.reducedMotion]: '0ms' },
+    transitionProperty: 'background-color, border-color, color',
+  },
+  scroll: {
+    scrollbarColor: `${color.surfaceActive} transparent`,
+    scrollbarWidth: 'thin',
+    overflowX: 'hidden',
+    overflowY: 'auto',
+    overscrollBehavior: 'contain',
+    display: 'flex',
+    flexDirection: 'column',
+    minHeight: 0,
+    paddingInline: space.xxl,
+    paddingTop: space.xs,
+    paddingBottom: space.xl,
+  },
+  content: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: guide.sectionGap,
+    marginBlock: 0,
+    animationName: { default: fadeIn, [media.reducedMotion]: 'none' },
+    animationDuration: duration.fade,
+    animationTimingFunction: easing.inOut,
+    animationFillMode: 'both',
+  },
+  /** Short states center their hero; auto margins keep overflow scrollable. */
+  centered: {
+    marginBlock: 'auto',
+  },
+  hero: {
+    display: 'flex',
+    gap: space.lg,
+    alignItems: 'flex-start',
+    textAlign: 'left',
+  },
+  heroCentered: {
+    flexDirection: 'column',
+    alignItems: 'center',
+    textAlign: 'center',
+  },
+  heroText: {
+    display: 'flex',
+    flexDirection: 'column',
+    flexGrow: 1,
+    gap: space.xs,
+    minWidth: 0,
+  },
+  title: {
+    margin: 0,
+    fontSize: guide.titleSize,
+    fontWeight: guide.titleWeight,
+    lineHeight: guide.titleLineHeight,
+    color: color.text,
+  },
+  body: {
+    margin: 0,
+    color: color.textMuted,
+  },
+  alert: {
+    display: 'flex',
+    gap: space.md,
+    alignItems: 'flex-start',
+    marginBlock: space.md,
+    marginInline: space.xxl,
+    paddingBlock: space.md,
+    paddingInline: space.lg,
+    borderRadius: guide.controlRadius,
+    fontSize: font.sizeMd,
+    color: color.danger,
+    overflowWrap: 'anywhere',
+    backgroundColor: `color-mix(in srgb, ${color.danger} 12%, ${color.surfaceSunken})`,
+    boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${color.danger} 24%, transparent)`,
+  },
+  alertIcon: {
+    display: 'flex',
+    flexShrink: 0,
+    marginTop: '2px',
+  },
+});

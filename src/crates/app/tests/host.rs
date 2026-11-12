@@ -633,9 +633,14 @@ struct FakeWindowHost {
     opened: Mutex<Vec<NativeWindowSpec>>,
     focused: Mutex<Vec<String>>,
     closed: Mutex<Vec<String>>,
+    appearances: Mutex<Vec<stache_sdk::Appearance>>,
 }
 
 impl WindowHost for FakeWindowHost {
+    fn apply_appearance(&self, appearance: stache_sdk::Appearance) {
+        self.appearances.lock().expect("appearances").push(appearance);
+    }
+
     fn open(&self, spec: &NativeWindowSpec) -> Result<(), String> {
         self.opened.lock().expect("opened").push(spec.clone());
         Ok(())
@@ -5542,6 +5547,59 @@ fn wait_until(label: &str, condition: impl Fn() -> bool) {
         assert!(Instant::now() < deadline, "timed out waiting for {label}");
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+#[test]
+fn ui_appearance_is_applied_app_wide_at_startup_and_on_every_accepted_reload() {
+    use stache_sdk::Appearance;
+    let fixture = fixture();
+    fixture.write("global.toml", "[ui]\nappearance = \"dark\"\n");
+    let permissions = FakePermissions::new(PermissionStatus::Denied);
+    let (mut harness, windows, host) = guide_harness(permissions, true);
+    harness.start(&fixture, false, None);
+    harness.wait_ready();
+    wait_until("the guidance window", || access_labels(&host).len() == 1);
+    assert_eq!(
+        *host.appearances.lock().expect("appearances"),
+        [Appearance::Dark],
+        "the first accepted value is applied to the application"
+    );
+    let client = IpcClient::new(fixture.app.socket_path().expect("socket"));
+
+    fixture.write("global.toml", "[ui]\nappearance = \"light\"\n");
+    let report = client.reload().expect("reload");
+    assert!(!report.has_failures(), "{report:?}");
+    wait_until("the light re-apply", || {
+        host.appearances.lock().expect("appearances").contains(&Appearance::Light)
+    });
+
+    fixture.write("global.toml", "[ui]\nappearance = \"sepia\"\n");
+    let report = client.reload().expect("rejected reload");
+    assert!(report.has_failures(), "{report:?}");
+
+    // A later accepted change that is neither the default nor the current
+    // value: once it is applied, the rejected reload was handled before it
+    // and must have applied nothing (not even a fallback to the default).
+    fixture.write("global.toml", "[ui]\nappearance = \"dark\"\n");
+    let report = client.reload().expect("reload");
+    assert!(!report.has_failures(), "{report:?}");
+    wait_until("the dark re-apply", || {
+        host.appearances.lock().expect("appearances").last() == Some(&Appearance::Dark)
+            && host.appearances.lock().expect("appearances").len() > 2
+    });
+    assert_eq!(
+        *host.appearances.lock().expect("appearances"),
+        [Appearance::Dark, Appearance::Light, Appearance::Dark],
+        "a rejected reload changes nothing"
+    );
+    assert_eq!(
+        host.opened.lock().expect("opened").len(),
+        1,
+        "nothing is recreated"
+    );
+    assert_eq!(windows.len(), 1);
+    harness.handle.request_shutdown();
+    assert!(harness.wait_exit());
 }
 
 #[test]

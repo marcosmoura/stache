@@ -9,7 +9,7 @@ Read when navigating the shipped foundation, explicitly planned rewrites or the 
 | Socket control and CLI                      | [architecture/ipc.md](architecture/ipc.md)                                                                  |
 | Typed config, reload, schemas, CLI          | [architecture/config.md](architecture/config.md)                                                            |
 | TOML configuration and migration            | [architecture/config.md](architecture/config.md), [spec](specs/2026-11-09-toml-config/00-overview.md)       |
-| Typed UI SDK, bindings, test window         | [architecture/ui.md](architecture/ui.md)                                                                    |
+| UI, windows, bindings, harnesses            | [architecture/ui.md](architecture/ui.md), [spec](specs/2026-11-11-ui-rebuild/00-overview.md)                |
 | Audio device switching (proxyAudio)         | [features/proxy-audio.md](features/proxy-audio.md)                                                          |
 | Adding a module                             | [guides/new-module.md](guides/new-module.md)                                                                |
 | Build, checks, hooks, coverage              | [guides/testing.md](guides/testing.md)                                                                      |
@@ -30,7 +30,7 @@ Read when navigating the shipped foundation, explicitly planned rewrites or the 
 | Tiling CLI and socket methods               | [features/tiling.md#cli](features/tiling.md#cli), [architecture/ipc.md](architecture/ipc.md#tiling-command) |
 | Tiling animation pipeline (shipped)         | [feature](features/tiling.md#animation), [spec](specs/2026-11-09-tiling-animation/00-overview.md)           |
 | Tiling borders (shipped, default off)       | [feature](features/tiling.md#borders), [spec](specs/2026-11-09-tiling-borders/00-overview.md)               |
-| Tiling–Bar strip (shipped, default off)     | [feature](features/bar.md#tiling-strip-data), [spec](specs/2026-11-08-tiling-bar/00-overview.md)            |
+| Tiling–Bar strip (data shipped, UI rebuilt) | [feature](features/bar.md#tiling-strip-data), [spec](specs/2026-11-08-tiling-bar/00-overview.md)            |
 | Coordinated teardown                        | [spec](specs/2026-11-03-teardown/00-overview.md)                                                            |
 | Release/packaging (planned)                 | [spec](specs/2026-11-03-release/00-overview.md)                                                             |
 | Old application/features                    | [legacy docs](../_legacy/docs/index.md), [legacy build](../_legacy/README.md)                               |

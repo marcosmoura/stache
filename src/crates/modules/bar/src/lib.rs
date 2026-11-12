@@ -24,6 +24,7 @@
 #![warn(missing_docs)]
 
 mod config;
+mod layout;
 mod menubar;
 mod module;
 pub mod providers;
@@ -37,6 +38,10 @@ mod window;
 mod tests;
 
 pub use config::{BarConfig, WeatherConfig, WeatherProvider};
+pub use layout::{
+    BarEntryFields, BarLayoutConfig, BarLayoutEntry, BarLayoutEntryTable, BarLayoutItem,
+    BarLayoutView, BarWidgetKind, ClockOptions, CpuOptions, HourCycle, NoOptions,
+};
 pub use menubar::{MENU_JOIN, MENU_POLL, MENU_RETRY, MenuMonitor, Schedule, next_wake};
 pub use module::{BarModule, BarRuntime, KEEP_AWAKE_PROVIDER, TILING_PROVIDER};
 pub use providers::{

@@ -1,1 +1,0 @@
-export { QueryErrorFallback } from './QueryErrorFallback';
