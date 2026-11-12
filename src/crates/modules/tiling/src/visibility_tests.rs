@@ -47,11 +47,17 @@ fn entry(application: ApplicationId, needed: bool, externally_hidden: bool) -> A
         },
         hide_wanted: !needed,
         externally_hidden,
+        host: false,
     }
 }
 
 fn requirement(entries: Vec<AppVisibility>) -> VisibilityRequirement {
     VisibilityRequirement {
+        finder_held: false,
+        settled: false,
+        desktop_host: None,
+        host_active: false,
+        kept_last: None,
         apps: entries,
         conflicts: Vec::new(),
     }
@@ -157,6 +163,7 @@ fn a_needed_application_is_never_hidden_even_shared_across_displays_and_inactive
         inactive_in: vec![WorkspaceId(2)],
         hide_wanted: false,
         externally_hidden: false,
+        host: false,
     };
     assert!(plan(&mut ledger, vec![shared]).is_empty());
     assert!(ledger.owned().is_empty());
@@ -296,6 +303,12 @@ fn a_hide_that_never_landed_is_re_sent_a_bounded_number_of_times() {
         }
     }
     assert_eq!(sent, usize::from(crate::visibility::MAX_HIDE_ATTEMPTS));
+    let owned = ledger.owned();
+    assert_eq!(
+        owned[0].reason.as_deref(),
+        Some("hide abandoned: still visible after every retry"),
+        "giving up is reported"
+    );
 }
 
 #[test]
@@ -1121,4 +1134,207 @@ fn the_lazy_system_backend_starts_nothing_until_used_and_cleans_up_inertly() {
         backend.close(),
         stache_macos::windows::CloseOutcome::AlreadyClosed
     ));
+}
+
+/// Re-sends `a`'s hide (each re-send reported as `evidence`) for eight
+/// seconds: every attempt is spent and the hide is abandoned.
+fn spend_hide_attempts(ledger: &mut Ledger, a: ApplicationId, evidence: &HideEvidence) {
+    for step in 0..80_u32 {
+        let now = base() + Duration::from_millis(100) * step;
+        if !plan_at(ledger, vec![entry(a, false, false)], now).is_empty() {
+            ledger.apply(Report::Hide(a, evidence.clone()));
+        }
+    }
+}
+
+#[test]
+fn a_switch_during_the_last_wait_does_not_restart_the_hide_round_or_drop_its_reason() {
+    let (mut ledger, a) = (Ledger::default(), app(1));
+    let _ = plan(&mut ledger, vec![entry(a, false, false)]);
+    let possible = HideEvidence::Possible("not acknowledged".to_owned());
+    ledger.apply(Report::Hide(a, possible.clone()));
+    let mut last = base();
+    let mut sent = 0;
+    for step in 0..80_u32 {
+        let now = base() + std::time::Duration::from_millis(100) * step;
+        if !plan_at(&mut ledger, vec![entry(a, false, false)], now).is_empty() {
+            ledger.apply(Report::Hide(a, possible.clone()));
+            last = now;
+            sent += 1;
+            if sent == usize::from(crate::visibility::MAX_HIDE_ATTEMPTS) {
+                break;
+            }
+        }
+    }
+    let reason = ledger.owned()[0].reason.clone();
+    assert!(reason.is_some(), "the evidence reason");
+    // A switch within the last confirmation window.
+    ledger.rearm_abandoned();
+    let soon = last + std::time::Duration::from_millis(100);
+    assert!(
+        plan_at(&mut ledger, vec![entry(a, false, false)], soon).is_empty(),
+        "the round is not restarted early"
+    );
+    assert_eq!(ledger.owned()[0].reason, reason, "the evidence reason stays");
+}
+
+#[test]
+fn an_ambiguous_record_keeps_its_reason_across_a_switch() {
+    let (mut ledger, a) = (Ledger::default(), app(1));
+    let _ = plan(&mut ledger, vec![entry(a, false, false)]);
+    ledger.apply(Report::Hide(a, HideEvidence::Possible("lost".to_owned())));
+    ledger.observe(a, Observation::Shown);
+    assert_eq!(ledger.ownership(a), Some(Ownership::Ambiguous));
+    let reason = ledger.owned()[0].reason.clone();
+    ledger.rearm_abandoned();
+    assert_eq!(ledger.owned()[0].reason, reason);
+}
+
+#[test]
+fn an_abandoned_hide_that_later_reads_hidden_drops_the_abandon_reason() {
+    let (mut ledger, a) = (Ledger::default(), app(1));
+    let _ = plan(&mut ledger, vec![entry(a, false, false)]);
+    ledger.apply(Report::Hide(a, HideEvidence::Sent));
+    // It reads visible: re-sent until abandoned.
+    spend_hide_attempts(&mut ledger, a, &HideEvidence::Sent);
+    assert_eq!(
+        ledger.owned()[0].reason.as_deref(),
+        Some(crate::visibility::ABANDONED_REASON)
+    );
+    ledger.observe(a, Observation::Hidden);
+    assert_eq!(ledger.owned()[0].reason, None, "no stale abandon reason");
+}
+
+#[test]
+fn the_startup_probe_is_spent_even_when_finder_had_a_window_then() {
+    let (mut ledger, finder) = (Ledger::default(), app(1));
+    // Startup is done; Finder has a tracked window, so it is no host yet.
+    let mut startup = requirement(vec![entry(finder, true, false)]);
+    startup.settled = true;
+    assert!(ledger.plan(&startup, &|_| true, true, base()).is_empty());
+    // Later its window closed and someone else hid it; nothing hides now.
+    let mut host = entry(finder, false, true);
+    host.host = true;
+    host.hide_wanted = false;
+    let mut later = requirement(vec![host]);
+    later.settled = true;
+    assert!(
+        ledger.plan(&later, &|_| true, true, base()).is_empty(),
+        "no un-hide outside the documented cases"
+    );
+}
+
+/// Ghostty (`a`) wanted hidden, a windowless host (`h`) chosen because
+/// Finder is held hidden.
+fn hosted(a: ApplicationId, h: ApplicationId, active: bool, hidden: bool) -> VisibilityRequirement {
+    let mut host = entry(h, false, hidden);
+    host.hide_wanted = false;
+    host.inactive_in = Vec::new();
+    host.host = true;
+    VisibilityRequirement {
+        finder_held: true,
+        settled: true,
+        desktop_host: Some(h),
+        host_active: active,
+        ..requirement(vec![entry(a, false, false), host])
+    }
+}
+
+#[test]
+fn a_windowless_host_is_unhidden_and_activated_before_any_hide() {
+    let (mut ledger, a, h) = (Ledger::default(), app(1), app(2));
+    let planned = ledger.plan(&hosted(a, h, false, true), &live, true, base());
+    assert_eq!(planned, vec![Planned::Unhide(h), Planned::Activate(h)]);
+    ledger.apply(Report::Unhide(h, UnhideEvidence::Sent));
+    // Waiting for the activation: no hide, no second activation.
+    let later = base() + Duration::from_millis(100);
+    assert!(ledger.plan(&hosted(a, h, false, false), &live, true, later).is_empty());
+    assert_eq!(
+        ledger.next_deadline(later),
+        Some(base() + crate::visibility::CONFIRMATION_TIMEOUT)
+    );
+    // Active: the hides go out.
+    assert_eq!(
+        ledger.plan(&hosted(a, h, true, false), &live, true, later),
+        vec![Planned::Hide(a)]
+    );
+}
+
+#[test]
+fn a_host_activation_that_is_refused_or_never_seen_releases_the_hides() {
+    let (a, h) = (app(1), app(2));
+    // The once-per-run probe of a visible host reads it shown.
+    let mut ledger = Ledger::default();
+    assert_eq!(
+        ledger.plan(&hosted(a, h, false, false), &live, true, base()),
+        vec![Planned::Unhide(h), Planned::Activate(h)]
+    );
+    ledger.apply(Report::Unhide(h, UnhideEvidence::Shown));
+    ledger.apply(Report::Activate(h, false));
+    assert_eq!(
+        ledger.plan(&hosted(a, h, false, false), &live, true, base()),
+        vec![Planned::Hide(a)]
+    );
+
+    let mut ledger = Ledger::default();
+    let _ = ledger.plan(&hosted(a, h, false, false), &live, true, base());
+    let late = base() + crate::visibility::CONFIRMATION_TIMEOUT;
+    assert_eq!(
+        ledger.plan(&hosted(a, h, false, false), &live, true, late),
+        vec![Planned::Hide(a)]
+    );
+}
+
+#[test]
+fn a_hide_read_back_hidden_is_never_resent_or_abandoned() {
+    // Measured: an application that already was hidden refuses the public hide,
+    // the AXHidden readback says hidden and no hidden notification ever comes.
+    let (mut ledger, a) = (Ledger::default(), app(1));
+    let _ = plan(&mut ledger, vec![entry(a, false, false)]);
+    ledger.apply(Report::Hide(a, HideEvidence::Confirmed));
+    for step in 0..80_u32 {
+        let now = base() + Duration::from_millis(100) * step;
+        assert!(plan_at(&mut ledger, vec![entry(a, false, false)], now).is_empty());
+    }
+    assert_eq!(ledger.ownership(a), Some(Ownership::Confirmed));
+    assert_eq!(ledger.owned()[0].reason, None, "never abandoned");
+    // A real show still releases it.
+    ledger.observe(a, Observation::Shown);
+    assert_eq!(ledger.ownership(a), None);
+}
+
+#[test]
+fn a_host_seen_active_is_not_activated_again_after_a_rearm() {
+    let (a, h) = (app(1), app(2));
+    let mut ledger = Ledger::default();
+    let _ = ledger.plan(&hosted(a, h, false, false), &live, true, base());
+    ledger.apply(Report::Unhide(h, UnhideEvidence::Shown));
+    let _ = ledger.plan(&hosted(a, h, true, false), &live, true, base());
+    // The user opens an accessory app: the host is no longer active.
+    let late = base() + crate::visibility::CONFIRMATION_TIMEOUT * 2;
+    for _ in 0..3 {
+        ledger.rearm_abandoned();
+        let planned = ledger.plan(&hosted(a, h, false, false), &live, true, late);
+        assert!(!planned.contains(&Planned::Activate(h)), "{planned:?}");
+    }
+}
+
+#[test]
+fn a_switch_never_resends_a_hide_that_read_back_hidden() {
+    // An application that read back hidden (it was hidden before this run)
+    // stays quiet across switches and activations: re-sending its hide on
+    // every one queued slow, useless requests ahead of the hide that matters.
+    let (mut ledger, a) = (Ledger::default(), app(1));
+    let _ = plan(&mut ledger, vec![entry(a, false, false)]);
+    ledger.apply(Report::Hide(a, HideEvidence::Confirmed));
+    for round in 0..5_u32 {
+        ledger.rearm_abandoned();
+        let start = base() + Duration::from_secs(20) * round;
+        for step in 0..80_u32 {
+            let now = start + Duration::from_millis(100) * step;
+            let planned = plan_at(&mut ledger, vec![entry(a, false, false)], now);
+            assert!(planned.is_empty(), "round {round} step {step}: {planned:?}");
+        }
+        assert_eq!(ledger.owned()[0].reason, None, "never abandoned");
+    }
 }

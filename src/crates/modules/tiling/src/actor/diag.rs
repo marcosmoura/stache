@@ -28,6 +28,8 @@ pub struct Diag {
     truncated: BTreeSet<ApplicationId>,
     no_frame: BTreeMap<DisplayId, NoFrameReason>,
     intent_sequence: u64,
+    /// The application last reported kept on screen.
+    kept_last: std::cell::Cell<Option<ApplicationId>>,
 }
 
 /// `Name (bundle.id)` of a known application.
@@ -349,6 +351,24 @@ impl Diag {
         ));
     }
 
+    /// Logs once when an empty desktop cannot be shown (see
+    /// `VisibilityRequirement::kept_last`).
+    pub fn kept_last(&self, state: &TilingState, kept: Option<ApplicationId>) {
+        if self.kept_last.replace(kept) == kept {
+            return;
+        }
+        let (Some(logger), Some(application)) = (&self.logger, kept) else {
+            return;
+        };
+        logger.info(format!(
+            "{} tiling: cannot show an empty desktop: {} is the last visible application \
+             (Finder is hidden because it has windows on a hidden workspace and no running \
+             application without windows can host); it stays, retried at the next switch",
+            self.origin.stamp(),
+            label(state, application)
+        ));
+    }
+
     /// Logs the visibility requests just planned, with why.
     pub fn planned(&self, state: &TilingState, planned: &[Planned]) {
         let Some(logger) = &self.logger else { return };
@@ -356,6 +376,7 @@ impl Diag {
             let (verb, application) = match request {
                 Planned::Hide(application) => ("hide", *application),
                 Planned::Unhide(application) => ("unhide", *application),
+                Planned::Activate(application) => ("desktop host", *application),
             };
             logger.info(format!(
                 "{} tiling: {verb} {}",

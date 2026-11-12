@@ -1612,6 +1612,7 @@ fn rejected(state: &mut TilingState, effect: &Effect) {
         | Effect::CancelFrame { .. }
         | Effect::HideApp { .. }
         | Effect::UnhideApp { .. }
+        | Effect::ActivateApp { .. }
         | Effect::Focus { .. }
         | Effect::Publish => {
             state.diagnostics.snapshot_refusals += 1;

@@ -392,6 +392,14 @@ pub enum Effect {
         /// The exact application instance.
         application: ApplicationId,
     },
+    /// Activate this exact application: the windowless desktop host (not
+    /// Finder), through `activate_exact`, before the hides of its switch.
+    ActivateApp {
+        /// Registry.
+        stamp: Stamp,
+        /// The exact application instance.
+        application: ApplicationId,
+    },
     /// Focus this exact window. Emitted only while the runtime holds the action
     /// authority. The runner unhides an owned-hidden application first, then
     /// activates it through `activate_exact` (the only activation path) and
