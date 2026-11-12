@@ -513,6 +513,52 @@ fn stale_plan_sequences_and_unknown_windows_are_ignored() {
     assert_eq!(rig.route.counters().unknown, 1);
 }
 
+/// A write that reported frames and then ends without reporting one (a
+/// partial final frame with no readback; a cancelled, stale or sealed write
+/// reports nothing either): the observed frame held back while it was in
+/// flight is applied once it ends.
+#[test]
+fn an_observed_frame_held_back_during_a_write_is_applied_when_the_write_ends_unreported() {
+    let (mut rig, w) = shown_rig();
+    rig.route.report(w, 6, rect(250.0), BorderFrameKind::AnimationFrame);
+    let mut e = entry(w, app(1), 11);
+    e.plan_sequence = 6;
+    e.write_pending = Some(6);
+    e.frame = rect(270.0);
+    rig.engine.update(rig.at(100), model(vec![e.clone()]));
+    assert_eq!(rig.drawn_width(), Some(250.0), "held back while in flight");
+    // The write ends; nothing more was reported.
+    e.write_pending = None;
+    rig.engine.update(rig.at(200), model(vec![e]));
+    assert_eq!(
+        rig.drawn_width(),
+        Some(270.0),
+        "the border lands on the window once the write ends"
+    );
+}
+
+#[test]
+fn an_observed_frame_never_pulls_the_border_back_while_a_tiling_write_is_in_flight() {
+    let (mut rig, w) = shown_rig();
+    rig.route.report(w, 6, rect(250.0), BorderFrameKind::AnimationFrame);
+    assert_eq!(rig.drawn_width(), Some(250.0));
+    // The window's observed frame, read from the motion, lags behind.
+    let mut e = entry(w, app(1), 11);
+    e.plan_sequence = 6;
+    e.write_pending = Some(6);
+    e.frame = rect(220.0);
+    rig.engine.update(rig.at(100), model(vec![e]));
+    assert_eq!(rig.drawn_width(), Some(250.0), "the acknowledged frame stays");
+    rig.route.report(w, 6, rect(260.0), BorderFrameKind::Settled);
+    assert_eq!(rig.drawn_width(), Some(260.0), "the settled frame wins");
+    // The write completed: the observed frame applies again.
+    let mut e = entry(w, app(1), 11);
+    e.plan_sequence = 6;
+    e.frame = rect(260.0);
+    rig.engine.update(rig.at(200), model(vec![e]));
+    assert_eq!(rig.drawn_width(), Some(260.0));
+}
+
 #[test]
 fn a_burst_of_frames_costs_one_merged_job() {
     let mut rig = Rig::queued();

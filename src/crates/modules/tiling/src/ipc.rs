@@ -38,8 +38,9 @@ use crate::config::LayoutType;
 use crate::dto::{
     ActionEvidence, ActionStatus, AppDto, FrameDto, OperationEvidence, OperationKind,
     OperationResponse, QueryKind, QueryParams, ReasonEvidence, RequestEvidence, ResizeArg,
-    ScreenDto, StatusAppDto, StatusDto, StatusExcludedDto, StatusHiddenDto, StatusNoFrameDto,
-    StatusWindowDto, WindowDto, WindowParams, WorkspaceDto, WorkspaceParams, method,
+    ScreenDto, StatusAnimationFallbackDto, StatusAppDto, StatusDto, StatusExcludedDto,
+    StatusHiddenDto, StatusNoFrameDto, StatusWindowDto, WindowDto, WindowParams, WorkspaceDto,
+    WorkspaceParams, method,
 };
 use crate::events::IntentSubmitError;
 use crate::intent::{
@@ -1587,6 +1588,21 @@ pub(crate) fn status(snapshot: &TilingSnapshot) -> StatusDto {
                     }
                     .to_owned(),
                     reason: owned.reason.clone(),
+                }
+            })
+            .collect(),
+        animation_fallbacks: snapshot
+            .animation_fallbacks
+            .iter()
+            .map(|(entry, retry_in)| {
+                let app = catalog(entry.application);
+                StatusAnimationFallbackDto {
+                    name: app.map(|app| app.info.name.clone()).unwrap_or_default(),
+                    bundle_id: app.map(|app| app.info.bundle_id.clone()).unwrap_or_default(),
+                    kind: entry.kind.as_str().to_owned(),
+                    reason: entry.reason.to_string(),
+                    retry_in_ms: retry_in
+                        .map(|left| u64::try_from(left.as_millis()).unwrap_or(u64::MAX)),
                 }
             })
             .collect(),

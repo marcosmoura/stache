@@ -222,7 +222,7 @@ unknown fields and is decoded once; every `Response::Ok.data` is encoded once.
   `id` (string)`,name,screenName,layout,isVisible,isFocused,windowCount`, windows
   `id,pid,appId,appName,title,workspace,frame,isMinimized,isFullscreen,isFloating,isFocused`
   and apps `pid,name,bundleId,isHidden`. `status` takes no filter and answers one object
-  (`phase,healthy,faults,layoutActive,configRevision,planSequence,apps,trackedApps,windows,failedApps,truncatedApps,unconfirmedApps,inflightApps,noFrame,hiddenApps,lastIntent,trackedWindows,excludedWindows,frameAttempts,enumerationFailures`),
+  (`phase,healthy,faults,layoutActive,configRevision,planSequence,apps,trackedApps,windows,failedApps,truncatedApps,unconfirmedApps,inflightApps,noFrame,hiddenApps,lastIntent,trackedWindows,excludedWindows,frameAttempts,enumerationFailures,animationFallbacks`),
   also while the runtime is initializing. That declaration order is the frozen JSON
   key order the CLI renders. A disabled, paused, pending-cleanup or not yet
   initialized module answers a typed error, never an empty list.

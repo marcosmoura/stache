@@ -4,13 +4,16 @@
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use stache_macos::DisplayId;
 use stache_macos::windows::{FrameAck, FrameReply, FrameStage, WindowActionOutcome};
 
 use super::coordinator_tests::{FakeSink, Rig, wait_for};
-use super::fallback::{FallbackReason, FallbackSet};
+use super::fallback::{
+    FIRST_COOLDOWN, FallbackEntry, FallbackEvent, FallbackReason, FallbackSet, MAX_COOLDOWN,
+    MotionKind,
+};
 use super::metrics::{
     AnimationRecord, LATENCY_SAMPLES, LatencyRing, MAX_APPLICATIONS, MetricsBook, Trigger, WINDOW,
 };
@@ -109,8 +112,8 @@ fn reason(rig: &Rig, application: u64) -> Option<FallbackReason> {
         .fallback
         .entries()
         .into_iter()
-        .find(|(a, _)| *a == app(application))
-        .map(|(_, r)| r)
+        .find(|e| e.application == app(application))
+        .map(|e| e.reason)
 }
 
 /// Each helper record is its own layout change (plan), so none fold together.
@@ -118,6 +121,7 @@ fn record(rate_hz: f64, lag_ms: u64) -> AnimationRecord {
     static PLAN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     AnimationRecord {
         plan_sequence: PLAN.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        kind: MotionKind::Resize,
         frames: FrameCounters {
             scheduled: 10,
             written: 8,
@@ -347,9 +351,9 @@ fn other_applications_are_unaffected_and_keep_animating() {
     let mut rig = clocked_rig();
     slow(&mut rig, 1, 1);
     slow(&mut rig, 2, 1);
-    assert!(rig.animator.shared().fallback.contains(app(1)));
+    assert!(rig.animator.shared().fallback.contains(app(1), MotionKind::Resize));
     healthy(&mut rig, 3, 2);
-    assert!(!rig.animator.shared().fallback.contains(app(2)));
+    assert!(!rig.animator.shared().fallback.contains(app(2), MotionKind::Resize));
     let sent = rig.sink.sent();
     let of_two: Vec<_> = sent.iter().filter(|s| s.plan == 3).collect();
     assert!(of_two.len() >= 8, "application 2 animated: {}", of_two.len());
@@ -368,7 +372,12 @@ fn an_application_entering_fallback_mid_animation_gets_one_final_write_and_no_mo
         rig.pump();
     }
     assert_eq!(rig.sink.sent().len(), 4, "four frames so far");
-    rig.animator.shared().fallback.insert(app(1), FallbackReason::BelowMinimumRate);
+    rig.animator.shared().fallback.insert(
+        app(1),
+        MotionKind::Resize,
+        FallbackReason::BelowMinimumRate,
+        rig.now,
+    );
     // The next tick writes the exact target once.
     rig.now = t0 + PERIOD * 5;
     let at = rig.now;
@@ -411,7 +420,12 @@ fn a_job_waiting_for_its_retarget_read_also_switches_to_one_final_write() {
     rig.admit(app_job(2, 1));
     assert!(rig.sink.sent().is_empty() || rig.sink.sent().iter().all(|s| s.plan == 1));
     let before = rig.sink.sent().len();
-    rig.animator.shared().fallback.insert(app(1), FallbackReason::LateEnd);
+    rig.animator.shared().fallback.insert(
+        app(1),
+        MotionKind::Resize,
+        FallbackReason::LateEnd,
+        rig.now,
+    );
     rig.now += PERIOD;
     let at = rig.now;
     rig.ticks.insert(D1, at);
@@ -445,11 +459,17 @@ fn a_completed_plan_is_never_written_again() {
 #[test]
 fn the_set_is_sticky_per_instance_and_keeps_the_first_reason() {
     let set = FallbackSet::default();
-    assert!(set.insert(app(1), FallbackReason::LateEnd));
-    assert!(!set.insert(app(1), FallbackReason::Overflow));
-    assert_eq!(set.entries(), vec![(app(1), FallbackReason::LateEnd)]);
+    let now = std::time::Instant::now();
+    assert!(set.insert(app(1), MotionKind::Resize, FallbackReason::LateEnd, now));
+    assert!(!set.insert(app(1), MotionKind::Resize, FallbackReason::Overflow, now));
+    assert_eq!(set.entries(), vec![FallbackEntry {
+        application: app(1),
+        kind: MotionKind::Resize,
+        reason: FallbackReason::LateEnd,
+        until: Some(now + FIRST_COOLDOWN),
+    }]);
     // A relaunch is a new instance: not in the set.
-    assert!(!set.contains(app(2)));
+    assert!(!set.contains(app(2), MotionKind::Resize));
     set.forget(app(1));
     assert!(set.is_empty());
 }
@@ -476,19 +496,22 @@ fn a_reload_that_turns_animations_off_and_on_clears_the_fallback_and_the_history
     let sink = FakeSink::new();
     let control = control(&sink);
     assert!(
-        !control.enter_fallback(app(1), FallbackReason::LateEnd),
+        !control.enter_fallback(app(1), FallbackReason::LateEnd, Instant::now()),
         "nothing falls back while animations are off"
     );
     control.configure(&enabled(true)).expect("on");
-    assert!(control.enter_fallback(app(1), FallbackReason::LateEnd));
+    assert!(control.enter_fallback(app(1), FallbackReason::LateEnd, Instant::now()));
     control.shared().book().record(app(1), record(10.0, 0));
-    assert_eq!(control.fallback_apps(), [app(1)].into());
+    assert_eq!(
+        control.fallback_apps(),
+        [(app(1), MotionKind::Move), (app(1), MotionKind::Resize)].into()
+    );
     assert_eq!(control.report().metrics.len(), 1);
     // A reload that keeps animations on keeps the fallback.
     control
         .configure(&AnimationConfig { duration: 300, ..enabled(true) })
         .expect("on");
-    assert!(control.fallback_apps().contains(&app(1)));
+    assert!(control.fallback_apps().contains(&(app(1), MotionKind::Resize)));
     // Off clears; on again starts fresh.
     control.configure(&enabled(false)).expect("off");
     assert!(control.fallback_apps().is_empty());
@@ -505,11 +528,14 @@ fn a_terminated_application_is_forgotten() {
     let sink = FakeSink::new();
     let control = control(&sink);
     control.configure(&enabled(true)).expect("on");
-    control.enter_fallback(app(1), FallbackReason::EnhancedUiStuck);
-    control.enter_fallback(app(2), FallbackReason::EnhancedUiStuck);
+    control.enter_fallback(app(1), FallbackReason::EnhancedUiStuck, Instant::now());
+    control.enter_fallback(app(2), FallbackReason::EnhancedUiStuck, Instant::now());
     control.shared().book().record(app(1), record(60.0, 0));
     control.forget_application(app(1));
-    assert_eq!(control.fallback_apps(), [app(2)].into());
+    assert_eq!(
+        control.fallback_apps(),
+        [(app(2), MotionKind::Move), (app(2), MotionKind::Resize)].into()
+    );
     assert!(control.report().metrics.is_empty());
     control.stop();
     assert!(control.join_within(Duration::from_secs(5)));
@@ -824,4 +850,194 @@ fn twenty_hz_and_120_ms_of_end_lag_never_trigger_the_fallback() {
         records.iter().all(|r| !r.rate_bad() && !r.lag_bad()),
         "{records:?}"
     );
+}
+
+// ------------------------------------------------- recovery and the two kinds
+
+#[test]
+fn a_rate_or_lag_fallback_cools_down_doubling_to_ten_minutes_and_a_healthy_record_resets_it() {
+    let set = FallbackSet::default();
+    let t0 = Instant::now();
+    let kind = MotionKind::Resize;
+    let mut now = t0;
+    let mut expected = FIRST_COOLDOWN;
+    for _ in 0..6 {
+        assert!(set.insert(app(1), kind, FallbackReason::BelowMinimumRate, now));
+        assert_eq!(set.entries()[0].until, Some(now + expected));
+        assert!(
+            set.expire(now + expected.saturating_sub(ms(1))).is_empty(),
+            "not before"
+        );
+        let left = set.expire(now + expected);
+        assert_eq!(left.len(), 1);
+        assert!(!set.contains(app(1), kind));
+        now += expected;
+        expected = (expected * 2).min(MAX_COOLDOWN);
+    }
+    assert_eq!(expected, MAX_COOLDOWN, "60, 120, 240, 480, 600, 600 s");
+    // A healthy animation in between: back to 60 s.
+    set.healthy(app(1), kind);
+    assert!(set.insert(app(1), kind, FallbackReason::LateEnd, now));
+    assert_eq!(set.entries()[0].until, Some(now + FIRST_COOLDOWN));
+    // The other kind keeps its own cool-down.
+    assert!(set.insert(app(1), MotionKind::Move, FallbackReason::Overflow, now));
+    assert_eq!(set.entries()[0].until, Some(now + FIRST_COOLDOWN));
+}
+
+#[test]
+fn an_enhanced_ui_fallback_never_cools_down_and_replaces_a_recoverable_one() {
+    let set = FallbackSet::default();
+    let now = Instant::now();
+    set.insert(app(1), MotionKind::Move, FallbackReason::NoFrameClock, now);
+    set.insert(
+        app(1),
+        MotionKind::Move,
+        FallbackReason::ReEnablesEnhancedUi,
+        now,
+    );
+    assert_eq!(set.entries()[0].reason, FallbackReason::ReEnablesEnhancedUi);
+    // The replacement is noted: the log says it is now sticky.
+    let events = set.take_events();
+    assert_eq!(events.len(), 2, "{events:?}");
+    assert_eq!(
+        events[1],
+        FallbackEvent::Entered(FallbackEntry {
+            application: app(1),
+            kind: MotionKind::Move,
+            reason: FallbackReason::ReEnablesEnhancedUi,
+            until: None,
+        })
+    );
+    assert_eq!(set.entries()[0].until, None);
+    assert!(set.expire(now + Duration::from_hours(24)).is_empty());
+    assert!(set.contains(app(1), MotionKind::Move));
+}
+
+#[test]
+fn entries_and_exits_are_noted_once_for_the_log() {
+    let set = FallbackSet::default();
+    let now = Instant::now();
+    set.insert(app(1), MotionKind::Resize, FallbackReason::LateEnd, now);
+    set.insert(app(1), MotionKind::Resize, FallbackReason::LateEnd, now);
+    let entry = set.entries()[0];
+    assert_eq!(set.take_events(), [FallbackEvent::Entered(entry)]);
+    set.expire(now + FIRST_COOLDOWN);
+    assert_eq!(set.take_events(), [FallbackEvent::Left(entry)]);
+    assert!(set.take_events().is_empty());
+}
+
+#[test]
+fn leaving_the_fallback_clears_that_kinds_history_so_two_new_bad_records_are_needed() {
+    let sink = FakeSink::new();
+    let control = control(&sink);
+    control.configure(&enabled(true)).expect("on");
+    let book = || control.shared().book().records(app(1));
+    let mut moved = record(60.0, 0);
+    moved.kind = MotionKind::Move;
+    control.shared().book().record(app(1), moved);
+    control.shared().book().record(app(1), record(10.0, 0));
+    assert_eq!(
+        control.shared().book().record(app(1), record(10.0, 0)),
+        Some(Trigger::Rate)
+    );
+    let t0 = Instant::now();
+    control.shared().fallback.insert(
+        app(1),
+        MotionKind::Resize,
+        FallbackReason::BelowMinimumRate,
+        t0,
+    );
+    assert!(control.expire_fallbacks(t0 + ms(59_999)).is_empty());
+    assert_eq!(control.expire_fallbacks(t0 + FIRST_COOLDOWN).len(), 1);
+    assert!(control.fallback_apps().is_empty());
+    assert_eq!(
+        book(),
+        vec![moved],
+        "the resize history is cleared, the move one kept"
+    );
+    assert_eq!(
+        control.shared().book().record(app(1), record(10.0, 0)),
+        None,
+        "1 of 1"
+    );
+    assert_eq!(
+        control.shared().book().record(app(1), record(10.0, 0)),
+        Some(Trigger::Rate),
+        "2 of 2"
+    );
+    control.stop();
+    assert!(control.join_within(Duration::from_secs(5)));
+}
+
+#[test]
+fn the_policy_counts_each_kind_separately() {
+    let mut book = MetricsBook::default();
+    let moved = |rate| {
+        let mut r = record(rate, 0);
+        r.kind = MotionKind::Move;
+        r
+    };
+    assert_eq!(book.record(app(1), record(10.0, 0)), None);
+    assert_eq!(
+        book.record(app(1), moved(10.0)),
+        None,
+        "one bad move, one bad resize"
+    );
+    assert_eq!(book.record(app(1), moved(60.0)), None);
+    assert_eq!(
+        book.record(app(1), record(10.0, 0)),
+        Some(Trigger::Rate),
+        "two bad resizes"
+    );
+    assert_eq!(
+        book.record(app(1), moved(10.0)),
+        Some(Trigger::Rate),
+        "two bad moves of 3"
+    );
+}
+
+/// A slow application that falls back for resizes still animates a move, and
+/// its resize records do not count against its moves.
+#[test]
+fn an_application_that_cannot_animate_resizes_still_animates_moves() {
+    let mut rig = clocked_rig();
+    slow(&mut rig, 1, 1);
+    slow(&mut rig, 2, 1);
+    assert!(rig.animator.shared().fallback.contains(app(1), MotionKind::Resize));
+    assert!(!rig.animator.shared().fallback.contains(app(1), MotionKind::Move));
+    let mut moving = app_job(3, 1);
+    moving.components = crate::outcome::FrameComponents { position: true, size: false };
+    run_animation(&mut rig, moving, true, 1, Duration::ZERO);
+    let of_move: Vec<_> = rig.sink.sent().into_iter().filter(|s| s.plan == 3).collect();
+    assert!(of_move.len() >= 8, "the move animated: {}", of_move.len());
+    assert_eq!(of_move[0].stage, FrameStage::First);
+}
+
+/// A resize running when its kind falls back is cut to one final write; a
+/// move of the same application is not.
+#[test]
+fn a_mid_animation_fallback_only_cuts_short_the_kind_that_fell_back() {
+    let mut rig = clocked_rig();
+    let t0 = rig.now;
+    let mut moving = app_job(1, 1);
+    moving.components = crate::outcome::FrameComponents { position: true, size: false };
+    rig.admit(moving);
+    for k in 1..=3_u32 {
+        rig.now = t0 + PERIOD * k;
+        let at = rig.now;
+        rig.ticks.insert(D1, at);
+        rig.pump();
+    }
+    rig.animator.shared().fallback.insert(
+        app(1),
+        MotionKind::Resize,
+        FallbackReason::BelowMinimumRate,
+        rig.now,
+    );
+    rig.now = t0 + PERIOD * 4;
+    let at = rig.now;
+    rig.ticks.insert(D1, at);
+    rig.pump();
+    let last = *rig.sink.sent().last().expect("a frame");
+    assert_eq!(last.stage, FrameStage::Intermediate, "the move keeps animating");
 }

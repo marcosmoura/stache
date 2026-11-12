@@ -10,6 +10,7 @@ use stache_macos::windows::{IssuedKind, NativeStatus, WindowActionOutcome, Windo
 
 use super::frame_tests::{Fixture, one_screen};
 use super::*;
+use crate::animation::MotionKind;
 use crate::config::TilingConfig;
 use crate::drag::{DragPoint, DragSignal};
 use crate::geometry::Rect;
@@ -208,7 +209,8 @@ fn a_b_a_rewrites_the_window_back_and_an_old_ack_never_settles_the_successor() {
 fn an_application_in_instant_fallback_gets_one_direct_write_per_plan_a_b_a() {
     let mut f = settled();
     let w = window(&f);
-    f.state.set_animation_fallback([w.application()].into());
+    // An outer gap change resizes the window: its kind is `Resize`.
+    f.state.set_animation_fallback([(w.application(), MotionKind::Resize)].into());
     let a = writes(&reconfigure(&mut f, 2, 40));
     assert_eq!(a.len(), 1, "one write per plan");
     assert!(!a[0].animate, "direct, not animated");
@@ -229,8 +231,9 @@ fn the_fallback_of_another_application_changes_nothing_and_a_relaunch_animates_a
     let mut f = settled();
     let w = window(&f);
     // Another instance (a relaunch of the same application has a new id).
-    f.state
-        .set_animation_fallback([stache_macos::ApplicationId::for_testing(900)].into());
+    f.state.set_animation_fallback(
+        [(stache_macos::ApplicationId::for_testing(900), MotionKind::Resize)].into(),
+    );
     let planned = writes(&reconfigure(&mut f, 2, 40));
     assert!(planned[0].animate, "unaffected");
     f.ack(w, planned[0].plan, applied_at(planned[0].target));
@@ -238,6 +241,23 @@ fn the_fallback_of_another_application_changes_nothing_and_a_relaunch_animates_a
     f.state.set_animation_fallback(std::collections::BTreeSet::new());
     let again = writes(&reconfigure(&mut f, 3, 0));
     assert!(again[0].animate);
+}
+
+#[test]
+fn a_fallback_for_one_kind_leaves_the_other_kind_animating() {
+    let mut f = settled();
+    let w = window(&f);
+    // In fallback for moves only: a gap change resizes, so it still animates.
+    f.state.set_animation_fallback([(w.application(), MotionKind::Move)].into());
+    let resize = writes(&reconfigure(&mut f, 2, 40)).remove(0);
+    assert!(resize.components.size, "the gap change resizes");
+    assert!(resize.animate, "a resize animates while only moves fall back");
+    f.ack(w, resize.plan, applied_at(resize.target));
+    // In fallback for resizes: the same kind of change is direct.
+    f.state.set_animation_fallback([(w.application(), MotionKind::Resize)].into());
+    let back = writes(&reconfigure(&mut f, 3, 0)).remove(0);
+    assert!(back.components.size);
+    assert!(!back.animate, "a resize in a resize fallback is direct");
 }
 
 #[test]

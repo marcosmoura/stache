@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use stache_macos::ApplicationId;
 
+use super::fallback::MotionKind;
 use super::worker::FrameCounters;
 
 /// Animations kept per application.
@@ -100,6 +101,9 @@ fn percentile<T: PartialOrd + Copy>(values: &mut [T], p: usize) -> Option<T> {
 pub struct AnimationRecord {
     /// The layout plan the animation belonged to.
     pub plan_sequence: u64,
+    /// Whether the windows moved only or changed size; the fallback policy
+    /// looks at each kind separately.
+    pub kind: MotionKind,
     /// Frames scheduled, written and dropped.
     pub frames: FrameCounters,
     /// Written frames per second from the first tick to the final
@@ -173,7 +177,7 @@ pub struct MetricsSummary {
 
 impl MetricsBook {
     /// Records a finished animation and returns the criterion the application
-    /// now fails in 2 of its last 3, if any.
+    /// now fails in 2 of its last 3 of the record's kind, if any.
     pub fn record(
         &mut self,
         application: ApplicationId,
@@ -191,7 +195,7 @@ impl MetricsBook {
             used: 0,
         });
         entry.used = self.clock;
-        match entry.records.back_mut() {
+        match entry.records.iter_mut().rev().find(|last| last.kind == record.kind) {
             Some(last) if last.plan_sequence == record.plan_sequence => last.fold(&record),
             _ => {
                 if entry.records.len() == WINDOW {
@@ -200,7 +204,12 @@ impl MetricsBook {
                 entry.records.push_back(record);
             }
         }
-        let last = entry.records.iter().rev().take(POLICY_LOOKBACK);
+        let last = entry
+            .records
+            .iter()
+            .rev()
+            .filter(|r| r.kind == record.kind)
+            .take(POLICY_LOOKBACK);
         let (mut rate, mut lag, mut any) = (0, 0, 0);
         for record in last {
             let (r, l) = (record.rate_bad(), record.lag_bad());
@@ -214,6 +223,14 @@ impl MetricsBook {
             Some(Trigger::Rate)
         } else {
             Some(Trigger::Lag)
+        }
+    }
+
+    /// Drops an application's records of one kind (it left the fallback for
+    /// that kind, so it needs two new bad records of three to fall back again).
+    pub fn forget_kind(&mut self, application: ApplicationId, kind: MotionKind) {
+        if let Some(entry) = self.apps.get_mut(&application) {
+            entry.records.retain(|record| record.kind != kind);
         }
     }
 

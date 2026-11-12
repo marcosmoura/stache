@@ -159,6 +159,39 @@ impl Diag {
         }
     }
 
+    /// Logs (info) each application that entered or left the animation instant
+    /// fallback: name, bundle id, kind and reason.
+    pub fn animation_fallback(
+        &self,
+        state: &TilingState,
+        events: &[crate::animation::FallbackEvent],
+    ) {
+        use crate::animation::FallbackEvent;
+        let Some(logger) = &self.logger else { return };
+        for event in events {
+            let line = match event {
+                FallbackEvent::Entered(entry) => format!(
+                    "animation: {} moves without animation for {}s ({}): {}",
+                    label(state, entry.application),
+                    entry.kind.as_str(),
+                    if entry.until.is_some() {
+                        "until a cool-down passes"
+                    } else {
+                        "for this run"
+                    },
+                    entry.reason,
+                ),
+                FallbackEvent::Left(entry) => format!(
+                    "animation: {} animates {}s again (its cool-down passed): {}",
+                    label(state, entry.application),
+                    entry.kind.as_str(),
+                    entry.reason,
+                ),
+            };
+            logger.info(format!("{} tiling: {line}", self.origin.stamp()));
+        }
+    }
+
     /// Logs a tab group handover (debug): the window that now represents the
     /// group took the slot of the one it replaced.
     pub fn handover(

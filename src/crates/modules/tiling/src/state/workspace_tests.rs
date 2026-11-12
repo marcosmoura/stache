@@ -1877,3 +1877,77 @@ fn floating_pinned_and_minimized_windows_are_re_evaluated() {
         "a window that stays keeps its pin"
     );
 }
+
+/// Each write of `effects` with its `animate` flag and whether it wants a size.
+fn animated_writes(effects: &[Effect]) -> Vec<(WindowInstance, u64, Rect, bool)> {
+    effects
+        .iter()
+        .filter_map(|e| match e {
+            Effect::WriteFrame {
+                window,
+                plan_sequence,
+                target,
+                animate,
+                ..
+            } => Some((*window, *plan_sequence, *target, *animate)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The user's four presets on a floating workspace with animations on: A, B,
+/// C, A each animate, including a retarget while the previous preset is still
+/// moving (no acknowledgement yet) and a position-only change (left to right).
+#[test]
+fn switching_presets_animates_every_time_including_a_retarget_mid_animation() {
+    let mut world = World::new(
+        Some(serde_json::json!({
+            "workspaces": [{"name": "f", "layout": "floating", "screen": "main"}],
+            "animations": { "enabled": true, "duration": 275, "easing": "ease_out_expo" },
+            "floating": {"presets": [
+                {"name": "centered", "width": 1000, "height": 600, "center": true},
+                {"name": "full", "width": "100%", "height": "100%"},
+                {"name": "aligned-left", "width": "50%", "height": "100%", "x": 0, "y": 0},
+                {"name": "aligned-right", "width": "50%", "height": "100%", "x": "50%", "y": 0},
+            ]}
+        })),
+        false,
+    );
+    world.enable();
+    let w = world.feed.token(1, 1);
+    // The window appears on the revealed workspace: written directly, settled.
+    for (window, plan, target, _) in animated_writes(&world.add_effects(w)) {
+        world.ack(window, plan, target);
+    }
+    world.focus(w);
+    let preset = |world: &mut World, name: &str| {
+        let effects = world.intent(Intent::Preset(name.into()));
+        assert_eq!(world.outcome(), IntentOutcome::Applied, "{name}");
+        let written = animated_writes(&effects);
+        let [(window, plan, target, animate)] = written[..] else {
+            panic!("{name}: one write: {written:?}");
+        };
+        assert_eq!(window, w);
+        assert!(animate, "{name} animates");
+        (plan, target)
+    };
+    // A, B, C, A, each acknowledged before the next.
+    for name in ["centered", "full", "aligned-left", "centered"] {
+        let (plan, target) = preset(&mut world, name);
+        world.ack(w, plan, target);
+    }
+    // A retarget while the previous preset still moves: never acknowledged.
+    let (_, full) = preset(&mut world, "full");
+    let (plan, left) = preset(&mut world, "aligned-left");
+    assert_ne!(full, left);
+    world.ack(w, plan, left);
+    // A position-only change (left to right keep the size) animates too.
+    let (plan, right) = preset(&mut world, "aligned-right");
+    assert_eq!((right.width, right.height), (left.width, left.height));
+    world.ack(w, plan, right);
+    let (plan, centered) = preset(&mut world, "centered");
+    world.ack(w, plan, centered);
+    // The planner never kept a reveal mark or a spent pin for it.
+    assert!(!world.state.frames.revealed.contains(&w));
+    assert!(!world.state.frames.pinned.contains_key(&w));
+}

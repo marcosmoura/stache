@@ -310,6 +310,24 @@ pub struct StatusHiddenDto {
     pub reason: Option<String>,
 }
 
+/// One application that moves without animation for one kind of layout change.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StatusAnimationFallbackDto {
+    /// The application name (empty when unknown).
+    pub name: String,
+    /// The bundle identifier (empty when unknown).
+    pub bundle_id: String,
+    /// `move` (position only) or `resize` (the size changes).
+    pub kind: String,
+    /// Why it moves without animation.
+    pub reason: String,
+    /// Milliseconds left of its cool-down when the state was published: it
+    /// animates this kind again on its first layout change after that (`0`:
+    /// on its next one). `None` for a reason that lasts the run.
+    pub retry_in_ms: Option<u64>,
+}
+
 /// One tracked window with the facts that decided its eligibility.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -394,6 +412,10 @@ pub struct StatusDto {
     pub frame_attempts: u64,
     /// Enumeration or tracking failures since start.
     pub enumeration_failures: u64,
+    /// Applications in the animation instant fallback, per kind (additive:
+    /// absent from older answers).
+    #[serde(default)]
+    pub animation_fallbacks: Vec<StatusAnimationFallbackDto>,
 }
 
 // ---------------------------------------------------------- operation result

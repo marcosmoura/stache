@@ -38,7 +38,7 @@ use stache_macos::windows::{
 use stache_macos::{ApplicationId, DisplayId, FrameClockFactory, StuckClock, WakeFn};
 use stache_sdk::{CancelListener, CancellationToken};
 
-use super::fallback::{FallbackReason, FallbackSet};
+use super::fallback::{FallbackReason, FallbackSet, MotionKind};
 use super::metrics::{AnimationRecord, LatencyRing, MetricsBook, Trigger};
 use super::pacing::{ClockSet, Notes};
 use super::size::SizePlan;
@@ -541,8 +541,10 @@ impl Animator {
         }
         let elapsed = acked.saturating_duration_since(first);
         let (write_p50, write_p95) = timing.latency.percentiles();
+        let kind = MotionKind::of(job.components.size);
         let record = AnimationRecord {
             plan_sequence: job.plan_sequence,
+            kind,
             frames: counters,
             rate_hz: if elapsed.is_zero() {
                 f64::INFINITY
@@ -557,6 +559,9 @@ impl Animator {
         };
         let application = job.window.application();
         let trigger = self.shared.book().record(application, record);
+        if !record.rate_bad() && !record.lag_bad() {
+            self.shared.fallback.healthy(application, kind);
+        }
         let Some(trigger) = trigger else { return };
         let reason = if self.sink.is_overflow(application) {
             FallbackReason::Overflow
@@ -567,7 +572,7 @@ impl Animator {
         } else {
             FallbackReason::LateEnd
         };
-        self.shared.fallback.insert(application, reason);
+        self.shared.fallback.insert(application, kind, reason, acked);
     }
 
     /// Ends `active` with `outcome`: now, or once its in-flight frames answer.
@@ -839,7 +844,10 @@ impl Animator {
             // write at this tick and no further intermediate frames.
             if matches!(active.phase, Phase::Reading { .. } | Phase::Running(_))
                 && !active.timing.forced
-                && fallback.contains(active.job.window.application())
+                && fallback.contains(
+                    active.job.window.application(),
+                    MotionKind::of(active.job.components.size),
+                )
             {
                 active.force_final(now);
             }

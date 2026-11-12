@@ -694,3 +694,68 @@ fn the_targets_update_carries_the_panel_number_placement_and_fast_reorder_permis
     assert!(!target.above);
     assert_eq!(target.fast_panel(), None, "below never fast-reorders");
 }
+
+// ------------------------------------------------- the end of a Tiling write
+
+/// The model during and after a Tiling write of plan 6 at `width`.
+fn writing(w: WindowInstance, width: f64, pending: bool) -> BorderEntry {
+    let mut e = entry(w, app(1), 11);
+    e.plan_sequence = 6;
+    e.write_pending = pending.then_some(6);
+    e.frame = Rect::new(0.0, 0.0, width, 100.0);
+    e
+}
+
+/// The final frame was settled (a confirming report), but the model is left at
+/// a frame read during the motion: the border stays on the target, with and
+/// without live follow, and nothing hides.
+#[test]
+fn a_write_that_settled_keeps_the_border_on_the_target_whatever_the_model_says() {
+    for live in [None, Some(FakeLiveFollow::active())] {
+        let (mut rig, w) = live.as_ref().map_or_else(shown_rig, live_rig);
+        rig.engine.set_follow_grace(FOLLOW_GRACE);
+        rig.route.report(
+            w,
+            6,
+            Rect::new(0.0, 0.0, 150.0, 100.0),
+            BorderFrameKind::AnimationFrame,
+        );
+        rig.engine.update(rig.at(100), model(vec![writing(w, 130.0, true)]));
+        rig.route
+            .report(w, 6, Rect::new(0.0, 0.0, 180.0, 100.0), BorderFrameKind::Settled);
+        assert_eq!(rig.drawn_width(), Some(180.0));
+        let before = moves(&rig);
+        rig.engine.update(rig.at(200), model(vec![writing(w, 130.0, false)]));
+        assert_eq!(
+            rig.drawn_width(),
+            Some(180.0),
+            "live {}: on the target",
+            live.is_some()
+        );
+        assert_eq!(moves(&rig), before, "no move back");
+        assert_eq!(hides(&rig), 0, "no hide");
+    }
+}
+
+/// A write that ends with no report (partial without a read, cancelled,
+/// stale, sealed) while live follow is active: the held model frame applies
+/// with one move, and nothing blinks.
+#[test]
+fn a_write_that_ends_unreported_with_live_follow_moves_once_without_a_blink() {
+    let live = FakeLiveFollow::active();
+    let (mut rig, w) = live_rig(&live);
+    rig.engine.set_follow_grace(FOLLOW_GRACE);
+    rig.route.report(
+        w,
+        6,
+        Rect::new(0.0, 0.0, 150.0, 100.0),
+        BorderFrameKind::AnimationFrame,
+    );
+    rig.engine.update(rig.at(100), model(vec![writing(w, 170.0, true)]));
+    assert_eq!(rig.drawn_width(), Some(150.0));
+    let (before_moves, before_shows) = (moves(&rig), rig.shows());
+    rig.engine.update(rig.at(200), model(vec![writing(w, 170.0, false)]));
+    assert_eq!(rig.drawn_width(), Some(170.0));
+    assert_eq!(moves(&rig), before_moves + 1, "one move");
+    assert_eq!((hides(&rig), rig.shows()), (0, before_shows), "no hide, no show");
+}

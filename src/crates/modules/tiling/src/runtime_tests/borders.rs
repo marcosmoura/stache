@@ -1222,6 +1222,8 @@ use crate::backend::SystemWindowBackend;
 use crate::test_support::FakeAppDirectory;
 
 const D1: DisplayId = DisplayId::new(1);
+/// An `(x, y)` position or a `(width, height)` size.
+type Pair = (f64, f64);
 static NAMES_B: AtomicUsize = AtomicUsize::new(0);
 
 fn window_node(ax: &FakeWindowAx, cg: u32) -> NodeId {
@@ -1273,11 +1275,17 @@ struct Anim {
 impl Anim {
     fn boot() -> Self { Self::boot_with(false) }
 
+    /// One application with `windows` windows, no live follow.
+    fn boot_windows(windows: u32) -> Self { Self::boot_full(false, windows) }
+
     /// `live`: compose the native live follow over fakes (quiet period of a
     /// minute, so a scenario stops it explicitly).
-    fn boot_with(live: bool) -> Self {
+    fn boot_with(live: bool) -> Self { Self::boot_full(live, 2) }
+
+    fn boot_full(live: bool, windows: u32) -> Self {
         let ax = FakeWindowAx::new();
-        let nodes: Vec<NodeId> = (101..=102).map(|cg| window_node(&ax, cg)).collect();
+        let nodes: Vec<NodeId> = (101..101 + windows).map(|cg| window_node(&ax, cg)).collect();
+        let count = nodes.len();
         let element = ax.add_node(FakeNode {
             windows: Ok(nodes.clone()),
             enhanced_ui: Err(AxError::AttributeUnsupported),
@@ -1340,7 +1348,7 @@ impl Anim {
         runtime.submit_config(1, anim_config(200)).expect("config");
         wait_until("enumeration", || {
             let snap = runtime.snapshot();
-            snap.phase == Phase::Complete && snap.windows.len() == 2
+            snap.phase == Phase::Complete && snap.windows.len() == count
         });
         assert!(runtime.authorize(1));
         let anim = Self {
@@ -1362,7 +1370,7 @@ impl Anim {
     fn settled(&self) -> bool {
         let snap = self.runtime.snapshot();
         let live: Vec<_> = snap.frames.iter().filter(|f| f.desired.is_some()).collect();
-        live.len() == 2
+        live.len() == self.nodes.len()
             && live
                 .iter()
                 .all(|f| !f.in_flight && f.outcome.is_some() && f.actual == f.desired)
@@ -1370,6 +1378,48 @@ impl Anim {
     }
 
     fn wait_settled(&self) { wait_until("settled layout", || self.settled()); }
+
+    /// The positions and the sizes written to `node` since AX call `from`.
+    fn written_since(&self, node: NodeId, from: usize) -> (Vec<Pair>, Vec<Pair>) {
+        let (mut positions, mut sizes) = (Vec::new(), Vec::new());
+        for call in self.ax.calls().iter().skip(from) {
+            match call {
+                Call::SetPosition(n, p) if *n == node => positions.push((p.x, p.y)),
+                Call::SetSize(n, s) if *n == node => sizes.push((s.width, s.height)),
+                _ => {}
+            }
+        }
+        (positions, sizes)
+    }
+
+    fn handle_of(&self, cg: u32) -> OverlayHandle {
+        self.events()
+            .iter()
+            .find_map(|e| match e {
+                Ev::Show { handle, cg: shown, .. } if *shown == cg => Some(*handle),
+                _ => None,
+            })
+            .expect("a border")
+    }
+
+    /// Slows every AX write of the application's windows by `millis`, so the
+    /// shard replaces pending frames (latest wins) like a slow application.
+    fn slow_writes(&self, millis: u64) {
+        self.ax
+            .on_node_write(move |_| std::thread::sleep(Duration::from_millis(millis)));
+    }
+
+    /// Drives the frame clock at about 120 Hz until the layout settled. The
+    /// animation must have started (its clock is live) first, so a layout that
+    /// is still settled from before the reload does not end the wait.
+    fn drive_until_settled(&self) {
+        wait_until("the animation clock", || self.clocks.is_live(D1));
+        wait_until("the animation to finish", || {
+            self.clocks.fire(D1, Instant::now());
+            std::thread::sleep(Duration::from_millis(8));
+            self.settled() && self.clocks.live() == 0
+        });
+    }
 
     fn reload(&mut self, outer: u32) {
         self.revision += 1;
@@ -1491,6 +1541,188 @@ fn animated_layout_changes_are_followed_frame_by_frame_and_settle_exact() {
     assert_eq!(after.stale, before.stale + 1);
     assert_eq!(after.moves, before.moves);
     assert_eq!(anim.moves_of(handle).last().copied(), Some(last));
+}
+
+/// Checks that `window`'s border, since `moves_before`, moved only to frames
+/// the window really reached, followed every frame written since AX call
+/// `calls_before` (but `may_skip` of them), and ended exactly on the window.
+/// Returns the move count.
+fn assert_border_followed(
+    anim: &Anim,
+    node: NodeId,
+    cg: u32,
+    start: Rect,
+    (calls_before, moves_before): (usize, usize),
+    may_skip: usize,
+) -> usize {
+    let handle = anim.handle_of(cg);
+    let (positions, sizes) = anim.written_since(node, calls_before);
+    let moves: Vec<OverlayRect> = anim.moves_of(handle)[moves_before..].to_vec();
+    let near = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).abs() < 1e-6 && (a.1 - b.1).abs() < 1e-6;
+    assert!(positions.len() >= 3, "window {cg} was animated: {positions:?}");
+    for m in &moves {
+        let reached_position =
+            near((m.x, m.y), (start.x, start.y)) || positions.iter().any(|p| near(*p, (m.x, m.y)));
+        let reached_size = near((m.width, m.height), (start.width, start.height))
+            || sizes.iter().any(|s| near(*s, (m.width, m.height)));
+        assert!(
+            reached_position && reached_size,
+            "window {cg}: the border moved to {m:?}, a frame the window never reached \
+             (written positions {positions:?}, sizes {sizes:?})"
+        );
+    }
+    let skipped: Vec<_> = positions
+        .iter()
+        .filter(|p| !moves.iter().any(|m| near((m.x, m.y), **p)))
+        .collect();
+    assert!(
+        skipped.len() <= may_skip,
+        "window {cg}: the border never followed the frames written at {skipped:?}: {moves:?}"
+    );
+    assert_eq!(
+        moves.last().copied(),
+        Some(overlay_rect(anim.frame_of(node))),
+        "window {cg}: the border ends exactly on the window"
+    );
+    moves.len()
+}
+
+/// A multi-frame animation of a slow application (the shard replaces pending
+/// frames, latest wins): the border of its one window moves only to frames the
+/// window reached, follows each of them and lands on the target.
+#[test]
+fn a_border_follows_only_the_frames_its_window_reached_while_frames_are_dropped() {
+    let mut anim = Anim::boot_windows(1);
+    wait_until("the border shown", || {
+        anim.events().iter().any(|e| matches!(e, Ev::Show { .. }))
+    });
+    let node = anim.nodes[0];
+    let start = anim.frame_of(node);
+    let (calls, moves) = (anim.ax.calls().len(), anim.moves_of(anim.handle_of(101)).len());
+    anim.slow_writes(12);
+    anim.reload(0);
+    anim.drive_until_settled();
+    assert_border_followed(&anim, node, 101, start, (calls, moves), 0);
+}
+
+/// The same for two windows of one application moved by one layout change.
+#[test]
+fn both_borders_follow_their_windows_through_one_animated_layout_change() {
+    let mut anim = Anim::boot_windows(2);
+    wait_until("both borders shown", || {
+        anim.events().iter().filter(|e| matches!(e, Ev::Show { .. })).count() == 2
+    });
+    let starts: Vec<Rect> = anim.nodes.iter().map(|n| anim.frame_of(*n)).collect();
+    let calls = anim.ax.calls().len();
+    let moves: Vec<usize> =
+        [101, 102].iter().map(|cg| anim.moves_of(anim.handle_of(*cg)).len()).collect();
+    anim.slow_writes(6);
+    anim.reload(0);
+    anim.drive_until_settled();
+    for (index, cg) in [101_u32, 102].into_iter().enumerate() {
+        assert_border_followed(
+            &anim,
+            anim.nodes[index],
+            cg,
+            starts[index],
+            (calls, moves[index]),
+            0,
+        );
+    }
+}
+
+/// A retarget while the window still moves: the border follows the frames of
+/// both plans the window reached and lands on the new target, never on a frame
+/// of the superseded plan that was not written.
+#[test]
+fn a_retarget_mid_animation_keeps_the_border_on_written_frames_and_ends_on_the_new_target() {
+    let mut anim = Anim::boot_windows(1);
+    wait_until("the border shown", || {
+        anim.events().iter().any(|e| matches!(e, Ev::Show { .. }))
+    });
+    let node = anim.nodes[0];
+    let start = anim.frame_of(node);
+    let (calls, moves) = (anim.ax.calls().len(), anim.moves_of(anim.handle_of(101)).len());
+    anim.slow_writes(12);
+    anim.reload(0);
+    wait_until("the animation clock", || anim.clocks.is_live(D1));
+    wait_until("a few frames written", || {
+        anim.clocks.fire(D1, Instant::now());
+        std::thread::sleep(Duration::from_millis(8));
+        anim.written_since(node, calls).0.len() >= 3
+    });
+    anim.reload(100);
+    wait_until("the new plan", || {
+        anim.runtime
+            .snapshot()
+            .frames
+            .iter()
+            .any(|f| f.desired.is_some_and(|d| (d.x - 100.0).abs() < 1e-6))
+    });
+    anim.drive_until_settled();
+    // The superseded plan's frame that was inside the AX call at the retarget
+    // answers after the new plan started: the route drops it as stale, so at
+    // most that one written frame is skipped (the border is never more than one
+    // written frame behind).
+    assert_border_followed(&anim, node, 101, start, (calls, moves), 1);
+    let target = anim.frame_of(node);
+    assert!(
+        (target.x - 100.0).abs() < 1e-6,
+        "the new plan landed: {target:?}"
+    );
+}
+
+/// A direct (instant) write: the border moves when the window was written,
+/// not when the write was only dispatched.
+#[test]
+fn a_direct_write_moves_the_border_once_the_window_was_written() {
+    let mut anim = Anim::boot_windows(1);
+    wait_until("the border shown", || {
+        anim.events().iter().any(|e| matches!(e, Ev::Show { .. }))
+    });
+    let node = anim.nodes[0];
+    let handle = anim.handle_of(101);
+    let before = anim.frame_of(node);
+    let moves = anim.moves_of(handle).len();
+    // Hold the window's first write: the AX write is recorded, then blocks.
+    let gate = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+    let held = Arc::clone(&gate);
+    anim.ax.on_node_write(move |_| {
+        let (open, changed) = &*held;
+        let guard = lock(open);
+        drop(changed.wait_while(guard, |open| !*open).unwrap_or_else(PoisonError::into_inner));
+    });
+    // Animations off: the gap change is one direct write.
+    anim.revision += 1;
+    let direct = Arc::new(
+        serde_json::from_value(json!({
+            "enabled": true,
+            "gaps": { "inner": 0, "outer": 0 },
+            "animations": { "enabled": false },
+            "borders": { "enabled": true },
+        }))
+        .expect("config"),
+    );
+    anim.runtime.submit_config(anim.revision, direct).expect("config");
+    wait_until("the write is inside the AX call", || {
+        anim.written_since(node, 0).0.len() + anim.written_since(node, 0).1.len() > 0
+            && anim.frame_of(node) != before
+    });
+    std::thread::sleep(Duration::from_millis(30));
+    assert_eq!(
+        anim.moves_of(handle).len(),
+        moves,
+        "the border waits for the acknowledged write"
+    );
+    {
+        let (open, changed) = &*gate;
+        *lock(open) = true;
+        changed.notify_all();
+    }
+    anim.wait_settled();
+    wait_until("the border moved", || {
+        anim.moves_of(handle).last().copied() == Some(overlay_rect(anim.frame_of(node)))
+    });
 }
 
 /// Stop: the borders stage releases every overlay within its bound and no

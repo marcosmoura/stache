@@ -958,7 +958,7 @@ pub struct TilingState {
     /// Applications that move without animation (the instant fallback). The
     /// actor copies them from the animation control before each transition;
     /// the planner writes their windows directly.
-    pub(crate) animation_fallback: BTreeSet<ApplicationId>,
+    pub(crate) animation_fallback: BTreeSet<(ApplicationId, crate::animation::MotionKind)>,
     pub(crate) tabs: TabRegistry,
     pub(crate) tab_outbox: TabOutbox,
     /// Applications listed again after a Space change or an activation because
@@ -988,7 +988,10 @@ impl TilingState {
 
     /// Replaces the applications that move without animation. Called by the
     /// actor before a transition, so the transition itself stays pure.
-    pub fn set_animation_fallback(&mut self, fallback: BTreeSet<ApplicationId>) {
+    pub fn set_animation_fallback(
+        &mut self,
+        fallback: BTreeSet<(ApplicationId, crate::animation::MotionKind)>,
+    ) {
         self.animation_fallback = fallback;
     }
 
@@ -1245,6 +1248,7 @@ impl TilingState {
             unreachable,
             refused_focus: self.refused_focus,
             hidden_apps: Vec::new(),
+            animation_fallbacks: Vec::new(),
             display_layout: self.layout.clone(),
             apps: self.apps.values().cloned().collect(),
             tabs: self.tabs.status(self.windows.values().filter(|w| w.is_inactive_tab()).count()),
@@ -1362,6 +1366,10 @@ pub struct TilingSnapshot {
     pub refused_focus: Option<RefusedFocus>,
     /// Applications the runtime hid (or may have hid), with their ownership.
     pub hidden_apps: Vec<crate::visibility::OwnedApp>,
+    /// Applications in the animation instant fallback, per kind, with the time
+    /// left of a cool-down when the snapshot was published (`None` is sticky;
+    /// zero means on its next plan). Filled by the actor.
+    pub animation_fallbacks: Vec<(crate::animation::FallbackEntry, Option<std::time::Duration>)>,
     /// The native display layout (frames, scale, built-in flag) behind `screens`.
     pub display_layout: DisplayLayout,
     /// The application catalog the actor knows, in stable application order.

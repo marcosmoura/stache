@@ -661,10 +661,12 @@ pub(super) fn plan_and_issue(state: &mut TilingState, fx: &mut Vec<Effect>) {
             status: AttemptStatus::InFlight,
         });
         // A just-revealed window is written directly, whatever the config says.
-        // An application in instant fallback gets one direct write per plan.
+        // An application in instant fallback for this kind of write (a move,
+        // or a size change) gets one direct write per plan.
+        let kind = crate::animation::MotionKind::of(wanted.size);
         let animate = !corrective
             && !state.frames.revealed.remove(token)
-            && !state.animation_fallback.contains(&token.application())
+            && !state.animation_fallback.contains(&(token.application(), kind))
             && animations
                 .as_ref()
                 .is_some_and(|config| crate::animation::wants_animation(config, &actual, target));
