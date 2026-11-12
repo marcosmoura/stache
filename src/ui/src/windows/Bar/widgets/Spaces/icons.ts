@@ -1,7 +1,6 @@
 import {
   AdobeIllustratorIcon,
   AdobePhotoshopIcon,
-  AiBrowserIcon,
   AppleFinderIcon,
   AppleMusicIcon,
   AppleReminderIcon,
@@ -16,7 +15,6 @@ import {
   CheckListIcon,
   ChromeIcon,
   ClaudeIcon,
-  CodeSimpleIcon,
   CodeSquareIcon,
   ComputerTerminal01Icon,
   DashboardCircleIcon,
@@ -104,8 +102,8 @@ import type { IconSource } from '@/components/Icon';
  */
 export const WORKSPACE_ICONS: Readonly<Record<string, IconSource>> = {
   terminal: ComputerTerminal01Icon,
-  coding: CodeSimpleIcon,
-  browser: AiBrowserIcon,
+  coding: SiZedindustries,
+  browser: SafariIcon,
   music: MusicNote03Icon,
   design: FigmaIcon,
   communication: MessageMultiple01Icon,
