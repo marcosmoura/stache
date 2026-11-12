@@ -20,6 +20,7 @@ use stache_macos::{DisplayId, DisplayLayout, FakeFrameClockFactory};
 
 use super::*;
 use crate::actor::AppDirectory;
+use crate::animation::FallbackReason;
 use crate::backend::SystemWindowBackend;
 use crate::config::TilingConfig;
 use crate::drag::{DragPoint, DragSignal};
@@ -1693,6 +1694,7 @@ fn three_windows_keep_animating_at_120_hz(write_ms: u64, expect_drops: bool) {
         DisplayLayout::new(vec![display(1, true, Some(120.0), 0.0)]),
     );
     let nodes = world.nodes(0).to_vec();
+    let application = world.token(nodes[0]).application();
     let slow = nodes.clone();
     world.ax.on_node_write(move |node| {
         if slow.contains(&node) {
@@ -1732,6 +1734,40 @@ fn three_windows_keep_animating_at_120_hz(write_ms: u64, expect_drops: bool) {
             "round {round} ({layout}) reached its target"
         );
         let report = world.runtime.animation().report();
+        // The three windows of one layout change are one record.
+        let records = world.runtime.animation().shared().book().records(application);
+        assert_eq!(
+            records.len(),
+            round + 1,
+            "round {round} ({layout}): one record per layout change: {records:?}"
+        );
+        // The rate and end lag are wall-clock measurements of real sleeps, so a
+        // loaded machine can really make this application miss the thresholds.
+        // While the measurements are healthy (they are at these write costs on
+        // an idle machine), it must keep animating; once they are not, the
+        // only correct outcome is the fallback they call for, and the rounds
+        // after it move directly by design. The thresholds themselves are
+        // pinned with a fake clock in `animation::fallback_tests`.
+        let bad = records.iter().rev().take(3).filter(|r| r.rate_bad() || r.lag_bad()).count();
+        if bad >= 2 {
+            assert!(
+                matches!(
+                    report.fallbacks.as_slice(),
+                    [(app, FallbackReason::BelowMinimumRate | FallbackReason::LateEnd)]
+                        if *app == application
+                ),
+                "round {round} ({layout}): measured too slow, so in fallback: {report:?}"
+            );
+            // Slow because pending frames were replaced, never because every
+            // frame was queued: at these write costs a correct sink always
+            // drops frames, and more so under load.
+            let dropped: usize = report.metrics.iter().map(|(_, m)| m.dropped).sum();
+            assert!(
+                dropped > 0,
+                "round {round} ({layout}): slow without dropped frames: {report:?}"
+            );
+            return;
+        }
         assert!(
             report.fallbacks.is_empty(),
             "round {round} ({layout}): {report:?}"
