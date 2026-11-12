@@ -1023,6 +1023,123 @@ fn a_primary_swap_moves_the_panel_and_the_reservation_together() {
     assert_eq!((moved.1.size.width, moved.1.origin.x), (2532, 14));
 }
 
+fn external_primary() -> DisplayInfo {
+    display(2, DisplayRect::new(0.0, 0.0, 2560.0, 1440.0), 1.0, true, true)
+}
+
+fn builtin_secondary() -> DisplayInfo {
+    display(
+        1,
+        DisplayRect::new(2560.0, 0.0, 1512.0, 982.0),
+        2.0,
+        false,
+        false,
+    )
+}
+
+fn moves(h: &Harness) -> Vec<(i32, i32, u32, u32)> {
+    lock(&h.windows.moved)
+        .iter()
+        .map(|(_, f)| (f.origin.x, f.origin.y, f.size.width, f.size.height))
+        .collect()
+}
+
+// The planned frame changes here, so this scenario also passed before the
+// panel fix: the Bar module uses a fake window capability. The fix itself (the
+// panel takes the requested frame, never the stale Tauri window frame) is
+// covered by `stache-app`
+// `windows::tests::repositioning_places_the_panel_at_the_requested_frame_not_the_tauri_window`.
+#[test]
+fn disconnecting_the_primary_external_display_moves_the_panel_to_the_builtin_and_back() {
+    let h = Harness::new(Native::Auto, config(28, 14), vec![
+        external_primary(),
+        builtin_secondary(),
+    ]);
+    h.start();
+    let first = h.windows.last();
+    assert!((h.reservation(2) - 42.0).abs() < f64::EPSILON);
+    let lease = h.source.lease();
+    // Disconnect: the built-in display becomes screens[0] at the origin.
+    lease.publish(Some(layout(vec![builtin()])));
+    h.wait_until("the panel to move to the built-in", |h| !moves(h).is_empty());
+    assert_eq!(moves(&h), [(14, 14, 1484, 28)]);
+    assert_eq!(h.windows.last(), first, "moved, not reopened");
+    assert_eq!(h.displays(), vec![1]);
+    assert!((h.reservation(1) - 42.0).abs() < f64::EPSILON);
+    let status = h.runtime.status().read();
+    assert_eq!(status.frame.map(|f| (f.x, f.y, f.width)), Some((14, 14, 1484)));
+    // Reconnect: back on the external display.
+    lease.publish(Some(layout(vec![external_primary(), builtin_secondary()])));
+    h.wait_until("the panel to move back", |h| moves(h).len() == 2);
+    assert_eq!(moves(&h)[1], (14, 14, 2532, 28));
+    h.wait_until("the reservation to move back", |h| h.reservation(2) > 0.0);
+    assert!(h.reservation(1).abs() < f64::EPSILON);
+    assert_eq!(h.windows.opened(), 1);
+}
+
+#[test]
+fn a_same_size_primary_replacement_still_reasserts_the_panel_frame() {
+    let twin = |id| display(id, DisplayRect::new(0.0, 0.0, 2560.0, 1440.0), 1.0, true, true);
+    let h = Harness::new(Native::Auto, config(28, 14), vec![twin(2)]);
+    h.start();
+    let lease = h.source.lease();
+    // A different display of the same size becomes primary: the planned frame
+    // is numerically identical, yet the system moved the panel off the
+    // removed display, so it must be placed again.
+    lease.publish(Some(layout(vec![twin(3)])));
+    h.wait_until("the panel to be re-asserted", |h| !moves(h).is_empty());
+    assert_eq!(moves(&h), [(14, 14, 2532, 28)]);
+    h.wait_until("the reservation to follow", |h| h.reservation(3) > 0.0);
+    assert_eq!(h.windows.opened(), 1);
+}
+
+#[test]
+fn an_arrangement_only_change_reasserts_the_panel_frame() {
+    let h = Harness::new(Native::Auto, config(28, 14), vec![builtin(), external()]);
+    h.start();
+    let generation = h.registry.observe_screen_reservations().read().topology;
+    let lease = h.source.lease();
+    let above = display(
+        2,
+        DisplayRect::new(0.0, -1440.0, 2560.0, 1440.0),
+        1.0,
+        false,
+        false,
+    );
+    lease.publish(Some(layout(vec![builtin(), above])));
+    h.wait_until("the panel to be re-asserted", |h| !moves(h).is_empty());
+    assert_eq!(moves(&h), [(14, 14, 1484, 28)]);
+    assert_eq!(
+        h.registry.observe_screen_reservations().read().topology,
+        generation
+    );
+    assert!((h.reservation(1) - 42.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn a_briefly_absent_primary_reopens_the_panel_at_the_new_primary_frame() {
+    let h = Harness::new(Native::Auto, config(28, 14), vec![
+        external_primary(),
+        builtin_secondary(),
+    ]);
+    h.start();
+    let lease = h.source.lease();
+    lease.publish(Some(layout(Vec::new())));
+    h.wait_until("no-primary", |h| {
+        h.runtime.status().read().panel == BarPanelState::NoPrimaryDisplay
+    });
+    assert_eq!(lock(&h.windows.closed).len(), 1);
+    lease.publish(Some(layout(vec![builtin()])));
+    h.wait_until("recovery", |h| {
+        h.runtime.status().read().panel == BarPanelState::Loaded
+    });
+    assert_eq!(h.windows.opened(), 2);
+    let request = lock(&h.windows.opened).last().expect("opened").1.clone();
+    assert_eq!(request.size.width, 1484);
+    assert_eq!(request.origin.map(|o| (o.x, o.y)), Some((14, 14)));
+    assert!((h.reservation(1) - 42.0).abs() < f64::EPSILON);
+}
+
 #[test]
 fn late_native_callbacks_after_a_stop_do_not_resurrect_anything() {
     let h = Harness::new(Native::Auto, config(28, 14), vec![builtin()]);

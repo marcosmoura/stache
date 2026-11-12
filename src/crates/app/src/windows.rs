@@ -12,7 +12,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use stache_macos::{NativeWindowHandle, PanelAdapter, SystemPanelAdapter};
+use stache_macos::{NativeWindowHandle, PanelAdapter, SystemPanelAdapter, TopLeftFrame};
 use stache_sdk::{
     Appearance, LogLevel, LogRecord, Logger, MainThreadExecutor, ModuleId, Operation, SurfaceId,
     WindowBackend, WindowError, WindowFrame, WindowId, WindowKind, WindowOrigin, WindowPhase,
@@ -271,10 +271,17 @@ impl PanelHosting {
         result
     }
 
-    /// After Tauri applied the new size/position: move the panel to match.
-    fn reposition<E: fmt::Display>(&self, label: &str, ns_window: NsWindow<E>) {
-        if let Ok(handle) = native_handle(ns_window) {
-            let _ = self.adapter.sync_frame(label, &handle);
+    /// Places a hosted panel at `frame` directly. Tauri queues its own size
+    /// and position changes on the main queue, so its window frame is stale
+    /// here and is never copied.
+    fn reposition(&self, label: &str, frame: WindowFrame) {
+        if self.is_panel(label) {
+            let _ = self.adapter.sync_frame(label, TopLeftFrame {
+                x: f64::from(frame.origin.x),
+                y: f64::from(frame.origin.y),
+                width: f64::from(frame.size.width),
+                height: f64::from(frame.size.height),
+            });
         }
     }
 
@@ -391,10 +398,8 @@ impl WindowHost for TauriWindowHost {
                 x: f64::from(frame.origin.x),
                 y: f64::from(frame.origin.y),
             }));
-            if self.panels.is_panel(label) {
-                // Tauri applied the frame to its hidden window; mirror it.
-                self.panels.reposition(label, window.ns_window());
-            }
+            // Tauri's hidden window moves later (queued); the panel moves now.
+            self.panels.reposition(label, frame);
         }
     }
 
@@ -1828,9 +1833,12 @@ mod tests {
         fn sync_frame(
             &self,
             label: &str,
-            _: &NativeWindowHandle,
+            frame: TopLeftFrame,
         ) -> Result<(), stache_macos::PanelError> {
-            self.log(&format!("sync {label}"));
+            self.log(&format!(
+                "sync {label} {} {} {} {}",
+                frame.x, frame.y, frame.width, frame.height
+            ));
             Ok(())
         }
 
@@ -1906,11 +1914,21 @@ mod tests {
     }
 
     #[test]
-    fn repositioning_reaches_the_panel_and_a_missing_window_does_not() {
+    fn repositioning_places_the_panel_at_the_requested_frame_not_the_tauri_window() {
         let (adapter, hosting) = hosting(false);
         let mut byte = 0_u8;
-        hosting.reposition("w", pointer(&mut byte));
-        hosting.reposition::<String>("w", Err("gone".to_owned()));
-        assert_eq!(adapter.events(), ["sync w"]);
+        hosting.reposition("w", frame(14));
+        hosting.register("w");
+        hosting.adopt("w", pointer(&mut byte)).expect("host");
+        // Same frame twice (a topology change that keeps the frame) reaches
+        // the panel twice: the system may have moved it meanwhile.
+        hosting.reposition("w", frame(14));
+        hosting.reposition("w", frame(14));
+        hosting.reposition("other", frame(14));
+        assert_eq!(adapter.events(), [
+            "host w",
+            "sync w 14 2 640 30",
+            "sync w 14 2 640 30"
+        ]);
     }
 }

@@ -47,10 +47,10 @@ use objc2::runtime::AnyObject;
 use objc2::{AnyThread, ClassType, MainThreadMarker, msg_send};
 use objc2_app_kit::{
     NSAutoresizingMaskOptions, NSBackingStoreType, NSColor, NSPanel, NSRunningApplication,
-    NSTrackingArea, NSTrackingAreaOptions, NSView, NSWindow, NSWindowCollectionBehavior,
+    NSScreen, NSTrackingArea, NSTrackingAreaOptions, NSView, NSWindow, NSWindowCollectionBehavior,
     NSWindowLevel, NSWindowStyleMask, NSWorkspace,
 };
-use objc2_core_foundation::CGRect;
+use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 
 /// Style mask the panel is created with. Fixed at init; never changed later.
 pub const PANEL_STYLE_MASK: NSWindowStyleMask =
@@ -128,6 +128,30 @@ impl fmt::Debug for NativeWindowHandle {
     }
 }
 
+/// A panel frame in logical points, top-left origin of the primary display
+/// (`NSScreen.screens[0]`), y growing downwards.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TopLeftFrame {
+    /// Left edge.
+    pub x: f64,
+    /// Top edge, measured down from the primary display's top.
+    pub y: f64,
+    /// Width.
+    pub width: f64,
+    /// Height.
+    pub height: f64,
+}
+
+/// Converts a top-left frame to `AppKit`'s bottom-left global coordinates,
+/// given the primary display's current height in points.
+#[must_use]
+pub fn appkit_rect(frame: TopLeftFrame, primary_height: f64) -> CGRect {
+    CGRect::new(
+        CGPoint::new(frame.x, primary_height - frame.y - frame.height),
+        CGSize::new(frame.width, frame.height),
+    )
+}
+
 /// Hosts Tauri webviews in native non-activating panels. Fakeable in
 /// application tests. Windows are identified by their Tauri label.
 pub trait PanelAdapter: Send + Sync {
@@ -138,12 +162,15 @@ pub trait PanelAdapter: Send + Sync {
     /// Returns a typed [`PanelError`]; nothing is left half-hosted.
     fn host(&self, label: &str, window: &NativeWindowHandle) -> Result<(), PanelError>;
 
-    /// Makes the panel's frame equal the (already repositioned) Tauri window's
-    /// frame. A label that is not hosted is a no-op.
+    /// Places the panel at `frame` (top-left coordinates of the primary
+    /// display), converted with the primary display's height read at call
+    /// time. It never copies the Tauri window's frame: Tauri applies its own
+    /// moves asynchronously, so that frame is stale at this point. A label
+    /// that is not hosted, or no primary display, is a no-op.
     ///
     /// # Errors
-    /// Returns a typed [`PanelError`] when the window cannot be read.
-    fn sync_frame(&self, label: &str, window: &NativeWindowHandle) -> Result<(), PanelError>;
+    /// [`PanelError::NotMainThread`] off the main thread.
+    fn sync_frame(&self, label: &str, frame: TopLeftFrame) -> Result<(), PanelError>;
 
     /// Moves the webview back into Tauri's window and closes the panel. Must run
     /// before Tauri closes a hosted window. Idempotent; unknown labels are a
@@ -182,13 +209,17 @@ impl PanelAdapter for SystemPanelAdapter {
         Ok(())
     }
 
-    fn sync_frame(&self, label: &str, window: &NativeWindowHandle) -> Result<(), PanelError> {
-        MainThreadMarker::new().ok_or(PanelError::NotMainThread)?;
-        let window = window_ref(window)?;
-        let frame = window.frame();
+    fn sync_frame(&self, label: &str, frame: TopLeftFrame) -> Result<(), PanelError> {
+        let main = MainThreadMarker::new().ok_or(PanelError::NotMainThread)?;
+        // The observer reacts to NSApplicationDidChangeScreenParametersNotification,
+        // posted after NSScreen is updated, so screens[0] is current here.
+        let Some(primary) = NSScreen::screens(main).to_vec().into_iter().next() else {
+            return Ok(());
+        };
+        let rect = appkit_rect(frame, primary.frame().size.height);
         HOSTED.with(|hosted| {
             if let Some(host) = hosted.borrow().get(label) {
-                host.panel.setFrame_display(frame, true);
+                host.panel.setFrame_display(rect, true);
             }
         });
         Ok(())
@@ -343,6 +374,23 @@ mod tests {
     }
 
     #[test]
+    fn a_top_left_frame_converts_against_the_current_primary_height() {
+        let bar = TopLeftFrame {
+            x: 14.0,
+            y: 14.0,
+            width: 2532.0,
+            height: 28.0,
+        };
+        let on_external = appkit_rect(bar, 1440.0);
+        assert_eq!((on_external.origin.x, on_external.origin.y), (14.0, 1398.0));
+        assert_eq!((on_external.size.width, on_external.size.height), (2532.0, 28.0));
+        // After the external display is gone the built-in (982 pt) is primary.
+        let on_builtin = appkit_rect(TopLeftFrame { width: 1484.0, ..bar }, 982.0);
+        assert_eq!((on_builtin.origin.x, on_builtin.origin.y), (14.0, 940.0));
+        assert!((on_builtin.size.width - 1484.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
     fn a_window_without_subviews_is_an_unexpected_layout() {
         assert_eq!(
             check_layout(0),
@@ -361,7 +409,12 @@ mod tests {
             let handle =
                 NativeWindowHandle::from_tauri_ns_window((&raw mut byte).cast()).expect("non-null");
             let host = SystemPanelAdapter.host("w", &handle);
-            let sync = SystemPanelAdapter.sync_frame("w", &handle);
+            let sync = SystemPanelAdapter.sync_frame("w", TopLeftFrame {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            });
             SystemPanelAdapter.unhost("w");
             SystemPanelAdapter.discard("w");
             (host, sync)

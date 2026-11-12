@@ -778,7 +778,10 @@ tray's **Open Test Window** action is the only launch path that creates a webvie
   in a main-thread registry keyed by label. `unhost` (webview back into Tauri's
   window, panel closed) runs before every Tauri close of the window; a
   `Destroyed` event for a still-hosted label only drops the state. Reposition
-  updates Tauri's hidden window and then mirrors its frame onto the panel.
+  queues the move of Tauri's hidden window (Tauri applies it asynchronously)
+  and places the panel directly at the requested top-left frame, converted to
+  AppKit coordinates with the height of `NSScreen.screens[0]` read at that
+  moment; it never copies the hidden window's (still stale) frame.
   Focus on a panel is a no-op. The hosting was verified live on macOS 27.0
   (2026-11-09, committed host `377512b`: no activation on click, hover while
   another app is active, below normal windows, clean close; see the
