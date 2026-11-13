@@ -232,7 +232,7 @@ other of the two constants. Compare identifiers exactly, and use the bundle URL 
 - [ ] `RELEASE-04-13` After Stage 3, with the release installed and running, `bun run tauri:dev` starts
       its own host instead of exiting as a second launch, shows `Stache Next` in its tray, and a checkout's
       `cargo run -q -p stache-app --bin stache -- cache path` prints the `.next` path. Gated manual check.
-- [ ] `RELEASE-04-14` On a packaged build, the verifier's `CFBundleIdentifier` is
+- [x] `RELEASE-04-14` On a packaged build, the verifier's `CFBundleIdentifier` is
       `com.marcosmoura.stache` (`RELEASE-01-06`), and `stache cache path` through the shipped CLI route
       prints the final path. Gated manual check, recorded with `RELEASE-05-07` or `RELEASE-05-10`.
 - [x] `RELEASE-04-15` After Stage 3, `IDENTITY` is a constant selected only by `cfg!(debug_assertions)`,
@@ -242,7 +242,10 @@ other of the two constants. Compare identifiers exactly, and use the bundle URL 
 
 Status 2026-11-13: Stages 1 to 3 are implemented: release builds are `Stache` /
 `com.marcosmoura.stache`, debug builds and `tauri:dev` stay `.next`, and a foreign process with
-this identifier refuses startup. The manual checks `RELEASE-04-11`, `04-13` and `04-14` are open.
+this identifier refuses startup. `RELEASE-04-14` passed on the owner's ad-hoc install of `a744ddf` (2026-11-13): the verifier and
+`/Applications/Stache.app` report `com.marcosmoura.stache`, and `stache cache path` through the
+`~/.local/bin/stache` link prints `~/Library/Caches/com.marcosmoura.stache`. The manual checks
+`RELEASE-04-11` and `04-13` are open.
 Decided in the Stage 3 commit: persistent ownership state (Caps remap journal, durable leases)
 follows `IDENTITY`; a release build never reads, adopts or deletes `.next` state.
 

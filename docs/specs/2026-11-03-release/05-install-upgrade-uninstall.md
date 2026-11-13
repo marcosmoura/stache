@@ -212,7 +212,14 @@ it is a rehearsal tool, not the public migration route.
 the bundle, also when found by name on `PATH`. Mode selection reads `current_exe` without
 canonicalizing it. **The symlink route is selected**; `RELEASE-05-10` is not applicable unless the
 real-install half of `RELEASE-05-07` fails. Kept proven by `cli/tests/symlink_probe.rs`. The
-real-install half (`stache cache path` and socket access through the shipped link) is not run.
+real-install half is partly run.
+
+2026-11-13, owner's ad-hoc install of `a744ddf` (Decision 21): `ditto -x -k` of
+`Stache_0.26.0_aarch64.zip` into `/Applications`, then
+`ln -s /Applications/Stache.app/Contents/MacOS/stache ~/.local/bin/stache`. Through the link,
+`stache cache path` printed `~/Library/Caches/com.marcosmoura.stache` and `stache --version` printed
+`0.26.0`, with no desktop host started. Socket access through the link to a running app is not
+yet checked, and this was an ad-hoc build, not the signed artifact the criterion finally needs.
 
 Status 2026-11-13: the preparation is implemented. `RELEASE-05-07` has its probe half recorded
 above; its real-install half, `05-08` and `05-09` are not run. `05-10` is not applicable while the
