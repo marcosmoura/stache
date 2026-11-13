@@ -328,7 +328,11 @@ describe('Bar', () => {
     expect(itemsOf('end')).toEqual(['weather', 'cpu', 'battery', 'keep_awake', 'wifi', 'clock']);
     // No readings and no weather configured: only the UI-local Clock draws.
     expect(zone('center').querySelectorAll('button')).toHaveLength(0);
-    await vi.waitFor(() => expect(zone('end').querySelectorAll('button')).toHaveLength(1));
+    // The first production-registry render in this file: each widget chunk is
+    // loaded lazily and, on a cold runner, transformed first.
+    await vi.waitFor(() => expect(zone('end').querySelectorAll('button')).toHaveLength(1), {
+      timeout: 5000,
+    });
   });
 
   for (const [label, outcome] of [

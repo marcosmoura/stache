@@ -105,10 +105,20 @@ describe('BarItem', () => {
 
   it('shows a visible focus ring for keyboard focus only', async () => {
     const screen = await renderItems();
-    const button = screen.getByText('click').element();
+    const button = screen.getByText('click').element() as HTMLButtonElement;
 
     expect(getComputedStyle(button).outlineStyle).toBe('none');
-    await userEvent.keyboard('{Tab}');
+    /*
+     * WebKit's Tab reaches buttons only when macOS "Keyboard navigation" is on,
+     * so the button is focused after a real pointer event (no ring) and then
+     * receives a real key press, which turns that focus into keyboard focus.
+     */
+    await userEvent.click(button);
+    button.focus();
+    expect(document.activeElement).toBe(button);
+    expect(getComputedStyle(button).outlineStyle).toBe('none');
+
+    await userEvent.keyboard('{ArrowDown}');
     expect(document.activeElement).toBe(button);
     await expect.poll(() => getComputedStyle(button).outlineStyle).toBe('solid');
     expect(getComputedStyle(button).outlineColor).toBe(swatch('focus'));

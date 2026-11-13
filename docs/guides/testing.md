@@ -343,7 +343,12 @@ CI rules (`.github/workflows/`):
   Playwright Test run TS tests.
 - `test:ui`: Vitest browser mode in real Playwright WebKit. Suites are colocated `*.test.ts(x)` under
   `src/ui/src`; `src/ui/tests` holds setup and helpers (`render`, `recordIpc`). Coverage retains
-  80/80/65/80 thresholds.
+  80/80/65/80 thresholds. `tests/setup.ts` pins `prefers-reduced-motion: no-preference` before
+  each file renders and after every test, so the machine's Reduce Motion setting never applies;
+  a test that wants reduced motion emulates `reduce` itself (`playwright.config.ts` pins the same
+  default for `test:e2e`). Keyboard-focus tests do not rely on Tab, which WebKit lets reach buttons
+  only when macOS "Keyboard navigation" is on: they focus the element and press a real key, which
+  `:focus-visible` treats as keyboard focus.
 - **Screenshot baselines** (`src/ui/e2e/screenshots/*.spec.ts`, part of `test:e2e`):
   Playwright `expect(locator).toHaveScreenshot(name)` in WebKit with animations
   disabled, the caret hidden, a fixed viewport and device scale factor 2, and
