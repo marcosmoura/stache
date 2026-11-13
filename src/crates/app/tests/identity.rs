@@ -407,8 +407,8 @@ fn no_production_code_uses_tauri_identifier_keyed_paths() {
         {
             continue;
         }
+        // The whole file: no test uses these names either, so nothing needs a carve-out.
         let Some(text) = read(&path) else { continue };
-        let production = text.split("#[cfg(test)]").next().unwrap_or_default();
         for resolver in [
             "app_cache_dir",
             "app_data_dir",
@@ -416,7 +416,7 @@ fn no_production_code_uses_tauri_identifier_keyed_paths() {
             "app_local_data_dir",
             "app_log_dir",
         ] {
-            assert!(!production.contains(resolver), "{path} uses {resolver}");
+            assert!(!text.contains(resolver), "{path} uses {resolver}");
         }
     }
 }
