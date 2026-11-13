@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 ---
 
 # 05 — Install, upgrade, legacy removal and uninstall
@@ -106,7 +106,7 @@ gives that command and says to remove the link on uninstall. No separate CLI bin
       Homebrew route; and contains none of `killall`, `pkill`, `pgrep stache`, `xattr -d`,
       `xattr -cr`, `spctl --master-disable` or `brew install`. It links from `README.md` and
       `docs/index.md`. Test: a doc check in `scripts/release.test.ts`.
-- [ ] `RELEASE-05-07` On a self-signed install, `stache cache path` through the link prints the
+- [x] `RELEASE-05-07` On a self-signed install, `stache cache path` through the link prints the
       release cache path without starting a host, and a command through the link is answered by the
       running app without a second instance. Manual check, recorded below. The probe half is kept
       proven by `cli/tests/symlink_probe.rs`.
@@ -137,8 +137,14 @@ canonicalizing it. **The symlink route is selected.**
 `0.26.0`, with no desktop host started. The owner then launched the installed app and reported that
 everything works. With it running (`com.marcosmoura.stache` at `/Applications/Stache.app`),
 `stache config path` through the link was answered by the host (every file marked `active`) and no
-second instance started. This was an ad-hoc build; `RELEASE-05-07` is repeated on the self-signed
-install.
+second instance started. This was an ad-hoc build.
+
+2026-11-13, self-signed install of `a445fa9` (`Authority=Stache App`, hardened runtime, requirement
+anchored on the certificate), replacing the ad-hoc copy after the owner quit it: through the same
+link, `stache cache path` printed `~/Library/Caches/com.marcosmoura.stache` with no host started.
+The owner launched the app and reported it works. With it running, `stache config path` through
+the link was answered by the host (files marked `active`) and one instance stayed running.
+`RELEASE-05-07` passes.
 
 ## Tests
 

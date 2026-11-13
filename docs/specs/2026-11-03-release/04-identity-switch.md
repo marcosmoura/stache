@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 ---
 
 # 04 — Identity switch
@@ -217,7 +217,7 @@ other of the two constants. Compare identifiers exactly, and use the bundle URL 
       desktop. Test: `cli/src/mode.rs`, `app/src/lib.rs`.
 - [x] `RELEASE-04-10` After Stage 3, the measure tool never classifies the new app as legacy. Test:
       `scripts/measure/process.test.ts`, under `test:scripts`.
-- [ ] `RELEASE-04-11` With a detectable `.next` bundle active, launching the release bundle warns
+- [ ] `RELEASE-04-11` **Not run; waived by the owner on 2026-11-13.** With a detectable `.next` bundle active, launching the release bundle warns
       and both run. With an unbundled `tauri:dev` run active, both run with isolated lock, socket
       and cache paths; no sibling warning is required because that process is not detectable.
       With a harmless placeholder bundle using `com.marcosmoura.stache` running, the
@@ -229,7 +229,7 @@ other of the two constants. Compare identifiers exactly, and use the bundle URL 
       `media-control` entry and never the overlay; and neither
       `[profile.release]` nor a per-package release override enables debug assertions. Test:
       `app/tests/identity.rs`.
-- [ ] `RELEASE-04-13` After Stage 3, with the release installed and running, `bun run tauri:dev` starts
+- [ ] `RELEASE-04-13` **Not run; waived by the owner on 2026-11-13.** After Stage 3, with the release installed and running, `bun run tauri:dev` starts
       its own host instead of exiting as a second launch, shows `Stache Next` in its tray, and a checkout's
       `cargo run -q -p stache-app --bin stache -- cache path` prints the `.next` path. Gated manual check.
 - [x] `RELEASE-04-14` On a packaged build, the verifier's `CFBundleIdentifier` is
@@ -244,8 +244,10 @@ Status 2026-11-13: Stages 1 to 3 are implemented: release builds are `Stache` /
 `com.marcosmoura.stache`, debug builds and `tauri:dev` stay `.next`, and a foreign process with
 this identifier refuses startup. `RELEASE-04-14` passed on the owner's ad-hoc install of `a744ddf` (2026-11-13): the verifier and
 `/Applications/Stache.app` report `com.marcosmoura.stache`, and `stache cache path` through the
-`~/.local/bin/stache` link prints `~/Library/Caches/com.marcosmoura.stache`. The manual checks
-`RELEASE-04-11` and `04-13` are open.
+`~/.local/bin/stache` link prints `~/Library/Caches/com.marcosmoura.stache`. The owner waived the manual checks
+`RELEASE-04-11` and `RELEASE-04-13` on 2026-11-13 ("Rehearse, waive the rest"): they were **not run**, and
+nothing here claims them. What they would have shown is covered only by the fake-backed collision
+tests and the path tests for both identities.
 Decided in the Stage 3 commit: persistent ownership state (Caps remap journal, durable leases)
 follows `IDENTITY`; a release build never reads, adopts or deletes `.next` state.
 

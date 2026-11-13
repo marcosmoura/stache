@@ -189,13 +189,15 @@ Homebrew cask or a fallback CLI binary, and Decision 21's ad-hoc install:
     `xattr -d`, `xattr -cr` or `spctl --master-disable`. Gatekeeper on a Mac that did not build the
     artifact is not proven by this spec.
 
+26. **The owner waived `RELEASE-04-11` and `RELEASE-04-13` on 2026-11-13.** They are recorded as
+    not run in [Part 04](04-identity-switch.md), which is `done` on that basis. The candidate
+    rehearsal and the second-build Accessibility check are not waived.
+
 ## What still needs the owner
 
 No credential gate remains. These need the owner and are recorded as evidence, never claimed:
 
 - [Part 03](03-signing.md): one check that a second self-signed build keeps the Accessibility grant.
-- [Part 04](04-identity-switch.md): `RELEASE-04-11` and `RELEASE-04-13`.
-- [Part 05](05-install-upgrade-uninstall.md): `RELEASE-05-07` on the self-signed install.
 - [Part 06](06-release-verification.md): the candidate rehearsal, which needs the owner's go-ahead
   to push `feat/release` and a `v0.26.0-rc.1` tag.
 
@@ -210,8 +212,8 @@ The final `v0.26.0` tag belongs on `main` after the merge and follows the
 | [01](01-build-metadata.md)            | One version, `Info.plist`, icon rule, bundle-content check.           | done        |
 | [02](02-release-pipeline.md)          | Artifacts, ad-hoc dry run, exact-SHA candidate Quality trigger.       | done        |
 | [03](03-signing.md)                   | Self-signed signing; the paid path removed.                           | in-progress |
-| [04](04-identity-switch.md)           | Staged switch, dev isolation, detectable sibling warnings.            | in-progress |
-| [05](05-install-upgrade-uninstall.md) | Install guide with first-open approval, CLI link, legacy-config note. | in-progress |
+| [04](04-identity-switch.md)           | Staged switch, dev isolation, detectable sibling warnings.            | done        |
+| [05](05-install-upgrade-uninstall.md) | Install guide with first-open approval, CLI link, legacy-config note. | done        |
 | [06](06-release-verification.md)      | Local publish command, limitations, candidate rehearsal.              | in-progress |
 
 Parts 01, 02 and 04 were implemented before the no-Developer-ID revision, along with a first
