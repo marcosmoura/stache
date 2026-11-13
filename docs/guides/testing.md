@@ -326,6 +326,12 @@ CI rules (`.github/workflows/`):
   listed above; every `tool:` entry carries `@<version>`. Dependabot moves the action SHAs, but
   these `tool:` versions are bumped by hand.
 - The pin test also rejects local actions, quoted `uses:` values and flow-style steps, by design.
+- The Quality job sets `NEXTEST_PROFILE=ci` (`.config/nextest.toml`): no fail-fast, so one run
+  reports every failing native test. In that profile the Tiling animation tests and the
+  restore-settle tests, which run the real engine on real time, each get the whole machine
+  (`threads-required = "num-cpus"`) and are retried up to twice; a starved runner otherwise puts
+  the animation engine in its `BelowMinimumRate` fallback. Local runs use the default profile:
+  no retries.
 
 - `lint:ui`: strict typecheck of frontend, prepare script and root configs, then oxlint (including `@stylexjs/eslint-plugin` and the local `scripts/lint/stylex-animation.js` through `jsPlugins`, and the
   `src/ui/src/ipc/` import boundary; see [UI](../architecture/ui.md#conventions)), then stylelint over `src/ui/**/*.css`.

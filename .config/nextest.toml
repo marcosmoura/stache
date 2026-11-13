@@ -12,3 +12,11 @@ fail-fast = true
 # CI profile with stricter settings
 [profile.ci]
 fail-fast = false
+
+# The Tiling animation tests and the restore-settle tests run the real engine on real time. On a
+# starved runner the engine falls back to direct writes (`BelowMinimumRate`), so these tests get
+# the whole machine, and a failure is retried.
+[[profile.ci.overrides]]
+filter = 'package(stache-tiling) & (test(/^(runtime_tests|module_tests)::animation::/) | test(/^visibility_tests::.*settle/))'
+threads-required = "num-cpus"
+retries = 2

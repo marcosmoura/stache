@@ -119,3 +119,12 @@ The changed tests are the tests. End-to-end scenario: the real Quality run on th
   `Bar.test.tsx` and `Spaces.test.tsx`, whose short bounds (60–180 ms) are what separates instant
   from animated. A deterministic form needs an injectable duration or a way to read the transition
   Motion was given.
+- Run 43412481884 (2026-11-13), the first to finish the native suite: UI, e2e and scripts passed;
+  4533 of 4543 native tests passed. The 10 failures were all `stache-tiling`: nine real-time
+  animation tests and `a_restore_readback_that_lags_clears_within_the_settle`. On the starved
+  runner the engine reports `BelowMinimumRate` and falls back to direct writes, so no test-only
+  change makes them deterministic. Decided by the user on 2026-11-13 ("the most sensible, that
+  won't fail much on CI or be flaky"): in the `ci` nextest profile those tests get the whole
+  machine and up to two retries. This supersedes "no retries" for that group only. An
+  injectable clock for the animation engine is the deterministic fix and is left to a Tiling
+  spec.
