@@ -1,0 +1,81 @@
+{
+  "formula": {
+    "name": "media-control",
+    "version": "0.7.7",
+    "bottleTag": "arm64_tahoe",
+    "blobDigest": "sha256:cfc4cf0de19ff242e778ad128ae8426dd9cfceb1219dd6805fd4e00705b9b887",
+    "repository": "homebrew/core/media-control"
+  },
+  "upstream": {
+    "mediaControl": {
+      "repository": "ungive/media-control",
+      "tag": "v0.7.7",
+      "revision": "3cfd5dcf78e7a619f7a42a3e2f29b06eb41027ea"
+    },
+    "mediaremoteAdapter": {
+      "repository": "ungive/mediaremote-adapter",
+      "tag": "v0.7.7",
+      "revision": "e3ff5021eb0875858bd05f48d2e9ba2e962d1cf6"
+    }
+  },
+  "files": [
+    {
+      "path": "mediaremote-adapter.pl",
+      "bottlePath": "media-control/0.7.7/lib/media-control/mediaremote-adapter.pl",
+      "upstreamPath": "bin/mediaremote-adapter.pl",
+      "sha256": "d97802e46db9535e2549e178c105ebf417a0254b3929fc32f08ecfd14d49a85f",
+      "mode": "100755",
+      "machO": false
+    },
+    {
+      "path": "MediaRemoteAdapterTestClient",
+      "bottlePath": "media-control/0.7.7/lib/media-control/MediaRemoteAdapterTestClient",
+      "sha256": "017398fb59840f86a158fa37b83c9c357281a4942b39175c7e97de4c62c97f6c",
+      "mode": "100755",
+      "machO": true
+    },
+    {
+      "path": "MediaRemoteAdapter.framework/Versions/A/MediaRemoteAdapter",
+      "bottlePath": "media-control/0.7.7/Frameworks/MediaRemoteAdapter.framework/Versions/A/MediaRemoteAdapter",
+      "sha256": "94c0f4271683b38f741087b8065e9983adbeab48a23102530c90f2a3da6f8de0",
+      "mode": "100755",
+      "machO": true
+    },
+    {
+      "path": "MediaRemoteAdapter.framework/Versions/A/Resources/Info.plist",
+      "bottlePath": "media-control/0.7.7/Frameworks/MediaRemoteAdapter.framework/Versions/A/Resources/Info.plist",
+      "sha256": "cf7c9699302a8ddacf24465443eb7a0153e1c347bf23c3c0895af41c85368af8",
+      "mode": "100644",
+      "machO": false
+    },
+    {
+      "path": "MediaRemoteAdapter.framework/Versions/A/_CodeSignature/CodeResources",
+      "bottlePath": "media-control/0.7.7/Frameworks/MediaRemoteAdapter.framework/Versions/A/_CodeSignature/CodeResources",
+      "sha256": "5ddd46b76ea756abd4e084c1f21566a39b4ff890bd21dce9b6f11ace69563305",
+      "mode": "100644",
+      "machO": false
+    }
+  ],
+  "symlinks": [
+    {
+      "path": "MediaRemoteAdapter.framework/Versions/Current",
+      "bottlePath": "media-control/0.7.7/Frameworks/MediaRemoteAdapter.framework/Versions/Current",
+      "target": "A"
+    },
+    {
+      "path": "MediaRemoteAdapter.framework/MediaRemoteAdapter",
+      "bottlePath": "media-control/0.7.7/Frameworks/MediaRemoteAdapter.framework/MediaRemoteAdapter",
+      "target": "Versions/Current/MediaRemoteAdapter"
+    },
+    {
+      "path": "MediaRemoteAdapter.framework/Resources",
+      "bottlePath": "media-control/0.7.7/Frameworks/MediaRemoteAdapter.framework/Resources",
+      "target": "Versions/Current/Resources"
+    }
+  ],
+  "license": {
+    "path": "LICENSE",
+    "upstreamPath": "LICENSE",
+    "sha256": "a489c16a6be195584fa0b35e28fca54abc8492eb0cc05d851dd24f522f4900a2"
+  }
+}

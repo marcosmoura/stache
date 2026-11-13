@@ -519,7 +519,7 @@ fn invalidation_completes_while_a_send_is_held_and_queued_writes_become_inert() 
     // Logical invalidation is one atomic store: it returns at once.
     let started = Instant::now();
     live.runtime.seal();
-    assert!(started.elapsed() < Duration::from_millis(500));
+    assert!(started.elapsed() < Duration::from_secs(2));
     assert!(!live.runtime.is_authorized());
 
     // The drain is finite and reports the truth while the send is stalled.

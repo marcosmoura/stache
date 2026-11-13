@@ -17,7 +17,8 @@
 //!
 //! Menu items carry only an index into the target's token table (`NSMenuItem`
 //! `tag`); the action callback maps it to an [`ActionToken`], contains panics
-//! and only calls the selection sink. It performs no AX call and no wait.
+//! (unwind-enabled builds only; release aborts) and only calls the selection
+//! sink. It performs no AX call and no wait.
 //!
 //! The pure [`plan`] turns a [`MenuSnapshot`] into a [`RenderPlan`] (what to
 //! draw and which items carry actions) so the rendering rules are testable
@@ -108,7 +109,8 @@ pub trait PresenterBackend: Send + Sync {
     fn remove(&self, presentation: PresentationId) -> RemoveResult;
 }
 
-/// Calls `sink` with panic containment. Returns whether it ran to completion.
+/// Calls `sink` with panic containment (unwind-enabled builds only; release aborts). Returns
+/// whether it ran to completion.
 pub fn contain_selection(sink: &SelectionSink, token: ActionToken) -> bool {
     catch_unwind(AssertUnwindSafe(|| sink(token))).is_ok()
 }
@@ -269,8 +271,9 @@ mod system {
         struct ActionTarget;
 
         impl ActionTarget {
-            /// Selects the token for the item's tag; panics are contained and
-            /// nothing else happens (no AX, no wait).
+            /// Selects the token for the item's tag; panics are contained
+            /// (unwind-enabled builds only; release aborts) and nothing else
+            /// happens (no AX, no wait).
             #[unsafe(method(stacheMenuItemSelected:))]
             fn selected(&self, sender: &NSMenuItem) {
                 let ivars = self.ivars();

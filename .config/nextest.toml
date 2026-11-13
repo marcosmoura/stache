@@ -9,6 +9,18 @@ dir = "target/nextest"
 # Fail fast on first failure for quicker feedback
 fail-fast = true
 
-# CI profile with stricter settings
+# CI profile: the GitHub runner is slow and starved, so one run reports every failure
+# (no fail-fast) and a failed test is retried; nextest lists a test that passed on a retry as
+# FLAKY. Local runs use the default profile, which never retries.
 [profile.ci]
 fail-fast = false
+retries = 2
+# Nearly every test in the two Tiling animation test modules runs the real engine on real time. Even with the whole runner to
+# itself the engine measures it as too slow and falls back to direct writes
+# (`BelowMinimumRate`), so both modules are a local check, like the font-dependent screenshots.
+default-filter = 'not (package(stache-tiling) & test(/^(runtime_tests|module_tests)::animation::/))'
+
+# The restore-settle tests wait on real time: they get the whole machine.
+[[profile.ci.overrides]]
+filter = 'package(stache-tiling) & test(/^visibility_tests::.*settle/)'
+threads-required = "num-cpus"

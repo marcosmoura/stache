@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Subcommand};
-use stache_sdk::config::{PathReport, PathState, inspect_paths, stale_jsonc_hint};
+use stache_sdk::config::{
+    PathReport, PathState, TrustWarning, inspect_catalog_trust, inspect_paths, stale_jsonc_hint,
+};
 use stache_sdk::ipc::{CoreFileState, CoreStatus, IO_TIMEOUT, IpcClient, RetryPolicy};
 use stache_sdk::{ConfigCatalog, ConfigPaths};
 
@@ -127,17 +129,20 @@ fn path<W: Write, E: Write>(
     let report = inspect_paths(catalog, paths);
     let stale = paths.stale_jsonc_files(catalog.ids());
     let legacy = paths.legacy_config_hint(&environment.config, catalog.ids());
+    let trust = inspect_catalog_trust(catalog, paths);
     if let Some(status) = remote_status(environment)
         && status.directory == report.directory
     {
         render_core_status(&status, out, err);
         render_stale_hints(&stale, out);
         render_legacy_hint(legacy.as_deref(), out);
+        render_trust_warnings(&trust, out);
         return ExitCode::SUCCESS;
     }
     render_path_report(&report, out);
     render_stale_hints(&stale, out);
     render_legacy_hint(legacy.as_deref(), out);
+    render_trust_warnings(&trust, out);
     ExitCode::SUCCESS
 }
 
@@ -202,6 +207,13 @@ fn render_stale_hints<W: Write>(stale: &[String], out: &mut W) {
 fn render_legacy_hint<W: Write>(hint: Option<&str>, out: &mut W) {
     if let Some(hint) = hint {
         let _ = writeln!(out, "{hint}");
+    }
+}
+
+/// Prints one line per configuration path someone else can write.
+fn render_trust_warnings<W: Write>(warnings: &[TrustWarning], out: &mut W) {
+    for warning in warnings {
+        let _ = writeln!(out, "{warning}");
     }
 }
 
@@ -295,6 +307,44 @@ mod tests {
         let (code, out, err) = execute(ConfigCommand::Path, &catalog(), &directory);
         assert_eq!(code, ExitCode::SUCCESS, "{err}");
         assert!(!out.contains("migrate"), "{out}");
+    }
+
+    #[test]
+    fn config_path_prints_trust_warnings_after_entries_and_notes() {
+        use std::os::unix::fs::PermissionsExt;
+        let chmod = |path: &Path, mode: u32| {
+            fs::set_permissions(path, fs::Permissions::from_mode(mode)).expect("chmod");
+        };
+        let root = tempfile::tempdir().expect("temp dir");
+        let directory = root.path().join("config");
+        fs::create_dir_all(&directory).expect("dir");
+        chmod(&directory, 0o755);
+        fs::write(directory.join("sample.toml"), "").expect("toml");
+        chmod(&directory.join("sample.toml"), 0o644);
+        fs::write(directory.join("global.jsonc"), "{}").expect("jsonc");
+        let (code, clean, err) = execute(ConfigCommand::Path, &catalog(), &directory);
+        assert_eq!(code, ExitCode::SUCCESS, "{err}");
+        assert!(!clean.contains("warning:"), "{clean}");
+
+        chmod(&directory, 0o775);
+        chmod(&directory.join("sample.toml"), 0o666);
+        let (code, out, err) = execute(ConfigCommand::Path, &catalog(), &directory);
+        assert_eq!(code, ExitCode::SUCCESS, "{err}");
+        let owner = stache_sdk::config::current_owner();
+        let tail = format!(
+            "note: global.jsonc is ignored; run `stache config migrate`\n\
+             warning: {} is group-writable (mode 0775, owner uid {owner}); Stache runs commands from its configuration, see docs/architecture/config.md#trust-model\n\
+             warning: {} is group-writable and world-writable (mode 0666, owner uid {owner}); Stache runs commands from its configuration, see docs/architecture/config.md#trust-model\n",
+            fs::canonicalize(&directory).expect("canonical").display(),
+            fs::canonicalize(directory.join("sample.toml")).expect("canonical").display()
+        );
+        assert!(out.ends_with(&tail), "{out}");
+        assert_eq!(
+            out.strip_suffix(&tail),
+            clean.strip_suffix("note: global.jsonc is ignored; run `stache config migrate`\n"),
+            "entries and markers are unchanged"
+        );
+        assert!(!out.contains('\u{1b}'), "no ANSI: {out}");
     }
 
     #[test]

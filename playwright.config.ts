@@ -21,6 +21,8 @@ export default defineConfig({
   use: {
     baseURL: `http://localhost:${PORT}`,
     trace: 'retain-on-failure',
+    // Independent of the machine's Reduce Motion; a spec may still emulate `reduce`.
+    reducedMotion: 'no-preference',
   },
   projects: [{ name: 'webkit', use: { ...devices['Desktop Safari'] } }],
   webServer: {

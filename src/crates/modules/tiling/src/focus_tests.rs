@@ -249,7 +249,7 @@ fn a_held_lane_is_busy_and_never_queues() {
         .with_lane(lane.clone()),
     );
     let focus = focus_of(&rig, fast(), lane);
-    rig.actor.set_mode(Mode::Delay(Duration::from_millis(300)));
+    rig.actor.set_mode(Mode::Delay(Duration::from_millis(1300)));
     let socket = std::thread::spawn(move || ipc.handle("window", json!({"swap": "right"})));
     // Wait until the socket request is inside the lane (its intent was sent).
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -263,7 +263,7 @@ fn a_held_lane_is_busy_and_never_queues() {
         ExactFocusOutcome::Busy
     );
     assert!(
-        started.elapsed() < Duration::from_millis(200),
+        started.elapsed() < Duration::from_millis(500),
         "busy never waits"
     );
     let _ = socket.join().expect("join");

@@ -344,6 +344,45 @@ fn config_path_reports_active_files_from_a_reachable_host() {
 }
 
 #[test]
+fn config_path_appends_trust_warnings_when_a_host_answers() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().expect("temp dir");
+    let environment = environment(root.path());
+    let directory = root.path().join(".config").join("stache");
+    std::fs::create_dir_all(&directory).expect("config dir");
+    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o777)).expect("chmod");
+    let status = CoreStatus {
+        directory: directory.clone(),
+        files: vec![CoreFileStatus {
+            file: "global.toml".to_owned(),
+            state: CoreFileState::Missing,
+            active: false,
+            diagnostic: None,
+            warnings: Vec::new(),
+        }],
+        access: None,
+    };
+    let _server = server(&environment, empty_reload(), status);
+    let (code, out, err) = run(
+        &["stache", "config", "path"],
+        &config_catalog(),
+        &CommandCatalog::new(),
+        &environment,
+        false,
+    );
+    assert_eq!(code, ExitCode::SUCCESS, "{err}");
+    let owner = stache_sdk::config::current_owner();
+    assert_eq!(
+        out,
+        format!(
+            "{0}\n  global.toml\nwarning: {1} is group-writable and world-writable (mode 0777, owner uid {owner}); Stache runs commands from its configuration, see docs/architecture/config.md#trust-model\n",
+            directory.display(),
+            std::fs::canonicalize(&directory).expect("canonical").display()
+        )
+    );
+}
+
+#[test]
 fn config_path_falls_back_to_offline_without_a_host() {
     let root = tempfile::tempdir().expect("temp dir");
     let environment = environment(root.path());

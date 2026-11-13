@@ -442,9 +442,10 @@ pub(super) fn generate_all(
     let finished = (Mutex::new(false), Condvar::new());
     let batch = thread::scope(|scope| {
         let worker = scope.spawn(|| {
-            // Fires on unwind too, so a panicking worker never leaves the TTY
-            // loop spinning. The join below turns the panic into a top-level
-            // failure (exit 1) after the cursor is restored; it is not resumed.
+            // Fires on unwind too, so a panicking worker never leaves the TTY loop
+            // spinning. The join below turns the panic into a top-level failure
+            // (exit 1) after the cursor is restored; it is not resumed.
+            // Unwind-enabled builds only: a release build aborts.
             let _done = FinishGuard(&finished);
             run_rounds(&tasks, effects, &app, &cancel, &counter)
         });

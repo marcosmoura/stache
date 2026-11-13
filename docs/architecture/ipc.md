@@ -408,7 +408,10 @@ and timed-out requests are closed or answered with a typed error; none panic.
 Finished handlers publish their thread ID to a bounded completion channel before
 releasing capacity. Reaping joins only those IDs, never an arbitrary active
 handler; retained handles remain within the connection limit.
-A drop guard releases capacity even on panic; handler panics become wire errors.
+In unwinding (debug and test) builds a drop guard releases capacity on a panic and
+a handler panic becomes a `Handler` wire error; the release build aborts the
+process instead, and the client sees the connection close
+([Release panics](sdk.md#release-panics)).
 Stop updates its predicate under the same mutex used by waiting acquisitions.
 Bounded shutdown joins the accept thread only when it and every handler permit
 finished inside the bound; otherwise it detaches them and still removes the owned
@@ -418,6 +421,13 @@ Zero connection/request bounds clamp to one; zero timeout is rejected before
 endpoint creation. Failed socket-mode or timeout setup closes that connection.
 These checks protect against foreign users and cooperating startup races, not
 arbitrary malicious same-UID path mutation between filesystem checks and use.
+
+Any process of the same user can call every socket method, including
+`tiling query windows` (which returns window titles) and the window and
+workspace mutations. There is deliberately no peer-credential check: the `0600`
+socket in a `0700` directory already excludes other users, and a same-user
+process could edit the configuration, which is code, anyway. See the
+[trust model](config.md#trust-model).
 
 ## Identity paths
 

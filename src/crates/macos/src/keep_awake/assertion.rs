@@ -639,7 +639,8 @@ impl AssertionOwner {
     ///
     /// # Panics
     /// If `before_rollback` panics, the rollback still runs before the panic
-    /// resumes, so unwinding cannot strand created IDs.
+    /// resumes, so unwinding cannot strand created IDs. A release build aborts
+    /// instead, and the kernel releases the assertions at process exit.
     pub fn acquire_with_rollback(
         &self,
         request: &AssertionRequest,
@@ -772,8 +773,8 @@ impl AssertionOwner {
     ///
     /// An empty prefix releases nothing, so the caller has nothing to publish
     /// and the callback is dropped without being called. A panic from the
-    /// callback is contained so the rollback still runs; the panic resumes only
-    /// afterwards.
+    /// callback is contained (unwind-enabled builds only; release aborts) so
+    /// the rollback still runs; the panic resumes only afterwards.
     fn rollback_after_hook<F: FnOnce()>(
         &self,
         generation: u64,

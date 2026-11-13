@@ -360,7 +360,7 @@ describe('Spaces motion', () => {
           expect(document.querySelectorAll('[data-highlight]')).toHaveLength(1);
           expect(highlight('coding')!.style.transform).toMatch(/^(none|)$/);
         },
-        { timeout: 2000 },
+        { timeout: 5000 },
       );
     } finally {
       frames.stop();
@@ -378,7 +378,7 @@ describe('Spaces motion', () => {
     const apps = [app('1', 'G'.repeat(60)), app('2', 'A rather long application name'.repeat(2))];
     const { setView } = await renderStrip(tilingStrip({ apps, focusedApp: apps[0] }));
 
-    await vi.waitFor(() => expect(labelOf('1')?.style.width).toBe('auto'), { timeout: 2000 });
+    await vi.waitFor(() => expect(labelOf('1')?.style.width).toBe('auto'), { timeout: 5000 });
 
     const reveal = recordFrames(() => {
       const label = labelOf('2');
@@ -393,7 +393,7 @@ describe('Spaces motion', () => {
           expect(labelOf('2')!.style.width).toBe('auto');
           expect(labelOf('1')).toBeNull();
         },
-        { timeout: 2000 },
+        { timeout: 5000 },
       );
     } finally {
       reveal.stop();
@@ -413,7 +413,7 @@ describe('Spaces motion', () => {
       setView({
         tiling: tilingStrip({ apps: [...apps, app('3', 'Safari')], focusedApp: apps[1] }),
       });
-      await vi.waitFor(() => expect(appButtons()[2]?.style.width).toBe('auto'), { timeout: 2000 });
+      await vi.waitFor(() => expect(appButtons()[2]?.style.width).toBe('auto'), { timeout: 5000 });
     } finally {
       entering.stop();
     }
@@ -427,7 +427,7 @@ describe('Spaces motion', () => {
 
     try {
       setView({ tiling: tilingStrip({ apps: [apps[1]!], focusedApp: apps[1] }) });
-      await vi.waitFor(() => expect(appKeys()).toEqual(['2']), { timeout: 2000 });
+      await vi.waitFor(() => expect(appKeys()).toEqual(['2']), { timeout: 5000 });
     } finally {
       leaving.stop();
     }

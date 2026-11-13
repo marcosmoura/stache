@@ -37,7 +37,8 @@ pub(super) struct ReplyGuard(Option<FrameCallback>);
 impl ReplyGuard {
     pub(super) fn new(callback: FrameCallback) -> Self { Self(Some(callback)) }
 
-    /// Answers once. A panicking callback is contained.
+    /// Answers once. A panicking callback is contained (unwind-enabled builds only; release
+    /// aborts).
     pub(super) fn answer(mut self, reply: FrameReply) {
         if let Some(callback) = self.0.take() {
             let _ = catch_unwind(AssertUnwindSafe(|| callback(reply)));

@@ -2799,8 +2799,10 @@ mod tests {
         teardown.request(TeardownCause::Request, None);
         let deadline = teardown.deadline().expect("deadline");
         assert!(teardown.wait_for_terminal(LIMIT));
+        // The sink stays blocked until the end of the test, so any bound well
+        // under `LIMIT` proves the point; 2 s leaves room for a loaded machine.
         assert!(
-            requested.elapsed() < Duration::from_millis(200),
+            requested.elapsed() < Duration::from_secs(2),
             "a blocked sink must not delay the terminal action"
         );
         assert_eq!(teardown.delivery(), RecordDelivery::Unavailable);

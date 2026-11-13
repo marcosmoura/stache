@@ -4740,7 +4740,7 @@ fn the_hud_owner_release_never_waits_on_a_settle_holding_the_retained_lock() {
     let started = Instant::now();
     let answer = owner.release();
     assert!(
-        started.elapsed() < Duration::from_millis(500),
+        started.elapsed() < Duration::from_secs(1),
         "release waited on the retained lock: {:?}",
         started.elapsed()
     );

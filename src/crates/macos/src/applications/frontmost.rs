@@ -276,9 +276,10 @@ pub(super) fn preflight_on_main(
 /// Change notifications for a host that republishes frontmost state elsewhere.
 ///
 /// Registered through [`ApplicationObservation::watch_frontmost_observed`].
-/// Both callbacks are contained: a panic is caught and never reaches the
-/// activation sink or the main refresh. Neither runs while the publication cell
-/// is locked, so an implementation may call [`FrontmostWatch::snapshot`].
+/// Both callbacks are contained (unwind-enabled builds only; release aborts): a
+/// panic is caught and never reaches the activation sink or the main refresh.
+/// Neither runs while the publication cell is locked, so an implementation may
+/// call [`FrontmostWatch::snapshot`].
 pub trait FrontmostListener: Send + Sync {
     /// An activation was ingested and the epoch advanced to `epoch`; the
     /// previous confirmation is already stale.
@@ -388,7 +389,7 @@ impl FrontmostShared {
     }
 }
 
-/// Runs a listener callback, containing a panic.
+/// Runs a listener callback, containing a panic (unwind-enabled builds only; release aborts).
 fn contain(call: impl FnOnce()) {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(call));
 }
@@ -450,7 +451,8 @@ pub struct RefreshTicket {
 }
 
 impl RefreshTicket {
-    /// Runs the refresh on the main thread. Panics are contained.
+    /// Runs the refresh on the main thread. Panics are contained (unwind-enabled builds only;
+    /// release aborts).
     pub fn run(mut self) {
         self.armed = false;
         self.shared.refresh_pending.store(false, Ordering::SeqCst);

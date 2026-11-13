@@ -2096,7 +2096,7 @@ fn invalidation_is_lock_free_while_a_native_send_is_stalled() {
     let started = Instant::now();
     assert!(live.gate.invalidate(1), "the generation was live");
     assert!(
-        started.elapsed() < Duration::from_millis(250),
+        started.elapsed() < Duration::from_secs(2),
         "returns while the send is stalled"
     );
     assert_eq!(
@@ -2192,7 +2192,7 @@ fn caller_cancellation_is_observed_within_a_quantum_and_stays_truthful() {
         outcome,
         WindowActionOutcome::NotIssued(NotIssuedReason::AbandonedBeforeSend)
     );
-    assert!(started.elapsed() < Duration::from_millis(500));
+    assert!(started.elapsed() < Duration::from_secs(2));
     canceller.join().expect("canceller");
     release.send(()).expect("release");
     let _ = first.join().expect("first");

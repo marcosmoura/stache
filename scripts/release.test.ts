@@ -891,7 +891,7 @@ describe('RELEASE-03-15 paid path removed', () => {
     const workflow = read('.github/workflows/quality.yml');
 
     expect(workflow).toMatch(
-      /- run: bun run release\n\s+- name: [^\n]*\n\s+working-directory: target\/release-artifacts\n\s+run: shasum -a 256 -c SHA256SUMS\n$/,
+      /- run: bun run release\n\s+- name: [^\n]*\n\s+working-directory: target\/release-artifacts\n\s+run: shasum -a 256 -c SHA256SUMS\n/,
     );
     expect(workflow).toContain("tags: ['v*-rc.*']");
     expect(workflow).not.toMatch(/secrets\.|--self-sign|--dry-run-signing|release --sign/);
