@@ -27,6 +27,27 @@ anything. This part cannot be `done`, and
 | 3. Rename    | One commit changes every surface and adds the dev overlay. Refusal begins. | Stage 2 recorded in this file |
 | 4. Rebase    | In-flight rewrite branches pick up the overlay when they rebase.           | None                          |
 
+## Stage 2 record
+
+2026-11-13: the owner approved the migration and the legacy removal in the orchestrator session
+("I approve the legacy removal", then "Do it now. No need to backup anything! You can do a full
+switch!"). Performed the same day on the release machine, at the owner's instruction:
+
+- Legacy `Stache` was not running (no application with `com.marcosmoura.stache` in `lsappinfo`).
+- `/Applications/Stache.app` (`com.marcosmoura.stache`, 0.25.0, built 2026-09-28) was moved to the
+  Trash as `Stache-legacy-0.25.0.app`.
+- `cargo uninstall stache` removed the legacy CLI (`stache v0.25.0`, installed from the old
+  `app/native` tree) from `~/.cargo/bin`.
+- No config backup was made, by the owner's choice. `~/.config/stache` was not touched; it already
+  held `global.toml` and the per-module `.toml` files beside the original `config.jsonc`.
+- Afterwards: no `Stache*.app` in `/Applications`, no `_legacy/target`, and `mdfind` for
+  `com.marcosmoura.stache` returns nothing. `mdfind` also returned nothing before the removal
+  (Spotlight was reindexing after a restart), so the direct listing is the stronger evidence.
+- Left in place: an inactive `mise` shim named `stache`, and the legacy cache at
+  `~/Library/Caches/com.marcosmoura.stache`, which becomes the release cache path.
+
+Stage 3 may proceed.
+
 ## Identity surfaces
 
 The inventory, refreshed 2026-11-13. It names areas, not every file: Stage 1 derives the
@@ -185,7 +206,7 @@ other of the two constants. Compare identifiers exactly, and use the bundle URL 
       failure warns and continues. Test: same harness.
 - [x] `RELEASE-04-06` No code path identifies or terminates a process by the name `stache`, and no
       `killall` or `pkill` appears in `scripts/`, `package.json` or `.github/`. Test: `app/tests/identity.rs`.
-- [ ] `RELEASE-04-07` Before Stage 3, this file records the owner's migration and removal approval
+- [x] `RELEASE-04-07` Before Stage 3, this file records the owner's migration and removal approval
       with its date, and an `mdfind` for `com.marcosmoura.stache` on the release machine shows no
       remaining legacy bundle. Gated manual check.
 - [ ] `RELEASE-04-08` After Stage 3, resolved cache, runtime and socket paths are exact for both
@@ -219,8 +240,7 @@ other of the two constants. Compare identifiers exactly, and use the bundle URL 
       the selection. A debug test run sees the development constant. Test: `sdk/src/paths.rs` and a
       source check in `app/tests/identity.rs`.
 
-Status 2026-11-13: Stage 1 is implemented. `IDENTITY` is still the development identity and
-`collision::POLICY` is warn-only. Everything from `RELEASE-04-04` and `04-07` on waits for Stage 2.
+Status 2026-11-13: Stage 1 is implemented and Stage 2 is recorded above. Stage 3 is next.
 
 ## Tests
 

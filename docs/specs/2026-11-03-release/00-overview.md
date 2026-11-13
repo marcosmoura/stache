@@ -159,6 +159,14 @@ Decisions from the 2026-11-13 revision:
     `feat/release` unmerged. Parts 03, 04 and 05 stay `in-progress` and Part 06 `draft`.
 19. **`feat/release` starts from `main`, independent of `fix/security-hardening`.**
     Whichever merges second resolves the overlap in `quality.yml` and this spec.
+20. **Legacy removal was approved and performed on 2026-11-13**, superseding the Part 04 half of
+    Decision 18; see the [Stage 2 record](04-identity-switch.md#stage-2-record). Stage 3 follows.
+    Part 03 stays blocked on credentials.
+21. **The owner installs an ad-hoc build of the renamed app in `/Applications` for their own use**
+    before credentials exist. This is a local owner install from `bun run release`, done by hand
+    at the owner's request; it is not a release, is not distributable, and proves none of the
+    signed-artifact criteria. Ad-hoc signatures change with every build, so macOS privacy grants
+    such as Accessibility must be given again after each reinstall.
 
 ## Blocked gates and merge consequence
 
