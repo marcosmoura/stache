@@ -48,3 +48,8 @@ jobs:
       - name: Verify release checksums
         working-directory: target/release-artifacts
         run: shasum -a 256 -c SHA256SUMS
+      - name: Signing dry run (identity "-", hardened runtime)
+        run: bun run release --dry-run-signing
+      - name: Verify dry-run checksums
+        working-directory: target/release-artifacts
+        run: shasum -a 256 -c SHA256SUMS

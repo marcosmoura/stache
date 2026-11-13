@@ -955,7 +955,11 @@ Never run legacy and new device-changing automation together.
 `bun run release` builds the release bundle, verifies it (contents, `arm64`, system-only
 linkage, the vendored `media-control` set, merged `Info.plist`), packages an ad-hoc DMG and zip,
 mounts and expands them to check the app and its signature, and writes `SHA256SUMS` and
-`release.json` to `target/release-artifacts/`. See [release](release.md).
+`release.json` to `target/release-artifacts/`. `bun run release --dry-run-signing` runs the
+Part 03 signing order with identity `-` and hardened runtime, skipping notarization and stapling.
+`scripts/release.test.ts` covers both, the `--sign` refusals and fail-closed paths and the
+`release.yml` gates with fake runners; nothing signs with a real identity or contacts Apple.
+See [release](release.md).
 
 ## Release performance comparison
 

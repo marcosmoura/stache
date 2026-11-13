@@ -193,7 +193,7 @@ a claim made by this spec.
 | [01](01-build-metadata.md)            | One version, `Info.plist`, icon rule, bundle-content check.               | done        |
 | [02](02-release-pipeline.md)          | Artifacts, ad-hoc dry run, exact-SHA candidate Quality trigger.           | done        |
 | [03](03-signing-notarization.md)      | Final Developer ID re-sign, notarization, stapling, CI gate. **Blocked.** | in-progress |
-| [04](04-identity-switch.md)           | Staged switch, dev isolation, detectable sibling warnings. **Gated.**     | draft       |
+| [04](04-identity-switch.md)           | Staged switch, dev isolation, detectable sibling warnings. **Gated.**     | in-progress |
 | [05](05-install-upgrade-uninstall.md) | Executable migration/removal, exclusive CLI routes, local test casks.     | draft       |
 | [06](06-release-verification.md)      | Private candidate gates; separate public operational checklist.           | draft       |
 

@@ -1,0 +1,93 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  release:
+    name: Signed draft release (macOS 26)
+    runs-on: macos-26
+    environment: release
+    env:
+      HUSKY: '0'
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+      - name: Retained nightly toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - run: bun install --frozen-lockfile
+      - name: Tag version and Quality gate for the exact SHA
+        # Exit 0 pass, 2 pending (wait, up to 60 minutes), anything else blocks.
+        run: |
+          for attempt in $(seq 1 60); do
+            gh run list --repo "$GITHUB_REPOSITORY" --workflow quality.yml --commit "$GITHUB_SHA" \
+              --limit 50 --json databaseId,headSha,status,conclusion,createdAt > "$RUNNER_TEMP/quality-runs.json"
+            status=0
+            bun scripts/release/gate.ts "$TAG" "$GITHUB_SHA" "$RUNNER_TEMP/quality-runs.json" || status=$?
+            if [ "$status" -ne 2 ]; then exit "$status"; fi
+            sleep 60
+          done
+          echo "Quality is still pending for $GITHUB_SHA" >&2
+          exit 1
+      - name: Sign, notarize and staple
+        env:
+          DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+          NOTARY_API_KEY_P8: ${{ secrets.NOTARY_API_KEY_P8 }}
+          STACHE_SIGNING_IDENTITY: ${{ secrets.STACHE_SIGNING_IDENTITY }}
+          STACHE_TEAM_ID: ${{ secrets.STACHE_TEAM_ID }}
+          STACHE_NOTARY_KEY_ID: ${{ secrets.STACHE_NOTARY_KEY_ID }}
+          STACHE_NOTARY_ISSUER: ${{ secrets.STACHE_NOTARY_ISSUER }}
+        run: |
+          set +x
+          umask 077
+          keychain_password="$(uuidgen)"
+          security create-keychain -p "$keychain_password" "$RUNNER_TEMP/stache-release.keychain-db"
+          security set-keychain-settings -lut 3600 "$RUNNER_TEMP/stache-release.keychain-db"
+          security unlock-keychain -p "$keychain_password" "$RUNNER_TEMP/stache-release.keychain-db"
+          printf '%s' "$DEVELOPER_ID_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/developer-id.p12"
+          security import "$RUNNER_TEMP/developer-id.p12" -k "$RUNNER_TEMP/stache-release.keychain-db" \
+            -P "$DEVELOPER_ID_P12_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/developer-id.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$RUNNER_TEMP/stache-release.keychain-db" > /dev/null
+          security list-keychains -d user -s "$RUNNER_TEMP/stache-release.keychain-db" $(security list-keychains -d user | tr -d '"')
+          printf '%s' "$NOTARY_API_KEY_P8" > "$RUNNER_TEMP/stache-notary-key.p8"
+          STACHE_NOTARY_KEY_PATH="$RUNNER_TEMP/stache-notary-key.p8" bun run release --sign
+      - name: Remove temporary keychain and key file
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/stache-release.keychain-db" 2> /dev/null || true
+          rm -f "$RUNNER_TEMP/stache-notary-key.p8" "$RUNNER_TEMP/developer-id.p12"
+      - name: Verify release checksums
+        working-directory: target/release-artifacts
+        run: shasum -a 256 -c SHA256SUMS
+      - name: Create draft release
+        working-directory: target/release-artifacts
+        run: |
+          prerelease=()
+          case "$TAG" in *-rc.*) prerelease=(--prerelease) ;; esac
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft "${prerelease[@]}" \
+            --title "$TAG" --verify-tag *.dmg *.zip SHA256SUMS release.json
+      - name: Remove a partial draft
+        if: failure()
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2> /dev/null | grep -qx true; then
+            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes
+          fi
