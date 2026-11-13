@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 02 — Bar shell and shared components
@@ -24,8 +24,8 @@ Everything the widgets share: the Bar's root rules and slide-away, the `BarItem`
 
 ### Components
 
-- `components/BarItem/`: the rounded item. Props: `onClick` (optional; with it the item is a `button`, without it a `div`), `active` (optional), `label` (accessible name for icon-only items), `children`, restricted `style`. Rest and hover looks, hover and active transitions, the fade-in on mount (opacity only) and full Bar height follow today's item. Keyboard focus is visible. Disabled-motion and reduced-motion behavior come from the Motion provider.
-- `components/ScrollingLabel/`: shows text in a width-limited box; when the text overflows, it scrolls horizontally back and forth and pauses at each end, as today; when it fits, it is static. It re-measures when the text or the box width changes, and does not animate under reduced motion (the text is truncated with an ellipsis instead).
+- `windows/Bar/components/BarItem/` (moved there by the user on 2026-11-11): the rounded item. Props: `onClick` (optional; with it the item is a `button`, without it a `div`), `active` (optional), `label` (accessible name for icon-only items), `children`, restricted `style`. Rest and hover looks, hover and active transitions, the fade-in on mount (opacity only) and full Bar height follow today's item. Keyboard focus is visible. Disabled-motion and reduced-motion behavior come from the Motion provider.
+- `components/ScrollingLabel/`: shows text in a width-limited box; when the text overflows, it runs as a one-way marquee with a start pause and faded edges, as today; when it fits, it is static. It re-measures when the text or the box width changes, and does not animate under reduced motion (the text is truncated with an ellipsis instead).
 - `hooks/useMediaQuery` (subscribes with `useSyncExternalStore`) and a `compact` media query const for `width <= 2036px`.
 - A widget-level error fallback is already in `WidgetSlot`; add nothing visible for errors.
 
@@ -35,14 +35,14 @@ Everything the widgets share: the Bar's root rules and slide-away, the `BarItem`
 
 ## Acceptance criteria
 
-- [ ] MIG-02-01: Every new token resolves to today's Mocha value in dark and its Latte counterpart in light.
-- [ ] MIG-02-02: The Bar slides away only for `available` with `menu.state = "visible"`, returns for every other state, and does both instantly under reduced motion.
-- [ ] MIG-02-03: `BarItem` renders a button only when clickable, shows rest, hover, active and focus-visible looks from tokens in both themes, and fades in once on mount.
-- [ ] MIG-02-04: `ScrollingLabel` is static when the text fits, scrolls when it overflows, re-measures on text and width changes, and truncates under reduced motion.
-- [ ] MIG-02-05: Each mutation sends exactly the typed request, ignores a second click while pending, logs non-success outcomes and changes no DOM.
-- [ ] MIG-02-06: The context menu does not open in the Bar window; text cannot be selected.
-- [ ] MIG-02-07: `docs/architecture/ui.md` documents `BarItem`, `ScrollingLabel`, compact mode and the command mutations; `docs/features/bar.md` restores the shell and click-action sections as shipped.
-- [ ] MIG-02-08: `bun run lint`, `bun run format:check` and `bun run test` pass.
+- [x] MIG-02-01: Every new token resolves to today's Mocha value in dark and its Latte counterpart in light.
+- [x] MIG-02-02: The Bar slides away only for `available` with `menu.state = "visible"`, returns for every other state, and does both instantly under reduced motion.
+- [x] MIG-02-03: `BarItem` renders a button only when clickable, shows rest, hover, active and focus-visible looks from tokens in both themes, and fades in once on mount.
+- [x] MIG-02-04: `ScrollingLabel` is static when the text fits, scrolls when it overflows, re-measures on text and width changes, and truncates under reduced motion.
+- [x] MIG-02-05: Each mutation sends exactly the typed request, ignores a second click while pending, logs non-success outcomes and changes no DOM.
+- [x] MIG-02-06: The context menu does not open in the Bar window; text cannot be selected.
+- [x] MIG-02-07: `docs/architecture/ui.md` documents `BarItem`, `ScrollingLabel`, compact mode and the command mutations; `docs/features/bar.md` restores the shell and click-action sections as shipped.
+- [x] MIG-02-08: `bun run lint`, `bun run format:check` and `bun run test` pass.
 
 ## Tests
 
@@ -56,3 +56,6 @@ Everything the widgets share: the Bar's root rules and slide-away, the `BarItem`
 ## Notes
 
 - Read today's values from `main` (`Bar.styles.tsx`, `Bar.root.css`, the Surface, Button, Stack and ScrollingLabel styles, `sdk/tokens.ts`) as numbers to reproduce, not as code to port.
+- Outcome: a `defineConsts` media query failed as a style key in dev and tests because the StyleX plugin could serve CSS before the token file was transformed. `server.warmup` for `theme/*.stylex.ts` fixes it, so style files can use `[media.compact]`; the slide-away stays on Motion.
+- Outcome: `ScrollingLabel` was first built as back-and-forth scrolling, which this part wrongly described as today's behavior. It was rebuilt as today's one-way marquee (user decision 2026-11-11).
+- Outcome (user decision 2026-11-11): the marquee no longer waits for the whole label to leave. The label enters from the right with no start pause and a copy follows it at a gap of 50% of the box width, looping seamlessly.

@@ -205,7 +205,7 @@ independent of disk validity; `config path` sends host diagnostics to stderr.
 existing `ConfigStore`; the store still owns last-good state, so one rejected
 file never blocks the others. The desktop `core.reload` wrapper asks the host
 worker to publish the resulting module status once, so a CLI reload updates the
-tray and test window without a restart.
+tray and popover without a restart.
 
 ### Tiling methods
 
@@ -222,7 +222,7 @@ unknown fields and is decoded once; every `Response::Ok.data` is encoded once.
   `id` (string)`,name,screenName,layout,isVisible,isFocused,windowCount`, windows
   `id,pid,appId,appName,title,workspace,frame,isMinimized,isFullscreen,isFloating,isFocused`
   and apps `pid,name,bundleId,isHidden`. `status` takes no filter and answers one object
-  (`phase,healthy,faults,layoutActive,configRevision,planSequence,apps,trackedApps,windows,failedApps,truncatedApps,unconfirmedApps,inflightApps,noFrame,hiddenApps,lastIntent,trackedWindows,excludedWindows,frameAttempts,enumerationFailures`),
+  (`phase,healthy,faults,layoutActive,configRevision,planSequence,apps,trackedApps,windows,failedApps,truncatedApps,unconfirmedApps,inflightApps,noFrame,hiddenApps,lastIntent,trackedWindows,excludedWindows,frameAttempts,enumerationFailures,animationFallbacks`),
   also while the runtime is initializing. That declaration order is the frozen JSON
   key order the CLI renders. A disabled, paused, pending-cleanup or not yet
   initialized module answers a typed error, never an empty list.
@@ -237,6 +237,8 @@ unknown fields and is decoded once; every `Response::Ok.data` is encoded once.
   that pair executes, so earlier actions may already have run. Focus accepts
   directions case-insensitively (`prev` aliases `previous`) or a numeric window id
   resolved once to the exact current window; swap and `layout` are exact.
+  Focusing an inactive workspace (no window and no way to show it empty, see
+  [Tiling](../features/tiling.md)) fails with `Workspace is inactive`.
 - `pause`/`resume` take `{}` and wait for the registry acknowledgement.
   They are single-flight: while another pause or resume is still running (including
   one abandoned after its deadline) the request is not started and answers a typed
@@ -294,7 +296,7 @@ app are unaffected.
 ## Bar data bridge (Tauri IPC)
 
 Not the control socket: the Bar webview talks to the host through one generated
-command and one generated event (`src/ui/src/sdk/bindings.gen.ts`).
+command and one generated event (`src/ui/src/ipc/bindings.gen.ts`).
 
 - `bar_snapshot()` returns `BarSnapshotOutcome`, tagged by `kind`: `available`
   (`view`: `generation`, `sequence`, `configRevision` as decimal strings, `panel`,
@@ -343,7 +345,7 @@ command and one generated event (`src/ui/src/sdk/bindings.gen.ts`).
   Bar strip and returns `BarTilingOutcome` (tagged by `kind`: `applied`, `noOp`,
   `stale`, `unavailable` (`reason`: `barNotRunning`, `notRunning`, `disabled`,
   `paused`, `cleanupPending`, `shuttingDown`, `unhealthy`), `busy`, `uncertain`,
-  `refused`, `failed`, `invalid`, `unauthorized`). `request` is
+  `refused` (also for an inactive workspace), `failed`, `invalid`, `unauthorized`). `request` is
   `{ generation, sequence, action }` with unknown fields rejected; `action` is the
   closed enum `focusWorkspace { name } | focusWindow { window }` (an opaque
   decimal key from `BarView.tiling`). The actual calling window must be the live Bar

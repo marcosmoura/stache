@@ -114,6 +114,10 @@ impl FrameControl {
         let _ = self.borders.set(borders);
     }
 
+    /// The native borders' frame seam, if composed.
+    #[must_use]
+    pub fn border_frames(&self) -> Option<Arc<dyn BorderFrames>> { self.borders.get().cloned() }
+
     /// Reports one frame to the borders, if any are composed. Never blocks.
     pub fn report_border(
         &self,
@@ -273,14 +277,9 @@ impl FrameControl {
             Ok(request) => request,
             Err(outcome) => return reply(outcome),
         };
-        // The border follows the target at once and is corrected by the
-        // readback in the reply; a write that is inert reported nothing above.
-        self.report_border(
-            job.window,
-            job.plan_sequence,
-            job.target,
-            BorderFrameKind::Target,
-        );
+        // The border moves when the write answers (the frame read back, else
+        // the target of an applied write), never at dispatch: it lands with the
+        // window, not before it. A write that is inert reports nothing.
         let reply = {
             let borders = self.borders.get().cloned();
             let (window, plan_sequence, target) = (job.window, job.plan_sequence, job.target);

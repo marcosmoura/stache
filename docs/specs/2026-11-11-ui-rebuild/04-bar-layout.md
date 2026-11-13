@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 04 — Bar layout mechanism
@@ -44,7 +44,7 @@ status: draft
 
 ### Layout engine and Bar window
 
-- `windows/Bar/` reads the Bar snapshot through `barFeed` and selects `layout`, `height` and `padding`.
+- `windows/Bar/` reads the Bar snapshot through `barFeed` and selects `layout` and `height`. `padding` is not used by the UI: the host already insets the panel frame by it (decided during implementation).
 - It renders three zone containers (start aligned to the leading edge, center centered on the Bar regardless of the other zones' widths, end aligned to the trailing edge) and, per item, a `WidgetSlot` keyed by `id`.
 - `WidgetSlot` resolves the definition and renders the lazy widget inside its own `Suspense` and error boundary: one widget that throws or fails to load shows nothing in its slot and leaves the others working. The failure is logged once.
 - A kind with no registered definition renders nothing and leaves no empty element. In development it warns once per kind.
@@ -55,15 +55,15 @@ status: draft
 
 ## Acceptance criteria
 
-- [ ] UI-04-01: Decode, defaults, normalization and every rejection listed above are covered, with field paths; schema, template, bindings and migration agree; `bun run check:generated` passes.
-- [ ] UI-04-02: An accepted layout reload publishes a `BarView` with the new layout and a greater sequence; a rejected reload publishes no layout change.
-- [ ] UI-04-03: With fixture widgets registered, the Bar renders each zone's items in configured order, and the center zone stays centered when the start and end zones have different widths.
-- [ ] UI-04-04: After a layout change, an item with a surviving `id` keeps its state in its new position; removed items unmount; added items mount.
-- [ ] UI-04-05: A widget that throws while rendering and a widget whose `load` rejects each leave an empty slot and do not affect the other items.
-- [ ] UI-04-06: With the production registry, the default layout renders three empty zones, no error and no widget chunk request.
-- [ ] UI-04-07: The repeated-widget case renders both instances with distinct ids.
-- [ ] UI-04-08: `docs/features/bar.md`, `docs/architecture/config.md`, `docs/architecture/ui.md` and `docs/roadmap.md` describe the layout keys, the widget contract, how to add a widget, and that the Bar has no widgets until the migration.
-- [ ] UI-04-09: `bun run lint`, `bun run format:check` and `bun run test` pass.
+- [x] UI-04-01: Decode, defaults, normalization and every rejection listed above are covered, with field paths; schema, template, bindings and migration agree; `bun run check:generated` passes.
+- [x] UI-04-02: An accepted layout reload publishes a `BarView` with the new layout and a greater sequence; a rejected reload publishes no layout change.
+- [x] UI-04-03: With fixture widgets registered, the Bar renders each zone's items in configured order, and the center zone stays centered when the start and end zones have different widths.
+- [x] UI-04-04: After a layout change, an item with a surviving `id` keeps its state in its new position; removed items unmount; added items mount.
+- [x] UI-04-05: A widget that throws while rendering and a widget whose `load` rejects each leave an empty slot and do not affect the other items.
+- [x] UI-04-06: With the production registry, the default layout renders three empty zones, no error and no widget chunk request.
+- [x] UI-04-07: The repeated-widget case renders both instances with distinct ids.
+- [x] UI-04-08: `docs/features/bar.md`, `docs/architecture/config.md`, `docs/architecture/ui.md` and `docs/roadmap.md` describe the layout keys, the widget contract, how to add a widget, and that the Bar has no widgets until the migration.
+- [x] UI-04-09: `bun run lint`, `bun run format:check` and `bun run test` pass.
 
 ## Tests
 

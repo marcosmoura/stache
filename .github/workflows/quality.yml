@@ -44,11 +44,7 @@ jobs:
         run: bun run check:generated
       - run: bun run lint
       - run: bun run format:check
-      # The Bar visual-parity gate (`test:parity`) is local only: it needs the system-installed
-      # Maple Mono NF font and compares against reference renders from the development machine.
-      - run: bun run test:ui
-      - run: bun run test:scripts
-      - run: bun run test:native
+      - run: bun run test
       - run: bun run test:ui:coverage
       - name: Audit new locks only
         run: |

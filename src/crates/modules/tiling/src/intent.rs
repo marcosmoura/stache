@@ -214,6 +214,9 @@ pub enum IntentNoOp {
 pub enum IntentRejection {
     /// No workspace has that name.
     UnknownWorkspace,
+    /// The workspace is inactive: it has no window and cannot be shown as an
+    /// empty desktop.
+    InactiveWorkspace,
     /// The token names no tracked window.
     UnknownWindow,
     /// No display matches.

@@ -11,8 +11,9 @@ bun install --frozen-lockfile
 node_modules/.bin/playwright install webkit
 bun run lint
 bun run format:check
-bun run test
+bun run test            # test:ui + test:e2e + test:scripts + test:native
 bun run test:ui:coverage
+bun run test:e2e        # Playwright scenarios only
 bun run build
 bun run generate-schema
 bun run generate-schema -- --check
@@ -94,21 +95,21 @@ Bar's backend (part 03: `stache-bar` `tests.rs`, `window.rs` and `stache-app` `b
 
 Bar slice (c), the menu bar and the data bridge, is fake-backed as well. `stache_macos::menu_bar` tests (`menu_bar/tests.rs`) cover the pure resolution (either signal visible wins, undecided falls back to the layer-25 list then the prior then unknown, the legacy heuristic, the pointer row needing the right screen), when polling is needed, inline versus a never-draining main queue with a bounded budget, pure ordered hints, a late notification after stop and removal failure. `stache-bar` `menubar.rs` tests the pure `next_wake` schedule and observation dedupe; `tests.rs` runs the real runtime over `FakeMenuBarBackend`: no observer, worker or sample without a panel (disabled, paused, zero size, no primary), subscribe before the first sample, 20 rapid signal toggles with a constant `height + padding` reservation and no registry update, a dropped signal reconciled by a poll only while auto-hide needs it, the bounded poll cadence (about 8 samples in 400 ms at 50 ms, zero once auto-hide is off), burst coalescing, a deduplicated unknown that recovers, a failed registration degrading to a labelled poll, a stuck removal `cleanupPending` and retried with late callbacks ignored, zero-size leave and re-enter, and a stalled main queue bounding `end`. `stache-app` `bar_tests.rs` covers the bridge: authorization (live label, test/access/shell/forged/stale labels), typed `unavailable` reasons per state and on registry revocation, a stalled main queue or never-loading page never blocking `bar_snapshot` (under 200 ms), DTO serde with exact strings above 2^53, the label shape and `sequence_is_newer` edge values, events with increasing sequences only to the Bar label, a failed emission and a coalescing overflow becoming `resnapshot`, shutdown during changes and before the subscription, an unattached bridge, and an end-to-end scenario (28/14 on two displays, menu toggles with increasing sequences while Tiling keeps a constant top 42, pause gives `unavailable` with zero observers and an idle bridge worker, resume recovers with a new generation). Auto-hide hiding and revealing the bar was observed live (part 04 run, macOS 27.0); which path delivered it (`NSMenu`/`NSEvent`/workspace notifications or the layer-25 window list) was not isolated.
 
-Bar part 05 slice (b), the fixed click actions, is fake-backed. `app/src/bar_actions_tests.rs` runs the real `ApplicationControl` over `FakeApplicationBackend` (one thread per job) and a scripted settings opener: the fixed target per action, inline and deferred completion, completion failure, missing app (`notInstalled`), rejected URL and failed open (`refused`), an issued open with no completion (`uncertainAfterIssuance`, issued once, no retry), an acknowledgement timeout before issuance (the abandoned job never sends) and after issuance (`block_next_open_after_issue`), a stop during preflight and before the native send (the permit refuses; no successor effects), a pane guard failing at the send, 100 rapid clicks while one is in flight all `busy`, and the exact serde wire forms with non-enum input rejected. `access.rs` tests the pane opener (guard at the send, rejected URL, never-started job `timedOutBeforeIssuance` and never sending late, send outliving the bound). `bar_tests.rs` adds end-to-end scenarios (bar.toml 28/14): a click on each component through the bridge reaches the fakes with the fixed target, typed `notInstalled`/`refused`, `unauthorized` for test/access/shell/forged/stale labels, `unavailable` while disabled, paused or failed, stopping mid-click sends nothing, and a hung adapter or stalled queue never blocks bridge reads (under 200 ms) or shutdown. `host_policy.rs` asserts the capability is exactly `allow-bar-snapshot`, `allow-bar-action`, `allow-bar-weather`, `core:event:allow-listen`, `core:event:allow-unlisten`. WebKit: `Bar.actions.test.tsx` mocks `invoke` and asserts each component calls `bar_action` with only its enum value and that no outcome or rejection changes the DOM; hover/active styles are covered unchanged by the parity gate. No test launches an application, opens a URL or touches `NSWorkspace`.
+Bar part 05 slice (b), the fixed click actions, is fake-backed. `app/src/bar_actions_tests.rs` runs the real `ApplicationControl` over `FakeApplicationBackend` (one thread per job) and a scripted settings opener: the fixed target per action, inline and deferred completion, completion failure, missing app (`notInstalled`), rejected URL and failed open (`refused`), an issued open with no completion (`uncertainAfterIssuance`, issued once, no retry), an acknowledgement timeout before issuance (the abandoned job never sends) and after issuance (`block_next_open_after_issue`), a stop during preflight and before the native send (the permit refuses; no successor effects), a pane guard failing at the send, 100 rapid clicks while one is in flight all `busy`, and the exact serde wire forms with non-enum input rejected. `access.rs` tests the pane opener (guard at the send, rejected URL, never-started job `timedOutBeforeIssuance` and never sending late, send outliving the bound). `bar_tests.rs` adds end-to-end scenarios (bar.toml 28/14): a click on each component through the bridge reaches the fakes with the fixed target, typed `notInstalled`/`refused`, `unauthorized` for test/access/shell/forged/stale labels, `unavailable` while disabled, paused or failed, stopping mid-click sends nothing, and a hung adapter or stalled queue never blocks bridge reads (under 200 ms) or shutdown. `host_policy.rs` asserts the capability is exactly `allow-bar-snapshot`, `allow-bar-action`, `allow-bar-weather`, `core:event:allow-listen`, `core:event:allow-unlisten`. The WebKit suites of the previous UI were deleted on `feat/ui-rebuild`. No test launches an application, opens a URL or touches `NSWorkspace`.
 
-Bar part 06 slice A, the weather location adapter, is fake-backed. `stache_macos::location` tests (`location/tests.rs`) cover the pure policy (authorization status to request/wait/proceed/fail with no re-request after a decided status, the temporary full accuracy conditions, `CLError` mapping, fix validation), coordinate redaction in `Debug`/`Display`, first-writer-wins completion, the generation gate dropping late events, `FakeLocationSource` recording the requested accuracy, and the real source stopping at `NoUsageDescription` in the test binary. The late-consent watcher is tested through the pure `ConsentWatch` state machine (timeout while awaiting keeps one watcher, a decision notifies once and ends it, cancel or a newer generation drops late decisions, never two managers) and `FakeLocationSource::{decide_consent, watcher_pending, watchers_created, watchers_cancelled, notifications}`; `stache-bar` weather tests assert the cache drop, a single `weatherEpoch` bump, a decision after stop bumping nothing, and the app `bar_tests.rs` scenarios assert the `BarChanged` with the bumped epoch, the located second `bar_weather`, and no event or manager after stop. The UI tests assert one refetch per epoch change, none for an unchanged epoch, and that an older in-flight answer cannot replace a newer one. No test constructs a `CLLocationManager`, prompts or reads the real location. Config tests cover `precise_location` decode, default, wrong type and migration, and `refresh_interval` default 20, the 5 and 1440 bounds, rejection of 4, 1441, 0, negatives, floats and strings at `weather.refresh_interval`, migration, schema minimum/maximum and the template line; service, bridge and `Weather.query.test.tsx` tests assert `refreshIntervalMinutes` reaches the answer, a reconfigure changes it and polling follows the configured minutes. `src/crates/app/Info.plist` is embedded in debug builds by `tauri-codegen` (check with `otool -s __TEXT __info_plist target/debug/stache`); `host_policy.rs` asserts `bundle.macOS.entitlements` points at `Entitlements.plist` holding only the location entitlement and that `Info.plist` has the usage string. The consent prompt only appears for a bundled `.app` (`bun run tauri build --debug --bundles app`, launched with `open`); the dev binary never prompts. Live consent checks need approval per run.
+Bar part 06 slice A, the weather location adapter, is fake-backed. `stache_macos::location` tests (`location/tests.rs`) cover the pure policy (authorization status to request/wait/proceed/fail with no re-request after a decided status, the temporary full accuracy conditions, `CLError` mapping, fix validation), coordinate redaction in `Debug`/`Display`, first-writer-wins completion, the generation gate dropping late events, `FakeLocationSource` recording the requested accuracy, and the real source stopping at `NoUsageDescription` in the test binary. The late-consent watcher is tested through the pure `ConsentWatch` state machine (timeout while awaiting keeps one watcher, a decision notifies once and ends it, cancel or a newer generation drops late decisions, never two managers) and `FakeLocationSource::{decide_consent, watcher_pending, watchers_created, watchers_cancelled, notifications}`; `stache-bar` weather tests assert the cache drop, a single `weatherEpoch` bump, a decision after stop bumping nothing, and the app `bar_tests.rs` scenarios assert the `BarChanged` with the bumped epoch, the located second `bar_weather`, and no event or manager after stop. The UI tests assert one refetch per epoch change, none for an unchanged epoch, and that an older in-flight answer cannot replace a newer one. No test constructs a `CLLocationManager`, prompts or reads the real location. Config tests cover `precise_location` decode, default, wrong type and migration, and `refresh_interval` default 20, the 5 and 1440 bounds, rejection of 4, 1441, 0, negatives, floats and strings at `weather.refresh_interval`, migration, schema minimum/maximum and the template line; service, bridge and UI (`Weather.query.test.ts`) tests assert `refreshIntervalMinutes` reaches the answer, a reconfigure changes it and polling follows the configured minutes. `src/crates/app/Info.plist` is embedded in debug builds by `tauri-codegen` (check with `otool -s __TEXT __info_plist target/debug/stache`); `host_policy.rs` asserts `bundle.macOS.entitlements` points at `Entitlements.plist` holding only the location entitlement and that `Info.plist` has the usage string. The consent prompt only appears for a bundled `.app` (`bun run tauri build --debug --bundles app`, launched with `open`); the dev binary never prompts. Live consent checks need approval per run.
 
 Bar part 06 slice B, the weather data path (`bar_weather`), is fake-backed and reads no real location, home or environment. `stache-bar` `weather/tests.rs` (child of the crate `tests` module, so it reuses the real-registry harness): env parser fixtures (quoted, single-quoted, comments, `export`, whitespace, CRLF, `=` in values, missing/empty/blank key, malformed lines, last duplicate wins, unterminated quote, substitution from earlier entries only, BOM, invalid UTF-8), the file reader over temp directories with an injected home and config directory (empty `api_keys` reads nothing, relative against the config directory and never the working directory, absolute, `~` with and without a home, missing, directory, oversized and exactly-at-cap, unreadable, symlink, key absent, redacted `Debug`), the exact serde wire forms, and the resolver over `FakeLocationSource` and a gated source: a fix, a reduced fix, every `LocationUnavailable` variant falling back with its typed diagnostic, an empty default location giving `none`, `precise_location` reaching the recorded request and a reconfigure applying at the next read, 60 s reuse on a fake clock (59 s reuses, 60 s reads), a new revision or restart reading again, no read while disabled, zero-size, paused or failed, four concurrent calls sharing one read, a hung read timing joiners out without a second read, stale after a revision change or a stop during the read with nothing recorded, and a weather note changing no sequence. `stache-app` `bar_tests.rs` adds end-to-end scenarios (28/14, two displays, `[weather]` with an env file and a default location, Tiling top 42): `bar_weather` through the real bridge returns the key and coordinates without touching the view, denied/undetermined/no-usage-description fall back, `precise_location` applies without a restart, `unavailable` with zero recorded reads for disabled, paused, gated, failed and zero-size, `unauthorized` for test/access/shell/forged/stale labels, stop during a blocked read is `stale` with no later effect, a hung read never blocks `bar_snapshot` (under 200 ms) or shutdown, a missing key file is a redacted diagnostic and Open Meteo reads no key, and a sentinel key and sentinel coordinates never appear in the serialized `BarView`, `BarChanged`, `BarRuntimeStatus`, `ModuleStatusView`, `StatusChanged`, any `Debug` output or captured logs (with the response as the positive control). The weather click is covered like the other actions in `bar_actions_tests.rs` and the click scenarios. UI code, providers and CSP tests are slice C (next paragraph).
 
-Bar part 07 slice B, the media provider, is fake-backed: no adapter, perl, real child, real clock sleep or user cache directory is touched. `stache-bar` `providers/media/tests.rs` uses a scripted `ChildProcess`/`ProcessFactory`, a virtual clock and a temp cache directory. Parser: empty payload, missing title, full mapping, unknown keys, wrong-typed fields, character caps, invalid wrapper/type/payload shapes, nesting past the recursion limit, artwork pairing. Artwork: every MIME fixture generated in-test with the `image` crate (center crop and deterministic pixels, solid-color exactness, portrait crop), stable content id, placeholder/MIME/base64 rejection, the encoded cap before decoding, dimension and pixel caps rejected from a header-patched PNG before the pixel decode. Store: round trip as base64 `.txt` with `0600`/`0700`, memory-only, traversal-proof ids, symlinked entry and directory refusal, corrupt/oversized/mismatched entries, pruning to 64 entries, bounded memory layer. Publisher: duplicate coalescing, stale artwork never attaching to a newer state, nothing published after close. Owner: exact command line, state then artwork id, coalescing, whole-state replacement, split UTF-8 and multi-line chunks, oversized/invalid frames, backoff schedule 1, 2, 5, 10, 30, 60, 60 s on the fake clock, reset after a 60 s run, restarting then unavailable (media hidden), cancel during backoff waking at once, stop ordering (media invalidated before SIGTERM), SIGTERM ignored then SIGKILL, an unreapable child staying retained with no second spawn, bounded sanitized stderr flood, unavailable or relative resources spawning nothing, a stop before the first spawn. `stache-app` `bar_actions_tests.rs` covers the media click map (four players, look-alikes inert, not installed, stale) and `bar_tests.rs` adds end-to-end scenarios (bar.toml 28/14, two displays, Tiling top 42): a Spotify track with artwork reaching `BarView.media` and `bar_media_artwork` with the wire form pinned and the artwork bytes absent from the view, `BarChanged`, status, module view, `Debug` and logs; stop/pause reaping the exact child, hiding media with no late publish, and a resumed successor inheriting nothing; crash then recovery; repeated crashes reporting `unavailable` while Bar stays Running; unavailable resources; disabled, zero-size and permission-revoked Bars with zero children; a click for each known player and inert unknown/absent media; artwork authorization for test/access/shell/forged/stale labels and malformed ids; production parts using `<cache>/media-artwork` and the vendored resources. `host_policy.rs` now expects `allow-bar-media-artwork`. Live streaming was observed only in the approved dev run (Spotify, macOS 27.0, which counts for the macOS 26+ gate by user decision 2026-11-10); the adapter from the bundled copy and artwork under the real CSP in a bundle stay unverified.
+Bar part 07 slice B, the media provider, is fake-backed: no adapter, perl, real child, real clock sleep or user cache directory is touched. `stache-bar` `providers/media/tests.rs` uses a scripted `ChildProcess`/`ProcessFactory`, a virtual clock and a temp cache directory. Parser: empty payload, missing title, full mapping, unknown keys, wrong-typed fields, character caps, invalid wrapper/type/payload shapes, nesting past the recursion limit, artwork pairing. Artwork: every MIME fixture generated in-test with the `image` crate (center crop and deterministic pixels, solid-color exactness, portrait crop), stable content id, placeholder/MIME/base64 rejection, the encoded cap before decoding, dimension and pixel caps rejected from a header-patched PNG before the pixel decode. Store: round trip as base64 `.txt` with `0600`/`0700`, memory-only, traversal-proof ids, symlinked entry and directory refusal, corrupt/oversized/mismatched entries, pruning to 64 entries, bounded memory layer. Publisher: duplicate coalescing, stale artwork never attaching to a newer state, nothing published after close. Owner: exact command line, state then artwork id, coalescing, whole-state replacement, split UTF-8 and multi-line chunks, oversized/invalid frames, backoff schedule 1, 2, 5, 10, 30, 60, 60 s on the fake clock, reset after a 60 s run, restarting then unavailable (media hidden), cancel during backoff waking at once, stop ordering (media invalidated before SIGTERM), SIGTERM ignored then SIGKILL, an unreapable child staying retained with no second spawn, bounded sanitized stderr flood, unavailable or relative resources spawning nothing, a stop before the first spawn. `stache-app` `bar_actions_tests.rs` covers the media click map (four players, look-alikes inert, not installed, stale) and `bar_tests.rs` adds end-to-end scenarios (bar.toml 28/14, two displays, Tiling top 42): a Spotify track with artwork reaching `BarView.media` and `bar_media_artwork` with the wire form pinned and the artwork bytes absent from the view, `BarChanged`, status, module view, `Debug` and logs; stop/pause reaping the exact child, hiding media with no late publish, and a resumed successor inheriting nothing; crash then recovery; repeated crashes reporting `unavailable` while Bar stays Running; unavailable resources; disabled, zero-size and permission-revoked Bars with zero children; a click for each known player and inert unknown/absent media; artwork authorization for the live Accessibility guide window, forged test/access/shell labels, forged and stale Bar labels and malformed ids; production parts using `<cache>/media-artwork` and the vendored resources. `host_policy.rs` now expects `allow-bar-media-artwork`. Live streaming was observed only in the approved dev run (Spotify, macOS 27.0, which counts for the macOS 26+ gate by user decision 2026-11-10); the adapter from the bundled copy and artwork under the real CSP in a bundle stay unverified.
 
-Bar part 06 slice C, the weather UI, is tested in WebKit with no network. `tests/weatherFetch.ts` replaces `fetch` with a router that rejects and records any unmatched request (ipapi.co and ipinfo.io included) and `invoke` is mocked, so no test reads the real location, prompts or contacts a provider. `Weather.api.test.ts`: the availability matrix, coordinate parsing, both icon maps (all codes, night variants, fallback), exact Visual Crossing, Open Meteo and geocoding URLs and parameters, the first geocoding result, geocoding empty/HTTP error/malformed JSON, `none`/empty/invalid locations making no request, HTTP error, malformed JSON, wrong shape, a 15 s timeout (fake timers), cancellation, and fixed secret-free error messages. `Weather.query.test.tsx` (fake timers): every outcome (`ready`, `stale` once then again, `unavailable`, `unauthorized`), an older-than-feed revision re-read, every provider mode with missing/empty/blank/present key, the location chain, the 20 minute and reconnect refetch with no focus refetch and no extra calls, a new revision refetching while the old response is dropped, unmount aborting the request, StrictMode disposal, and sentinel key/coordinates absent from query keys, cache entries, storage, console and results. `Bar.actions.test.tsx` covers the Weather click (only `weather`, no DOM change) and `Bar.bridge.test.tsx` renders the label through the real Bar. `host_policy.rs` asserts the exact `connect-src` host set for `csp` and `devCsp`, no wildcard, script-src, `unsafe-eval` or ipapi/ipinfo. The parity gate runs unchanged and pixel-identical (no weather state was missing: loaded, loading, error, unconfigured and every icon are scenarios).
+The Accessibility guide (migration part 07) is covered by `windows/AccessibilityGuide/**/*.test.ts(x)` (every section, the unbundled variant, the error line, self-close on `open`, each command sent once and disabled while pending, Escape without auto-repeat and Close through a mocked current window, the drag region, the calls made), with `e2e/scenarios/access.spec.ts` and the whole-session `bar-session.spec.ts`. `windows/Bar/widgets/registry.test.ts` proves the registry is exhaustive at the type level.
 
-Bar part 04 slice (b), the static surface and activation, is tested in WebKit and with Rust fakes. UI: colocated component tests under `src/ui/src/shell/windows/Bar/**` and `shell/components/**` render each component against the fixture seam (`src/ui/tests/barFixtures.ts`, `renderBar.tsx`) and assert DOM structure, computed styles, every data-dependent branch (media absent/paused/artwork load and failure/long label/known and unknown players, battery absent/full/unknown/compact/charging with the viewport media query mocked or resized with `page.viewport`, CPU unresolved/no data/threshold, Wi-Fi unknown/off/disconnected/connected with and without a name/signal icons, weather unconfigured/loading/rounded temperature/icon fallback, Keep Awake unresolved/active/inactive, Spaces slot and fallback, Status order), the Clock with fake timers (format, 1 s tick, timer cleared on unmount), Surface (0.275 s constant, crust, fade-in), Button hover through `userEvent`, the Bar menu slide, the scoped root rules and the document marker, the error and Suspense fallbacks, and Shell routing (`?surface=bar` renders the Bar and reads only `bar_snapshot`; other surfaces carry no marker). `sdk/barFeed.test.ts` covers the feed: subscribe before read, a stale initial snapshot after a newer event, numeric `BigInt` ordering above 2^53, equal/older/malformed events, `resnapshot`, `unavailable`/`unauthorized` outcomes, disposal (also before `listen` resolves) and failures landing in the query error state; `Bar.test.tsx` repeats the ordering and StrictMode disposal through the real hook. Rust: `host_policy.rs` reads `capabilities/bar.json` and asserts it grants only the two event-listener permissions to `stache-bar-*` and is listed in `tauri.conf.json`; `host.rs` proves the production composition registers Bar default disabled with nothing started; `bar_tests.rs` proves a disabled Bar owns no webview, topology feed or bridge worker. The pixel/computed-style parity matrix against the independent legacy reference is slice (c); see [Bar visual-parity gate](#bar-visual-parity-gate-part-04-slice-c). No real panel or webview is opened by these tests.
+Bar part 06 slice C (the weather UI) and Bar part 04 slice (b) (the static surface) were tested by WebKit suites of the previous UI; their replacements are the UI suites below. The rebuilt weather UI (migration part 04) is covered by `windows/Bar/widgets/Weather/*.test.ts(x)` (providers and location with a stubbed `fetch`, fake-timer timeout and interval tests, abort, key contents, icon tables, display states and click) and `e2e/scenarios/weather.spec.ts` (fake host plus Playwright routes for the provider hosts; any other remote request is aborted and asserted absent). The Rust fakes of part 04 slice (b) remain under `test:native`. The rebuilt Media UI (migration part 05) is covered by `windows/Bar/widgets/Media/*.test.ts(x)` (label, icon table, artwork query outcomes and id changes against the mocked IPC, retained artwork with real decoding of the valid and invalid PNG fixtures in `tests/png.ts`) and `e2e/scenarios/media.spec.ts`. The rebuilt Spaces UI (migration part 06) is covered by `windows/Bar/widgets/Spaces/**/*.test.ts(x)` (states, Tiling's published order, labels, compact mode, clicks, every icon-table entry rendered, motion with animations on and under reduced motion, and a render-count test) and `e2e/scenarios/spaces.spec.ts` (a whole session through the fake host).
 
 Keep Awake published state (Bar part 08 slice A): the keep-awake suite decodes the channel through the real registry for every transition (schema identity, held start publication, tombstones on pause/disable/failed release, sequence restart on a new generation) over the existing fakes; `app/tests/keep_awake_status.rs` pins the `keepAwake.status` bytes with a golden captured before the change; `published_state.rs` proves codec registration, mismatched-version and wrong-provider rejection and an independent decode; `bar_keep_awake.rs` table-tests the projection (`Tracker`) for initial null, active only when confirmed, every other state, late old-generation writes/tombstones and sequence reset; `bar_tests.rs` runs the real Keep Awake factory on fakes under the 28/14 two-display Bar (follows adoption/release, pause/disable facts, absent/disabled/failed Keep Awake, rejected-file retention, watcher lifecycle). The reload-based file cases use `ConfigStore::reload_one`, the same path the watcher calls. No test creates a real assertion or changes the lock state.
 
-Keep Awake session click (Bar part 08 slice B) is fake-backed; no real assertion or lock change. `session_action_tests.rs` pins the exact serde wire forms of every outcome, the closed `pause | resume` enum (`enable`/`disable`/`retry` do not deserialize), the Bar capability policy (`keepAwake` Pause/Resume only) and the job waiter (finish, shutdown cancelling a queued job, `uncertain` for a started one, bounded timeouts). `tests/keep_awake_host.rs` runs `HostHandle::session_action` on the real host runner over the Keep Awake fakes: pause/resume applied with the host status sink seeing the change and zero configuration writes, a disabled module inert (zero writes, no native activity), an external tray pause racing a click never inverted, a failed module typed `unavailable` with no acquisition, a second click while one is in flight `busy`, and a shutdown during a click (the release parked) returning `uncertain` without hanging. `bar_tests.rs` (28/14, two displays, Tiling 14/10) clicks through the real bridge: pause then resume with the pushed `BarChanged` (`{active:false,paused:true}` then active), running-but-locked, disabled/absent inert, failed, release pending (no retry), repeated and external-pause stale clicks, authorization of every invalid label, module and the stale label, Bar not running, registry shutdown, and a watcher with zero idle wake-ups that wakes through the host status sink. `tests/bindings.rs` pins the generated `barSessionAction` command and `host_policy.rs` the exact capability set. WebKit: `Bar.actions.test.tsx` asserts the click sends only the fixed module and the observed action and that every outcome, a rejection included, leaves the DOM unchanged; `Bar.bridge.test.tsx` covers the session mapping and a bridge-view click. The pixel-parity gate is unchanged.
+Keep Awake session click (Bar part 08 slice B) is fake-backed; no real assertion or lock change. `session_action_tests.rs` pins the exact serde wire forms of every outcome, the closed `pause | resume` enum (`enable`/`disable`/`retry` do not deserialize), the Bar capability policy (`keepAwake` Pause/Resume only) and the job waiter (finish, shutdown cancelling a queued job, `uncertain` for a started one, bounded timeouts). `tests/keep_awake_host.rs` runs `HostHandle::session_action` on the real host runner over the Keep Awake fakes: pause/resume applied with the host status sink seeing the change and zero configuration writes, a disabled module inert (zero writes, no native activity), an external tray pause racing a click never inverted, a failed module typed `unavailable` with no acquisition, a second click while one is in flight `busy`, and a shutdown during a click (the release parked) returning `uncertain` without hanging. `bar_tests.rs` (28/14, two displays, Tiling 14/10) clicks through the real bridge: pause then resume with the pushed `BarChanged` (`{active:false,paused:true}` then active), running-but-locked, disabled/absent inert, failed, release pending (no retry), repeated and external-pause stale clicks, authorization of every invalid label, module and the stale label, Bar not running, registry shutdown, and a watcher with zero idle wake-ups that wakes through the host status sink. `tests/bindings.rs` pins the generated `barSessionAction` command and `host_policy.rs` the exact capability set. The WebKit suites of the previous UI were deleted on `feat/ui-rebuild`.
 
 Tiling–Bar integration (part 10) is fake-backed; no real window, AX call, activation or panel. `bar_tiling_tests.rs` table-tests the projection and the `bar_tiling_action` validation. `src/crates/app/src/bar_tiling_e2e.rs` (a child module of `bar_tests.rs`) runs the **real** Tiling module (`TilingFactory`, its actor and its `TilingFocus` path) next to the real Bar in one registry over `FakeWindowBackend` (echoed frame writes), `FakeApplicationBackend`, a two-display fake (built-in 1512x982 plus a 2560x1440 external, menu bar auto-hidden) and the fake panel host, with `bar.toml` 28/14 and `tiling.toml` gaps 14/10. It asserts Tiling's planned frames and the `BarView.tiling` / `BarChanged` the UI receives: the strip contents and click round trips, minimized/hidden windows and silent frame-only activity, loading before the first publication, paused/disabled/failed Tiling as `absent` while Bar and Keep Awake keep updating, the reservation lifecycle (constant while slid hidden, held while loading, released by a failed panel, exact-generation tombstones, stale releases), click authorization and revalidation, busy and stuck clicks ending `uncertain` at shutdown, the watcher lifecycle, and the final integration gates: rejected `tiling.toml` files keeping the strip and revision with ordered A–B–A accepted edits, inert late clicks and writes after shutdown, Hold-to-Quit > MenuAnywhere > Keybindings at the host priorities over a fake shared input service with Tiling listen-only, noTunes' separate application observation, and Keep Awake disable/enable plus Bar pause/resume recovering the strip with a strictly increasing `BarChanged` sequence. Native clicks, focus and live geometry stay **unverified**.
 
@@ -264,7 +265,7 @@ No test or default check contacts JankyBorders: the external-service path was re
 
 Tiling's whole-desktop scenarios (`runtime_tests/scenarios.rs`) wire the real actor, transition, visibility ledger, frame control and application actions over fakes and drive them like a desktop: the user's workspace rules, nine applications (an agent, a 1x1 utility window, a Finder info popup, one that cannot be tracked), one built-in display, the system's hide/unhide notifications delivered promptly, twice, late or never, Cmd-Tab, intents and the frontmost application at startup. They pin that one failed application never blocks the layout of the others, that workspace switches hide and unhide correctly over repeated round trips, that focus follows the activation's real focused window and never switches a workspace on a guess, that an application activated while its hide is unsettled does not ping-pong the workspace, that a lost hidden notice resolves on the actor clock, that an application missed at listing is tracked after its activation or the watch install, and that agents and tiny windows are not tracked. `cli_tests.rs` reads a response far over one 4 KiB chunk through the real socket (macOS rejects a socket timeout update after the host closed its end), and `stache-sdk` pins the client against a large answer followed by an immediate close. None of these touch a real window or application.
 
-Tiling's animation metrics and instant fallback (`animation/metrics.rs`, `animation/fallback.rs`, `animation/fallback_tests.rs`, `state/animation_tests.rs`, `status.rs` tests, `runtime_tests/animation.rs`) are tested with fakes only. The coordinator tests drive `Animator` over the fake clock and `FakeSink` (`manual` holds replies, `set_overflow` hosts an application on the overflow shard; `FakeWindowBackend::set_overflow` does the same for the live sink) and answer a "slow application" late or as replaced: the recorded frames, rate, write latency, end lag (measured against the producing tick or timer deadline, with ticks at the job period at every phase never causing a fallback at 60 or 120 Hz while a latency above one period still does) and the fixed 64-sample ring; a stalled clock giving timer-rate frames and timer attribution; a contained panic completing an ending job exactly once; the bounded book (the last 8 animations, 64 applications, least recently used); one bad animation not triggering and 2 of the last 3 triggering for the rate, the lag, the overflow and the no-frame-clock reasons; a full coordinator not being sticky; one exact final write and no further frame when an application enters the set mid-animation (also while waiting for its retarget read); no write after a settle readback; a reload that turns animations off clearing the set and the history; a terminated or relaunched application; and other applications unaffected. The planner tests pin one direct write per plan for an application in the set, A, B, A included. The status tests pin the exact `animation: <name> (<bundle id>) moves without animation: <reason>` and `animation metrics: ...` lines. The end-to-end tests run a desktop of several applications over the real sharded adapter where one application's fake AX writes are slow: it crosses into fallback mid-run, its next layout change is one direct write per window, the others keep animating, status shows the diagnostics and metrics, and a relaunch animates again; a third party that keeps re-enabling Enhanced UI reaches the same fallback. The SkyLight batching part was skipped, so nothing tests it.
+Tiling's animation metrics and instant fallback (`animation/metrics.rs`, `animation/fallback.rs`, `animation/fallback_tests.rs`, `state/animation_tests.rs`, `status.rs` tests, `runtime_tests/animation.rs`) are tested with fakes only. The coordinator tests drive `Animator` over the fake clock and `FakeSink` (`manual` holds replies, `set_overflow` hosts an application on the overflow shard; `FakeWindowBackend::set_overflow` does the same for the live sink) and answer a "slow application" late or as replaced: the recorded frames, rate, write latency, end lag (measured against the producing tick or timer deadline, with ticks at the job period at every phase never causing a fallback at 60 or 120 Hz while a latency above one period still does) and the fixed 64-sample ring; a stalled clock giving timer-rate frames and timer attribution; a contained panic completing an ending job exactly once; the bounded book (the last 8 animations, 64 applications, least recently used); one bad animation not triggering and 2 of the last 3 triggering for the rate, the lag, the overflow and the no-frame-clock reasons; a full coordinator not being sticky; one exact final write and no further frame when an application enters the set mid-animation (also while waiting for its retarget read); no write after a settle readback; a reload that turns animations off clearing the set and the history; a terminated or relaunched application; and other applications unaffected. The planner tests pin one direct write per plan for an application in the set, A, B, A included. The status tests pin the exact `animation: <name> (<bundle id>) moves without animation for <kinds>: <reason>` and `animation metrics: ...` lines. The end-to-end tests run a desktop of several applications over the real sharded adapter where one application's fake AX writes are slow: it crosses into fallback mid-run, its next layout change is one direct write per window, the others keep animating, status shows the diagnostics and metrics, and a relaunch animates again; a third party that keeps re-enabling Enhanced UI reaches the same fallback. The fallback set tests also pin the cool-down (60 s, doubling to 10 minutes, reset by a healthy record, sticky Enhanced UI reasons), the entry and exit notes for the log, the per-kind policy (moves and resizes counted and cut short separately) and the cleared history on leaving; `state/workspace_tests.rs` pins that preset A, B, C, A (with a retarget mid-animation and a position-only change) animates for a healthy application. `runtime_tests/borders.rs` counts border moves against the frames a slow fake application really wrote for one and two windows, a retarget and a direct write. The SkyLight batching part was skipped, so nothing tests it.
 
 Manual and native gates (each needs per-run approval; the formal per-run native gates in `validation.md` have not
 run): enumerate and observe one real application, write a frame to a scratch window, raise it with
@@ -326,7 +327,8 @@ CI rules (`.github/workflows/`):
   these `tool:` versions are bumped by hand.
 - The pin test also rejects local actions, quoted `uses:` values and flow-style steps, by design.
 
-- `lint:ui`: strict typecheck of frontend, prepare script and root configs, then oxlint/stylelint.
+- `lint:ui`: strict typecheck of frontend, prepare script and root configs, then oxlint (including `@stylexjs/eslint-plugin` and the local `scripts/lint/stylex-animation.js` through `jsPlugins`, and the
+  `src/ui/src/ipc/` import boundary; see [UI](../architecture/ui.md#conventions)), then stylelint over `src/ui/**/*.css`.
   oxlint enforces `curly: all`: every `if`, `else`, `for` and `while` body uses braces, even for one
   statement. A blank line separates every `if`, loop, `switch`, `try` and bare block from the
   statements before and after it, a blank line precedes every `return`, and one follows each run of
@@ -335,17 +337,51 @@ CI rules (`.github/workflows/`):
   `lint:native`: cargo-sort check and Clippy with warnings as errors. Neither fixes source.
 - `format:check`: pinned oxfmt and rustfmt checks, including active specs. `format` explicitly rewrites.
   Root oxfmt disables nested configs so legacy config cannot override archive exclusions. Generated
-  artifacts (`schemas/**`, `src/crates/app/gen/**`, `src/ui/src/sdk/bindings.gen.ts`) are excluded:
+  artifacts (`schemas/**`, `src/crates/app/gen/**`, `src/ui/src/ipc/bindings.gen.ts`) are excluded:
   their bytes belong to the generators, so `check:generated`, not the formatter, is their gate.
-- `test` runs `test:ui`, `test:parity`, `test:scripts` and `test:native`. Bun runs commands; Vitest runs TS tests.
-  CI runs `test:ui`, `test:scripts` and `test:native` as separate steps and leaves `test:parity` out: the
-  parity gate needs the system-installed Maple Mono NF font and reference renders from the development
-  machine, so it runs locally only (`bun run test`, the pre-push hook and before a Bar UI merge).
-- `test:ui`: real Playwright WebKit through Vitest. Suites live under `src/ui/src` next to components;
-  `src/ui/tests` holds setup/support only. SDK wrapper and status-feed suites mock the generated Tauri
-  command/event boundary; `Shell` router and `TestWindow` suites prove route validation, subscription
-  cleanup, event-over-snapshot precedence, empty/error states and token styles through the computed
-  background. Coverage retains 80/80/65/80 thresholds.
+- `test` runs `test:ui`, `test:e2e`, `test:scripts` and `test:native`. Bun runs commands; Vitest and
+  Playwright Test run TS tests.
+- `test:ui`: Vitest browser mode in real Playwright WebKit. Suites are colocated `*.test.ts(x)` under
+  `src/ui/src`; `src/ui/tests` holds setup and helpers (`render`, `recordIpc`). Coverage retains
+  80/80/65/80 thresholds.
+- **Screenshot baselines** (`src/ui/e2e/screenshots/*.spec.ts`, part of `test:e2e`):
+  Playwright `expect(locator).toHaveScreenshot(name)` in WebKit with animations
+  disabled, the caret hidden, a fixed viewport and device scale factor 2, and
+  `page.emulateMedia({ colorScheme })` for dark and light. `snapshotPathTemplate` in
+  `playwright.config.ts` stores baselines in
+  `src/ui/e2e/screenshots/__screenshots__/<spec file>/<name>.png`. Current baselines:
+  `BarItem` rest, hover and active in dark and light (`bar-item.spec.ts`, harness page
+  `/e2e/harness.html?gallery=bar-item`), and the end zone with the five system widgets
+  in dark and light (`system-widgets.spec.ts`, production `index.html?surface=bar` with
+  the fake host and `Date` fixed by `page.clock.setFixedTime`), and the Weather item
+  ready and loading in dark and light (`weather.spec.ts`, the provider answered by a
+  `page.route`, every other remote request aborted), and the Media item playing with
+  artwork, paused and without artwork in dark and light (`media.spec.ts`, the artwork a
+  PNG fixture from `tests/png.ts`), and the Spaces strip wide (every app) and compact
+  (the focused app only) in dark and light (`spaces.spec.ts`, reduced motion so the
+  strip is settled), and the Accessibility guide blocked and revoked (480×640, the
+  page captured with a transparent background) in dark and light (`windows.spec.ts`, reduced motion so nothing is mid-animation),
+  and the tray popover shell with every badge kind, its Overview with the user's modules and
+  the settings editor on `keepAwake`, `tiling` and an invalid `tiling.toml` (480×640,
+  transparent background) in dark and light (`popover.spec.ts`). The popover and the
+  Accessibility guide use the system font and WebKit's system colours; their specs pin the
+  user-dependent ones (accent, selection, focus ring) to the macOS defaults and paint a
+  neutral stand-in for the native material (`pinSystemColours`, which both specs import
+  from `e2e/screenshots/systemColours.ts`), so
+  they need no font skip. The
+  other baselines depend on the
+  system font 'Maple Mono NF': after loading, each test calls `skipWithoutMapleMono(page)`
+  (`e2e/screenshots/font.ts`, a DOM measurement evaluated in the page, since WebKit's
+  canvas does not see user-installed fonts) and, without the font, calls
+  `test.skip(true, "font 'Maple Mono NF' is not installed: screenshot baseline skipped")`,
+  so the run reports an explicit skip and never a silent pass. A missing baseline fails
+  the test and writes the new reference for review. After an intended visual change,
+  regenerate and review them with `bunx playwright test <path> --update-snapshots`
+  (for example `bunx playwright test src/ui/e2e/screenshots/bar-item.spec.ts --update-snapshots`).
+  Screenshot tests never live next to source.
+- `test:e2e`: Playwright Test in WebKit against the Vite dev server on port 1430 with the scripted fake
+  host (`src/ui/e2e/`); scenarios are `src/ui/e2e/scenarios/*.spec.ts`, screenshot specs `src/ui/e2e/screenshots/*.spec.ts`, and output goes to the ignored
+  `test-results/e2e/`. See [UI](../architecture/ui.md#test-harnesses).
 - `test:scripts`: the Vitest Node project in `vitest.scripts.config.ts` covers the root TypeScript
   tooling under `scripts/`. The teardown collision guard uses injected fake queries only; no test
   reads the real process table, signals or launches a process. `scripts/measure/config.test.ts` pins
@@ -400,13 +436,13 @@ from that worktree. No automatic shared configuration change is made.
 
 Pre-commit checks active staged inputs; Rust stages run workspace format/sort/Clippy checks.
 `lint-staged.config.ts` uses one function task because lint-staged globs cannot combine the
-extension sets with the nested archive/build/generated exclusions, and `tsc -b` takes no filenames.
+extension sets with the nested archive/build/generated exclusions, and `tsc -b` takes no filenames. Staged `.css` files also run stylelint.
 It passes literal argv to the installed tools, so names with spaces or apostrophes stay safe. Pre-push runs `bun run test`.
-Check routing manually in a disposable checkout for TS, TSX styles, Markdown, Rust and ignored-only
+Check routing manually in a disposable checkout for TS, TSX, Markdown, Rust and ignored-only
 stages.
 Vite uses its default watcher rooted at `src/ui`; native crates, archive and root build outputs are
 outside that root. No custom watcher module or ancestor-matching ignore is needed.
-Smoke HMR once with `bun run dev`: edit/restore Shell text and observe an update without navigation;
+Smoke HMR once with `bun run dev`: edit/restore the `UnknownSurface` text (open `/` with no surface) and observe an update without navigation;
 write an ignored archive/nested-worktree probe and observe no update. Stop the owned server with Ctrl+C.
 
 Correction smoke (2026-11-02): Shell edit/restoration hot-updated with the same page time origin and
@@ -445,6 +481,11 @@ and the Next process launched by terminal A exited. Never use killall/process-na
 Record the actual restart/quiet-period/cleanup observations before marking this acceptance complete.
 
 ## Native host smoke (opt-in)
+
+The harness's WebKit probes read the popover Overview's DOM: `[data-testid=overview]`, the
+`proxyAudio` row (`[data-module=proxyAudio]` with `data-state="disabled"` and an unchecked
+`role=switch`) and, after the reload, the `[data-file="proxyAudio.toml"]` configuration note
+carrying the reload's `smoke_marker` warning. `OverviewTab.test.tsx` pins those attributes.
 
 `cargo nextest run --workspace --features stache-app/dev-tools` covers the host
 composition with fake native and permission services: early quit, repeated
@@ -499,13 +540,16 @@ the deliberate failure probe below, not the normal run.
 `smoke` implies `custom-protocol`, so the harness loads the embedded production
 assets rather than a dev server. It proves zero webviews, `run_on_main` on the
 AppKit main thread, the activation observer delivering on main and removing itself
-on drop, the React `TestWindow` DOM reporting `Host ready` and every registered
-config file, generated `host_status`/`app_info` IPC inside WebKit, a pre-start
+on drop, the popover opened through the host (`NativeWindows::open_popover`; the
+prewarm is compiled out under `smoke`) with its React Overview rendering the disabled
+`proxyAudio` row, generated `host_status` IPC inside WebKit, a pre-start
 `proxyAudio.toml` loaded as a valid disabled config, a real socket reload
-accepted from a changed valid config that stays disabled, the resulting
-`statusChanged` update advancing the exact revision in both the React DOM and the
-`host_status` snapshot, window create/reuse/close, the host still answering on
-its socket and not shutting down after the last window closed, the second process
+accepted from a changed valid config that stays disabled (with one ignored
+`smoke_marker` key), the resulting `statusChanged` update advancing the exact
+revision in the `host_status` snapshot and showing the new warning in the React DOM,
+the popover hidden (webview and bookkeeping kept, never destroyed), the host still
+answering on its socket and not shutting down while it is hidden, the popover shown
+again as the same document, the second process
 rejected by the instance lock, and a real SIGTERM delivered only to the owned
 PID. It exits 0 after the shared shutdown path completes. The reload never
 enables `proxyAudio`, so smoke never starts the audio runtime or changes the
@@ -633,15 +677,15 @@ its terminal record, and the exit status from `AppKit`. Any other non-empty
 `STACHE_SMOKE_TERMINATE` value keeps the previous behaviour.
 
 `STACHE_SMOKE_HOLD=1` starts the normal app with that hanging owner registered,
-schedules no `terminate:`, opens the explicit test window the smoke checks use,
+schedules no `terminate:`, shows the popover the smoke checks use,
 and waits for an external quit. It prints:
 
 ```text
-smoke: ok: test window stache-test-N visible
+smoke: ok: popover stache-popover visible
 smoke: ok: holding for an external quit
 ```
 
-Bring the window frontmost and press Cmd-Q (twice for the repeat case). With
+Bring Stache frontmost (the popover is key) and press Cmd-Q (twice for the repeat case). With
 nothing arriving it prints `smoke: FAIL: no external quit arrived within 120 s`
 and exits non-zero. `STACHE_SMOKE_HOLD=clean` is the same without the hanging
 owner. A successful run ends inside `AppKit`, so the verdict is the stderr log
@@ -745,7 +789,7 @@ in the teardown outcome, while an unchanged `dispatch` may still return OS statu
   PID=$!
   ```
 
-  Bring `smoke: ok: test window stache-test-N visible` frontmost, press Cmd-Q
+  After `smoke: ok: popover stache-popover visible`, with the popover key, press Cmd-Q
   once, then `wait "$PID"`. Pass: one coordinated run, one `Clean` record, no
   owned socket. If the key never reaches AppKit, the gate fails and requires
   explicit re-planning with the owner; app-menu or quit-event evidence is
@@ -886,109 +930,6 @@ Stache does not build on native Spaces. The panel keeps legacy's
 `canJoinAllSpaces | stationary` behavior (no `fullScreenAuxiliary`) for parity.
 The 2026-11-09 run passed items 1–4 and both optional observations.
 
-## Bar visual-parity gate (part 04, slice c)
-
-`src/ui/tests/bar-parity/` compares the new Bar with the independent legacy reference
-(`src/ui/tests/bar-reference/`, pinned to `e0b4648`; see its README) in the same run, in WebKit. Nothing is
-stored as a baseline, nothing is auto-updated and the reference is never edited or regenerated to fit the
-new UI. A mismatch is fixed in the new UI or reported as a deviation that needs user approval.
-
-```sh
-bun run test:parity                      # both scales; required for any Bar UI change and before merge
-bunx vitest run --project bar-parity-1x  # parity at device scale 1
-bunx vitest run --project bar-parity-2x  # parity at device scale 2
-```
-
-`vite.config.ts` has three projects: `ui` (the UI suite, device scale 1, parity excluded so `bun run test:ui`
-stays fast), `bar-parity-1x` and `bar-parity-2x` (Playwright context `deviceScaleFactor: 2`). `bun run test`
-runs `test:parity` after `test:ui`. The parity file reads
-`devicePixelRatio`, so one file covers both scales. The run takes about 7.5 minutes per scale because every
-case renders two documents and takes two screenshots. Browser commands for the gate (`parityFont`,
-`parityEmulate`, `parityScreenshot`, `parityPointer`, `parityWriteRecord`) live in `vite.config.ts` and are typed in
-`tests/browser-commands.d.ts`; none starts a Tauri or legacy process.
-
-**Set-up.** Reference and new Bar each render in a fixed borderless iframe of exactly the panel viewport
-(`display - 2 * padding` wide, Bar height tall). The test page viewport is set to the same width because the
-Bar's JS media query (`useMediaQuery`) reads the page. The new Bar is the real `Bar` through the static fixture
-seam (`BarDataProvider`), the real Linaria and `Bar.root.css` styles, inside the production document shell
-(`index.html` and `main.css`); the Tauri bridge is mocked. Media artwork-by-id, retained artwork, stale ids and the media click are covered outside the gate by `Media.artwork.test.tsx`, `Bar.bridge.test.tsx` and `Bar.actions.test.tsx`; fixtures never run those hooks, so the gate is unaffected. Scenario data for all 89 reference scenarios is in
-`bar-parity/scenarios.ts` (a test fails if the sets differ). Frozen: `Date` (the Clock reads
-`Tue Nov 10 14:05:09` from local fields, so the time zone does not matter), locale `en-US`, dark colour scheme,
-finite animations finished or paused at a stated time, the scrolling label paused at a stated point of its cycle,
-and the `motion` fade driven by a frozen clock (`motionClock.ts`).
-
-**Compared, with no threshold and no masking.** For every element from `html` down: tag, attributes and inline
-custom properties, bounding rect, offset/client/scroll sizes, text nodes and their rects, every computed
-style property, `::before`/`::after` computed styles where generated, the `@keyframes` rules, and for SVG the
-element tree and every attribute (`d`, `viewBox`, `stroke*`, `fill`, `width`, ...). Then the screenshots of the
-two iframes must be byte-identical PNGs. The only things not compared are listed in `capture.ts`
-(`LEGACY_PREFIX_ALIASES`) and `harness.tsx`, each with its reason; they are also written into the run record.
-
-**Matrix.** Panel viewports for a 1440 laptop and a 2560 external display at padding 12 (1416, 2536) and 14
-(1412, 2532); heights 28 and 32; the breakpoint triple at CSS viewports 2035/2036/2037 (display = viewport + 24).
-All 89 scenarios run at 1416, 2536 and the breakpoint triple, a 21-scenario subset at the other sizes; device
-scale 1 and 2. Also: the full subset under reduced motion at both sizes plus an instant slide; hover and
-active on all seven clickable-looking items; the menu slide away and back sampled at t=0, midpoint (75 ms) and
-end (150 ms) with transition property/duration/easing compared; scrolling labels at the start and the
-middle of the cycle; the Surface fade at 0, 137, 138 and 275 ms against the legacy curve (`cubic-bezier(0.42, 0,
-0.58, 1)`, `motionRaw.durationSlow` 0.275 s, not the CSS `400ms`) with the settled end state compared pixel for
-pixel; the font check; reference provenance; and determinism (the same render twice is pixel-identical).
-
-**Tiling strip (10c-2).** 24 scenarios cover the strip (`spaces-*`, plus `spaces-fallback`): every workspace icon
-with each one focused and none focused, an unknown workspace (sorted last, focused, no icon), every app-map icon
-(32 legacy keys including U+200E WhatsApp and Microsoft Edge Dev, the three simple-icons, the seven approved
-additions and the unknown-app fallback, ten per scenario), a focused app, duplicate names with a long and a
-Unicode title (40 + `...` wide; laptop widths reduce to the focused app), duplicates without focus, the app-exit
-end state, Tiling absent, enabled with zero workspaces, the strip beside media, and `loading` (the reference's
-suspended queries; the new Bar renders it from `BarData.spaces` `loading` through `spacesFromTiling`, no module
-mock). The new side is fed `BarView.tiling` through the real `spacesFromTiling`. Hover and active are compared
-on every workspace and app button of `spaces-app-focused` at 1416 and 2536 (each must change the legacy render).
-Motion, driven by the frozen clock at 2536: the app reveal (`spaces-duplicate-titles`, width 0 and opacity 0 at
-t=0; at the midpoint of the shortest reveal every app's opacity, and each unfocused app's width, follows the
-legacy curve with the length-scaled duration `max(0.15, length * 0.15 / 15)` s; the end is pixel-identical to
-the reference); the app exit (the leaving app stays exactly the legacy duration, then the Bar equals
-`spaces-two-apps`); and the workspace-indicator layout spring (`bounce: 0`, `motionRaw.durationSlower` 0.5 s)
-from terminal to tasks: at t=0 the new indicator sits on the old one, at 50/125/250 ms its rect follows the
-critically damped spring `1 - e^(-wt)(1 + wt)` with `e^(-w*0.5)(1 + w*0.5) = 0.001`, and the end is
-pixel-identical. The strip is also in the reduced-motion subset (legacy has no `MotionConfig`, so motion ignores
-the preference on both sides).
-
-**Approved by the user 2026-11-11 (strip motion bounds).** The reveal opacity mid-samples reuse the approved 5e-4 Surface
-fade bound; the reveal width and indicator-rect mid-samples allow `1/64 px` (one WebKit layout unit) plus 5e-4 of
-the full width or travel. Static scenarios and every t=0/end sample are exact. Not modelled: motion's crossfade
-opacity between the two shared-layout indicators, and the app exit curve: motion 13.1.0 (also legacy's
-lockfile version) collapses the leaving app's width on the first frame and keeps opacity 1 until removal, so
-only the presence window and the end state are compared. Existing tolerances are unchanged.
-
-**Environment record.** `bar-parity/run-record.1x.json` and `run-record.2x.json` hold the parity-run record
-(not the reference manifest): installed Maple Mono NF Medium file name, version, SHA-256 and measured metrics,
-OS, WebKit build, device scale, colour scheme, locale, the matrix and the notes below. They contain no
-timestamps. A normal parity run writes its record to an untracked location under `test-results/` and never
-rewrites the committed files; run with `STACHE_PARITY_WRITE_RECORD=1` to update the committed records when the
-environment or the matrix changes. A missing font is an
-environment failure: the whole file fails with `Maple Mono NF Medium is not installed ...`; no substitute font
-is ever used. The font must advance 7.8 px per glyph at 13px/500, equal to `hmtx` of the file on disk, and must
-measure differently from the fallback stack.
-
-**Negative tests** perturb the new render (font family, font size, padding +1 px, gap +1 px, one icon path, the
-media `translateX`, a colour; on the strip: a workspace icon path, one app glyph swapped for another, the label
-font, app padding +1 px and column-gap +1 px) and tamper copies of the manifest, a fixture, an icon, a strip
-icon, a strip source hash and the harness (`verifyReference` fails); each must be reported by the matching
-comparison category and, for visual perturbations, by the screenshot. `scripts/bar-reference/provenance.test.ts`
-(`bun run test:scripts`) checks the strip provenance the shared verifier does not know: the 4.4.0 strip package
-integrity against the repository `bun.lock`, the user-decision records, each strip icon's output hash and that
-every strip source is pinned by the `renderer/bar` tree, and fails on tampered copies of each.
-
-**Reference notes.** The reference is data, so the gate accounts for these differences between its static
-markup and the live legacy DOM (reported for review, never edited): the page shell lacks `<html lang="en">`; JSX
-interpolations such as the CPU `{usage}%` render as two text nodes in React (the reference has one, which changes
-two pixels of antialiasing at wide widths); the scrolling-label numbers are fixed in the markup, so the legacy
-measurement formula is re-applied on the reference layout; `media-long-title` is a pre-measurement frame
-and is compared in its settled legacy state; Stylis' `-webkit-box-*` duplicates are not generated by the
-reference flattener and are ignored by name; Linaria's hashed `scroll-text` keyframes name is normalized
-(the rules are compared); `motion` evaluates whole milliseconds and its bezier differs from the exact curve by
-under 5e-4.
-
 ## Bar system providers (part 05, slice a)
 
 All provider checks are fake-backed and never read the machine: the `stache-macos` `system::testing` fakes
@@ -1003,9 +944,7 @@ sample, a thousand Wi-Fi signals giving one extra sample at least 500 ms later. 
 disabled, zero-size, no-primary or paused, readings flowing through the published cell with unchanged samples
 emitting nothing, a hung CPU read not delaying battery/Wi-Fi/bridge reads, bounded stop with a retained owner,
 no republish after stop, resume restarting the workers. The end-to-end scenarios are in
-`src/crates/app/src/bar_tests.rs`. The WebKit side (`Bar.bridge.test.tsx`) renders CPU, battery and Wi-Fi from the
-bridge view and compares the DOM to the fixture provider for every part 04 scenario; `bun run test:parity` must
-still pass unchanged. SMC temperature was checked in the approved live run (it matched Activity Monitor); the performance run is a
+`src/crates/app/src/bar_tests.rs`. The WebKit side was deleted with the previous UI on `feat/ui-rebuild`. SMC temperature was checked in the approved live run (it matched Activity Monitor); the performance run is a
 manual gate that needs separate approval (see [features/bar](../features/bar.md) and [performance](performance.md#bar-system-providers-part-05)).
 
 ## Streaming and media adapter (part 07, slice A)

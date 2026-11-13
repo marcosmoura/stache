@@ -85,6 +85,9 @@ pub const CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(1);
 /// Hides re-sent for an application observed visible although the ledger holds
 /// it hidden. Reset when a hidden observation arrives or the app is needed.
 pub const MAX_HIDE_ATTEMPTS: u8 = 3;
+
+/// The reason an abandoned hide keeps (see `Ledger::abandon`).
+pub const ABANDONED_REASON: &str = "hide abandoned: still visible after every retry";
 /// Diagnostics and focus reports kept.
 pub const LOG_CAPACITY: usize = 32;
 
@@ -324,6 +327,17 @@ struct Entry {
     wait_since: Option<Instant>,
     /// Hides re-sent because the application stayed visible.
     hide_attempts: u8,
+    /// An abandoned hide re-armed by a workspace switch: re-send it now.
+    rearmed: bool,
+    /// Every hide re-send was spent and the last wait ran out.
+    abandoned: bool,
+    /// An unhide of a windowless Finder whose hidden state is not known to be
+    /// ours: the runner reads `AXHidden` first and sends nothing when visible.
+    probe: bool,
+    /// Our hide was read back hidden (`AXHidden`). The system sends no
+    /// hidden notification when the application already was hidden, so a
+    /// visible observation is stale until a shown one arrives.
+    read_hidden: bool,
     reason: Option<String>,
 }
 
@@ -339,6 +353,10 @@ impl Entry {
             unhide_failures: 0,
             wait_since: None,
             hide_attempts: 0,
+            rearmed: false,
+            abandoned: false,
+            probe: false,
+            read_hidden: false,
             reason: None,
         }
     }
@@ -379,6 +397,8 @@ pub enum Report {
     Hide(ApplicationId, HideEvidence),
     /// An unhide finished.
     Unhide(ApplicationId, UnhideEvidence),
+    /// A desktop host activation finished: whether it was sent.
+    Activate(ApplicationId, bool),
 }
 
 /// What the actor observed about an application's visibility.
@@ -399,6 +419,19 @@ pub enum Planned {
     Hide(ApplicationId),
     /// Unhide this exact application.
     Unhide(ApplicationId),
+    /// Activate this exact application: the desktop host (not Finder).
+    Activate(ApplicationId),
+}
+
+impl Planned {
+    /// The order requests of one turn are sent in.
+    const fn rank(&self) -> u8 {
+        match self {
+            Self::Unhide(_) => 0,
+            Self::Activate(_) => 1,
+            Self::Hide(_) => 2,
+        }
+    }
 }
 
 /// The optional host logger of a ledger (no `Debug` of its own).
@@ -425,6 +458,14 @@ pub struct Ledger {
     logger: LedgerLog,
     /// Diagnostics noted and not yet written to the logger.
     unlogged: Vec<String>,
+    /// Whether a windowless Finder's real hidden state was checked this run.
+    host_probed: bool,
+    /// The desktop host activated last, and since when the hides wait for it
+    /// to become active (`None` once they stop waiting).
+    host_activation: Option<(ApplicationId, Option<Instant>)>,
+    /// The current host choice was observed active: its activation is
+    /// satisfied and never sent again for this choice.
+    host_seen_active: bool,
 }
 
 impl Ledger {
@@ -449,6 +490,7 @@ impl Ledger {
             .values()
             .filter(|entry| !entry.hide_inflight && !entry.unhide_inflight)
             .filter_map(|entry| entry.wait_since)
+            .chain(self.host_activation.and_then(|(_, since)| since))
             .map(|since| since + CONFIRMATION_TIMEOUT)
             .filter(|due| *due > now)
             .min()
@@ -474,8 +516,10 @@ impl Ledger {
             return Vec::new();
         }
         let mut planned = Vec::new();
+        let hold = self.plan_activation(requirement, now, &mut planned);
         for app in &requirement.apps {
-            let needed = !app.needed_by.is_empty();
+            // Finder without a tracked window hosts the desktop: it is shown.
+            let needed = !app.needed_by.is_empty() || app.host;
             if needed {
                 self.suppressed.remove(&app.application);
             }
@@ -518,7 +562,7 @@ impl Ledger {
                 None => {
                     if app.hide_wanted
                         && !app.externally_hidden
-                        && !self.suppressed.contains(&app.application)
+                        && !(hold || self.suppressed.contains(&app.application))
                     {
                         self.entries.insert(app.application, Entry::new());
                         planned.push(Planned::Hide(app.application));
@@ -545,18 +589,25 @@ impl Ledger {
                     }
                     // Not needed: a failed-unhide streak must not block the next switch.
                     entry.unhide_failures = 0;
-                    if owned && app.hide_wanted && !app.externally_hidden {
+                    if owned && app.hide_wanted && !app.externally_hidden && !entry.read_hidden {
                         // We hold it hidden, yet it is observed visible: the
                         // hide did not land or its notification was lost.
+                        // Not while the desktop host is not active yet.
                         let since = *entry.wait_since.get_or_insert(now);
-                        if now.saturating_duration_since(since) >= CONFIRMATION_TIMEOUT
+                        let due = !hold
+                            && (entry.rearmed
+                                || now.saturating_duration_since(since) >= CONFIRMATION_TIMEOUT);
+                        if due
                             && entry.hide_attempts < MAX_HIDE_ATTEMPTS
                             && !self.suppressed.contains(&app.application)
                         {
                             entry.wait_since = None;
                             entry.hide_attempts += 1;
+                            entry.rearmed = false;
                             entry.hide_inflight = true;
                             planned.push(Planned::Hide(app.application));
+                        } else if due && entry.hide_attempts >= MAX_HIDE_ATTEMPTS {
+                            self.abandon(app.application, requirement);
                         }
                     } else {
                         entry.wait_since = None;
@@ -564,7 +615,138 @@ impl Ledger {
                 }
             }
         }
+        self.plan_host(requirement, &mut planned);
+        // The desktop host is shown (and made frontmost) before the hides.
+        planned.sort_by_key(Planned::rank);
         planned
+    }
+
+    /// Activates a non-Finder desktop host once per choice; `true` while the
+    /// hides must wait for it to become active (at most
+    /// [`CONFIRMATION_TIMEOUT`], or until its activation is refused). Hiding
+    /// the frontmost application while the host is not frontmost lets macOS
+    /// activate (and show) another hidden application instead.
+    fn plan_activation(
+        &mut self,
+        requirement: &VisibilityRequirement,
+        now: Instant,
+        planned: &mut Vec<Planned>,
+    ) -> bool {
+        let Some(host) = requirement.desktop_host else {
+            self.host_activation = None;
+            self.host_seen_active = false;
+            return false;
+        };
+        if self.host_activation.is_none_or(|(application, _)| application != host) {
+            self.host_seen_active = false;
+        }
+        if requirement.host_active {
+            if !self.host_seen_active {
+                self.host_activation = Some((host, None));
+                self.host_seen_active = true;
+            }
+            return false;
+        }
+        match &mut self.host_activation {
+            Some((application, since)) if *application == host => match *since {
+                Some(started) if now.saturating_duration_since(started) < CONFIRMATION_TIMEOUT => {
+                    true
+                }
+                Some(_) => {
+                    *since = None;
+                    self.note(format!("{host:?}: desktop host not active in time"));
+                    false
+                }
+                None => false,
+            },
+            _ => {
+                self.host_activation = Some((host, Some(now)));
+                planned.push(Planned::Activate(host));
+                true
+            }
+        }
+    }
+
+    /// A windowless Finder is shown whoever hid it (showing it shows nothing):
+    /// checked once per run (an earlier run may have hidden it), and again when
+    /// it is observed hidden and this turn hides something (a switch needs it).
+    fn plan_host(&mut self, requirement: &VisibilityRequirement, planned: &mut Vec<Planned>) {
+        let hides = planned.iter().any(|request| matches!(request, Planned::Hide(_)));
+        for app in requirement.apps.iter().filter(|app| app.host) {
+            // A windowless host other than Finder exists only when a switch
+            // needs it, so it counts as a turn that hides something.
+            let switch = hides || requirement.desktop_host == Some(app.application);
+            if self.entries.contains_key(&app.application)
+                || !(!self.host_probed || (app.externally_hidden && switch))
+            {
+                continue;
+            }
+            self.host_probed = true;
+            let mut entry = Entry::new();
+            entry.ownership = Ownership::Confirmed;
+            entry.hide_inflight = false;
+            entry.unhide_inflight = true;
+            entry.probe = true;
+            self.entries.insert(app.application, entry);
+            planned.push(Planned::Unhide(app.application));
+        }
+        // Once startup has tried every application the once-per-run probe is
+        // spent, whether or not Finder was windowless then.
+        self.host_probed |= requirement.settled;
+    }
+
+    /// Marks `application`'s hide abandoned, logging it once.
+    fn abandon(&mut self, application: ApplicationId, requirement: &VisibilityRequirement) {
+        let reason = ABANDONED_REASON;
+        let Some(entry) = self.entries.get_mut(&application) else {
+            return;
+        };
+        if entry.abandoned {
+            return;
+        }
+        entry.abandoned = true;
+        entry.reason = Some(reason.to_owned());
+        let why = match (requirement.finder_held, requirement.desktop_host) {
+            (true, None) => {
+                "macOS keeps the last visible regular application, Finder is hidden because it \
+                 has windows on a hidden workspace, and no windowless application was available \
+                 as host either"
+            }
+            (true, Some(_)) => {
+                "macOS keeps the last visible regular application, Finder is hidden because it \
+                 has windows on a hidden workspace, and the windowless desktop host did not take \
+                 over"
+            }
+            _ => "macOS keeps the last visible regular application",
+        };
+        let message =
+            format!("{application:?}: {reason} ({why}); retried at the next workspace switch");
+        self.note(message);
+    }
+
+    /// Any intent or activation gives every abandoned hide another bounded
+    /// round, sent at the next plan: another application may be visible by now.
+    /// Only a really abandoned record we hold is re-armed, never one still in
+    /// its last wait or an ambiguous one.
+    pub fn rearm_abandoned(&mut self) {
+        // A host refused or timed out before it was ever active is activated
+        // again; one seen active is not (the user may be in another app).
+        if !self.host_seen_active && self.host_activation.is_some_and(|(_, since)| since.is_none())
+        {
+            self.host_activation = None;
+        }
+        for entry in self.entries.values_mut() {
+            let owned = matches!(
+                entry.ownership,
+                Ownership::Confirmed | Ownership::PendingIssued | Ownership::PendingPossible
+            );
+            if entry.abandoned && owned && !entry.hide_inflight {
+                entry.abandoned = false;
+                entry.hide_attempts = 0;
+                entry.rearmed = true;
+                entry.reason = None;
+            }
+        }
     }
 
     /// An effect that never ran: forget its in-flight mark.
@@ -580,6 +762,7 @@ impl Ledger {
                     entry.unhide_inflight = false;
                 }
             }
+            Planned::Activate(application) => self.apply(Report::Activate(application, false)),
         }
     }
 
@@ -620,6 +803,17 @@ impl Ledger {
         match report {
             Report::Hide(application, evidence) => self.apply_hide(application, evidence),
             Report::Unhide(application, evidence) => self.apply_unhide(application, evidence),
+            Report::Activate(application, sent) => {
+                if let Some((host, since)) = &mut self.host_activation
+                    && *host == application
+                    && !sent
+                    && since.is_some()
+                {
+                    // Refused: the hides go out now and the abandon path decides.
+                    *since = None;
+                    self.note(format!("{application:?}: desktop host activation not sent"));
+                }
+            }
         }
     }
 
@@ -636,7 +830,10 @@ impl Ledger {
                 self.entries.remove(&application);
                 self.note(format!("{application:?}: hide not sent ({reason}); never owned"));
             }
-            HideEvidence::Confirmed => entry.ownership = Ownership::Confirmed,
+            HideEvidence::Confirmed => {
+                entry.ownership = Ownership::Confirmed;
+                entry.read_hidden = !shown_seen;
+            }
             HideEvidence::Sent | HideEvidence::Possible(_) => {
                 let reason = match &evidence {
                     HideEvidence::Possible(reason) => Some(reason.clone()),
@@ -697,6 +894,11 @@ impl Ledger {
                         Ownership::PendingIssued | Ownership::PendingPossible
                     ) {
                         entry.ownership = Ownership::Confirmed;
+                        entry.reason = None;
+                    }
+                    if entry.abandoned {
+                        // The hide landed after all: no stale abandon reason.
+                        entry.abandoned = false;
                         entry.reason = None;
                     }
                     entry.hide_attempts = 0;
@@ -1041,6 +1243,9 @@ impl VisibilityControl {
         planned
     }
 
+    /// See [`Ledger::rearm_abandoned`].
+    pub fn rearm_abandoned(&self) { self.book().ledger.rearm_abandoned(); }
+
     /// Whether our hide of `application` has not settled: see
     /// [`Ledger::hide_unsettled`].
     #[must_use]
@@ -1207,6 +1412,12 @@ impl VisibilityControl {
                 Report::Unhide(app, evidence) => {
                     (false, format!("unhide of {app:?}: {evidence:?}"))
                 }
+                Report::Activate(app, false) => {
+                    (true, format!("desktop host activation of {app:?} not sent"))
+                }
+                Report::Activate(app, true) => {
+                    (false, format!("desktop host activation of {app:?} sent"))
+                }
             };
             if level_warn {
                 logger.warn(format!("tiling visibility: {text}"));
@@ -1331,8 +1542,36 @@ impl VisibilityControl {
         }
     }
 
+    /// Runs one planned desktop host activation through the only activation
+    /// path.
+    pub fn execute_activate(&self, exec: &Exec<'_>, application: ApplicationId) {
+        let sent = exec.actions.is_some_and(|actions| {
+            let authorization =
+                actions.activation_authorization(application, Instant::now() + VISIBILITY_DEADLINE);
+            let Some(id) = self.arm(Armed::Activation(authorization.clone())) else {
+                return false;
+            };
+            let activation = actions.activate(&authorization);
+            self.disarm(id);
+            matches!(
+                activation,
+                ActivationOutcome::Requested | ActivationOutcome::Uncertain(_)
+            )
+        });
+        self.report(Report::Activate(application, sent));
+    }
+
     /// Runs one planned unhide.
     pub fn execute_unhide(&self, exec: &Exec<'_>, application: ApplicationId) {
+        let probe = self.book().ledger.entries.get(&application).is_some_and(|entry| entry.probe);
+        if probe
+            && Self::ax_read_hidden(exec, application, Instant::now() + VISIBILITY_DEADLINE)
+                == stache_macos::ax::AxReading::Value(false)
+        {
+            self.book().ledger.note(format!("{application:?}: desktop host already shown"));
+            self.report(Report::Unhide(application, UnhideEvidence::Shown));
+            return;
+        }
         let evidence = self.unhide_evidence(exec, application, false);
         self.report(Report::Unhide(application, evidence));
     }
@@ -1478,6 +1717,7 @@ impl VisibilityControl {
             }
         }
         let mut book = self.book();
+        book.ledger.note(format!("focus {window:?}: {steps:?}"));
         if book.focus.len() == LOG_CAPACITY {
             book.focus.pop_front();
         }

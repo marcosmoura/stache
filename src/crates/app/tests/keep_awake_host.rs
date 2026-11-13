@@ -126,6 +126,8 @@ impl HostUi for CountingUi {
     fn status(&self, _: &stache_app::bindings::HostStatus) {
         self.0.fetch_add(1, Ordering::SeqCst);
     }
+
+    fn config_changed(&self, _: &[String]) {}
 }
 
 #[derive(Default)]

@@ -1,6 +1,6 @@
-//! Configuration-backed enable edits from the tray.
+//! Configuration edits: the tray's enable switch and generic key-path edits.
 //!
-//! An enable action plans the complete replacement text first, validates it,
+//! An edit plans the complete replacement text first, validates it,
 //! then commits only if the file still has the bytes that were inspected. A
 //! conflict, an invalid disk file or a failed validation leaves the file
 //! untouched. The actual write is a same-directory temporary file followed by a
@@ -15,14 +15,16 @@ use std::fs;
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
-use stache_sdk::config::{ConfigDiagnostic, DiagnosticKind};
+use stache_sdk::config::{
+    ConfigDiagnostic, ConfigEditOp, DiagnosticKind, apply_edit, content_hash,
+};
 use stache_sdk::{
-    ConfigCatalog, ConfigEdit as ConfigEditResult, ConfigFileId, ConfigPaths, ModuleId,
-    set_enabled as set_enabled_text,
+    ConfigCatalog, ConfigEdit as ConfigEditResult, ConfigEditError, ConfigFileId, ConfigPaths,
+    ModuleId, set_enabled as set_enabled_text,
 };
 use tempfile::NamedTempFile;
 
-/// A validated enable edit that has not been written.
+/// A validated edit that has not been written.
 #[derive(Debug)]
 pub struct PendingEdit {
     path: PathBuf,
@@ -39,6 +41,17 @@ impl PendingEdit {
     /// Whether committing would replace the file.
     #[must_use]
     pub const fn is_change(&self) -> bool { self.changed }
+
+    /// The content hash the file has after a successful commit: the planned
+    /// text for a change, otherwise the inspected bytes (`None` when missing).
+    #[must_use]
+    pub fn hash(&self) -> Option<String> {
+        if self.changed {
+            Some(content_hash(self.contents.as_bytes()))
+        } else {
+            self.original.as_deref().map(content_hash)
+        }
+    }
 
     /// Writes the edit if the file still matches the inspected bytes.
     ///
@@ -161,6 +174,17 @@ pub enum EnableEditError {
     },
     /// The current or candidate file is parse/type/validation invalid.
     Invalid(ConfigDiagnostic),
+    /// A generic edit found the current file invalid; it is read-only.
+    CurrentInvalid(Box<ConfigDiagnostic>),
+    /// The file's bytes no longer match the hash the edit was based on.
+    Stale {
+        /// The affected path.
+        path: PathBuf,
+        /// The current hash, `None` for a missing file.
+        current: Option<String>,
+    },
+    /// The edit cannot be applied to the document (bad path, index or value).
+    Refused(Box<ConfigEditError>),
     /// The file changed after it was inspected.
     Conflict {
         /// The affected path.
@@ -187,6 +211,17 @@ impl std::fmt::Display for EnableEditError {
             Self::Global => f.write_str("the global configuration has no enabled switch"),
             Self::Read { path, error } => write!(f, "cannot read {}: {error}", path.display()),
             Self::Invalid(diagnostic) => write!(f, "configuration is invalid: {diagnostic}"),
+            Self::CurrentInvalid(diagnostic) => {
+                write!(f, "the file is invalid and cannot be edited: {diagnostic}")
+            }
+            Self::Stale { path, .. } => {
+                write!(
+                    f,
+                    "{} changed since it was read; the edit was not written",
+                    path.display()
+                )
+            }
+            Self::Refused(error) => error.fmt(f),
             Self::Conflict { path } => {
                 write!(f, "{} changed on disk; the edit was not written", path.display())
             }
@@ -203,7 +238,13 @@ impl std::error::Error for EnableEditError {
         match self {
             Self::Read { error, .. } | Self::Write { error, .. } => Some(error),
             Self::Invalid(diagnostic) => Some(diagnostic),
-            Self::Unknown(_) | Self::Global | Self::Conflict { .. } | Self::Symlink { .. } => None,
+            Self::CurrentInvalid(diagnostic) => Some(diagnostic.as_ref()),
+            Self::Refused(error) => Some(error.as_ref()),
+            Self::Unknown(_)
+            | Self::Global
+            | Self::Conflict { .. }
+            | Self::Symlink { .. }
+            | Self::Stale { .. } => None,
         }
     }
 }
@@ -285,6 +326,99 @@ pub fn plan_enabled(
         contents: candidate.to_owned(),
         changed: true,
     })
+}
+
+/// Plans one validated generic edit without writing anything.
+///
+/// The file is read once. A symlink is refused; the bytes must hash to
+/// `base_hash` (`None` = the file was missing) or the edit is
+/// [`EnableEditError::Stale`]; an existing file must currently be valid. A
+/// missing file starts from the generated template. The candidate is decoded
+/// and validated through the catalog exactly as a reload would.
+///
+/// # Errors
+/// Returns [`EnableEditError`] for an unknown ID, a symlink, a read failure, a
+/// stale hash, an invalid current file, a refused operation or an invalid
+/// candidate.
+pub fn plan_edit(
+    catalog: &ConfigCatalog,
+    paths: &ConfigPaths,
+    id: ModuleId,
+    op: &ConfigEditOp,
+    base_hash: Option<&str>,
+) -> Result<PendingEdit, EnableEditError> {
+    if !catalog.contains(id) {
+        return Err(EnableEditError::Unknown(id));
+    }
+    let path = paths.file(ConfigFileId::module(id));
+    if fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return Err(EnableEditError::Symlink { path });
+    }
+    let original = match fs::read(&path) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == ErrorKind::NotFound => None,
+        Err(error) => return Err(EnableEditError::Read { path, error }),
+    };
+    let current = original.as_deref().map(content_hash);
+    if current.as_deref() != base_hash {
+        return Err(EnableEditError::Stale { path, current });
+    }
+    let text = match &original {
+        Some(bytes) => {
+            let text = String::from_utf8(bytes.clone()).map_err(|_| EnableEditError::Read {
+                path: path.clone(),
+                error: std::io::Error::other("configuration is not UTF-8"),
+            })?;
+            catalog
+                .inspect(id, &path, &text)
+                .map_err(|diagnostic| EnableEditError::CurrentInvalid(Box::new(diagnostic)))?;
+            text
+        }
+        None => catalog.template(id).ok_or(EnableEditError::Unknown(id))?,
+    };
+    let edit = apply_edit(&text, op).map_err(|error| EnableEditError::Refused(Box::new(error)))?;
+    let Some(candidate) = edit.text() else {
+        return Ok(PendingEdit {
+            path,
+            original,
+            contents: text,
+            changed: false,
+        });
+    };
+    catalog.inspect(id, &path, candidate).map_err(EnableEditError::Invalid)?;
+    Ok(PendingEdit {
+        path,
+        original,
+        contents: candidate.to_owned(),
+        changed: true,
+    })
+}
+
+/// Creates a missing file from the generated template with a no-clobber
+/// rename. An existing file (including one created concurrently) is left as is.
+///
+/// # Errors
+/// Returns [`EnableEditError`] for an unknown ID or a write failure.
+pub fn create_from_template(
+    catalog: &ConfigCatalog,
+    paths: &ConfigPaths,
+    id: ModuleId,
+) -> Result<PathBuf, EnableEditError> {
+    let path = paths.file(ConfigFileId::module(id));
+    if fs::symlink_metadata(&path).is_ok() {
+        return Ok(path);
+    }
+    let contents = catalog.template(id).ok_or(EnableEditError::Unknown(id))?;
+    let pending = PendingEdit {
+        path: path.clone(),
+        original: None,
+        contents,
+        changed: true,
+    };
+    match pending.commit() {
+        Ok(_) | Err(EnableEditError::Conflict { .. }) => Ok(path),
+        Err(error) => Err(error),
+    }
 }
 
 fn invalid(path: &Path, message: String) -> ConfigDiagnostic {

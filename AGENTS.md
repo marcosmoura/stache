@@ -9,14 +9,14 @@ The independent old application lives in `_legacy/`; do not port its behavior wi
 
 - Package manager: Bun 1.4.4; pnpm is allowed only inside `_legacy/`.
 - Rust: retained nightly/rustfmt, workspace Clippy pedantic + nursery, warnings as errors.
-- UI: React + TypeScript + Linaria + React Compiler/Vite, React Query and UI-local zustand.
-- Browser tests: Vitest + Playwright WebKit, not Bun's test runner.
+- UI: React + TypeScript + StyleX + React Compiler/Vite; TanStack Query, zustand, Motion, Hugeicons.
+- UI tests: Vitest browser mode + Playwright Test e2e, both WebKit, not Bun's test runner.
 
 ```sh
 bun run tauri:dev
 bun run lint
 bun run format:check
-bun run test
+bun run test        # test:ui + test:e2e + test:scripts + test:native
 bun run test:ui:coverage
 bun run generate-schema
 cargo run -q -p stache-app --bin stache -- schema   # one binary, CLI mode

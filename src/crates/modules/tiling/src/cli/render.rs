@@ -443,6 +443,21 @@ pub fn status(status: &StatusDto, ansi: bool) -> String {
                 .map_or_else(String::new, |reason| format!(": {}", printable(reason)))
         );
     }
+    for fallback in &status.animation_fallbacks {
+        let _ = writeln!(
+            out,
+            "no animation for {}s: {} ({}): {}; {}",
+            fallback.kind,
+            printable(&fallback.name),
+            printable(&fallback.bundle_id),
+            printable(&fallback.reason),
+            match fallback.retry_in_ms {
+                None => "for this run".to_owned(),
+                Some(0) => "animates again on its next layout change".to_owned(),
+                Some(ms) => format!("animates again after {}s", ms.div_ceil(1000)),
+            }
+        );
+    }
     for window in &status.tracked_windows {
         let _ = writeln!(
             out,

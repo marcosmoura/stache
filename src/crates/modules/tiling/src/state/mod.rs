@@ -50,6 +50,8 @@ mod drag_tests;
 #[cfg(test)]
 mod frame_tests;
 #[cfg(test)]
+mod inactive_tests;
+#[cfg(test)]
 mod minimum_tests;
 #[cfg(test)]
 mod tab_tests;
@@ -392,6 +394,14 @@ pub enum Effect {
         /// The exact application instance.
         application: ApplicationId,
     },
+    /// Activate this exact application: the windowless desktop host (not
+    /// Finder), through `activate_exact`, before the hides of its switch.
+    ActivateApp {
+        /// Registry.
+        stamp: Stamp,
+        /// The exact application instance.
+        application: ApplicationId,
+    },
     /// Focus this exact window. Emitted only while the runtime holds the action
     /// authority. The runner unhides an owned-hidden application first, then
     /// activates it through `activate_exact` (the only activation path) and
@@ -420,6 +430,16 @@ pub struct ScreenState {
     /// Tiling's count of this display's native presences. A display that
     /// disappears and returns gets a new one, so a reused id is detectable.
     pub presence: u64,
+}
+
+/// A focus request refused because its workspace was inactive. `serial`
+/// increases by one (wrapping) on every refusal of a generation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RefusedFocus {
+    /// The workspace that was refused.
+    pub workspace: WorkspaceId,
+    /// The refusal counter.
+    pub serial: u32,
 }
 
 /// One workspace: desired assignment and order.
@@ -925,6 +945,8 @@ pub struct TilingState {
     pub(crate) workspace_history: VecDeque<WorkspaceId>,
     pub(crate) last_intent: Option<IntentRecord>,
     pub(crate) last_reload_error: Option<String>,
+    /// The last focus request refused because its workspace was inactive.
+    pub(crate) refused_focus: Option<RefusedFocus>,
     pub(crate) tombstones: BTreeSet<WindowInstance>,
     pub(crate) tombstone_order: VecDeque<WindowInstance>,
     pub(crate) ledger: VisibilityLedger,
@@ -936,7 +958,7 @@ pub struct TilingState {
     /// Applications that move without animation (the instant fallback). The
     /// actor copies them from the animation control before each transition;
     /// the planner writes their windows directly.
-    pub(crate) animation_fallback: BTreeSet<ApplicationId>,
+    pub(crate) animation_fallback: BTreeSet<(ApplicationId, crate::animation::MotionKind)>,
     pub(crate) tabs: TabRegistry,
     pub(crate) tab_outbox: TabOutbox,
     /// Applications listed again after a Space change or an activation because
@@ -966,7 +988,10 @@ impl TilingState {
 
     /// Replaces the applications that move without animation. Called by the
     /// actor before a transition, so the transition itself stays pure.
-    pub fn set_animation_fallback(&mut self, fallback: BTreeSet<ApplicationId>) {
+    pub fn set_animation_fallback(
+        &mut self,
+        fallback: BTreeSet<(ApplicationId, crate::animation::MotionKind)>,
+    ) {
         self.animation_fallback = fallback;
     }
 
@@ -1017,6 +1042,7 @@ impl TilingState {
             workspace_history: VecDeque::new(),
             last_intent: None,
             last_reload_error: None,
+            refused_focus: None,
             tombstones: BTreeSet::new(),
             tombstone_order: VecDeque::new(),
             ledger: VisibilityLedger::default(),
@@ -1187,6 +1213,8 @@ impl TilingState {
     #[must_use]
     pub fn snapshot(&self) -> TilingSnapshot {
         let phase = self.phase();
+        let visibility = crate::workspaces::visibility_requirement(self);
+        let unreachable = crate::workspaces::unreachable(self, &visibility);
         TilingSnapshot {
             sequence: self.sequence,
             phase,
@@ -1213,11 +1241,14 @@ impl TilingState {
             frames: frames::statuses(self),
             no_frame: self.frames.no_frame.iter().map(|(id, why)| (*id, *why)).collect(),
             host_revision: self.host.revision,
-            visibility: crate::workspaces::visibility_requirement(self),
+            visibility,
             last_intent: self.last_intent.clone(),
             workspace_history: self.workspace_history.iter().copied().collect(),
             last_reload_error: self.last_reload_error.clone(),
+            unreachable,
+            refused_focus: self.refused_focus,
             hidden_apps: Vec::new(),
+            animation_fallbacks: Vec::new(),
             display_layout: self.layout.clone(),
             apps: self.apps.values().cloned().collect(),
             tabs: self.tabs.status(self.windows.values().filter(|w| w.is_inactive_tab()).count()),
@@ -1232,6 +1263,11 @@ impl TilingState {
     pub fn visibility_requirement(&self) -> VisibilityRequirement {
         crate::workspaces::visibility_requirement(self)
     }
+
+    /// Whether `FocusWorkspace(name)` would be refused because the workspace
+    /// is inactive (the same rule the intent applies).
+    #[must_use]
+    pub fn refuses_focus(&self, name: &str) -> bool { intents::refuses_focus(self, name) }
 
     /// The identity of the drag gesture in progress, if any.
     #[must_use]
@@ -1323,8 +1359,17 @@ pub struct TilingSnapshot {
     pub workspace_history: Vec<WorkspaceId>,
     /// Why the latest reload mapping was refused, if it was.
     pub last_reload_error: Option<String>,
+    /// Workspaces Stache cannot show as an empty desktop (published as
+    /// `inactive`; see [`crate::workspaces::unreachable`]).
+    pub unreachable: Vec<WorkspaceId>,
+    /// The last focus request refused because its workspace was inactive.
+    pub refused_focus: Option<RefusedFocus>,
     /// Applications the runtime hid (or may have hid), with their ownership.
     pub hidden_apps: Vec<crate::visibility::OwnedApp>,
+    /// Applications in the animation instant fallback, per kind, with the time
+    /// left of a cool-down when the snapshot was published (`None` is sticky;
+    /// zero means on its next plan). Filled by the actor.
+    pub animation_fallbacks: Vec<(crate::animation::FallbackEntry, Option<std::time::Duration>)>,
     /// The native display layout (frames, scale, built-in flag) behind `screens`.
     pub display_layout: DisplayLayout,
     /// The application catalog the actor knows, in stable application order.

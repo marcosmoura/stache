@@ -8,7 +8,7 @@ use std::process::Command;
 fn committed() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../..")
-        .join("src/ui/src/sdk/bindings.gen.ts")
+        .join("src/ui/src/ipc/bindings.gen.ts")
 }
 
 #[test]

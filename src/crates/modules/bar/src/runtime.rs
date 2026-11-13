@@ -144,6 +144,8 @@ pub struct Panel {
     window: OwnedWindow,
     watch: WindowWatch,
     frame: PanelFrame,
+    /// The feed revision the panel was last placed for.
+    revision: u64,
     opened: Instant,
     loaded: bool,
 }
@@ -458,7 +460,10 @@ impl Inner {
                 reservation_top,
             } => {
                 if let Some(panel) = run.panel.as_mut() {
-                    if panel.frame != frame {
+                    // A new reading re-asserts the frame even when it is
+                    // numerically unchanged: the window server relocates a
+                    // panel whose display went away or was rearranged.
+                    if panel.frame != frame || panel.revision != reading.revision {
                         let moved = window_frame(frame).and_then(|target| {
                             panel.window.reposition(target).map_err(|error| error.to_string())
                         });
@@ -468,6 +473,7 @@ impl Inner {
                             )));
                         }
                         panel.frame = frame;
+                        panel.revision = reading.revision;
                     }
                 } else {
                     // A convergence trigger restarts the retry budget; the panel
@@ -476,7 +482,8 @@ impl Inner {
                         run.failures = 0;
                     }
                     run.retry_due = None;
-                    let panel = Self::open(&run.windows, frame).map_err(ConvergeError::Failed)?;
+                    let panel = Self::open(&run.windows, frame, reading.revision)
+                        .map_err(ConvergeError::Failed)?;
                     run.panel = Some(panel);
                     run.kick();
                 }
@@ -491,7 +498,7 @@ impl Inner {
         }
     }
 
-    fn open(windows: &WindowCapability, frame: PanelFrame) -> Result<Panel, String> {
+    fn open(windows: &WindowCapability, frame: PanelFrame, revision: u64) -> Result<Panel, String> {
         let key = WindowKey::new("bar").map_err(|error| error.to_string())?;
         let size = WindowSize::new(frame.width, frame.height).map_err(|error| error.to_string())?;
         let request = WindowRequest::new(key, BAR_SURFACE, size, WindowKind::NonActivatingPanel)
@@ -504,6 +511,7 @@ impl Inner {
             window,
             watch,
             frame,
+            revision,
             opened: Instant::now(),
             loaded: false,
         })

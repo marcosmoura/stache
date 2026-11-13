@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 01 — Widget options
@@ -35,13 +35,13 @@ Make layout entries typed per widget, publish the options, and hand them to widg
 
 ## Acceptance criteria
 
-- [ ] MIG-01-01: Decode, defaults, key order, every rejection with its field path and the unknown-key warning are covered for both widgets with options and one without.
-- [ ] MIG-01-02: The schema has one object variant per widget with a constant `widget`; the template round-trips; `bun run check:generated` passes.
-- [ ] MIG-01-03: An accepted options change publishes a greater sequence with the new resolved options; a rejected one publishes nothing.
-- [ ] MIG-01-04: A fixture widget receives typed options, re-renders on an options change and keeps its state.
-- [ ] MIG-01-05: The moved-then-removed item keeps its content until its own exit completes.
-- [ ] MIG-01-06: `docs/architecture/config.md`, `docs/features/bar.md` and `docs/architecture/ui.md` describe the entry options and how a widget declares options.
-- [ ] MIG-01-07: `bun run lint`, `bun run format:check` and `bun run test` pass.
+- [x] MIG-01-01: Decode, defaults, key order, every rejection with its field path and the unknown-key warning are covered for both widgets with options and one without.
+- [x] MIG-01-02: The schema has one object variant per widget with a constant `widget`; the template round-trips; `bun run check:generated` passes.
+- [x] MIG-01-03: An accepted options change publishes a greater sequence with the new resolved options; a rejected one publishes nothing.
+- [x] MIG-01-04: A fixture widget receives typed options, re-renders on an options change and keeps its state.
+- [x] MIG-01-05: The moved-then-removed item keeps its content until its own exit completes.
+- [x] MIG-01-06: `docs/architecture/config.md`, `docs/features/bar.md` and `docs/architecture/ui.md` describe the entry options and how a widget declares options.
+- [x] MIG-01-07: `bun run lint`, `bun run format:check` and `bun run test` pass.
 
 ## Tests
 
@@ -52,3 +52,4 @@ Make layout entries typed per widget, publish the options, and hand them to widg
 ## Notes
 
 - A settings UI will edit the raw TOML: the published layout has resolved ids and options and does not say what was written explicitly. Nothing here needs to change that.
+- Decision (orchestrator, during implementation): the catalog hands a decoder its keys in alphabetical order, so options always arrive before `widget`. The SDK gained `ModuleConfig::prune_section`, a hook that runs before decoding; Bar uses it to remove another widget's options from an entry and report them as unknown-key warnings.

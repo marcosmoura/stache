@@ -1,84 +1,86 @@
-//! Native tray menu and actions.
+//! The tray icon, its clicks and its minimal native menu.
 //!
-//! The tray is created on the `AppKit` main thread before the host starts its slow
-//! services. Menu callbacks only enqueue work on the host worker; they never
-//! join a module, wait for the socket or block on configuration I/O.
-//!
-//! Enable is configuration-backed and executes through the host's validated
-//! TOML edit. Pause/resume are session-only and never touch a file. The menu is
-//! built from a pure row description so wording and action eligibility are
-//! testable without `AppKit`.
+//! The tray is created on the `AppKit` main thread before the host starts its
+//! slow services. A left click toggles the popover under the icon; a right
+//! click shows the native menu `Open Stache`, separator, `Quit Stache Next`.
+//! Callbacks only queue work; they never join a module, wait for the socket
+//! or block on configuration I/O. Clicks and menu rows are mapped by pure
+//! functions so they are testable without `AppKit`.
 
-use tauri::AppHandle;
-use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem};
-use tauri::tray::TrayIconBuilder;
+use stache_macos::IconAnchor;
+use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{AppHandle, Manager as _};
 
-use crate::bindings::{AccessState, ConfigFileView, HostStatus, ModuleState, ModuleStatusView};
 use crate::host::HostHandle;
 
-/// The tray icon identity shared with status updates.
+/// The tray icon identity.
 pub const TRAY_ID: &str = "stache-next";
 
-/// One actionable tray command.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// The tray tooltip.
+pub const TOOLTIP: &str = "Stache Next";
+
+/// One menu or click action.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TrayAction {
-    /// Toggle the configuration-backed enabled flag.
-    Enable {
-        /// Module identifier.
-        module: String,
-        /// The requested flag.
-        enabled: bool,
-    },
-    /// Pause a module for this session.
-    Pause(String),
-    /// Resume a paused module.
-    Resume(String),
-    /// Retry an eligible failed or unavailable module.
-    Retry(String),
-    /// Open or focus the Accessibility guidance window.
-    AccessGuide,
-    /// Explicitly request Accessibility (may show the system prompt).
-    AccessRequest,
-    /// Open the Accessibility pane of System Settings.
-    AccessSettings,
-    /// Open the explicit test window.
-    TestWindow,
+    /// Toggle the popover under the icon.
+    TogglePopover(IconAnchor),
+    /// Remember the icon rectangle for a later `Open Stache`.
+    NoteAnchor(IconAnchor),
+    /// Show the popover under the last icon rectangle.
+    OpenPopover,
     /// Quit through the shared shutdown coordinator.
     Quit,
-}
-
-/// A non-action status or diagnostic row.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TrayItem {
-    /// Stable callback identifier, or an empty string for a disabled row.
-    pub id: String,
-    /// Visible text.
-    pub label: String,
-    /// The action, or `None` for a status/diagnostic row.
-    pub action: Option<TrayAction>,
-    /// Check state for a check item.
-    pub checked: Option<bool>,
 }
 
 /// One rendered menu row.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TrayRow {
-    /// A menu item.
-    Item(TrayItem),
+    /// A menu item: callback identifier and visible text.
+    Item {
+        /// Stable callback identifier.
+        id: &'static str,
+        /// Visible text.
+        label: &'static str,
+    },
     /// A separator.
     Separator,
 }
 
-/// Creates the tray and its initial menu.
+/// The right-click menu, in order.
+pub const MENU: [TrayRow; 3] = [
+    TrayRow::Item {
+        id: "open",
+        label: "Open Stache",
+    },
+    TrayRow::Separator,
+    TrayRow::Item {
+        id: "quit",
+        label: "Quit Stache Next",
+    },
+];
+
+/// Creates the tray, its menu and its click handling.
 ///
 /// # Errors
 /// Returns a Tauri menu or tray construction error.
 pub fn create(app: &AppHandle, host: HostHandle) -> tauri::Result<()> {
-    let menu = menu(app, &host.status())?;
+    let menu = menu(app)?;
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
-        .tooltip("Stache Next")
+        .tooltip(TOOLTIP)
         .menu(&menu)
-        .on_menu_event(move |_app, event| handle_event(&host, event.id.as_ref()));
+        .show_menu_on_left_click(false)
+        .on_menu_event(move |app, event| {
+            if let Some(action) = menu_action(event.id.as_ref()) {
+                run(app, &host, action);
+            }
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let Some(action) = click_action(&event) {
+                // Clicks never quit, so no host handle is needed here.
+                run_click(tray.app_handle(), action);
+            }
+        });
     if let Some(icon) = app.default_window_icon() {
         builder = builder.icon(icon.clone());
     }
@@ -86,43 +88,19 @@ pub fn create(app: &AppHandle, host: HostHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Rebuilds the menu after a status change. Must run on the main thread.
-///
-/// # Errors
-/// Returns a Tauri menu error; the existing menu stays in place.
-pub fn update(app: &AppHandle, status: &HostStatus) -> tauri::Result<()> {
-    let menu = menu(app, status)?;
-    if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        tray.set_menu(Some(menu))?;
-    }
-    Ok(())
-}
-
-fn menu(app: &AppHandle, status: &HostStatus) -> tauri::Result<Menu<tauri::Wry>> {
+fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let mut items: Vec<Box<dyn IsMenuItem<tauri::Wry>>> = Vec::new();
-    for row in rows(status) {
+    for row in &MENU {
         match row {
             TrayRow::Separator => items.push(Box::new(PredefinedMenuItem::separator(app)?)),
-            TrayRow::Item(item) => {
-                let enabled = item.action.is_some();
-                if let Some(checked) = item.checked {
-                    items.push(Box::new(CheckMenuItem::with_id(
-                        app,
-                        item.id,
-                        item.label,
-                        enabled,
-                        checked,
-                        None::<&str>,
-                    )?));
-                } else {
-                    items.push(Box::new(MenuItem::with_id(
-                        app,
-                        item.id,
-                        item.label,
-                        enabled,
-                        None::<&str>,
-                    )?));
-                }
+            TrayRow::Item { id, label } => {
+                items.push(Box::new(MenuItem::with_id(
+                    app,
+                    *id,
+                    *label,
+                    true,
+                    None::<&str>,
+                )?));
             }
         }
     }
@@ -131,459 +109,155 @@ fn menu(app: &AppHandle, status: &HostStatus) -> tauri::Result<Menu<tauri::Wry>>
     Menu::with_items(app, &references)
 }
 
-/// Builds the pure menu description for one status snapshot.
+/// The action of a menu row.
 #[must_use]
-pub fn rows(status: &HostStatus) -> Vec<TrayRow> {
-    let mut rows = Vec::new();
-    let header = if status.ready {
-        match (status.access.state, status.access.revoked) {
-            (AccessState::Checking, _) => "Stache Next — checking Accessibility…",
-            (AccessState::Blocked, true) => "Stache Next — Accessibility was turned off",
-            (AccessState::Blocked, false) => "Stache Next — Accessibility required",
-            (AccessState::Open, _) => "Stache Next",
-        }
-    } else {
-        "Stache Next — starting…"
+pub fn menu_action(id: &str) -> Option<TrayAction> {
+    match id {
+        "open" => Some(TrayAction::OpenPopover),
+        "quit" => Some(TrayAction::Quit),
+        _ => None,
+    }
+}
+
+/// The action of a tray icon event: a left button release toggles the
+/// popover; a right button press (which opens the menu) records the icon
+/// rectangle. Everything else is ignored.
+#[must_use]
+pub fn click_action(event: &TrayIconEvent) -> Option<TrayAction> {
+    let TrayIconEvent::Click { rect, button, button_state, .. } = event else {
+        return None;
     };
-    rows.push(item("status", header, None, None));
-    if status.access.state == AccessState::Blocked {
-        rows.push(item(
-            "access-guide",
-            "Show Accessibility Help…",
-            Some(TrayAction::AccessGuide),
-            None,
-        ));
-        rows.push(item(
-            "access-request",
-            "Request Accessibility…",
-            Some(TrayAction::AccessRequest),
-            None,
-        ));
-        rows.push(item(
-            "access-settings",
-            "Open Accessibility Settings…",
-            Some(TrayAction::AccessSettings),
-            None,
-        ));
-    }
-    if let Some(error) = &status.error {
-        rows.push(item("error", truncate(error, 80), None, None));
-    }
-    for module in &status.modules {
-        module_rows(&mut rows, module);
-    }
-    for file in &status.config {
-        config_rows(&mut rows, file);
-    }
-    rows.push(TrayRow::Separator);
-    rows.push(item(
-        "test-window",
-        "Open Test Window",
-        Some(TrayAction::TestWindow),
-        None,
-    ));
-    rows.push(TrayRow::Separator);
-    rows.push(item("quit", "Quit Stache Next", Some(TrayAction::Quit), None));
-    rows
-}
-
-fn module_rows(rows: &mut Vec<TrayRow>, module: &ModuleStatusView) {
-    rows.push(item(
-        format!("enable:{}", module.id),
-        format!("{} enabled", module.id),
-        Some(TrayAction::Enable {
-            module: module.id.clone(),
-            enabled: !module.enabled,
-        }),
-        Some(module.enabled),
-    ));
-    rows.push(item(
-        format!("state:{}", module.id),
-        format!("  {}: {}", module.id, state_label(module.state)),
-        None,
-        None,
-    ));
-    if let Some(detail) = &module.detail {
-        rows.push(item(
-            format!("detail:{}", module.id),
-            format!("  {}", truncate(detail, 80)),
-            None,
-            None,
-        ));
-    }
-    if let Some(diagnostic) = &module.diagnostic {
-        rows.push(item(
-            format!("diagnostic:{}", module.id),
-            format!("  configuration: {}", truncate(diagnostic, 80)),
-            None,
-            None,
-        ));
-    }
-    if module.enabled {
-        let (id, label, action) = if module.paused {
-            (
-                format!("resume:{}", module.id),
-                format!("Resume {}", module.id),
-                TrayAction::Resume(module.id.clone()),
-            )
-        } else {
-            (
-                format!("pause:{}", module.id),
-                format!("Pause {}", module.id),
-                TrayAction::Pause(module.id.clone()),
-            )
-        };
-        rows.push(item(id, label, Some(action), None));
-    }
-    // A failed disabled or paused module has a failed stop to retry.
-    let retryable = module.state == ModuleState::Failed
-        || (module.state == ModuleState::Unavailable && module.enabled && !module.paused);
-    if retryable {
-        rows.push(item(
-            format!("retry:{}", module.id),
-            format!("Retry {}", module.id),
-            Some(TrayAction::Retry(module.id.clone())),
-            None,
-        ));
+    let anchor = anchor(rect);
+    match (button, button_state) {
+        (MouseButton::Left, MouseButtonState::Up) => Some(TrayAction::TogglePopover(anchor)),
+        (MouseButton::Right, MouseButtonState::Down) => Some(TrayAction::NoteAnchor(anchor)),
+        _ => None,
     }
 }
 
-fn config_rows(rows: &mut Vec<TrayRow>, file: &ConfigFileView) {
-    if let Some(diagnostic) = &file.diagnostic {
-        rows.push(item(
-            format!("config:{}", file.file),
-            format!("{}: {}", file.file, truncate(diagnostic, 80)),
-            None,
-            None,
-        ));
-    }
-    for (index, warning) in file.warnings.iter().enumerate() {
-        rows.push(item(
-            format!("warning:{}:{index}", file.file),
-            format!("{}: {}", file.file, truncate(warning, 80)),
-            None,
-            None,
-        ));
-    }
+/// The click rectangle as reported: physical pixels of the icon's display.
+fn anchor(rect: &tauri::Rect) -> IconAnchor {
+    let (x, y) = match rect.position {
+        tauri::Position::Physical(position) => (f64::from(position.x), f64::from(position.y)),
+        tauri::Position::Logical(position) => (position.x, position.y),
+    };
+    let (width, height) = match rect.size {
+        tauri::Size::Physical(size) => (f64::from(size.width), f64::from(size.height)),
+        tauri::Size::Logical(size) => (size.width, size.height),
+    };
+    IconAnchor { x, y, width, height }
 }
 
-fn item(
-    id: impl Into<String>,
-    label: impl Into<String>,
-    action: Option<TrayAction>,
-    checked: Option<bool>,
-) -> TrayRow {
-    TrayRow::Item(TrayItem {
-        id: id.into(),
-        label: label.into(),
-        action,
-        checked,
-    })
-}
-
-const fn state_label(state: ModuleState) -> &'static str {
-    match state {
-        ModuleState::Stopped => "stopped",
-        ModuleState::Disabled => "disabled",
-        ModuleState::Running => "running",
-        ModuleState::Paused => "paused",
-        ModuleState::WaitingForPermission => "waiting for permission",
-        ModuleState::Unavailable => "unavailable",
-        ModuleState::Failed => "failed",
-    }
-}
-
-fn handle_event(host: &HostHandle, id: &str) {
-    if let Some(module) = id.strip_prefix("enable:") {
-        if let Some(current) = module_status(host, module) {
-            host.set_enabled(module, !current.enabled);
-        }
-    } else if let Some(module) = id.strip_prefix("pause:") {
-        host.pause(module);
-    } else if let Some(module) = id.strip_prefix("resume:") {
-        host.resume(module);
-    } else if let Some(module) = id.strip_prefix("retry:") {
-        host.retry(module);
-    } else if id == "access-guide" {
-        host.open_access_guide();
-    } else if id == "access-request" {
-        host.request_permission();
-    } else if id == "access-settings" {
-        host.open_accessibility_settings();
-    } else if id == "test-window" {
-        host.open_test_window();
-    } else if id == "quit" {
+fn run(app: &AppHandle, host: &HostHandle, action: TrayAction) {
+    if action == TrayAction::Quit {
         host.request_shutdown();
+    } else {
+        run_click(app, action);
     }
 }
 
-fn module_status(host: &HostHandle, id: &str) -> Option<ModuleStatusView> {
-    host.status().modules.into_iter().find(|module| module.id == id)
-}
-
-fn truncate(text: &str, limit: usize) -> String {
-    if text.chars().count() <= limit {
-        return text.to_owned();
-    }
-    let mut shortened: String = text.chars().take(limit.saturating_sub(1)).collect();
-    shortened.push('…');
-    shortened
+fn run_click(app: &AppHandle, action: TrayAction) {
+    // The window backend is managed after the tray exists; until then a click
+    // does nothing.
+    let Some(windows) = app.try_state::<crate::WindowsState>() else {
+        return;
+    };
+    let _ = match action {
+        TrayAction::TogglePopover(anchor) => windows.0.toggle_popover(anchor),
+        TrayAction::NoteAnchor(anchor) => {
+            windows.0.note_tray_anchor(anchor);
+            Ok(())
+        }
+        TrayAction::OpenPopover => windows.0.open_popover(),
+        TrayAction::Quit => Ok(()),
+    };
 }
 
 #[cfg(test)]
 mod tests {
+    use tauri::tray::TrayIconId;
+    use tauri::{PhysicalPosition, PhysicalSize, Position, Rect, Size};
+
     use super::*;
-    use crate::bindings::{AccessView, ConfigFileState, ModuleStatusView};
 
-    fn module(state: ModuleState, enabled: bool, paused: bool) -> ModuleStatusView {
-        ModuleStatusView {
-            id: "testModule".to_owned(),
-            state,
-            enabled,
-            paused,
-            revision: "1".to_owned(),
-            detail: None,
-            diagnostic: None,
-            keybindings: None,
-            tiling: None,
-            bar: None,
-        }
-    }
-
-    fn status() -> HostStatus {
-        HostStatus {
-            ready: true,
-            error: None,
-            access: AccessView {
-                state: AccessState::Open,
-                revoked: false,
-                app_path: None,
+    fn click(button: MouseButton, button_state: MouseButtonState) -> TrayIconEvent {
+        TrayIconEvent::Click {
+            id: TrayIconId::new(TRAY_ID),
+            position: PhysicalPosition::new(0.0, 0.0),
+            rect: Rect {
+                position: Position::Physical(PhysicalPosition::new(2000, 0)),
+                size: Size::Physical(PhysicalSize::new(48, 66)),
             },
-            modules: Vec::new(),
-            config: Vec::new(),
+            button,
+            button_state,
         }
     }
 
-    fn gated(state: AccessState, revoked: bool) -> HostStatus {
-        let mut snapshot = status();
-        snapshot.access.state = state;
-        snapshot.access.revoked = revoked;
-        snapshot
-    }
-
-    fn labels(rows: &[TrayRow]) -> Vec<(String, String)> {
-        rows.iter()
-            .filter_map(|row| match row {
-                TrayRow::Item(item) => Some((item.id.clone(), item.label.clone())),
-                TrayRow::Separator => None,
-            })
-            .collect()
-    }
-
-    fn actions(rows: &[TrayRow]) -> Vec<TrayAction> {
-        rows.iter()
-            .filter_map(|row| match row {
-                TrayRow::Item(item) => item.action.clone(),
-                TrayRow::Separator => None,
-            })
-            .collect()
-    }
+    const ANCHOR: IconAnchor = IconAnchor {
+        x: 2000.0,
+        y: 0.0,
+        width: 48.0,
+        height: 66.0,
+    };
 
     #[test]
-    fn long_details_are_truncated_on_a_character_boundary() {
-        let text = "é".repeat(90);
-        let shortened = truncate(&text, 10);
-        assert_eq!(shortened.chars().count(), 10);
-        assert!(shortened.ends_with('…'));
-    }
-
-    #[test]
-    fn a_running_module_shows_plain_state_and_no_retry() {
-        let mut snapshot = status();
-        snapshot.modules = vec![module(ModuleState::Running, true, false)];
-        let rows = rows(&snapshot);
-        assert!(
-            rows.iter().any(|row| matches!(
-                row,
-                TrayRow::Item(item) if item.action.is_none() && item.label.contains("running")
-            )),
-            "a plain running status row is required"
+    fn a_left_release_toggles_the_popover_at_the_icon() {
+        assert_eq!(
+            click_action(&click(MouseButton::Left, MouseButtonState::Up)),
+            Some(TrayAction::TogglePopover(ANCHOR))
         );
-        assert!(!actions(&rows).iter().any(|action| matches!(action, TrayAction::Retry(_))));
     }
 
     #[test]
-    fn retry_is_offered_for_every_failed_module_and_only_an_active_unavailable_one() {
-        let mut snapshot = status();
-        snapshot.modules = vec![module(ModuleState::Failed, false, false)];
-        assert!(actions(&rows(&snapshot)).iter().any(|a| matches!(a, TrayAction::Retry(_))));
-        snapshot.modules = vec![module(ModuleState::Failed, true, true)];
-        assert!(actions(&rows(&snapshot)).iter().any(|a| matches!(a, TrayAction::Retry(_))));
-        snapshot.modules = vec![module(ModuleState::Unavailable, false, false)];
-        assert!(!actions(&rows(&snapshot)).iter().any(|a| matches!(a, TrayAction::Retry(_))));
-        snapshot.modules = vec![module(ModuleState::Unavailable, true, true)];
-        assert!(!actions(&rows(&snapshot)).iter().any(|a| matches!(a, TrayAction::Retry(_))));
-        snapshot.modules = vec![module(ModuleState::Failed, true, false)];
-        assert_eq!(actions(&rows(&snapshot)), vec![
-            TrayAction::Enable {
-                module: "testModule".to_owned(),
-                enabled: false
-            },
-            TrayAction::Pause("testModule".to_owned()),
-            TrayAction::Retry("testModule".to_owned()),
-            TrayAction::TestWindow,
-            TrayAction::Quit,
-        ]);
+    fn a_right_press_only_remembers_the_icon_for_the_menu() {
+        assert_eq!(
+            click_action(&click(MouseButton::Right, MouseButtonState::Down)),
+            Some(TrayAction::NoteAnchor(ANCHOR))
+        );
     }
 
     #[test]
-    fn module_and_file_diagnostics_are_separate_non_action_rows() {
-        let mut snapshot = status();
-        let mut failed = module(ModuleState::Failed, true, false);
-        failed.detail = Some("start failed".to_owned());
-        failed.diagnostic = Some("bad field".to_owned());
-        snapshot.modules = vec![failed];
-        snapshot.config = vec![ConfigFileView {
-            file: "proxyAudio.toml".to_owned(),
-            path: "/tmp/proxyAudio.toml".to_owned(),
-            state: ConfigFileState::Invalid,
-            active: false,
-            diagnostic: Some("parse error".to_owned()),
-            warnings: vec!["unknown key".to_owned()],
-        }];
-        let rows = rows(&snapshot);
-        for expected in ["start failed", "bad field", "parse error", "unknown key"] {
-            assert!(
-                rows.iter().any(|row| matches!(
-                    row,
-                    TrayRow::Item(item) if item.action.is_none() && item.label.contains(expected)
-                )),
-                "missing non-action row for {expected}"
-            );
-        }
-    }
-
-    #[test]
-    fn paused_and_disabled_rows_do_not_offer_retry() {
-        let mut snapshot = status();
-        snapshot.modules = vec![
-            module(ModuleState::Paused, true, true),
-            module(ModuleState::Disabled, false, false),
-        ];
-        let actions = actions(&rows(&snapshot));
-        assert!(!actions.iter().any(|action| matches!(action, TrayAction::Retry(_))));
-        assert!(actions.iter().any(|action| matches!(action, TrayAction::Resume(_))));
-    }
-
-    fn access_rows(snapshot: &HostStatus) -> Vec<(String, String)> {
-        labels(&rows(snapshot))
-            .into_iter()
-            .filter(|(id, _)| id == "status" || id.starts_with("access-"))
-            .collect()
-    }
-
-    fn pair(id: &str, label: &str) -> (String, String) { (id.to_owned(), label.to_owned()) }
-
-    #[test]
-    fn checking_shows_only_the_checking_status_row() {
-        let snapshot = gated(AccessState::Checking, false);
-        assert_eq!(access_rows(&snapshot), vec![pair(
-            "status",
-            "Stache Next — checking Accessibility…"
-        )]);
-    }
-
-    #[test]
-    fn blocked_shows_the_required_status_and_both_gate_actions() {
-        let snapshot = gated(AccessState::Blocked, false);
-        assert_eq!(access_rows(&snapshot), vec![
-            pair("status", "Stache Next — Accessibility required"),
-            pair("access-guide", "Show Accessibility Help…"),
-            pair("access-request", "Request Accessibility…"),
-            pair("access-settings", "Open Accessibility Settings…"),
-        ]);
-        let actions = actions(&rows(&snapshot));
-        assert!(actions.contains(&TrayAction::AccessRequest));
-        assert!(actions.contains(&TrayAction::AccessSettings));
-    }
-
-    #[test]
-    fn the_guide_row_is_the_first_gate_row_and_only_while_blocked() {
-        for revoked in [false, true] {
-            let rows = rows(&gated(AccessState::Blocked, revoked));
-            let ids: Vec<String> = labels(&rows).into_iter().map(|(id, _)| id).collect();
-            assert_eq!(ids[0], "status");
-            assert_eq!(ids[1], "access-guide", "{ids:?}");
-            assert_eq!(ids[2], "access-request");
-            assert_eq!(ids[3], "access-settings");
-            assert!(actions(&rows).contains(&TrayAction::AccessGuide));
-        }
-        for state in [AccessState::Checking, AccessState::Open] {
-            let rows = rows(&gated(state, false));
-            assert!(!labels(&rows).iter().any(|(id, _)| id == "access-guide"));
-            assert!(!actions(&rows).contains(&TrayAction::AccessGuide));
-        }
-    }
-
-    #[test]
-    fn revoked_changes_only_the_status_wording() {
-        let snapshot = gated(AccessState::Blocked, true);
-        assert_eq!(access_rows(&snapshot), vec![
-            pair("status", "Stache Next — Accessibility was turned off"),
-            pair("access-guide", "Show Accessibility Help…"),
-            pair("access-request", "Request Accessibility…"),
-            pair("access-settings", "Open Accessibility Settings…"),
-        ]);
-    }
-
-    #[test]
-    fn open_has_no_gate_row_and_no_snapshot_has_a_permission_row() {
-        assert_eq!(access_rows(&gated(AccessState::Open, false)), vec![pair(
-            "status",
-            "Stache Next"
-        )]);
-        for (state, revoked) in [
-            (AccessState::Checking, false),
-            (AccessState::Blocked, false),
-            (AccessState::Blocked, true),
-            (AccessState::Open, false),
+    fn presses_releases_and_other_buttons_are_ignored() {
+        for (button, state) in [
+            (MouseButton::Left, MouseButtonState::Down),
+            (MouseButton::Right, MouseButtonState::Up),
+            (MouseButton::Middle, MouseButtonState::Down),
+            (MouseButton::Middle, MouseButtonState::Up),
         ] {
-            let mut snapshot = gated(state, revoked);
-            snapshot.modules = vec![module(ModuleState::WaitingForPermission, true, false)];
-            assert!(
-                !labels(&rows(&snapshot)).iter().any(|(id, _)| id == "permission"),
-                "the per-module permission row is gone"
-            );
+            assert_eq!(click_action(&click(button, state)), None, "{button:?} {state:?}");
         }
+        let enter = TrayIconEvent::Enter {
+            id: TrayIconId::new(TRAY_ID),
+            position: PhysicalPosition::new(0.0, 0.0),
+            rect: Rect::default(),
+        };
+        assert_eq!(click_action(&enter), None);
     }
 
     #[test]
-    fn a_blocked_menu_keeps_modules_and_the_always_available_actions() {
-        let mut snapshot = gated(AccessState::Blocked, false);
-        snapshot.modules = vec![module(ModuleState::WaitingForPermission, true, false)];
-        let rows = rows(&snapshot);
-        assert!(labels(&rows).iter().any(|(_, label)| label.contains("waiting for permission")));
-        let actions = actions(&rows);
-        for expected in [
-            TrayAction::Enable {
-                module: "testModule".to_owned(),
-                enabled: false,
+    fn the_menu_has_exactly_open_a_separator_and_quit() {
+        assert_eq!(MENU, [
+            TrayRow::Item {
+                id: "open",
+                label: "Open Stache",
             },
-            TrayAction::Pause("testModule".to_owned()),
-            TrayAction::TestWindow,
-            TrayAction::Quit,
-        ] {
-            assert!(actions.contains(&expected), "missing {expected:?}");
-        }
-    }
-
-    #[test]
-    fn a_host_that_is_not_ready_reads_starting() {
-        let mut snapshot = gated(AccessState::Checking, false);
-        snapshot.ready = false;
-        assert_eq!(access_rows(&snapshot), vec![pair(
+            TrayRow::Separator,
+            TrayRow::Item {
+                id: "quit",
+                label: "Quit Stache Next",
+            },
+        ]);
+        assert_eq!(menu_action("open"), Some(TrayAction::OpenPopover));
+        assert_eq!(menu_action("quit"), Some(TrayAction::Quit));
+        for gone in [
+            "test-window",
+            "access-guide",
+            "enable:tiling",
+            "pause:bar",
             "status",
-            "Stache Next — starting…"
-        )]);
+        ] {
+            assert_eq!(menu_action(gone), None, "{gone}");
+        }
+        assert_eq!(TOOLTIP, "Stache Next");
     }
 }

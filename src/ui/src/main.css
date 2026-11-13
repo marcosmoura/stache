@@ -1,0 +1,37 @@
+/*
+ * Cascade layer order: the reset sits below every StyleX layer
+ * (`stylex.priority*`, emitted by the StyleX plugin with the same order).
+ * This file holds no component styles.
+ */
+@layer reset, stylex;
+
+@layer reset {
+  /*
+   * Light/dark is CSS only: color tokens are `light-dark()` values, resolved
+   * from the window's native appearance (`[ui] appearance`). No script reads or
+   * sets the theme.
+   */
+  :root {
+    color-scheme: light dark;
+  }
+
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html,
+  body {
+    margin: 0;
+    padding: 0;
+  }
+
+  html,
+  body,
+  #root {
+    min-height: 100%;
+
+    background: transparent;
+  }
+}

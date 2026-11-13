@@ -5,7 +5,7 @@ use std::fs;
 use std::path::Path;
 use std::process::ExitCode;
 
-use stache_bar::{BarConfig, WeatherProvider};
+use stache_bar::{BarConfig, BarLayoutConfig, WeatherProvider};
 use stache_hold_to_quit::{CommandQuitConfig, HudAnimation, HudPosition};
 use stache_keep_awake::KeepAwakeConfig;
 use stache_keybindings::KeybindingsConfig;
@@ -154,6 +154,13 @@ fn templates_come_from_the_typed_defaults() {
     let catalog = catalog();
     let global = catalog.template(GlobalConfig::ID).expect("global template");
     assert!(global.contains("exec_on_startup = []"));
+    assert!(global.contains("[ui]"), "{global}");
+    assert!(global.contains("appearance = \"system\""), "{global}");
+    assert!(global.contains("# Light or dark appearance"), "{global}");
+    let schema = catalog.schema_json(GlobalConfig::ID).expect("schema").expect("render");
+    for value in ["\"system\"", "\"light\"", "\"dark\""] {
+        assert!(schema.contains(value), "{schema}");
+    }
     assert!(global.starts_with("#:schema "), "{global}");
     let keep_awake = catalog.template(KeepAwakeConfig::ID).expect("keepAwake template");
     assert!(keep_awake.contains("enabled = false"), "{keep_awake}");
@@ -1523,6 +1530,12 @@ fn assert_migrated_bar_is_typed(catalog: &ConfigCatalog, destination: &Path) {
     assert_eq!(decoded.height, 32, "explicit height is kept");
     assert_eq!(decoded.padding, 12, "omitted padding is materialized");
     assert_eq!(decoded.weather.provider, WeatherProvider::Auto);
+    assert!(!text.contains("[layout]"), "migration writes no layout: {text}");
+    assert_eq!(
+        decoded.layout,
+        BarLayoutConfig::default(),
+        "the default layout applies"
+    );
 }
 
 fn bar_migration(legacy_bar: &str) -> (ExitCode, String, String, serde_json::Value) {
@@ -2039,7 +2052,9 @@ fn templates_follow_struct_declaration_order_with_scalars_before_tables() {
         "exec_on_startup",
         "[logging]",
         "level",
-        "debug"
+        "debug",
+        "[ui]",
+        "appearance"
     ]);
     assert_eq!(order(CommandQuitConfig::ID), [
         "enabled",
@@ -2099,4 +2114,37 @@ fn union_table_keys_keep_their_template_comments() {
             "{key} has no comment:\n{gaps}"
         );
     }
+}
+
+#[test]
+fn bar_entry_options_decode_warn_and_reject_through_the_real_catalog() {
+    let catalog = catalog();
+    let path = Path::new("bar.toml");
+    let text = "[layout]\nend = [\"weather\", { temperature_alert = 90, widget = \"cpu\" }, { widget = \"clock\", show_seconds = false, temperature_alert = 1 }]\n";
+    let (config, warnings) =
+        catalog.decode_typed::<BarConfig>(BarConfig::ID, path, text).expect("decode");
+    assert_eq!(warnings, ["layout.end.2.temperature_alert"]);
+    let published = serde_json::to_value(config.layout.normalized().end).expect("encode");
+    assert_eq!(
+        published,
+        serde_json::json!([
+            { "widget": "weather", "id": "weather", "options": {} },
+            { "widget": "cpu", "id": "cpu", "options": { "temperature_alert": 90 } },
+            { "widget": "clock", "id": "clock", "options": { "show_date": true, "show_seconds": false, "hour_cycle": "h23" } },
+        ])
+    );
+    let error = catalog
+        .inspect(
+            BarConfig::ID,
+            path,
+            "[layout]\nend = [\"wifi\", { widget = \"cpu\", temperature_alert = 200 }]\n",
+        )
+        .expect_err("out of range");
+    assert_eq!(
+        error.field.as_deref(),
+        Some("layout.end[1].temperature_alert"),
+        "{error}"
+    );
+    let schema = catalog.schema_json(BarConfig::ID).expect("schema").expect("render");
+    assert!(schema.contains("\"const\": \"clock\""), "{schema}");
 }

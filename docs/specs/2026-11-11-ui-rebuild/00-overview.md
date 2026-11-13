@@ -91,10 +91,10 @@ Dependencies point one way: `windows` → `widgets` → `components` → `theme`
 
 | Part                      | Summary                                                                                           | Status |
 | ------------------------- | ------------------------------------------------------------------------------------------------- | ------ |
-| [01](01-scaffold.md)      | Delete the old UI and tooling; new project, toolchain, router, placeholder window, both harnesses | draft  |
-| [02](02-design-system.md) | Tokens, light/dark, `[ui] appearance` applied natively, Motion setup, `Icon` component            | draft  |
-| [03](03-data-layer.md)    | IPC boundary, query client, ordered feeds, host and Bar queries, zustand scoped-store helper      | draft  |
-| [04](04-bar-layout.md)    | `[layout]` in `bar.toml`, `BarView.layout`, widget registry, layout engine, Bar window, scenarios | draft  |
+| [01](01-scaffold.md)      | Delete the old UI and tooling; new project, toolchain, router, placeholder window, both harnesses | done   |
+| [02](02-design-system.md) | Tokens, light/dark, `[ui] appearance` applied natively, Motion setup, `Icon` component            | done   |
+| [03](03-data-layer.md)    | IPC boundary, query client, ordered feeds, host and Bar queries, zustand scoped-store helper      | done   |
+| [04](04-bar-layout.md)    | `[layout]` in `bar.toml`, `BarView.layout`, widget registry, layout engine, Bar window, scenarios | done   |
 
 ## Affected docs
 

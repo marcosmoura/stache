@@ -23,7 +23,7 @@ use std::time::Duration;
 
 pub use control::{AnimationControl, AnimationReport, LiveSink};
 pub use easing::apply_easing;
-pub use fallback::FallbackReason;
+pub use fallback::{FallbackEntry, FallbackEvent, FallbackReason, MotionKind};
 pub use metrics::{MetricsSummary, describe as describe_metrics};
 pub use spring::{SpringParams, SpringState};
 pub use transition::Transition;

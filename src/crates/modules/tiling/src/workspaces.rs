@@ -251,6 +251,9 @@ pub struct AppVisibility {
     pub hide_wanted: bool,
     /// The application is hidden by someone else. Never cleared by a refresh.
     pub externally_hidden: bool,
+    /// Finder without a tracked window: kept shown as the desktop host,
+    /// because macOS does not hide the last visible regular application.
+    pub host: bool,
 }
 
 /// Why isolation is only partial.
@@ -283,6 +286,22 @@ pub struct VisibilityRequirement {
     pub apps: Vec<AppVisibility>,
     /// Partial-isolation diagnostics, ordered by application.
     pub conflicts: Vec<VisibilityConflict>,
+    /// Finder is wanted hidden because its tracked windows are all on hidden
+    /// workspaces, so it cannot host the desktop (see [`AppVisibility::host`]).
+    pub finder_held: bool,
+    /// Startup has tried every listed application (`completed_once`).
+    pub settled: bool,
+    /// A running application without any window that hosts the desktop
+    /// because Finder cannot: nothing visible is needed and something is
+    /// wanted hidden. Its entry in [`Self::apps`] has [`AppVisibility::host`].
+    pub desktop_host: Option<ApplicationId>,
+    /// [`Self::desktop_host`] is the active application.
+    pub host_active: bool,
+    /// The frontmost application kept on screen: Finder is held, no
+    /// windowless host exists and every other application is hidden or being
+    /// hidden, so macOS would refuse its hide (and only deactivate it). Its
+    /// entry is not wanted hidden.
+    pub kept_last: Option<ApplicationId>,
 }
 
 impl VisibilityRequirement {
@@ -357,9 +376,179 @@ pub fn visibility_requirement(state: &TilingState) -> VisibilityRequirement {
             externally_hidden: state.apps.get(&application).is_some_and(|app| app.hidden),
             needed_by,
             inactive_in: inactive,
+            host: false,
         });
     }
+    for application in finders(state) {
+        match out.apps.iter().position(|app| app.application == application) {
+            Some(index) => out.finder_held |= out.apps[index].hide_wanted,
+            // Only once every listed application was tried: a Finder window
+            // not listed yet must not be shown by mistake.
+            None if !state.completed_once => {}
+            None => out.apps.push(AppVisibility {
+                application,
+                needed_by: Vec::new(),
+                displays: Vec::new(),
+                inactive_in: Vec::new(),
+                hide_wanted: false,
+                externally_hidden: state.apps.get(&application).is_some_and(|app| app.hidden),
+                host: true,
+            }),
+        }
+    }
+    out.settled = state.completed_once;
+    if let Some(application) = windowless_host(state, &out) {
+        out.desktop_host = Some(application);
+        out.host_active = state.active_application == Some(application);
+        out.apps.push(AppVisibility {
+            application,
+            needed_by: Vec::new(),
+            displays: Vec::new(),
+            inactive_in: Vec::new(),
+            hide_wanted: false,
+            externally_hidden: state.apps.get(&application).is_some_and(|app| app.hidden),
+            host: true,
+        });
+    }
+    if out.desktop_host.is_none() {
+        out.kept_last = last_visible(state, &out);
+        if let Some(index) = out.apps.iter().position(|app| Some(app.application) == out.kept_last)
+        {
+            out.apps[index].hide_wanted = false;
+        }
+    }
+    out.apps.sort_by_key(|app| app.application);
     out
+}
+
+/// The frontmost application, when it is wanted hidden and would be the last
+/// visible regular application: Finder is held, nothing is needed and every
+/// other known application is hidden (observed or owned) or wanted hidden.
+/// An application whose visibility is unknown (never reported hidden) keeps
+/// the hide being sent.
+fn last_visible(state: &TilingState, out: &VisibilityRequirement) -> Option<ApplicationId> {
+    let front = state.active_application?;
+    let blocked = !state.completed_once
+        || !out.finder_held
+        || out.apps.iter().any(|app| app.host || !app.needed_by.is_empty())
+        || !out.hide_wanted(front);
+    let others_hidden = state.apps.iter().all(|(application, record)| {
+        *application == front
+            || record.skipped
+            || record.hidden
+            || state.owned_hidden.contains(application)
+            || out.hide_wanted(*application)
+    });
+    (!blocked && others_hidden).then_some(front)
+}
+
+/// Finder's bundle identifier: the desktop host.
+const FINDER_BUNDLE_ID: &str = "com.apple.finder";
+
+/// The running Finder instances Tiling knows.
+fn finders(state: &TilingState) -> impl Iterator<Item = ApplicationId> + '_ {
+    state
+        .apps
+        .iter()
+        .filter(|(_, record)| record.info.bundle_id.eq_ignore_ascii_case(FINDER_BUNDLE_ID))
+        .map(|(application, _)| *application)
+}
+
+/// The desktop host when Finder cannot be one: needed only once startup has
+/// tried every application, when Finder is held hidden, no visible workspace
+/// needs an application and something is wanted hidden (a switch would leave
+/// no visible regular application). A candidate is a tracked (listed, so
+/// regular), non-skipped application whose window listing finished and
+/// returned nothing: no tracked and no excluded window. The active one wins,
+/// then an unhidden one, then the lowest application id.
+///
+/// Blind spot: the AX listing returns only windows of the current Space, so
+/// an application whose windows are all on another Space or in a native
+/// fullscreen Space (never listed or focused) looks windowless; activating it
+/// can make macOS switch to that Space. A Space change does not re-list such
+/// an application.
+fn windowless_host(state: &TilingState, out: &VisibilityRequirement) -> Option<ApplicationId> {
+    let needed = |app: &AppVisibility| app.host || !app.needed_by.is_empty();
+    if !state.completed_once
+        || !out.finder_held
+        || out.apps.iter().any(needed)
+        || !out.apps.iter().any(|app| app.hide_wanted)
+    {
+        return None;
+    }
+    windowless_candidate(state)
+}
+
+/// The windowless host candidate of [`windowless_host`], without the
+/// planner's "a hide is wanted now" preconditions: whether some application
+/// could host an empty desktop in this state.
+fn windowless_candidate(state: &TilingState) -> Option<ApplicationId> {
+    let startup = &state.startup;
+    state
+        .apps
+        .iter()
+        .filter(|(application, record)| {
+            record.tracked
+                && !record.skipped
+                && !startup.failed.contains(application)
+                && !startup.truncated.contains(application)
+                && !startup.awaiting.contains(application)
+                && !state.reconcile.inflight.contains(application)
+                && !state.reconcile.unconfirmed.contains(application)
+                && !state.reconcile.all
+                && !state.windows.values().any(|window| window.application == **application)
+                && !state.excluded.keys().any(|token| token.application() == **application)
+        })
+        .min_by_key(|(application, record)| {
+            (
+                state.active_application != Some(**application),
+                record.hidden,
+                **application,
+            )
+        })
+        .map(|(application, _)| *application)
+}
+
+/// The workspaces Stache cannot show as an empty desktop (published as
+/// `inactive`): no live window is assigned to it, it is not visible on its
+/// display and it is not reachable. A workspace is reachable once startup has
+/// tried every listed application and a workspace visible on another display
+/// holds a window, Finder hosts the desktop (it runs without a tracked window)
+/// or, while Finder is running, the windowless host selection finds a
+/// candidate (the planner uses a windowless host only once Finder is held
+/// hidden, so without a running Finder it would pick none). Before startup
+/// completes only the other-display rule applies. `requirement` is
+/// [`visibility_requirement`] of the same state: its Finder host entry is the
+/// Finder rule.
+#[must_use]
+pub fn unreachable(state: &TilingState, requirement: &VisibilityRequirement) -> Vec<WorkspaceId> {
+    let live = |id: WorkspaceId| {
+        state.windows.values().any(|window| {
+            window.departing.is_none()
+                && (window.desired.workspace == Some(id)
+                    || state
+                        .workspaces
+                        .iter()
+                        .any(|ws| ws.id == id && ws.order.contains(&window.token)))
+        })
+    };
+    // The planner picks a windowless host only while Finder is held, which
+    // needs a running Finder: without one, rule 3 does not apply.
+    let host = state.completed_once
+        && (requirement.apps.iter().any(|app| app.host)
+            || (finders(state).next().is_some() && windowless_candidate(state).is_some()));
+    state
+        .workspaces
+        .iter()
+        .filter(|workspace| !workspace.visible && !live(workspace.id) && !host)
+        .filter(|workspace| {
+            !state
+                .workspaces
+                .iter()
+                .any(|other| other.visible && other.screen != workspace.screen && live(other.id))
+        })
+        .map(|workspace| workspace.id)
+        .collect()
 }
 
 /// Whether `application` is the frontmost one and its focused window is not
@@ -472,8 +661,9 @@ fn carry(
 /// configured layout is unchanged), floating state, order and focus. Added
 /// workspaces use the configured layout. Windows of a removed workspace move,
 /// in their stable order, to the visible (else first) workspace of the same
-/// display, with the main display as fallback. Rule and ignore edits apply
-/// eligibility immediately but reassign no existing window.
+/// display, with the main display as fallback. Ignore edits apply eligibility
+/// immediately. When the workspace definitions change, the commit step then
+/// re-evaluates every managed window with the startup assignment.
 ///
 /// # Errors
 ///
@@ -520,6 +710,7 @@ pub fn prepare_reload(old: &TilingState, config: &TilingConfig) -> Result<Mappin
         }
         ensure_default_workspaces(&old.screens, &mut workspaces, &mut next_workspace);
         let focused = reconcile(&old.screens, &mut workspaces, old.focus.workspace);
+        let focused = focus_heir(old, &mut workspaces).or(focused);
         // Windows of removed workspaces move in stable order.
         let main = primary_screen(&old.screens);
         let removed: Vec<&WorkspaceState> = old
@@ -641,6 +832,23 @@ impl Mapping {
         }
         Ok(())
     }
+}
+
+/// A removed focused workspace hands the focus to the workspace now visible on
+/// its display, where the native focus still is. `None` when the focused
+/// workspace survives or its display shows none.
+fn focus_heir(old: &TilingState, workspaces: &mut [WorkspaceState]) -> Option<WorkspaceId> {
+    let screen = old
+        .focus
+        .workspace
+        .filter(|id| !workspaces.iter().any(|n| n.id == *id))
+        .and_then(|id| old.workspaces.iter().find(|ws| ws.id == id))?
+        .screen;
+    let heir = workspaces.iter().find(|n| n.screen == screen && n.visible)?.id;
+    for workspace in workspaces.iter_mut() {
+        workspace.focused = workspace.id == heir;
+    }
+    Some(heir)
 }
 
 /// A focus snapshot for a mapping (used by the commit step).

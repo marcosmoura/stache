@@ -54,6 +54,21 @@ Every file starts with `#:schema <url>`, the Taplo/Tombi convention that points
 an editor at `schemas/<id>.schema.json`. It is an ordinary comment to the parser;
 there is no `$schema` data key.
 
+`global.toml` holds `logging`, `exec_on_startup` and `[ui]`. `[ui] appearance`
+is `"system"` (default), `"light"` or `"dark"`; any other value is a type error at
+`ui.appearance`. The effect is app-wide: the host sets the application
+appearance (`AppHandle::set_theme`, i.e. `NSApp.appearance` = nil, Aqua or Dark
+Aqua), and every window and the Bar `NSPanel` set none of their own and inherit
+it. In tao a per-window theme also sets the application appearance, and a build
+with no theme does not reset it, so no window is built with a theme. The webview's `prefers-color-scheme` follows that native appearance,
+so the UI's `light-dark()` tokens pick Latte or Mocha with no script (see
+[ui.md](ui.md#tokens-and-themes)). No window is forced dark.
+
+```toml
+[ui]
+appearance = "system" # "light" | "dark"
+```
+
 `bar.toml` is registered for configuration, schema, template and migration
 only (`enabled` default `false`, `height` 28, `padding` 12, and `weather` with
 `provider` `auto`|`visual_crossing`|`open_meteo`, `api_keys`, `default_location` and
@@ -66,6 +81,50 @@ expands injected `~`/`~/`, resolves anything else under the configuration
 directory and never expands shell or environment syntax or uses the process
 working directory. The Bar weather path reads `VISUAL_CROSSING_API_KEY` from that file on each
 `bar_weather` call (no watcher). See [bar.md](../features/bar.md).
+
+`bar.toml` `[layout]` (`BarLayoutConfig`, `src/crates/modules/bar/src/layout.rs`)
+has three ordered zones, `start`, `center` and `end`. An entry is a widget name
+(the closed snake_case enum `BarWidgetKind`: `spaces`, `media`, `weather`,
+`cpu`, `battery`, `keep_awake`, `wifi`, `clock`) or a table with `widget`
+(required), an optional `id` and that widget's options as flat keys
+(`{ widget = "clock", show_seconds = false }`). Options: `clock` has
+`show_date` and `show_seconds` (booleans, default `true`) and `hour_cycle`
+(`"h23"` or `"h12"`, default `"h23"`); `cpu` has `temperature_alert` (integer
+degrees Celsius, 1 to 150, default 85); the other widgets have none. A name and
+a table without option keys both mean the defaults. A missing `[layout]`
+is the default `start = ["spaces"]`, `center = ["media"]`,
+`end = ["weather", "cpu", "battery", "keep_awake", "wifi", "clock"]`; a zone
+missing from a present `[layout]` is empty.
+
+The "string or table" shape is a hand-written serde visitor, not an untagged or
+internally tagged derive (both buffer the value and lose paths), so type errors
+keep their exact path (`layout.end[2]`, `layout.end[2].widget`,
+`layout.start[0].id`, `layout.end[1].temperature_alert`): an option of the wrong
+type, out of range or with an unknown enum spelling rejects the file. Keys may
+come in any order. The decoder reads a table's keys alphabetically (the JSON
+map), so options arrive before `widget`; each option name belongs to exactly
+one widget and is decoded in place for its owner. Another widget's option on an
+entry is an unknown key: `ModuleConfig::prune_section`, a catalog hook run
+before every decode (default no-op), removes it from the JSON value and reports
+its path (`layout.end.1.show_seconds`) with the unknown-key warnings; other
+unknown keys reach `serde_ignored` as usual. The config type is
+`BarLayoutEntryTable`, internally tagged by `widget` with one variant per
+widget over `BarEntryFields<Options>` (`id` plus the flattened options;
+`NoOptions` for a widget without options). The schema describes an entry as an
+`anyOf` of a widget name and a `oneOf` with one object per widget (`widget` a
+`const`, only that widget's properties with their defaults and ranges; `id` a
+plain optional string with `minLength` 1 and the pattern `^[A-Za-z0-9_-]+$`).
+`BarConfig::validate` rejects a duplicate explicit id, naming both paths, and a
+`temperature_alert` out of range in a configuration built in code.
+`BarLayoutConfig::normalized()` assigns ids (an explicit id is kept; otherwise
+the widget name, then `<name>_2`, `<name>_3`, ... in file order across all
+zones, skipping explicit ids), resolves options and is what the host publishes
+as `BarView.layout`: items `BarLayoutItem`, tagged by `widget`, of
+`{ id, widget, options }` with every option resolved (`{}` for a widget without
+options); the generated TypeScript is a discriminated union on `widget`. The
+template shows the default under `[layout]` with a commented example that
+includes an option; migration writes no `[layout]`, so a migrated file uses
+the default.
 
 `notunes.toml` is registered for configuration, schema, template and migration,
 and backs the shipped blocker runtime: enabling it installs application
@@ -223,36 +282,97 @@ content is saved again. A rejected or deleted file keeps the last good registry
 revision, status and resources and records a separate diagnostic. `ConfigStore`
 never executes `exec_on_startup`.
 
-## Tray enable edits
+## Edits
 
-The tray's configuration-backed **Enable** action does not reserialize the file.
-`plan_enabled` reads the current bytes (or the generated template when the file
-is missing), refuses a symlink or an unreadable/invalid current file, locates the
-root `enabled` boolean with `toml_edit` and validates the complete replacement
-text before any write. Only that value span is replaced, so its trailing comment,
-the `#:schema` line, every other comment, key order, tables and arrays of tables
-stay byte for byte. When `enabled` is absent, `enabled = <bool>` is inserted after
-the last root key, or, in a file with no root keys, after the leading comment
-lines and before the first table header, so `#:schema` stays on line 1. The
-inserted line uses the file's own line ending (CRLF when the file has one). After
-the edit the candidate must hold the requested root `enabled`, or the edit is
-refused and nothing is written. A root
-`enabled` that is not a boolean (including a `[enabled]` table) is refused. The commit prepares and syncs a same-directory temporary
-file first, then re-reads the original bytes as close to the rename as possible.
-A missing target uses a no-clobber rename, so a concurrently created file is
-never replaced. A non-cooperating writer can still change the file between that last
-check and the rename; compare-plus-rename is not an atomic compare-and-swap on
-POSIX. Refusing a configuration file that is itself a symlink is deliberate: the
-tray never replaces the link. A replacement keeps the original file's permission
-bits, but the rename creates a new inode, so hard links to the old file are not
-updated.
+The settings editor and the tray's **Enable** action share one comment-preserving
+edit (`stache_sdk::config::edit_ops`); nothing reserializes a file. An edit is a
+`ConfigEditOp` at a key path (`ConfigPath`, a list of table keys and array
+indices, so quoted keys such as `"CapsLock+a"` need no escaping):
 
-After a successful commit the host calls `ConfigStore::reload_one` once. The
-watcher later reports the same bytes as unchanged, so a module is not reconfigured
-twice. An unchanged enabled value still syncs the disk state and retries an
-eligible failed start instead of only clearing the error. **Pause/Resume** never
-edit a file; a disabled module cannot be resumed from the tray. File diagnostics
-stay visible separately from runtime status.
+- `set { path, value }` sets or inserts a JSON value. A value already in the file
+  has only its value span replaced (its trailing comment stays); an existing
+  standard table or array of tables is set member by member. `null` is never
+  written: `set` with `null` is `remove`.
+- `remove { path }` removes a key (reset to default: the whole `key = value`
+  line) or an array element; removing a table or array-of-tables element removes
+  its header, body and sub-tables. Removing a missing key is unchanged.
+- `insert { path, index, value }` inserts an element into an inline array (in its
+  one-line or multi-line style) or a new `[[table]]` element.
+- `move { path, from, to }` reorders array elements; each array-of-tables
+  element moves with its header, body, sub-tables and the comment lines directly
+  above it, and each element of a one-element-per-line array moves with its
+  comments.
+- `rename { path, from, to }` renames a map key (re-rendering the headers of a
+  renamed table); it is refused when `to` exists.
+
+Only the touched span changes; the `#:schema` line, every other comment, key
+order, CRLF line endings and a missing trailing newline stay byte for byte. A new
+key goes after the last key of its table, before any sub-table header, in the
+file's line ending; in a file with no root keys a root key goes after the leading
+comment lines, so `#:schema` stays on line 1. An object (or a list of objects)
+set under the root or a standard table outside an array of tables becomes a
+`[table]` (or `[[table]]`) block appended at the end of the file; elsewhere
+values are written inline. A key under a dotted table is written as a dotted key
+in its nearest explicit table. Every planned text is re-parsed and compared with
+the same operation applied to the file's JSON value; a mismatch is refused and
+nothing is written. Path errors (a segment that crosses a non-table, an
+out-of-range index, an existing rename target, a value TOML cannot hold) are
+typed refusals.
+
+**Hash and stale.** A document's hash is FNV-1a 64-bit over the exact bytes as
+16 lowercase hex digits (`content_hash`; `None` for a missing file). It detects
+change, not tampering. Every editor edit carries the `baseHash` it was based on;
+`plan_edit` reads the file once and refuses with `stale` (writing nothing) when
+the bytes hash differently.
+
+**Validation.** `plan_edit` refuses a symlink, an unreadable file and a currently
+invalid file (an invalid file is read-only until a valid save lands). A missing
+file starts from the generated template. The candidate text is decoded and
+validated through the catalog exactly as a reload would before any write; a
+failure returns the catalog's message, line/column and field path (falling back
+to the edited path when the catalog names none). `set_enabled` (the tray) is
+`set` on the root `enabled` after refusing a non-boolean `enabled` (including a
+`[enabled]` table).
+
+**Commit.** The commit prepares and syncs a same-directory temporary file first,
+then re-reads the original bytes as close to the rename as possible; a change in
+between is reported as `stale`. A missing target uses a no-clobber rename, so a
+concurrently created file is never replaced. A non-cooperating writer can still
+change the file between that last check and the rename; compare-plus-rename is
+not an atomic compare-and-swap on POSIX. Refusing a configuration file that is
+itself a symlink is deliberate: an edit never replaces the link. A replacement
+keeps the original file's permission bits, but the rename creates a new inode,
+so hard links to the old file are not updated.
+
+After a successful commit the host calls `ConfigStore::reload_one` (or
+`reload_global` for `global.toml`) once, on the host runner, and returns the new
+hash and the reload outcome (`applied` with the revision, `unchanged`, or
+`rejected` with a diagnostic). The watcher later reports the same bytes as
+unchanged, so a module is not reconfigured twice. An unchanged enabled value
+still syncs the disk state and retries an eligible failed start instead of only
+clearing the error. **Pause/Resume** never edit a file; a disabled module cannot
+be resumed from the tray. File diagnostics stay visible separately from runtime
+status.
+
+## Document reads and change events
+
+`config_document(file)` reads one catalog file once, without touching a module
+lock: file name and path, state (`missing`, `valid`, `invalid`, `symlink`), hash,
+the parsed value (only the keys present in the file; `null` when missing or
+invalid), the catalog default, the JSON Schema, the diagnostic (message,
+line/column, field) and unknown-key warnings. A symlinked file is read through
+the link but is read-only. `config_files()` returns the last published
+`HostStatus.config`. `open_config_file(file)` creates a missing file from the
+template (no-clobber) and opens it with the default app (`open`). Files are named
+only by catalog file name; nothing accepts a path.
+
+The host emits `config-changed { files }` (catalog file names) after every
+committed edit (editor or tray) and after every watcher batch that touched
+catalog files, whatever the reload outcome (accepted, unchanged, rejected or
+deleted; a rescan names every file). It is emitted from the host runner after
+the reload and the status publication, holding no store lock. A watcher batch
+that only echoes the host's own committed bytes (same hash, not rejected) is not
+announced a second time, so one edit is one event.
 
 ## Reloading
 
@@ -273,7 +393,15 @@ diagnostic; the next changed configuration retries. Deleting a file retains the
 last good runtime until a valid replacement is written.
 
 `global.toml` updates the injected `LogFilter` immediately, so level changes
-are live. `exec_on_startup` is read once by the desktop host, never by config
+are live. Every accepted `global.toml` (the first load, including the
+default for a missing file, and every applied reload) reaches the store's
+`on_global_accepted` observers; the host's observer calls
+`WindowBackend::set_appearance`. The first accepted value and every change
+queue one main-thread job that applies it to the application
+(`WindowHost::apply_appearance`), whether or not a window is live; live windows
+and panels follow at once and later builds inherit it, nothing is recreated, and
+`"system"` clears the override so the system appearance is followed again.
+A job superseded by a newer value does nothing. A rejected or unchanged reload calls no observer and changes nothing. `exec_on_startup` is read once by the desktop host, never by config
 loading, reload or CLI. The host starts it once after initial setup (after
 registry start, socket and watcher) on its own owned thread, sequentially with
 legacy quoting rules, stopping at the first failure; shutdown cancels it, kills

@@ -41,13 +41,13 @@ Orchestrator decisions:
 
 | Part                           | Group | Summary                                                                                      | Status |
 | ------------------------------ | ----- | -------------------------------------------------------------------------------------------- | ------ |
-| [01](01-widget-options.md)     | A     | Typed per-widget options in `[layout]`, schema union, published items, `WidgetProps.options` | draft  |
-| [02](02-bar-shell.md)          | A     | Bar root rules, slide-away, `BarItem`, `ScrollingLabel`, compact mode, command mutations     | draft  |
-| [03](03-system-widgets.md)     | B     | Clock (with options), CPU (with option), Battery, Wi-Fi, Keep Awake                          | draft  |
-| [04](04-weather.md)            | C     | Weather widget: inputs command, providers, refresh, icon tables, click                       | draft  |
-| [05](05-media.md)              | D     | Media widget: label, artwork by id, retained artwork, player icons, click                    | draft  |
-| [06](06-spaces.md)             | E     | Spaces widget: workspaces, apps, focus clicks, motion, extended icon tables                  | draft  |
-| [07](07-windows-and-finish.md) | F     | Accessibility guide, test window, exhaustive registry, full scenario suite, final docs       | draft  |
+| [01](01-widget-options.md)     | A     | Typed per-widget options in `[layout]`, schema union, published items, `WidgetProps.options` | done   |
+| [02](02-bar-shell.md)          | A     | Bar root rules, slide-away, `BarItem`, `ScrollingLabel`, compact mode, command mutations     | done   |
+| [03](03-system-widgets.md)     | B     | Clock (with options), CPU (with option), Battery, Wi-Fi, Keep Awake                          | done   |
+| [04](04-weather.md)            | C     | Weather widget: inputs command, providers, refresh, icon tables, click                       | done   |
+| [05](05-media.md)              | D     | Media widget: label, artwork by id, retained artwork, player icons, click                    | done   |
+| [06](06-spaces.md)             | E     | Spaces widget: workspaces, apps, focus clicks, motion, extended icon tables                  | done   |
+| [07](07-windows-and-finish.md) | F     | Accessibility guide, test window, exhaustive registry, full scenario suite, final docs       | done   |
 
 ## Affected docs
 

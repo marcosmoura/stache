@@ -1014,7 +1014,7 @@ adapters, file-backed configuration (catalog, store, watcher, comment-preserving
 edits, templates and schemas), the typed accepted-configuration watch, generic published state with `observes`, host-owned screen reservations with the SDK display ID, identity
 paths/instance lock, cache leases, durable storage and the socket protocol/router/client/server,
 and the shared input contract with its idle macOS owner. The Tauri
-composition root, tray, permission polling, shutdown coordinator and test window
+composition root, tray, permission polling, shutdown coordinator and host windows
 are described in [overview.md](overview.md) and [ui.md](ui.md); the CLI
 composition is in [ipc.md](ipc.md). The proxyAudio runtime is in
 [proxy-audio.md](../features/proxy-audio.md); the typed React client and test

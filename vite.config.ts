@@ -1,35 +1,99 @@
 /// <reference types="vitest/config" />
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { release, type } from 'node:os';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import babel from '@rolldown/plugin-babel';
+import stylex from '@stylexjs/unplugin';
 import react, { reactCompilerPreset } from '@vitejs/plugin-react';
 import { playwright } from '@vitest/browser-playwright';
-import wyw from '@wyw-in-js/vite';
 import { defineConfig } from 'vite';
+import type { BrowserCommand } from 'vitest/node';
 
-import { readFontRecord } from './src/ui/tests/bar-parity/fontFile.node.ts';
+/** Media features a browser test may emulate (`commands.emulateMedia`). */
+type EmulatedMedia = {
+  colorScheme?: 'light' | 'dark' | 'no-preference' | null;
+  reducedMotion?: 'reduce' | 'no-preference' | null;
+};
 
-const uiRoot = path.resolve(import.meta.dirname, 'src/ui');
-const parityDirectory = path.resolve(uiRoot, 'tests/bar-parity');
-const uiInclude = ['./src/**/*.test.{ts,tsx}', './tests/**/*.test.{ts,tsx}'];
-const parityInclude = ['./tests/bar-parity/**/*.test.{ts,tsx}'];
+/** Vitest browser command: Playwright `page.emulateMedia` for the test page. */
+const emulateMedia: BrowserCommand<[EmulatedMedia]> = async (context, media) => {
+  await context.page.emulateMedia(media);
+};
+
+const repositoryRoot = import.meta.dirname;
+const uiRoot = path.resolve(repositoryRoot, 'src/ui');
+
+/**
+ * The `@/` alias is defined once, in `tsconfig.app.json`. Vite reads it through
+ * `resolve.tsconfigPaths`; StyleX receives the same table as absolute paths so
+ * `defineVars` imports resolve identically in dev, build and tests.
+ */
+const tsconfigPaths = (
+  JSON.parse(readFileSync(path.join(repositoryRoot, 'tsconfig.app.json'), 'utf8')) as {
+    compilerOptions: { paths: Record<string, string[]> };
+  }
+).compilerOptions.paths;
+
+const stylexAliases = Object.fromEntries(
+  Object.entries(tsconfigPaths).map(([alias, targets]) => [
+    alias,
+    targets.map((target) => path.resolve(repositoryRoot, target)),
+  ]),
+);
 
 export default defineConfig({
-  root: path.resolve(import.meta.dirname, 'src/ui'),
-  envDir: import.meta.dirname,
+  root: uiRoot,
+  envDir: repositoryRoot,
   plugins: [
-    wyw({
-      include: [path.resolve(import.meta.dirname, 'src/ui/src/**/*.styles.tsx')],
+    // StyleX first (keeps Fast Refresh), then React, then the React Compiler.
+    // In dev the plugin injects `/virtual:stylex.css` and `virtual:stylex:runtime`
+    // into `index.html` itself (`devMode: 'full'`).
+    stylex.vite({
+      useCSSLayers: { before: ['reset'], prefix: 'stylex' },
+      aliases: stylexAliases,
+      unstable_moduleResolution: { type: 'commonJS', rootDir: repositoryRoot },
+      devMode: 'full',
+      // StyleX post-processes its CSS with lightningcss. Without explicit
+      // targets it uses the default browserslist and lowers `light-dark()` to a
+      // polyfill that needs `color-scheme` in the same stylesheet; the webview is
+      // Safari 26, which supports it natively. (Major version in the high 16 bits.)
+      lightningcssOptions: { targets: { safari: 26 << 16 } },
     }),
     react(),
     babel({ presets: [reactCompilerPreset()] }),
   ],
+  resolve: {
+    tsconfigPaths: true,
+  },
+  // Pre-bundled up front so a first dev or test run never re-optimizes and
+  // reloads mid-run.
+  optimizeDeps: {
+    include: [
+      '@hugeicons/core-free-icons',
+      '@hugeicons/react',
+      '@tanstack/react-query',
+      '@tauri-apps/api/window',
+      'motion/react',
+      'motion/react-m',
+      'zustand',
+      'zustand/react/shallow',
+    ],
+    // Commit the scanned dependencies at once. Holding them until the crawl
+    // ends deadlocks a cold cache: the warmed-up `*.stylex.ts` transforms wait
+    // for the optimized `@stylexjs/stylex`, and the optimizer waits for them.
+    holdUntilCrawlEnd: false,
+  },
   clearScreen: false,
   server: {
     port: 1420,
     strictPort: true,
+    // The dev stylesheet (`/virtual:stylex.css`) is compiled from the modules
+    // transformed so far. A `defineConsts` media query used as a style key is a
+    // placeholder until its defining file is transformed; if the stylesheet is
+    // compiled before that, lightningcss rejects it ("Invalid empty selector").
+    // Transforming the token files at server start closes that window (dev and
+    // Vitest; the build transforms every module first).
+    warmup: { clientFiles: ['./src/theme/*.stylex.ts'] },
   },
   build: {
     target: 'safari26',
@@ -40,141 +104,39 @@ export default defineConfig({
   test: {
     css: true,
     root: uiRoot,
-    setupFiles: ['./tests/setup.ts'],
-    exclude: ['**/_legacy/**', '**/.worktrees/**', '**/dist/**', '**/node_modules/**'],
+    setupFiles: ['./tests/processShim.ts', './tests/setup.ts'],
+    exclude: ['**/_legacy/**', '**/.worktrees/**', '**/dist/**', '**/node_modules/**', 'e2e/**'],
     coverage: {
       provider: 'istanbul',
       reporter: ['text', 'json', 'html'],
       include: ['./src/**/*.{ts,tsx}'],
       exclude: [
         './**/*.test.{ts,tsx}',
-        './**/*.styles.tsx',
-        './main.tsx',
+        './**/*.style.ts',
+        './**/*.stylex.ts',
+        './src/main.tsx',
+        './src/ipc/bindings.gen.ts',
         './tests/**',
-        './vite-env.d.ts',
-        '**/_legacy/**',
+        './e2e/**',
         '**/dist/**',
       ],
       thresholds: { lines: 80, functions: 80, branches: 65, statements: 80 },
     },
     browser: {
       headless: true,
-      commands: {
-        // Bar visual-parity gate (src/ui/tests/bar-parity). Node side of the page-driven checks.
-        parityFont: () => ({ ...readFontRecord(), os: `${type()} ${release()}` }),
-        // Colour scheme and reduced motion emulation for the whole page (nested frames follow).
-        parityEmulate: async (
-          { page },
-          colorScheme: 'dark' | 'light',
-          reducedMotion: 'reduce' | 'no-preference',
-        ) => {
-          await page.emulateMedia({ colorScheme, reducedMotion });
-        },
-        // Exact screenshot of one element in the tester frame, as base64 PNG. Animations are
-        // never altered here; the test pauses them at a known timeline position beforehand.
-        parityScreenshot: async ({ frame }, selector: string) => {
-          const buffer = await (
-            await frame()
-          )
-            .locator(selector)
-            .screenshot({ animations: 'allow', caret: 'hide', scale: 'device', type: 'png' });
-
-          return buffer.toString('base64');
-        },
-        // Real pointer hover over the nth element matching `inner` inside the iframe `outer`.
-        parityPointer: async (
-          { page, frame },
-          action: 'hover' | 'down' | 'up' | 'reset',
-          outer: string,
-          inner: string,
-          index: number,
-        ) => {
-          if (action === 'reset') {
-            await page.mouse.up();
-            await page.mouse.move(0, page.viewportSize()?.height ?? 1);
-
-            return;
-          }
-
-          if (action === 'hover') {
-            await (
-              await frame()
-            )
-              .locator(outer)
-              .contentFrame()
-              .locator(inner)
-              .nth(index)
-              .hover({ force: true });
-
-            return;
-          }
-
-          await (action === 'down' ? page.mouse.down() : page.mouse.up());
-        },
-        // Persists the parity run record. Deterministic content, fixed directories.
-        parityWriteRecord: (_context, name: string, content: string) => {
-          if (!/^[\w.-]+\.json$/u.test(name)) {
-            throw new Error(`Invalid parity record name: ${name}`);
-          }
-
-          // A normal run writes to the untracked `test-results/bar-parity/`; the committed
-          // records change only on an explicit `STACHE_PARITY_WRITE_RECORD=1`.
-          const directory =
-            process.env.STACHE_PARITY_WRITE_RECORD === '1'
-              ? parityDirectory
-              : path.resolve(import.meta.dirname, 'test-results/bar-parity');
-
-          mkdirSync(directory, { recursive: true });
-          writeFileSync(path.join(directory, name), content);
-        },
-        // Lets a test emulate `prefers-reduced-motion` through Playwright.
-        setReducedMotion: async ({ page }, reduce: boolean) => {
-          await page.emulateMedia({ reducedMotion: reduce ? 'reduce' : 'no-preference' });
-        },
-      },
       screenshotFailures: true,
       screenshotDirectory: 'test-results/screenshots',
+      commands: { emulateMedia },
     },
     projects: [
-      // The UI suite (device scale 1). The Bar parity matrix runs separately
-      // (`bun run test:parity`) because it takes minutes.
       {
         extends: true,
         test: {
           name: 'ui',
-          include: uiInclude,
-          exclude: [...parityInclude],
+          include: ['./src/**/*.test.{ts,tsx}', './tests/**/*.test.{ts,tsx}'],
           browser: {
             enabled: true,
             provider: playwright(),
-            headless: true,
-            instances: [{ browser: 'webkit' }],
-          },
-        },
-      },
-      // The Bar parity matrix at device scale 1.
-      {
-        extends: true,
-        test: {
-          name: 'bar-parity-1x',
-          include: parityInclude,
-          browser: {
-            enabled: true,
-            provider: playwright(),
-            headless: true,
-            instances: [{ browser: 'webkit' }],
-          },
-        },
-      },
-      // The Bar parity matrix again at device scale 2.
-      {
-        extends: true,
-        test: {
-          name: 'bar-parity-2x',
-          include: parityInclude,
-          browser: {
-            enabled: true,
-            provider: playwright({ contextOptions: { deviceScaleFactor: 2 } }),
             headless: true,
             instances: [{ browser: 'webkit' }],
           },

@@ -38,8 +38,9 @@ use crate::config::LayoutType;
 use crate::dto::{
     ActionEvidence, ActionStatus, AppDto, FrameDto, OperationEvidence, OperationKind,
     OperationResponse, QueryKind, QueryParams, ReasonEvidence, RequestEvidence, ResizeArg,
-    ScreenDto, StatusAppDto, StatusDto, StatusExcludedDto, StatusHiddenDto, StatusNoFrameDto,
-    StatusWindowDto, WindowDto, WindowParams, WorkspaceDto, WorkspaceParams, method,
+    ScreenDto, StatusAnimationFallbackDto, StatusAppDto, StatusDto, StatusExcludedDto,
+    StatusHiddenDto, StatusNoFrameDto, StatusWindowDto, WindowDto, WindowParams, WorkspaceDto,
+    WorkspaceParams, method,
 };
 use crate::events::IntentSubmitError;
 use crate::intent::{
@@ -224,6 +225,8 @@ pub mod body {
     pub const NO_FOCUSED_WINDOW: &str = "No focused window";
     /// No workspace has that name.
     pub const WORKSPACE_NOT_FOUND: &str = "Workspace not found";
+    /// The workspace has no window and cannot be shown as an empty desktop.
+    pub const WORKSPACE_INACTIVE: &str = "Workspace is inactive";
     /// No display matches.
     pub const SCREEN_NOT_FOUND: &str = "Screen not found";
     /// The display has no visible workspace.
@@ -1250,6 +1253,7 @@ impl Planned {
             IntentOutcome::NoOp(_) => Ok(ActionStatus::AdmittedUnchanged),
             IntentOutcome::Rejected(rejection) => Err(HandlerError::handler(match rejection {
                 IntentRejection::UnknownWorkspace => body::WORKSPACE_NOT_FOUND.to_owned(),
+                IntentRejection::InactiveWorkspace => body::WORKSPACE_INACTIVE.to_owned(),
                 IntentRejection::UnknownWindow => self
                     .numeric
                     .map_or_else(|| body::NO_FOCUSED_WINDOW.to_owned(), body::window_not_found),
@@ -1584,6 +1588,21 @@ pub(crate) fn status(snapshot: &TilingSnapshot) -> StatusDto {
                     }
                     .to_owned(),
                     reason: owned.reason.clone(),
+                }
+            })
+            .collect(),
+        animation_fallbacks: snapshot
+            .animation_fallbacks
+            .iter()
+            .map(|(entry, retry_in)| {
+                let app = catalog(entry.application);
+                StatusAnimationFallbackDto {
+                    name: app.map(|app| app.info.name.clone()).unwrap_or_default(),
+                    bundle_id: app.map(|app| app.info.bundle_id.clone()).unwrap_or_default(),
+                    kind: entry.kind.as_str().to_owned(),
+                    reason: entry.reason.to_string(),
+                    retry_in_ms: retry_in
+                        .map(|left| u64::try_from(left.as_millis()).unwrap_or(u64::MAX)),
                 }
             })
             .collect(),

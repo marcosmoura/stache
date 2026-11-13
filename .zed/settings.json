@@ -2,7 +2,7 @@
 //
 // Formatting and linting run through the Oxc extension, which starts the
 // project-local `oxlint` / `oxfmt` binaries via `--lsp`. Stylelint uses the
-// repository config, including its `*.styles.tsx` override.
+// repository config for CSS files; StyleX styles are linted by oxlint.
 //
 // Rust formats through `rustfmt` directly. The rustup shim resolves the
 // toolchain from `rust-toolchain.toml`, so nightly options in `rustfmt.toml`
@@ -133,9 +133,6 @@
         },
         {
           "code_action": "source.fixAll.oxc"
-        },
-        {
-          "code_action": "source.fixAll.stylelint"
         }
       ],
       "prettier": {
@@ -195,7 +192,7 @@
     "stylelint-lsp": {
       "settings": {
         "stylelint": {
-          "validate": ["css", "typescript", "typescriptreact"]
+          "validate": ["css"]
         }
       }
     }

@@ -1,119 +1,67 @@
 # Tray
 
-Read when changing the menu bar item, its rows, or the actions it triggers. **Shipped
-behavior.** The source of truth is `src/crates/app/src/tray.rs`.
+Read when changing the menu bar item, its clicks or its menu. **Shipped behavior.** The
+source of truth is `src/crates/app/src/tray.rs`.
 
 ## Purpose
 
-The tray is the primary, always-present UI surface of the desktop app. It shows host and
-module status and carries the actions: configuration-backed Enable, session-only
-Pause/Resume, Retry, the explicit Accessibility gate actions, the on-demand test window and Quit.
-The test window is the only other surface, and it exists only while it is open.
+The tray is the always-present entry point of the desktop app. A left click toggles the
+[popover](popover.md) under the icon; a right click shows a minimal native menu. Module
+status and actions live in the popover, not in the menu.
 
-There is no Dock icon and no settings window. The app supplies no menu, so Tauri installs
-its default macOS application menu; under the Accessory activation policy no menu bar is
-displayed, but the menu object and its Quit key equivalent exist, which is why Cmd-Q
-reaches AppKit.
+There is no Dock icon. The app supplies no application menu, so Tauri installs its default
+macOS one; under the Accessory activation policy no menu bar is displayed, but the menu
+object and its Quit key equivalent exist, which is why Cmd-Q reaches AppKit.
 
-## Creation and updates
+## Creation
 
 - `tray::create` runs during Tauri setup, after `set_activation_policy(Accessory)` and
   before the host starts its slow services. The tray id is `stache-next`; the tooltip is
-  `Stache Next`; the icon is the app's `default_window_icon()`.
-- `tray::update` rebuilds the whole menu from a fresh status snapshot and replaces it
-  with `set_menu`. It must run on the AppKit main thread; `AppUi::status` dispatches it
-  through the host main-thread executor after emitting `status-changed`.
-- A rebuild that fails leaves the existing menu in place. The error is not surfaced:
-  `AppUi::status` discards the value `tray::update` returns, so a failed rebuild produces
-  no log line and no status diagnostic.
+  `Stache Next` (static); the icon is the app's `default_window_icon()`;
+  `show_menu_on_left_click(false)`.
+- The menu is built once. Nothing rebuilds it on a status change: there is no
+  `tray::update`.
 - The coordinator's `tray` owner removes the tray by id through its own acknowledged
   main-thread hop, separate from the final exit; a missing tray counts as removed.
-  AppKit's terminate reply path instead answers once and lets AppKit terminate.
 
-## Rows
+## Clicks and menu
 
-`rows(&HostStatus)` is a pure description, so wording and eligibility are testable
-without AppKit. It produces, in order:
+`click_action(&TrayIconEvent)` and `menu_action(id)` are pure, so the mapping is testable
+without AppKit:
 
-| Row                        | Kind       | Content                                                                                                                                              |
-| -------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `status`                   | non-action | `Stache Next`; `— starting…` before readiness; `— checking Accessibility…`; `— Accessibility required` or `— Accessibility was turned off` (revoked) |
-| `access-guide`             | menu item  | `Show Accessibility Help…`, the first gate row, only while the gate is blocked; opens or focuses the guidance window                                 |
-| `access-request`           | menu item  | `Request Accessibility…`, only while the gate is blocked                                                                                             |
-| `access-settings`          | menu item  | `Open Accessibility Settings…`, only while the gate is blocked                                                                                       |
-| `error`                    | non-action | Host error, truncated                                                                                                                                |
-| `enable:<id>`              | check item | `<id> enabled`; checked state is the configuration flag                                                                                              |
-| `state:<id>`               | non-action | Two-space indent, `<id>: <state label>`                                                                                                              |
-| `detail:<id>`              | non-action | Two-space indent, runtime detail when present, truncated                                                                                             |
-| `diagnostic:<id>`          | non-action | Two-space indent, `configuration: <diagnostic>`, truncated                                                                                           |
-| `pause:<id>`/`resume:<id>` | menu item  | Present for an enabled module; `Pause <id>` or `Resume <id>`                                                                                         |
-| `retry:<id>`               | menu item  | `Retry <id>`, when failed, or enabled, unpaused and unavailable                                                                                      |
-| `config:<file>`            | non-action | `<file>: <diagnostic>`, truncated                                                                                                                    |
-| `warning:<file>:<index>`   | non-action | `<file>: <warning>`, truncated                                                                                                                       |
-| `test-window`              | menu item  | `Open Test Window`                                                                                                                                   |
-| `quit`                     | menu item  | `Quit Stache Next`                                                                                                                                   |
+| Input                            | Action                                                                   |
+| -------------------------------- | ------------------------------------------------------------------------ |
+| Left button release              | `TogglePopover(rect)`: show the popover under the icon, or hide it       |
+| Right button press               | `NoteAnchor(rect)`: remember the icon rectangle; AppKit shows the menu   |
+| Menu `Open Stache` (`open`)      | `OpenPopover`: show the popover under the last remembered icon rectangle |
+| Menu `Quit Stache Next` (`quit`) | `Quit`: `HostHandle::request_shutdown`                                   |
+| Anything else                    | ignored                                                                  |
 
-Separators sit between the status block, the test window and Quit.
+The menu is exactly `Open Stache`, a separator, `Quit Stache Next` (`tray::MENU`). The
+rectangle is the click event's icon rectangle, in physical pixels of the icon's display.
 
-Every truncated payload has a budget of 80 characters, and the trailing `…` is part of
-that budget. Truncation applies to the payload before indentation and prefixes are added,
-so a rendered line can be longer than 80 characters.
+Quit calls the one idempotent teardown coordinator. Cmd-Q and other AppKit-initiated quits
+reach the same coordinator through the observed `applicationShouldTerminate:`; their
+real-session behavior is not verified yet, so the [roadmap](../roadmap.md) follow-up stays
+open.
 
-While the gate is blocked, module rows stay and read `waiting for permission`; Enable, Pause/Resume,
-Test Window and Quit keep working. When the gate is open no gate row appears. The former per-module
-`permission` row is gone: the gate rows replace it.
+## Former menu rows
 
-State labels are `stopped`, `disabled`, `running`, `paused`, `waiting for permission`,
-`unavailable` and `failed`. A non-action row is a disabled menu item, so it can never be
-clicked and never implies an action it does not have.
-
-## Actions
-
-`handle_event` maps callback ids to one host command each and returns immediately:
-
-- `enable:<id>` reads the current snapshot and requests the opposite of the accepted
-  flag. Enable is configuration-backed: plan, validate, prepare and sync the replacement,
-  recheck for an external change before the atomic rename, then apply once. A missing
-  target is committed with a no-clobber rename; a symlink is refused; an invalid file is
-  never overwritten.
-- `pause:<id>` / `resume:<id>` are session-only and never write a file.
-- `retry:<id>` retries an eligible failed or unavailable module. A failed module that is
-  disabled or paused has a failed stop, so Retry repeats that cleanup and starts nothing.
-- `access-guide` opens or focuses the Accessibility guidance window (also opened automatically once per
-  gated episode); it does nothing while the gate is open.
-- `access-request` triggers the explicit Accessibility request; it requests nothing while the gate
-  is open.
-- `access-settings` asks the host to open the Accessibility pane of System Settings while the gate
-  is not open; a failure becomes the host's last action error.
-- `test-window` opens or focuses the development test window.
-- `quit` calls `HostHandle::request_shutdown`, the one idempotent teardown coordinator.
-  Cmd-Q and other AppKit-initiated quits reach the same coordinator through the observed
-  `applicationShouldTerminate:`; their real-session behavior is not verified yet, so the
-  [roadmap](../roadmap.md) follow-up stays open.
+The former menu rows (status header, gate actions, per-module Enable, Pause/Resume, Retry,
+diagnostics, warnings and Quit) live in the popover's
+[Overview](popover.md#overview), with the same state labels and eligibility rules.
 
 ## Invariants and pitfalls
 
-- Menu callbacks never join a module, wait for the socket, or read configuration
-  inline; they only enqueue work on the host worker.
-- All menu construction and mutation runs on the main thread. Building a menu off it is
-  a crash, not a warning.
-- The menu is rebuilt from a snapshot, not mutated in place. Row ids are stable strings
-  derived from the module id and the file name, so renaming a module only changes its
-  row ids.
-- Configuration diagnostics are displayed separately from runtime state: an invalid file
-  never hides which module is running and never silently resets it.
-- Paused is runtime-only; a restart returns every module to its configured state.
-- There is no Reload item. Configuration reloads per module and `stache reload` exists,
-  so restarting the whole app for a configuration change is no longer part of the model.
-  A release-only Reload item is planned, and it depends on the coordinated restart path
-  from the planned teardown spec on the unmerged `feat/teardown` branch; see the note in
-  the [roadmap](../roadmap.md).
+- Click and menu callbacks never join a module, wait for the socket or read configuration
+  inline; they queue native work or one host command.
+- A click before the window backend is managed (early setup) does nothing.
+- All menu construction runs on the main thread.
 
 ## Tests
 
-The pure row description is covered in `src/crates/app/src/tray.rs`: truncation on a
-character boundary, a running module showing a plain state row with no Retry, Retry
-eligibility for every failed module and only an enabled unpaused unavailable one, module and
-file diagnostics as separate non-action rows, and healthy paused/disabled rows offering no
-Retry. A real tray click
-remains a manual check.
+`src/crates/app/src/tray.rs`: a left release toggles at the icon rectangle, a right press
+only records it, other presses, releases, buttons and enter events are ignored, and the
+menu is exactly the two items and a separator with no former row id mapping to an action.
+The popover lifecycle the clicks drive is tested in `windows.rs` (see
+[popover](popover.md#tests)). A real tray click remains a manual check.

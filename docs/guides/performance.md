@@ -126,7 +126,8 @@ External launch timing is reported separately and has no target.
 A gated launch (Accessibility missing) creates one webview, the guidance window,
 after the first permission check; the startup record above is written earlier and
 still reads `webviews=0`. The host then logs `access: guidance window requested`.
-A trusted launch creates no webview.
+A trusted launch creates no webview at startup. About 1 s after the host is ready
+it prewarms the popover, so an idle launch then holds one hidden popover webview.
 
 ## Webview evidence
 

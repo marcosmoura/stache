@@ -2,31 +2,35 @@
 //!
 //! The SDK validates ownership, surfaces, keys and kinds. This module owns the
 //! reuse map and hands native work to the main thread without ever waiting for
-//! it. Windows are labelled `stache-<surface>-<n>`: `stache-test-<n>` is granted
-//! only the test-window capability and `stache-access-<n>` only the access-window
-//! capability. `stache-bar-<n>` is the non-activating Bar panel; no production
-//! module requests it yet.
+//! it. Windows are labelled `stache-<surface>-<n>`: `stache-access-<n>` is
+//! granted only the access-window capability. `stache-bar-<n>` is the non-activating Bar panel; no production
+//! module requests it yet. `stache-popover` is the tray popover: one
+//! host-only, key-capable panel created once and then shown and hidden
+//! ([`NativeWindows::toggle_popover`]); no module request can open its surface.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use stache_macos::{NativeWindowHandle, PanelAdapter, SystemPanelAdapter};
-use stache_sdk::{
-    LogLevel, LogRecord, Logger, MainThreadExecutor, ModuleId, Operation, SurfaceId, WindowBackend,
-    WindowError, WindowFrame, WindowId, WindowKind, WindowOrigin, WindowPhase, WindowPhases,
-    WindowRequest,
+use stache_macos::{
+    IconAnchor, NativeWindowHandle, PanelAdapter, SystemPanelAdapter, TopLeftFrame,
 };
+use stache_sdk::{
+    Appearance, LogLevel, LogRecord, Logger, MainThreadExecutor, ModuleId, Operation, SurfaceId,
+    WindowBackend, WindowError, WindowFrame, WindowId, WindowKind, WindowOrigin, WindowPhase,
+    WindowPhases, WindowRequest,
+};
+use tauri::window::{Effect, EffectState, EffectsBuilder};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
+use crate::popover::{
+    POPOVER_HEIGHT, POPOVER_LABEL, POPOVER_SURFACE, POPOVER_WIDTH, PopoverShown, PopoverToggle,
+};
 use crate::shutdown::{NativeOwner, OwnerAnswer};
 
-/// Owner used for the explicit developer test window.
+/// Owner used for the host's own windows (the Accessibility guide, the popover).
 pub const HOST_OWNER: ModuleId = ModuleId::new("stache");
-
-/// Surface served to the explicit test window.
-pub const TEST_SURFACE: SurfaceId = SurfaceId::new("test");
 
 /// Surface served to the Accessibility guidance window.
 pub const ACCESS_SURFACE: SurfaceId = SurfaceId::new("access");
@@ -39,6 +43,10 @@ pub const ACCESS_WIDTH: u32 = 480;
 
 /// Logical height of the Accessibility guidance window.
 pub const ACCESS_HEIGHT: u32 = 640;
+
+/// Native corner radius of the Accessibility guide's material, matching the
+/// popover panel (`POPOVER_CORNER_RADIUS`) and the guide's `native.panelRadius`.
+pub const ACCESS_CORNER_RADIUS: f64 = 12.0;
 
 /// Native window chrome for one surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,12 +64,14 @@ pub struct WindowChrome {
 
 /// Maps a surface to its native chrome.
 ///
-/// The access surface is frameless and transparent; the Bar panel is frameless,
-/// transparent and shadowless; every other surface keeps the decorated, opaque
-/// builder defaults.
+/// The access surface is frameless and transparent, its rounded material set
+/// by the window effects in `open`; the Bar panel is frameless,
+/// transparent and shadowless; the popover is frameless and transparent, its
+/// shadow and rounded material drawn by its native panel; every other surface
+/// keeps the decorated, opaque builder defaults.
 #[must_use]
 pub fn chrome_for(surface: SurfaceId) -> WindowChrome {
-    if surface == BAR_SURFACE {
+    if surface == BAR_SURFACE || surface == POPOVER_SURFACE {
         WindowChrome {
             decorations: false,
             transparent: true,
@@ -82,6 +92,16 @@ pub fn chrome_for(surface: SurfaceId) -> WindowChrome {
             resizable: true,
             shadow: true,
         }
+    }
+}
+
+/// Maps `[ui] appearance` to the application theme: `None` follows the system.
+#[must_use]
+pub const fn theme_for(appearance: Appearance) -> Option<tauri::Theme> {
+    match appearance {
+        Appearance::System => None,
+        Appearance::Light => Some(tauri::Theme::Light),
+        Appearance::Dark => Some(tauri::Theme::Dark),
     }
 }
 
@@ -118,6 +138,15 @@ pub trait WindowHost: Send + Sync {
     /// Registers where page-load and failure events go. Called once by
     /// [`NativeWindows::new`]; fake hosts ignore it.
     fn attach_events(&self, _events: std::sync::Weak<dyn WindowEvents>) {}
+    /// Sets the application-wide native appearance (`NSApp.appearance`;
+    /// `System` clears it). Every live and later window and panel inherits it,
+    /// so no window carries an appearance of its own.
+    fn apply_appearance(&self, _appearance: Appearance) {}
+    /// Places the hosted popover under the tray icon, shows it as key and
+    /// tells its page it was shown.
+    fn show_popover(&self, _label: &str, _anchor: IconAnchor) {}
+    /// Orders the hosted popover out.
+    fn hide_popover(&self, _label: &str) {}
     /// Closes an existing window and reports what happened to it.
     fn close(&self, label: &str) -> CloseOutcome;
     /// The OS destroyed this window (its `Destroyed` event). Called on the main
@@ -139,6 +168,8 @@ pub trait WindowEvents: Send + Sync {
     fn page_loaded(&self, label: &str);
     /// The page in this window failed to load.
     fn page_failed(&self, label: &str, reason: String);
+    /// The popover panel lost key (a click outside it or on the tray icon).
+    fn popover_resigned(&self, _label: &str) {}
 }
 
 /// What one native close request did.
@@ -257,11 +288,42 @@ impl PanelHosting {
         result
     }
 
-    /// After Tauri applied the new size/position: move the panel to match.
-    fn reposition<E: fmt::Display>(&self, label: &str, ns_window: NsWindow<E>) {
-        if let Ok(handle) = native_handle(ns_window) {
-            let _ = self.adapter.sync_frame(label, &handle);
+    /// Places a hosted panel at `frame` directly. Tauri queues its own size
+    /// and position changes on the main queue, so its window frame is stale
+    /// here and is never copied.
+    fn reposition(&self, label: &str, frame: WindowFrame) {
+        if self.is_panel(label) {
+            let _ = self.adapter.sync_frame(label, TopLeftFrame {
+                x: f64::from(frame.origin.x),
+                y: f64::from(frame.origin.y),
+                width: f64::from(frame.size.width),
+                height: f64::from(frame.size.height),
+            });
         }
+    }
+
+    /// Hosts the popover Tauri just built in its key-capable panel; a resign
+    /// key reaches `events`. Same failure contract as [`adopt`](Self::adopt).
+    fn adopt_popover<E: fmt::Display>(
+        &self,
+        label: &str,
+        ns_window: NsWindow<E>,
+        events: Arc<OnceLock<std::sync::Weak<dyn WindowEvents>>>,
+    ) -> Result<(), String> {
+        let owned = label.to_owned();
+        let on_resign = Box::new(move || {
+            if let Some(events) = events.get().and_then(std::sync::Weak::upgrade) {
+                events.popover_resigned(&owned);
+            }
+        });
+        let result = native_handle(ns_window).and_then(|handle| {
+            self.adapter.host_popover(label, &handle, on_resign).map_err(|e| e.to_string())
+        });
+        if result.is_err() {
+            self.adapter.unhost(label);
+            self.labels().remove(label);
+        }
+        result
     }
 
     /// Must run before Tauri closes or destroys the window.
@@ -282,8 +344,10 @@ impl WindowHost for TauriWindowHost {
         let _ = self.events.set(events);
     }
 
+    #[allow(clippy::too_many_lines)] // One builder with the panel and popover paths.
     fn open(&self, spec: &NativeWindowSpec) -> Result<(), String> {
-        let panel = spec.kind == WindowKind::NonActivatingPanel;
+        let popover = spec.surface == POPOVER_SURFACE;
+        let panel = popover || spec.kind == WindowKind::NonActivatingPanel;
         let builder = WebviewWindowBuilder::new(
             &self.app,
             &spec.label,
@@ -296,7 +360,19 @@ impl WindowHost for TauriWindowHost {
         .transparent(spec.chrome.transparent)
         .resizable(spec.chrome.resizable)
         .shadow(spec.chrome.shadow);
-        let builder = if panel {
+        // No `.theme(..)`: in tao it sets the whole application's appearance,
+        // which `apply_appearance` owns. Windows inherit it.
+        let builder = if popover {
+            builder
+                .focused(false)
+                .skip_taskbar(true)
+                .closable(false)
+                .minimizable(false)
+                .maximizable(false)
+                .hidden_title(true)
+                .disable_drag_drop_handler()
+                .zoom_hotkeys_enabled(false)
+        } else if panel {
             let origin = spec.origin.unwrap_or(WindowOrigin { x: 0, y: 0 });
             builder
                 .position(f64::from(origin.x), f64::from(origin.y))
@@ -306,13 +382,22 @@ impl WindowHost for TauriWindowHost {
                 .skip_taskbar(true)
                 .visible_on_all_workspaces(true)
                 .always_on_bottom(true)
-                .theme(Some(tauri::Theme::Dark))
                 .closable(false)
                 .minimizable(false)
                 .maximizable(false)
                 .hidden_title(true)
                 .disable_drag_drop_handler()
                 .zoom_hotkeys_enabled(false)
+        } else if spec.surface == ACCESS_SURFACE {
+            // The guide's page is transparent: the popover's native material,
+            // rounded, shows through it and follows the system appearance.
+            builder.effects(
+                EffectsBuilder::new()
+                    .effect(Effect::Popover)
+                    .state(EffectState::Active)
+                    .radius(ACCESS_CORNER_RADIUS)
+                    .build(),
+            )
         } else {
             builder
         };
@@ -341,7 +426,14 @@ impl WindowHost for TauriWindowHost {
                 return Err(error.to_string());
             }
         };
-        if panel {
+        if popover {
+            // Hosted hidden; `show_popover` orders it in.
+            let events = Arc::clone(&self.events);
+            if let Err(error) = self.panels.adopt_popover(&spec.label, window.ns_window(), events) {
+                let _ = window.destroy();
+                return Err(error);
+            }
+        } else if panel {
             // Never `show()` + `set_focus()`: Tauri's window stays hidden and
             // its webview is displayed in a non-activating panel.
             if let Err(error) = self.panels.adopt(&spec.label, window.ns_window()) {
@@ -376,11 +468,29 @@ impl WindowHost for TauriWindowHost {
                 x: f64::from(frame.origin.x),
                 y: f64::from(frame.origin.y),
             }));
-            if self.panels.is_panel(label) {
-                // Tauri applied the frame to its hidden window; mirror it.
-                self.panels.reposition(label, window.ns_window());
-            }
+            // Tauri's hidden window moves later (queued); the panel moves now.
+            self.panels.reposition(label, frame);
         }
+    }
+
+    fn show_popover(&self, label: &str, anchor: IconAnchor) {
+        if !self.panels.is_panel(label) {
+            return;
+        }
+        let _ = self.panels.adapter.show_popover(label, anchor);
+        let _ = tauri_specta::Event::emit_to(&PopoverShown {}, &self.app, label);
+    }
+
+    fn hide_popover(&self, label: &str) {
+        if self.panels.is_panel(label) {
+            self.panels.adapter.hide_popover(label);
+        }
+    }
+
+    fn apply_appearance(&self, appearance: Appearance) {
+        // App-level: tao sets `NSApp.appearance` (nil for `None`) and
+        // refreshes each window's cached theme.
+        self.app.set_theme(theme_for(appearance));
     }
 
     fn close(&self, label: &str) -> CloseOutcome {
@@ -469,6 +579,25 @@ struct WindowShared {
     next: AtomicU64,
     phases: Arc<WindowPhases>,
     state: Mutex<WindowState>,
+    /// The last accepted `[ui] appearance`, applied application-wide; `None`
+    /// until the first accepted value so startup always applies it.
+    appearance: Mutex<Option<Appearance>>,
+    /// The popover's visibility and the last tray icon rectangle.
+    popover: Mutex<(PopoverToggle, IconAnchor)>,
+    /// Set by [`NativeWindows::release_all`]; a later prewarm builds nothing.
+    released: AtomicBool,
+}
+
+/// The popover's fixed request.
+fn popover_request() -> Result<WindowRequest, WindowError> {
+    Ok(WindowRequest::new(
+        stache_sdk::WindowKey::new("popover")
+            .map_err(|error| WindowError::Backend(error.to_string()))?,
+        POPOVER_SURFACE,
+        stache_sdk::WindowSize::new(POPOVER_WIDTH, POPOVER_HEIGHT)
+            .map_err(|error| WindowError::Backend(error.to_string()))?,
+        WindowKind::NonActivatingPanel,
+    ))
 }
 
 impl NativeWindows {
@@ -486,6 +615,9 @@ impl NativeWindows {
             next: AtomicU64::new(0),
             phases: WindowPhases::new(),
             state: Mutex::new(WindowState::default()),
+            appearance: Mutex::new(None),
+            popover: Mutex::new((PopoverToggle::default(), IconAnchor::default())),
+            released: AtomicBool::new(false),
         });
         let events: Arc<dyn WindowEvents> = shared.clone();
         shared.host.attach_events(Arc::downgrade(&events));
@@ -496,20 +628,110 @@ impl NativeWindows {
     #[must_use]
     pub fn window_phases(&self) -> Arc<WindowPhases> { Arc::clone(&self.shared.phases) }
 
-    /// Opens the explicit standard test window without a module request.
+    /// A left click on the tray icon at `anchor`: shows the popover under it,
+    /// or hides a shown one (including the click that just took key away
+    /// from it; see [`PopoverToggle::click`]).
     ///
     /// # Errors
-    /// Returns a typed validation or dispatch failure.
-    pub fn open_test_window(&self) -> Result<WindowId, WindowError> {
-        let request = WindowRequest::new(
-            stache_sdk::WindowKey::new("test")
-                .map_err(|error| WindowError::Backend(error.to_string()))?,
-            TEST_SURFACE,
-            stache_sdk::WindowSize::new(900, 640)
-                .map_err(|error| WindowError::Backend(error.to_string()))?,
-            stache_sdk::WindowKind::Standard,
-        );
-        self.open(HOST_OWNER, &request)
+    /// Returns a dispatch failure.
+    pub fn toggle_popover(&self, anchor: IconAnchor) -> Result<(), WindowError> {
+        self.toggle_popover_at(anchor, std::time::Instant::now())
+    }
+
+    /// [`toggle_popover`](Self::toggle_popover) at an explicit time.
+    ///
+    /// # Errors
+    /// Returns a dispatch failure.
+    pub fn toggle_popover_at(
+        &self,
+        anchor: IconAnchor,
+        now: std::time::Instant,
+    ) -> Result<(), WindowError> {
+        let (was_visible, show) = {
+            let mut popover = self.shared.popover();
+            popover.1 = anchor;
+            let was_visible = popover.0.is_visible();
+            (was_visible, popover.0.click(now))
+        };
+        if show {
+            self.present_popover(anchor)
+        } else if was_visible {
+            self.dispatch_popover_hide()
+        } else {
+            // The click that took key away: the resign already hid it.
+            Ok(())
+        }
+    }
+
+    /// Records the tray icon rectangle of a click that did not toggle (a
+    /// right click), for a later [`open_popover`](Self::open_popover).
+    pub fn note_tray_anchor(&self, anchor: IconAnchor) { self.shared.popover().1 = anchor; }
+
+    /// Shows the popover under the last tray icon rectangle (`Open Stache`).
+    ///
+    /// # Errors
+    /// Returns a dispatch failure.
+    pub fn open_popover(&self) -> Result<(), WindowError> {
+        let anchor = {
+            let mut popover = self.shared.popover();
+            popover.0.open();
+            popover.1
+        };
+        self.present_popover(anchor)
+    }
+
+    /// Hides a shown popover; does nothing otherwise.
+    pub fn hide_popover(&self) {
+        if self.shared.popover().0.hide() {
+            let _ = self.dispatch_popover_hide();
+        }
+    }
+
+    /// Whether the popover is shown, for status and tests.
+    #[must_use]
+    pub fn popover_visible(&self) -> bool { self.shared.popover().0.is_visible() }
+
+    /// Creates the popover window hidden ahead of the first click, through
+    /// the same creation path; shows nothing and emits no `popover-shown`. A
+    /// click before or during it reuses the one window. Does nothing once
+    /// the windows were released for shutdown.
+    ///
+    /// # Errors
+    /// Returns a dispatch failure; a creation failure is logged and the next
+    /// click creates the window as usual.
+    pub fn prewarm_popover(&self) -> Result<(), WindowError> {
+        if self.shared.released.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        self.open_validated(HOST_OWNER, &popover_request()?, Some(POPOVER_LABEL))
+            .map(|_| ())
+    }
+
+    /// Creates the popover window once, then shows it under `anchor`.
+    fn present_popover(&self, anchor: IconAnchor) -> Result<(), WindowError> {
+        let request = popover_request()?;
+        let result =
+            self.open_validated(HOST_OWNER, &request, Some(POPOVER_LABEL)).and_then(|_| {
+                let shared = Arc::clone(&self.shared);
+                self.shared.dispatch(move |host| {
+                    if shared.live_id(POPOVER_LABEL).is_some() && shared.popover().0.is_visible() {
+                        host.show_popover(POPOVER_LABEL, anchor);
+                    }
+                })
+            });
+        if result.is_err() {
+            self.shared.popover().0.hide();
+        }
+        result
+    }
+
+    fn dispatch_popover_hide(&self) -> Result<(), WindowError> {
+        let shared = Arc::clone(&self.shared);
+        self.shared.dispatch(move |host| {
+            if shared.live_id(POPOVER_LABEL).is_some() {
+                host.hide_popover(POPOVER_LABEL);
+            }
+        })
     }
 
     /// Removes a window that the OS destroyed, without asking it to close.
@@ -563,6 +785,8 @@ impl NativeWindows {
             state.by_id.clear();
             state.by_key.clear();
             state.releases.push(answer.clone());
+            self.shared.released.store(true, Ordering::SeqCst);
+            self.shared.popover().0.hide();
             state.settle();
             labels
         };
@@ -612,6 +836,14 @@ impl WindowShared {
     }
 
     fn is_live(&self, id: WindowId) -> bool { self.lock().by_id.contains_key(&id) }
+
+    fn popover(&self) -> std::sync::MutexGuard<'_, (PopoverToggle, IconAnchor)> {
+        self.popover.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn appearance(&self) -> Option<Appearance> {
+        *self.appearance.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 
     fn forget(&self, id: WindowId) {
         let mut state = self.lock();
@@ -672,6 +904,17 @@ impl WindowEvents for WindowShared {
             self.phases.advance(id, WindowPhase::Failed(reason));
         }
     }
+
+    /// Runs on the main thread, so the hide runs inline, before the tray
+    /// click that may have caused it.
+    fn popover_resigned(&self, label: &str) {
+        if label == POPOVER_LABEL
+            && self.popover().0.resigned(std::time::Instant::now())
+            && self.live_id(label).is_some()
+        {
+            self.host.hide_popover(label);
+        }
+    }
 }
 
 /// Validates the narrow native surface again at the backend boundary.
@@ -698,7 +941,7 @@ fn validate(request: &WindowRequest) -> Result<(), WindowError> {
     }
     match (request.kind, request.origin) {
         (WindowKind::Standard, None) => {
-            if request.surface != TEST_SURFACE && request.surface != ACCESS_SURFACE {
+            if request.surface != ACCESS_SURFACE {
                 return Err(WindowError::UnsupportedSurface { surface: request.surface });
             }
         }
@@ -725,7 +968,13 @@ impl NativeWindows {
         &self,
         owner: ModuleId,
         request: &WindowRequest,
+        fixed_label: Option<&str>,
     ) -> Result<WindowId, WindowError> {
+        if request.surface == ACCESS_SURFACE {
+            // Opening another host window (from the popover or the tray)
+            // dismisses the popover first.
+            self.hide_popover();
+        }
         let key = (owner, request.key.as_str().to_owned());
         let reserved = {
             let mut state = self.shared.lock();
@@ -734,7 +983,10 @@ impl NativeWindows {
                 Reserved::Existing(entry.id, entry.label, entry.kind)
             } else {
                 let id = WindowId::new(self.shared.next.fetch_add(1, Ordering::Relaxed) + 1);
-                let label = format!("stache-{}-{}", request.surface.as_str(), id.get());
+                let label = fixed_label.map_or_else(
+                    || format!("stache-{}-{}", request.surface.as_str(), id.get()),
+                    str::to_owned,
+                );
                 let entry = Entry {
                     id,
                     label: label.clone(),
@@ -783,6 +1035,9 @@ impl NativeWindows {
                 Err(error) => {
                     shared.phases.advance(id, WindowPhase::Failed(error.clone()));
                     shared.forget(id);
+                    if spec.label == POPOVER_LABEL {
+                        shared.popover().0.hide();
+                    }
                     shared.log(LogLevel::Warn, format!("cannot create window {label}: {error}"));
                 }
             }
@@ -796,7 +1051,7 @@ impl NativeWindows {
         Ok(id)
     }
 
-    /// Opens the existing `test` surface as a non-activating panel for the live
+    /// Opens a `panel-check` surface as a non-activating panel for the live
     /// native gate. It bypasses only the surface check of [`validate`] and
     /// exists only under the `panel-native-check` feature.
     ///
@@ -808,22 +1063,25 @@ impl NativeWindows {
         origin: WindowOrigin,
         size: stache_sdk::WindowSize,
     ) -> Result<WindowId, WindowError> {
+        // No routed UI surface: the page renders the local fallback and calls
+        // no command, so the panel needs no capability.
+        const PANEL_CHECK_SURFACE: SurfaceId = SurfaceId::new("panel-check");
         let request = WindowRequest::new(
             stache_sdk::WindowKey::new("test-panel")
                 .map_err(|error| WindowError::Backend(error.to_string()))?,
-            TEST_SURFACE,
+            PANEL_CHECK_SURFACE,
             size,
             WindowKind::NonActivatingPanel,
         )
         .with_origin(origin);
-        self.open_validated(HOST_OWNER, &request)
+        self.open_validated(HOST_OWNER, &request, None)
     }
 }
 
 impl WindowBackend for NativeWindows {
     fn open(&self, owner: ModuleId, request: &WindowRequest) -> Result<WindowId, WindowError> {
         validate(request)?;
-        self.open_validated(owner, request)
+        self.open_validated(owner, request, None)
     }
 
     fn focus(&self, window: WindowId) -> Result<(), WindowError> {
@@ -866,6 +1124,44 @@ impl WindowBackend for NativeWindows {
     }
 
     fn phases(&self) -> Option<Arc<WindowPhases>> { Some(Arc::clone(&self.shared.phases)) }
+
+    fn set_appearance(&self, appearance: Appearance) {
+        let previous = {
+            let mut current =
+                self.shared.appearance.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if *current == Some(appearance) {
+                return;
+            }
+            current.replace(appearance)
+        };
+        // Applied to the application whether or not a window is live: every
+        // live window and panel and every later build inherits it.
+        let shared = Arc::clone(&self.shared);
+        let dispatched = self.shared.dispatch(move |host| {
+            // A newer value queued after this one wins; a stale job does nothing.
+            if shared.appearance() == Some(appearance) {
+                host.apply_appearance(appearance);
+            }
+        });
+        if let Err(error) = dispatched {
+            // Nothing was applied: restore the previous value (unless a newer
+            // call replaced it) so a later call with this value retries.
+            {
+                let mut current = self
+                    .shared
+                    .appearance
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if *current == Some(appearance) {
+                    *current = previous;
+                }
+            }
+            self.shared.log(
+                LogLevel::Warn,
+                format!("application appearance dispatch failed: {error}"),
+            );
+        }
+    }
 
     fn close(&self, window: WindowId) {
         let entry = {
@@ -938,7 +1234,7 @@ impl NativeOwner for WindowsOwner {
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
-    use std::sync::atomic::AtomicBool;
+    use std::time::Duration;
 
     use stache_macos::PanelAdapter;
     use stache_sdk::{
@@ -959,6 +1255,11 @@ mod tests {
         fail_close: AtomicBool,
         gone: AtomicBool,
         moved: Mutex<Vec<(String, WindowFrame)>>,
+        appearances: Mutex<Vec<Appearance>>,
+        /// Popover shows and hides, in main-thread order.
+        popover: Mutex<Vec<String>>,
+        /// Opens and appearance applications, in main-thread order.
+        order: Mutex<Vec<String>>,
         events: Mutex<Option<std::sync::Weak<dyn WindowEvents>>>,
     }
 
@@ -984,6 +1285,7 @@ mod tests {
 
         fn open(&self, spec: &NativeWindowSpec) -> Result<(), String> {
             self.opened.lock().expect("opened").push(spec.clone());
+            self.order.lock().expect("order").push("open".to_owned());
             if self.fail_next.swap(false, Ordering::SeqCst) {
                 return Err("injected creation failure".to_owned());
             }
@@ -992,6 +1294,19 @@ mod tests {
 
         fn focus(&self, label: &str) {
             self.focused.lock().expect("focused").push(label.to_owned());
+        }
+
+        fn show_popover(&self, label: &str, anchor: IconAnchor) {
+            self.popover.lock().expect("popover").push(format!("show {label} {}", anchor.x));
+        }
+
+        fn hide_popover(&self, label: &str) {
+            self.popover.lock().expect("popover").push(format!("hide {label}"));
+        }
+
+        fn apply_appearance(&self, appearance: Appearance) {
+            self.appearances.lock().expect("appearances").push(appearance);
+            self.order.lock().expect("order").push(format!("apply {appearance:?}"));
         }
 
         fn destroyed(&self, label: &str) {
@@ -1091,8 +1406,8 @@ mod tests {
     fn the_same_owner_and_key_reuses_and_focuses() {
         let (windows, host) = windows();
         let owner = ModuleId::new("one");
-        let first = windows.open(owner, &request("test", "main")).expect("first");
-        let second = windows.open(owner, &request("test", "main")).expect("second");
+        let first = windows.open(owner, &request("access", "main")).expect("first");
+        let second = windows.open(owner, &request("access", "main")).expect("second");
         assert_eq!(first, second);
         assert_eq!(host.opened.lock().expect("opened").len(), 1);
         assert_eq!(host.focused.lock().expect("focused").len(), 1);
@@ -1102,11 +1417,11 @@ mod tests {
     fn closing_removes_the_entry_and_allows_a_new_window() {
         let (windows, host) = windows();
         let owner = ModuleId::new("one");
-        let first = windows.open(owner, &request("test", "main")).expect("first");
+        let first = windows.open(owner, &request("access", "main")).expect("first");
         windows.close(first);
         assert!(windows.is_empty());
         assert_eq!(host.closed.lock().expect("closed").len(), 1);
-        let second = windows.open(owner, &request("test", "main")).expect("second");
+        let second = windows.open(owner, &request("access", "main")).expect("second");
         assert_ne!(first, second);
         assert_eq!(host.opened.lock().expect("opened").len(), 2);
     }
@@ -1115,7 +1430,7 @@ mod tests {
     fn an_os_close_removes_the_entry_without_closing_again() {
         let (windows, host) = windows();
         let owner = ModuleId::new("one");
-        let id = windows.open(owner, &request("test", "main")).expect("open");
+        let id = windows.open(owner, &request("access", "main")).expect("open");
         let label = host.opened.lock().expect("opened")[0].label.clone();
         windows.window_closed(&label);
         assert!(windows.is_empty());
@@ -1129,24 +1444,14 @@ mod tests {
         let (windows, host) = windows();
         let one = ModuleId::new("one");
         let two = ModuleId::new("two");
-        windows.open(one, &request("test", "a")).expect("one a");
-        windows.open(one, &request("test", "b")).expect("one b");
-        windows.open(two, &request("test", "a")).expect("two a");
+        windows.open(one, &request("access", "a")).expect("one a");
+        windows.open(one, &request("access", "b")).expect("one b");
+        windows.open(two, &request("access", "a")).expect("two a");
         windows.release_owner(one);
         assert_eq!(host.closed.lock().expect("closed").len(), 2);
         assert_eq!(windows.len(), 1);
         windows.release_owner(two);
         assert!(windows.is_empty());
-    }
-
-    #[test]
-    fn the_explicit_test_window_uses_the_test_label_and_surface() {
-        let (windows, host) = windows();
-        windows.open_test_window().expect("open");
-        let opened = host.opened.lock().expect("opened");
-        assert!(opened[0].label.starts_with("stache-test-"));
-        assert_eq!(opened[0].surface, TEST_SURFACE);
-        assert_eq!((opened[0].width, opened[0].height), (900, 640));
     }
 
     #[test]
@@ -1157,7 +1462,7 @@ mod tests {
         for _ in 0..8 {
             let windows = Arc::clone(&windows);
             workers.push(std::thread::spawn(move || {
-                windows.open(owner, &request("test", "shared")).expect("open")
+                windows.open(owner, &request("access", "shared")).expect("open")
             }));
         }
         let ids: Vec<WindowId> =
@@ -1171,13 +1476,13 @@ mod tests {
         let executor = Arc::new(Queued::default());
         let (windows, host) = windows_with(executor.clone());
         let owner = ModuleId::new("one");
-        windows.open(owner, &request("test", "one")).expect("open");
+        windows.open(owner, &request("access", "one")).expect("open");
         windows.close(WindowId::new(1));
         executor.run();
         assert!(host.opened.lock().expect("opened").is_empty());
         assert_eq!(host.closed.lock().expect("closed").len(), 1);
 
-        windows.open(owner, &request("test", "two")).expect("open");
+        windows.open(owner, &request("access", "two")).expect("open");
         windows.release_owner(owner);
         executor.run();
         assert!(host.opened.lock().expect("opened").is_empty());
@@ -1190,8 +1495,8 @@ mod tests {
         let executor = Arc::new(Queued::default());
         let (windows, host) = windows_with(executor.clone());
         let owner = ModuleId::new("one");
-        windows.open(owner, &request("test", "a")).expect("a");
-        windows.open(owner, &request("test", "b")).expect("b");
+        windows.open(owner, &request("access", "a")).expect("a");
+        windows.open(owner, &request("access", "b")).expect("b");
         let answer = windows.release_all();
         executor.run();
         assert!(host.opened.lock().expect("opened").is_empty());
@@ -1202,7 +1507,7 @@ mod tests {
         }
         assert_eq!(answer.state(), OwnerState::Succeeded);
 
-        windows.open(owner, &request("test", "a")).expect("reopen");
+        windows.open(owner, &request("access", "a")).expect("reopen");
         executor.run();
         assert_eq!(host.opened.lock().expect("opened").len(), 1);
         assert_eq!(windows.len(), 1);
@@ -1213,9 +1518,9 @@ mod tests {
         let (windows, host) = windows();
         let one = ModuleId::new("one");
         let two = ModuleId::new("two");
-        windows.open(one, &request("test", "a")).expect("one a");
-        windows.open(one, &request("test", "b")).expect("one b");
-        windows.open(two, &request("test", "a")).expect("two a");
+        windows.open(one, &request("access", "a")).expect("one a");
+        windows.open(one, &request("access", "b")).expect("one b");
+        windows.open(two, &request("access", "a")).expect("two a");
         // The registry releases a module window before the windows stage runs.
         windows.release_owner(two);
         let answer = windows.release_all();
@@ -1248,7 +1553,7 @@ mod tests {
     fn an_already_gone_window_counts_as_closed() {
         let (windows, host) = windows();
         host.gone.store(true, Ordering::SeqCst);
-        windows.open(ModuleId::new("one"), &request("test", "main")).expect("open");
+        windows.open(ModuleId::new("one"), &request("access", "main")).expect("open");
         let answer = windows.release_all();
         assert_eq!(answer.state(), OwnerState::Succeeded);
         assert_eq!(host.closed.lock().expect("closed").len(), 1);
@@ -1258,7 +1563,7 @@ mod tests {
     fn a_failed_close_makes_the_release_a_failure() {
         let (windows, host) = windows();
         host.fail_close.store(true, Ordering::SeqCst);
-        windows.open(ModuleId::new("one"), &request("test", "main")).expect("open");
+        windows.open(ModuleId::new("one"), &request("access", "main")).expect("open");
         let answer = windows.release_all();
         assert_eq!(answer.state(), OwnerState::Failed);
     }
@@ -1266,13 +1571,227 @@ mod tests {
     #[test]
     fn a_missing_close_event_leaves_the_release_pending() {
         let (windows, _host) = windows();
-        windows.open(ModuleId::new("one"), &request("test", "main")).expect("open");
+        windows.open(ModuleId::new("one"), &request("access", "main")).expect("open");
         let answer = windows.release_all();
         assert_eq!(answer.state(), OwnerState::Pending);
         assert!(
             !answer.is_answered(),
             "a window without its Destroyed event is not acknowledged"
         );
+    }
+
+    const ICON: IconAnchor = IconAnchor {
+        x: 2000.0,
+        y: 0.0,
+        width: 48.0,
+        height: 66.0,
+    };
+
+    fn popover_log(host: &FakeHost) -> Vec<String> { host.popover.lock().expect("popover").clone() }
+
+    #[test]
+    fn the_popover_is_created_once_then_shown_and_hidden() {
+        let (windows, host) = windows();
+        let now = std::time::Instant::now();
+        windows.toggle_popover_at(ICON, now).expect("show");
+        windows.toggle_popover_at(ICON, now + Duration::from_secs(1)).expect("hide");
+        windows
+            .toggle_popover_at(ICON, now + Duration::from_secs(2))
+            .expect("show again");
+        let opened = host.opened.lock().expect("opened").clone();
+        assert_eq!(opened.len(), 1, "created once");
+        assert_eq!(opened[0].label, POPOVER_LABEL);
+        assert_eq!(opened[0].surface, POPOVER_SURFACE);
+        assert_eq!((opened[0].width, opened[0].height), (480, 640));
+        assert_eq!(opened[0].chrome, chrome_for(POPOVER_SURFACE));
+        assert!(!opened[0].chrome.decorations && opened[0].chrome.transparent);
+        assert_eq!(popover_log(&host), [
+            "show stache-popover 2000",
+            "hide stache-popover",
+            "show stache-popover 2000",
+        ]);
+        assert!(windows.popover_visible());
+        assert!(
+            host.focused.lock().expect("focused").is_empty(),
+            "never focused like a window"
+        );
+        assert_eq!(windows.live_label(HOST_OWNER).as_deref(), Some(POPOVER_LABEL));
+    }
+
+    #[test]
+    fn hide_popover_hides_only_a_shown_popover() {
+        let (windows, host) = windows();
+        windows.hide_popover();
+        assert!(popover_log(&host).is_empty());
+        windows.open_popover().expect("open");
+        windows.hide_popover();
+        windows.hide_popover();
+        assert_eq!(popover_log(&host), [
+            "show stache-popover 0",
+            "hide stache-popover"
+        ]);
+    }
+
+    #[test]
+    fn open_stache_uses_the_icon_of_the_last_right_click() {
+        let (windows, host) = windows();
+        windows.note_tray_anchor(ICON);
+        windows.open_popover().expect("open");
+        // Opening a shown popover shows it again (it regains key).
+        windows.open_popover().expect("again");
+        assert_eq!(popover_log(&host), [
+            "show stache-popover 2000",
+            "show stache-popover 2000"
+        ]);
+    }
+
+    #[test]
+    fn a_resign_key_hides_and_the_racing_tray_click_keeps_it_closed() {
+        let (windows, host) = windows();
+        windows.toggle_popover(ICON).expect("show");
+        // The press on the tray icon takes key away first.
+        host.events().popover_resigned(POPOVER_LABEL);
+        assert!(!windows.popover_visible());
+        windows.toggle_popover(ICON).expect("the same click");
+        assert!(!windows.popover_visible());
+        assert_eq!(popover_log(&host), [
+            "show stache-popover 2000",
+            "hide stache-popover"
+        ]);
+        // A later click opens again.
+        windows
+            .toggle_popover_at(ICON, std::time::Instant::now() + Duration::from_secs(1))
+            .expect("later");
+        assert!(windows.popover_visible());
+        // A resign for another label or a hidden popover does nothing.
+        host.events().popover_resigned("stache-access-9");
+        windows.hide_popover();
+        host.events().popover_resigned(POPOVER_LABEL);
+        assert_eq!(popover_log(&host).len(), 4);
+    }
+
+    #[test]
+    fn opening_the_guide_hides_the_popover_first() {
+        let (windows, host) = windows();
+        windows.open_popover().expect("open");
+        windows
+            .open(
+                HOST_OWNER,
+                &crate::windows::access_window_request().expect("request"),
+            )
+            .expect("guide");
+        assert!(!windows.popover_visible());
+        assert_eq!(popover_log(&host), [
+            "show stache-popover 0",
+            "hide stache-popover"
+        ]);
+    }
+
+    #[test]
+    fn a_failed_popover_creation_resets_it_and_the_next_click_retries() {
+        let (windows, host) = windows();
+        host.fail_next.store(true, Ordering::SeqCst);
+        windows.toggle_popover(ICON).expect("dispatched");
+        assert!(!windows.popover_visible());
+        assert!(popover_log(&host).is_empty());
+        windows.toggle_popover(ICON).expect("retry");
+        assert!(windows.popover_visible());
+        assert_eq!(host.opened.lock().expect("opened").len(), 2);
+        assert_eq!(popover_log(&host), ["show stache-popover 2000"]);
+    }
+
+    #[test]
+    fn shutdown_releases_the_popover_through_the_windows_owner() {
+        let (windows, host) = windows();
+        windows.toggle_popover(ICON).expect("show");
+        let owner = WindowsOwner::new(windows.clone());
+        let answer = owner.release();
+        assert!(!windows.popover_visible());
+        assert_eq!(*host.closed.lock().expect("closed"), [POPOVER_LABEL]);
+        windows.window_closed(POPOVER_LABEL);
+        assert_eq!(answer.state(), OwnerState::Succeeded);
+        assert!(windows.is_empty());
+    }
+
+    #[test]
+    fn prewarm_builds_one_hidden_popover_and_the_first_click_only_shows_it() {
+        let (windows, host) = windows();
+        windows.prewarm_popover().expect("prewarm");
+        windows.prewarm_popover().expect("again");
+        assert_eq!(host.opened.lock().expect("opened").len(), 1);
+        assert_eq!(host.opened.lock().expect("opened")[0].label, POPOVER_LABEL);
+        assert!(popover_log(&host).is_empty(), "built hidden, nothing shown");
+        assert!(!windows.popover_visible());
+        windows.toggle_popover(ICON).expect("click");
+        assert_eq!(host.opened.lock().expect("opened").len(), 1);
+        assert_eq!(popover_log(&host), ["show stache-popover 2000"]);
+    }
+
+    #[test]
+    fn a_click_during_the_prewarm_shows_the_one_window_once() {
+        let executor = Arc::new(Queued::default());
+        let (building, host) = windows_with(executor.clone());
+        building.prewarm_popover().expect("prewarm");
+        building.toggle_popover(ICON).expect("click while building");
+        executor.run();
+        assert_eq!(host.opened.lock().expect("opened").len(), 1);
+        assert_eq!(popover_log(&host), ["show stache-popover 2000"]);
+        // A click before the prewarm: the prewarm reuses its window.
+        let (early, host) = windows();
+        early.toggle_popover(ICON).expect("click");
+        early.prewarm_popover().expect("prewarm");
+        assert_eq!(host.opened.lock().expect("opened").len(), 1);
+        assert_eq!(popover_log(&host), ["show stache-popover 2000"]);
+    }
+
+    #[test]
+    fn a_prewarm_after_shutdown_builds_nothing() {
+        let (windows, host) = windows();
+        let answer = WindowsOwner::new(windows.clone()).release();
+        assert_eq!(answer.state(), OwnerState::Succeeded);
+        windows.prewarm_popover().expect("inert");
+        assert!(host.opened.lock().expect("opened").is_empty());
+        assert!(windows.is_empty());
+    }
+
+    #[test]
+    fn a_failed_prewarm_still_lets_a_click_open_the_popover() {
+        let (windows, host) = windows();
+        host.fail_next.store(true, Ordering::SeqCst);
+        windows.prewarm_popover().expect("dispatched");
+        assert!(windows.is_empty());
+        windows.toggle_popover(ICON).expect("click");
+        assert_eq!(host.opened.lock().expect("opened").len(), 2);
+        assert_eq!(popover_log(&host), ["show stache-popover 2000"]);
+        assert!(windows.popover_visible());
+    }
+
+    #[test]
+    fn a_queued_show_after_a_hide_does_not_show() {
+        let executor = Arc::new(Queued::default());
+        let (windows, host) = windows_with(executor.clone());
+        windows.toggle_popover(ICON).expect("show");
+        windows.hide_popover();
+        executor.run();
+        assert_eq!(host.opened.lock().expect("opened").len(), 1);
+        assert_eq!(popover_log(&host), ["hide stache-popover"]);
+    }
+
+    #[test]
+    fn no_module_can_open_the_popover_surface() {
+        let (windows, host) = windows();
+        for owner in [ModuleId::new("bar"), HOST_OWNER] {
+            let standard = request("popover", "popover");
+            assert_eq!(
+                windows.open(owner, &standard),
+                Err(WindowError::UnsupportedSurface { surface: POPOVER_SURFACE })
+            );
+            assert_eq!(
+                windows.open(owner, &panel_request("popover", "popover")),
+                Err(WindowError::UnsupportedSurface { surface: POPOVER_SURFACE })
+            );
+        }
+        assert!(host.opened.lock().expect("opened").is_empty());
     }
 
     #[test]
@@ -1289,12 +1808,12 @@ mod tests {
         let (windows, host) = windows();
         let owner = ModuleId::new("one");
         host.fail_next.store(true, Ordering::SeqCst);
-        let first = windows.open(owner, &request("test", "main")).expect("reservation");
+        let first = windows.open(owner, &request("access", "main")).expect("reservation");
         assert!(
             windows.is_empty(),
             "a failed native creation must not stay tracked"
         );
-        let second = windows.open(owner, &request("test", "main")).expect("retry");
+        let second = windows.open(owner, &request("access", "main")).expect("retry");
         assert_ne!(first, second);
         assert_eq!(windows.len(), 1);
         assert_eq!(host.opened.lock().expect("opened").len(), 2);
@@ -1304,13 +1823,13 @@ mod tests {
     fn the_backend_rechecks_kind_size_and_surface_for_host_requests() {
         let (windows, host) = windows();
         let owner = ModuleId::new("one");
-        let mut launcher = request("test", "main");
+        let mut launcher = request("access", "main");
         launcher.kind = WindowKind::Launcher;
         assert!(matches!(
             windows.open(owner, &launcher),
             Err(WindowError::UnsupportedKind { .. })
         ));
-        let mut zero = request("test", "main");
+        let mut zero = request("access", "main");
         zero.size = WindowSize { width: 0, height: 600 };
         assert!(matches!(
             windows.open(owner, &zero),
@@ -1328,23 +1847,20 @@ mod tests {
     }
 
     #[test]
-    fn access_and_test_host_requests_are_accepted_with_their_own_labels() {
+    fn the_access_host_request_is_accepted_with_its_own_label() {
         let (windows, host) = windows();
-        windows.open_test_window().expect("test");
         windows
             .open(HOST_OWNER, &access_window_request().expect("request"))
             .expect("access");
         let opened = host.opened.lock().expect("opened");
-        assert_eq!(opened.len(), 2);
-        assert!(opened[0].label.starts_with("stache-test-"));
-        assert_eq!(opened[0].surface, TEST_SURFACE);
+        assert_eq!(opened.len(), 1);
         assert!(
-            opened[1].label.starts_with("stache-access-"),
+            opened[0].label.starts_with("stache-access-"),
             "{}",
-            opened[1].label
+            opened[0].label
         );
-        assert_eq!(opened[1].surface, ACCESS_SURFACE);
-        let (width, height) = (opened[1].width, opened[1].height);
+        assert_eq!(opened[0].surface, ACCESS_SURFACE);
+        let (width, height) = (opened[0].width, opened[0].height);
         drop(opened);
         assert_eq!((width, height), (480, 640));
         assert!((1..=stache_sdk::MAX_WINDOW_DIMENSION).contains(&width));
@@ -1352,27 +1868,25 @@ mod tests {
     }
 
     #[test]
-    fn chrome_is_frameless_for_access_and_default_for_test() {
+    fn chrome_is_frameless_for_access_and_default_otherwise() {
         assert_eq!(chrome_for(ACCESS_SURFACE), WindowChrome {
             decorations: false,
             transparent: true,
             resizable: false,
             shadow: true,
         });
-        assert_eq!(chrome_for(TEST_SURFACE), WindowChrome {
+        assert_eq!(chrome_for(SurfaceId::new("other")), WindowChrome {
             decorations: true,
             transparent: false,
             resizable: true,
             shadow: true,
         });
         let (windows, host) = windows();
-        windows.open_test_window().expect("test");
         windows
             .open(HOST_OWNER, &access_window_request().expect("request"))
             .expect("access");
         let opened = host.opened.lock().expect("opened");
-        assert_eq!(opened[0].chrome, chrome_for(TEST_SURFACE));
-        assert_eq!(opened[1].chrome, chrome_for(ACCESS_SURFACE));
+        assert_eq!(opened[0].chrome, chrome_for(ACCESS_SURFACE));
     }
 
     #[test]
@@ -1462,20 +1976,22 @@ mod tests {
     }
 
     #[test]
-    fn bar_is_rejected_as_a_standard_window_and_test_access_stay_standard_only() {
+    fn bar_is_rejected_as_a_standard_window_and_access_stays_standard_only() {
         let (windows, host) = windows();
         let owner = ModuleId::new("one");
         assert!(matches!(
             windows.open(owner, &request("bar", "main")),
             Err(WindowError::UnsupportedSurface { .. })
         ));
-        let with_origin = request("test", "main").with_origin(ORIGIN);
+        let with_origin = request("access", "main").with_origin(ORIGIN);
         assert!(matches!(
             windows.open(owner, &with_origin),
             Err(WindowError::InvalidPlacement { .. })
         ));
         assert!(host.opened.lock().expect("opened").is_empty());
-        windows.open_test_window().expect("test stays standard");
+        windows
+            .open(HOST_OWNER, &access_window_request().expect("request"))
+            .expect("access stays standard");
         assert_eq!(host.opened.lock().expect("opened")[0].kind, WindowKind::Standard);
         assert_eq!(host.opened.lock().expect("opened")[0].origin, None);
     }
@@ -1496,8 +2012,8 @@ mod tests {
     fn a_standard_window_still_focuses_on_reuse_and_focus() {
         let (windows, host) = windows();
         let owner = ModuleId::new("one");
-        let id = windows.open(owner, &request("test", "main")).expect("open");
-        windows.open(owner, &request("test", "main")).expect("reuse");
+        let id = windows.open(owner, &request("access", "main")).expect("open");
+        windows.open(owner, &request("access", "main")).expect("reuse");
         windows.focus(id).expect("focus");
         assert_eq!(host.focused.lock().expect("focused").len(), 2);
     }
@@ -1626,6 +2142,103 @@ mod tests {
         assert_eq!(*host.destroyed.lock().expect("destroyed"), [label]);
     }
 
+    #[test]
+    fn appearance_maps_to_the_tauri_theme() {
+        assert_eq!(theme_for(Appearance::System), None);
+        assert_eq!(theme_for(Appearance::Light), Some(tauri::Theme::Light));
+        assert_eq!(theme_for(Appearance::Dark), Some(tauri::Theme::Dark));
+    }
+
+    fn applied(host: &FakeHost) -> Vec<Appearance> {
+        host.appearances.lock().expect("appearances").clone()
+    }
+
+    #[test]
+    fn a_change_with_no_live_window_reaches_the_application_before_a_later_build() {
+        let queued = Arc::new(Queued::default());
+        let (windows, host) = windows_with(queued.clone());
+        windows.set_appearance(Appearance::Dark);
+        assert!(
+            applied(&host).is_empty(),
+            "native work waits for the main thread"
+        );
+        windows.open(ModuleId::new("one"), &request("access", "a")).expect("open");
+        queued.run();
+        assert_eq!(*host.order.lock().expect("order"), ["apply Dark", "open"]);
+    }
+
+    #[test]
+    fn dark_then_system_with_no_window_live_clears_the_application_appearance() {
+        let (windows, host) = windows();
+        windows.set_appearance(Appearance::Dark);
+        let id = windows.open(ModuleId::new("one"), &request("access", "a")).expect("open");
+        windows.close(id);
+        windows.set_appearance(Appearance::System);
+        windows.open(ModuleId::new("two"), &request("access", "b")).expect("reopen");
+        assert_eq!(*host.order.lock().expect("order"), [
+            "apply Dark",
+            "open",
+            "apply System",
+            "open"
+        ]);
+    }
+
+    #[test]
+    fn the_first_value_is_always_applied_and_an_unchanged_value_does_nothing() {
+        let (windows, host) = windows();
+        windows.set_appearance(Appearance::System);
+        windows.set_appearance(Appearance::System);
+        assert_eq!(applied(&host), [Appearance::System]);
+        windows.open(ModuleId::new("one"), &request("access", "a")).expect("open");
+        windows.set_appearance(Appearance::System);
+        assert_eq!(applied(&host), [Appearance::System]);
+        // A change reaches the application; live windows are never recreated.
+        windows.set_appearance(Appearance::Light);
+        assert_eq!(applied(&host), [Appearance::System, Appearance::Light]);
+        assert_eq!(host.opened.lock().expect("opened").len(), 1);
+        assert!(host.closed.lock().expect("closed").is_empty());
+    }
+
+    #[test]
+    fn a_superseded_queued_value_is_not_applied() {
+        let queued = Arc::new(Queued::default());
+        let (windows, host) = windows_with(queued.clone());
+        windows.set_appearance(Appearance::Light);
+        windows.set_appearance(Appearance::Dark);
+        queued.run();
+        assert_eq!(applied(&host), [Appearance::Dark]);
+    }
+
+    /// Runs jobs inline, or refuses them while `refuse` is set.
+    #[derive(Default)]
+    struct Refusing {
+        refuse: AtomicBool,
+    }
+
+    impl MainThreadExecutor for Refusing {
+        fn is_main_thread(&self) -> bool { true }
+
+        fn execute(&self, job: Box<dyn FnOnce() + Send + 'static>) -> Result<(), ThreadError> {
+            if self.refuse.load(Ordering::SeqCst) {
+                return Err(ThreadError::GroupStopped);
+            }
+            job();
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_failed_dispatch_is_retried_by_the_same_value() {
+        let executor = Arc::new(Refusing::default());
+        let (windows, host) = windows_with(executor.clone());
+        executor.refuse.store(true, Ordering::SeqCst);
+        windows.set_appearance(Appearance::Dark);
+        assert!(applied(&host).is_empty());
+        executor.refuse.store(false, Ordering::SeqCst);
+        windows.set_appearance(Appearance::Dark);
+        assert_eq!(applied(&host), [Appearance::Dark]);
+    }
+
     #[derive(Default)]
     struct RecordingAdapter {
         events: Mutex<Vec<String>>,
@@ -1655,15 +2268,32 @@ mod tests {
         fn sync_frame(
             &self,
             label: &str,
-            _: &NativeWindowHandle,
+            frame: TopLeftFrame,
         ) -> Result<(), stache_macos::PanelError> {
-            self.log(&format!("sync {label}"));
+            self.log(&format!(
+                "sync {label} {} {} {} {}",
+                frame.x, frame.y, frame.width, frame.height
+            ));
             Ok(())
         }
 
         fn unhost(&self, label: &str) { self.log(&format!("unhost {label}")); }
 
         fn discard(&self, label: &str) { self.log(&format!("discard {label}")); }
+
+        fn host_popover(
+            &self,
+            label: &str,
+            _: &NativeWindowHandle,
+            on_resign: Box<dyn Fn()>,
+        ) -> Result<(), stache_macos::PanelError> {
+            self.log(&format!("host popover {label}"));
+            if self.fail_host {
+                return Err(stache_macos::PanelError::UnexpectedLayout { subviews: 0 });
+            }
+            on_resign();
+            Ok(())
+        }
     }
 
     fn hosting(fail_host: bool) -> (Arc<RecordingAdapter>, PanelHosting) {
@@ -1732,12 +2362,70 @@ mod tests {
         assert!(!hosting.is_panel("w"));
     }
 
+    #[derive(Default)]
+    struct ResignEvents(Mutex<Vec<String>>);
+
+    impl WindowEvents for ResignEvents {
+        fn page_loaded(&self, _: &str) {}
+
+        fn page_failed(&self, _: &str, _: String) {}
+
+        fn popover_resigned(&self, label: &str) {
+            self.0.lock().expect("resigned").push(label.to_owned());
+        }
+    }
+
     #[test]
-    fn repositioning_reaches_the_panel_and_a_missing_window_does_not() {
+    fn the_popover_is_hosted_with_a_resign_callback_that_reaches_the_events() {
+        let (adapter, hosting) = hosting(false);
+        let events = Arc::new(ResignEvents::default());
+        let sink: Arc<dyn WindowEvents> = events.clone();
+        let cell = Arc::new(OnceLock::new());
+        let _ = cell.set(Arc::downgrade(&sink));
+        let mut byte = 0_u8;
+        hosting.register(POPOVER_LABEL);
+        hosting.adopt_popover(POPOVER_LABEL, pointer(&mut byte), cell).expect("host");
+        assert_eq!(adapter.events(), ["host popover stache-popover"]);
+        assert_eq!(*events.0.lock().expect("resigned"), [POPOVER_LABEL]);
+        hosting.before_close(POPOVER_LABEL);
+        assert_eq!(
+            adapter.events().last().map(String::as_str),
+            Some("unhost stache-popover")
+        );
+    }
+
+    #[test]
+    fn a_popover_host_failure_unhosts_and_forgets_the_label() {
+        let (adapter, hosting) = hosting(true);
+        let mut byte = 0_u8;
+        hosting.register(POPOVER_LABEL);
+        let error = hosting
+            .adopt_popover(POPOVER_LABEL, pointer(&mut byte), Arc::new(OnceLock::new()))
+            .expect_err("host failure");
+        assert!(error.contains("unexpected layout"), "{error}");
+        assert_eq!(adapter.events(), [
+            "host popover stache-popover",
+            "unhost stache-popover"
+        ]);
+        assert!(!hosting.is_panel(POPOVER_LABEL));
+    }
+
+    #[test]
+    fn repositioning_places_the_panel_at_the_requested_frame_not_the_tauri_window() {
         let (adapter, hosting) = hosting(false);
         let mut byte = 0_u8;
-        hosting.reposition("w", pointer(&mut byte));
-        hosting.reposition::<String>("w", Err("gone".to_owned()));
-        assert_eq!(adapter.events(), ["sync w"]);
+        hosting.reposition("w", frame(14));
+        hosting.register("w");
+        hosting.adopt("w", pointer(&mut byte)).expect("host");
+        // Same frame twice (a topology change that keeps the frame) reaches
+        // the panel twice: the system may have moved it meanwhile.
+        hosting.reposition("w", frame(14));
+        hosting.reposition("w", frame(14));
+        hosting.reposition("other", frame(14));
+        assert_eq!(adapter.events(), [
+            "host w",
+            "sync w 14 2 640 30",
+            "sync w 14 2 640 30"
+        ]);
     }
 }

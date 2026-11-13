@@ -49,11 +49,11 @@ struct DecodeFailure {
     message: String,
 }
 
-fn decode_value<C: DeserializeOwned + Send + Sync + 'static>(
-    value: Value,
+fn decode_value<C: ModuleConfig + DeserializeOwned>(
+    mut value: Value,
 ) -> Result<DecodedConfig, DecodeFailure> {
     let mut track = serde_path_to_error::Track::new();
-    let mut warnings = Vec::new();
+    let mut warnings = C::prune_section(&mut value);
     let result = serde_ignored::deserialize::<_, _, C>(
         serde_path_to_error::Deserializer::new(value, &mut track),
         |path| {

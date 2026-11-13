@@ -15,7 +15,7 @@
     "security": {
       "csp": "default-src 'self'; object-src 'none'; base-uri 'none'; connect-src ipc: http://ipc.localhost https://weather.visualcrossing.com https://api.open-meteo.com https://geocoding-api.open-meteo.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:",
       "devCsp": "default-src 'self'; object-src 'none'; base-uri 'none'; connect-src ipc: http://ipc.localhost https://weather.visualcrossing.com https://api.open-meteo.com https://geocoding-api.open-meteo.com http://localhost:1420 ws://localhost:1420; style-src 'self' 'unsafe-inline'; img-src 'self' data:",
-      "capabilities": ["test-window", "access-window", "bar-window"]
+      "capabilities": ["access-window", "bar-window", "popover-window"]
     }
   },
   "bundle": {

@@ -1,6 +1,0 @@
-{
-  "identifier": "test-window",
-  "description": "Least-privilege surface for the on-demand Stache Next test window. It can listen for host events and close itself; no filesystem, shell, media, weather, system or plugin permissions are granted.",
-  "windows": ["stache-test-*"],
-  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten", "core:window:allow-close"]
-}

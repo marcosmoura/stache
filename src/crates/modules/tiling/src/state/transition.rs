@@ -1124,7 +1124,8 @@ fn hand_over(
 
 // -------------------------------------------------------------- assignment
 
-fn choose_workspace(state: &TilingState, token: WindowInstance) -> Option<WorkspaceId> {
+/// The workspace of the first configured workspace rule `token` matches.
+fn rule_workspace(state: &TilingState, token: WindowInstance) -> Option<WorkspaceId> {
     let window = state.windows.get(&token)?;
     let info = &state.apps.get(&window.application)?.info;
     let metadata = WindowMetadata {
@@ -1132,16 +1133,24 @@ fn choose_workspace(state: &TilingState, token: WindowInstance) -> Option<Worksp
         app_name: &info.name,
         title: &window.observed.title,
     };
-    // 1. The first matching configured workspace rule.
     let rules = state.workspace_rules.iter().map(|(_, rules)| rules);
-    if let Some(found) = find_matching_workspace_prepared(&metadata, rules)
-        && let Some(workspace) = state
-            .workspaces
-            .iter()
-            .find(|ws| ws.name == state.workspace_rules[found.workspace_index].0)
-    {
-        return Some(workspace.id);
-    }
+    let found = find_matching_workspace_prepared(&metadata, rules)?;
+    state
+        .workspaces
+        .iter()
+        .find(|ws| ws.name == state.workspace_rules[found.workspace_index].0)
+        .map(|ws| ws.id)
+}
+
+/// The startup assignment: the first matching rule, else the fallback.
+fn choose_workspace(state: &TilingState, token: WindowInstance) -> Option<WorkspaceId> {
+    // 1. The first matching configured workspace rule.
+    rule_workspace(state, token).or_else(|| fallback_workspace(state, token))
+}
+
+/// The startup fallback for a window no rule places.
+fn fallback_workspace(state: &TilingState, token: WindowInstance) -> Option<WorkspaceId> {
+    let window = state.windows.get(&token)?;
     // 2. The focused, else visible, workspace on the window's own display, then
     //    that display's default (its first workspace).
     let own = window.observed.frame.and_then(|frame| {
@@ -1603,6 +1612,7 @@ fn rejected(state: &mut TilingState, effect: &Effect) {
         | Effect::CancelFrame { .. }
         | Effect::HideApp { .. }
         | Effect::UnhideApp { .. }
+        | Effect::ActivateApp { .. }
         | Effect::Focus { .. }
         | Effect::Publish => {
             state.diagnostics.snapshot_refusals += 1;
@@ -1738,6 +1748,21 @@ fn apply_config(
         }
     };
     state.last_reload_error = None;
+    // Only names, order and rules decide where a window belongs; a layout or
+    // screen edit keeps every assignment (and every manual move).
+    let assignment_key = |c: &TilingConfig| -> Vec<(String, Vec<_>)> {
+        c.workspaces.iter().map(|ws| (ws.name.clone(), ws.rules.clone())).collect()
+    };
+    let workspaces_changed = state
+        .config
+        .as_deref()
+        .is_some_and(|old| assignment_key(old) != assignment_key(&config));
+    let previous_order: Vec<(WindowInstance, String)> = state
+        .workspaces
+        .iter()
+        .flat_map(|ws| ws.order.iter().map(|token| (*token, ws.name.clone())))
+        .collect();
+    let previous_focus = state.focus.window;
     state.config_revision = revision;
     state.workspace_rules.clone_from(&mapping.workspace_rules);
     state.ignore = mapping.ignore.clone();
@@ -1773,5 +1798,93 @@ fn apply_config(
         Some(id) => focus_for(&state.workspaces, id, &state.focus),
         None => FocusState::default(),
     };
+    if workspaces_changed {
+        reevaluate(state, &previous_order, previous_focus, fx);
+    }
     assign_unassigned(state);
+}
+
+/// Re-evaluates every managed window after an accepted reload that changed the
+/// workspace names, their order or any workspace's rules, with the startup
+/// assignment ([`choose_workspace`]): a window matching a rule goes to that
+/// rule's workspace; a window matching none stays in its workspace when it
+/// still exists, else takes the startup fallback. Windows are visited in their
+/// previous stable order and appended to a new workspace, so the windows a
+/// workspace receives keep their order.
+///
+/// Focus: a focused window that moves to a visible workspace keeps the focus
+/// and its workspace becomes the focused one; one that moves to a hidden
+/// workspace hands the focus to the next window of the focused workspace,
+/// natively too (as `send-to-workspace` does).
+fn reevaluate(
+    state: &mut TilingState,
+    previous_order: &[(WindowInstance, String)],
+    previous_focus: Option<WindowInstance>,
+    fx: &mut Vec<Effect>,
+) {
+    let mut focused_moved = false;
+    for (token, previous_name) in previous_order {
+        let token = *token;
+        let Some(window) = state.windows.get(&token) else {
+            continue;
+        };
+        if window.suspended {
+            continue;
+        }
+        let current = window.desired.workspace;
+        let survived = state.workspaces.iter().any(|ws| ws.name == *previous_name);
+        let target = rule_workspace(state, token).or_else(|| {
+            if survived {
+                current
+            } else {
+                fallback_workspace(state, token)
+            }
+        });
+        let Some(target) = target else {
+            continue;
+        };
+        if Some(target) == current {
+            continue;
+        }
+        if let Some(source) = current {
+            intents::leave_workspace(state, source, token);
+        }
+        if let Some(workspace) = state.workspaces.iter_mut().find(|ws| ws.id == target) {
+            insert_window(&mut workspace.order, token, None, workspace.layout);
+        }
+        if let Some(window) = state.windows.get_mut(&token) {
+            window.desired.workspace = Some(target);
+        }
+        state.frames.pinned.remove(&token);
+        if previous_focus == Some(token) {
+            focused_moved = true;
+        }
+    }
+    let Some(focused) = state.focus.workspace else {
+        return;
+    };
+    let moved_to = previous_focus
+        .filter(|_| focused_moved)
+        .and_then(|token| state.windows.get(&token))
+        .and_then(|window| window.desired.workspace)
+        .and_then(|id| state.workspaces.iter().find(|ws| ws.id == id));
+    match moved_to {
+        Some(workspace) if workspace.visible => {
+            // Still visible, so still natively focused: follow it.
+            if let Some(token) = previous_focus {
+                on_focused(state, token);
+            }
+        }
+        Some(_) => {
+            state.focus.window = previous_focus;
+            intents::refocus_in(state, focused, fx);
+        }
+        None => {
+            let previous = FocusState {
+                window: previous_focus,
+                ..state.focus
+            };
+            state.focus = focus_for(&state.workspaces, focused, &previous);
+        }
+    }
 }

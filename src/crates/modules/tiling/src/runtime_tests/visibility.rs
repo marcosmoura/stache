@@ -31,7 +31,9 @@ fn config() -> Arc<crate::config::TilingConfig> {
 
 fn v() -> V {
     let native = Arc::new(Native::new(Duration::from_millis(500)));
-    let source = FixtureSource::new(&native, &["com.a", "com.b"]);
+    // A windowless Finder hosts the desktop, so an empty workspace is
+    // reachable (not inactive).
+    let source = FixtureSource::new(&native, &["com.a", "com.b", "com.apple.finder"]);
     let actions = source.open(&CancellationToken::new()).expect("open");
     let (ids, keys) = (source.ids(), source.keys());
     let mut rig = Rig::new("", Vec::new(), 64, 64);
@@ -41,7 +43,11 @@ fn v() -> V {
         .map(|(n, id)| AppInfo {
             application: *id,
             pid: 100 + i32::try_from(n).unwrap_or_default(),
-            bundle_id: format!("com.fixture.{n}"),
+            bundle_id: if n == 2 {
+                "com.apple.finder".to_owned()
+            } else {
+                format!("com.fixture.{n}")
+            },
             name: format!("Fixture {n}"),
         })
         .collect();
@@ -68,6 +74,10 @@ fn v() -> V {
     engine.set_frame_control(Arc::clone(&rig.frames));
     engine.set_visibility_control(Arc::clone(&vis));
     rig.engine = engine;
+    // Finder reads visible at startup: nothing is sent to it.
+    rig.backend.script_hidden(stache_macos::windows::HiddenOutcome::Read(
+        stache_macos::ax::AxReading::Value(false),
+    ));
     rig.start();
     for id in &ids {
         rig.complete(*id);

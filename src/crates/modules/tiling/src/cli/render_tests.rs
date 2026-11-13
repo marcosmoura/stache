@@ -381,6 +381,23 @@ fn the_status_table_names_every_reason_nothing_happens() {
             reason: "UnknownDisplay".to_owned(),
         }],
         hidden_apps: Vec::new(),
+        animation_fallbacks: vec![
+            crate::dto::StatusAnimationFallbackDto {
+                name: "WhatsApp".to_owned(),
+                bundle_id: "net.whatsapp.WhatsApp".to_owned(),
+                kind: "resize".to_owned(),
+                reason: "writes fewer than 15 frames per second in 2 of its last 3 layout changes"
+                    .to_owned(),
+                retry_in_ms: Some(41_200),
+            },
+            crate::dto::StatusAnimationFallbackDto {
+                name: "Zed".to_owned(),
+                bundle_id: "dev.zed.Zed".to_owned(),
+                kind: "move".to_owned(),
+                reason: "turns Enhanced UI back on".to_owned(),
+                retry_in_ms: None,
+            },
+        ],
         last_intent: Some("FocusWorkspace(\"music\") -> Applied".to_owned()),
         tracked_windows: Vec::new(),
         excluded_windows: Vec::new(),
@@ -394,6 +411,9 @@ fn the_status_table_names_every_reason_nothing_happens() {
         "failed app: Zoom (us.zoom.xos) pid 9: Unacknowledged [retries 2]",
         "no frames on Built-in: UnknownDisplay",
         "last intent: FocusWorkspace",
+        "no animation for resizes: WhatsApp (net.whatsapp.WhatsApp): writes fewer than 15 frames \
+         per second in 2 of its last 3 layout changes; animates again after 42s",
+        "no animation for moves: Zed (dev.zed.Zed): turns Enhanced UI back on; for this run",
     ] {
         assert!(table.contains(expected), "{expected}\n{table}");
     }

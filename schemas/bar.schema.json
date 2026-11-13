@@ -18,6 +18,26 @@
       "maximum": 65535,
       "minimum": 0
     },
+    "layout": {
+      "description": "Which widgets the Bar shows, in three ordered zones: `start` (leading\nedge), `center` (centered on the Bar) and `end` (trailing edge).\nAn entry is a widget name (`spaces`, `media`, `weather`, `cpu`,\n`battery`, `keep_awake`, `wifi`, `clock`) or a table with `widget`, an\noptional unique `id` (ASCII letters, digits, `-` or `_`) and that\nwidget's options: `clock` takes `show_date` and `show_seconds` (default\ntrue) and `hour_cycle` (`\"h23\"` or `\"h12\"`, default `\"h23\"`); `cpu`\ntakes `temperature_alert` (1 to 150 degrees Celsius, default 85). A\nwidget may appear more than once. Without `[layout]` the default below\nis used; a zone left out of a present `[layout]` is empty.\n\nExample:\n  start = [\"spaces\"]\n  center = [\"media\"]\n  end = [\"weather\", { widget = \"cpu\", temperature_alert = 90 }, { widget = \"clock\", id = \"main_clock\", show_seconds = false }]",
+      "$ref": "#/$defs/BarLayoutConfig",
+      "default": {
+        "center": [
+          "media"
+        ],
+        "end": [
+          "weather",
+          "cpu",
+          "battery",
+          "keep_awake",
+          "wifi",
+          "clock"
+        ],
+        "start": [
+          "spaces"
+        ]
+      }
+    },
     "padding": {
       "description": "Padding around the status bar in pixels. Zero is preserved, not replaced.",
       "type": "integer",
@@ -39,6 +59,285 @@
     }
   },
   "$defs": {
+    "BarEntryClockOptions": {
+      "description": "The keys of an entry table besides `widget`: an optional `id` and the\nwidget's options, flat.",
+      "type": "object",
+      "properties": {
+        "hour_cycle": {
+          "description": "`h23` (24-hour) or `h12` (12-hour with AM/PM).",
+          "$ref": "#/$defs/HourCycle",
+          "default": "h23"
+        },
+        "id": {
+          "description": "A stable identity for this item: ASCII letters, digits, `-` or `_`,\nunique across all zones. Omitted, the widget name is used (then\n`<name>_2`, `<name>_3`, ... for repeats, in file order).",
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "show_date": {
+          "description": "Whether the date is shown before the time.",
+          "type": "boolean",
+          "default": true
+        },
+        "show_seconds": {
+          "description": "Whether the time shows seconds.",
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "BarEntryCpuOptions": {
+      "description": "The keys of an entry table besides `widget`: an optional `id` and the\nwidget's options, flat.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "A stable identity for this item: ASCII letters, digits, `-` or `_`,\nunique across all zones. Omitted, the widget name is used (then\n`<name>_2`, `<name>_3`, ... for repeats, in file order).",
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "temperature_alert": {
+          "description": "The temperature, in degrees Celsius, at which the CPU item shows its\nalert (1 to 150).",
+          "type": "integer",
+          "format": "uint8",
+          "default": 85,
+          "maximum": 150,
+          "minimum": 1
+        }
+      }
+    },
+    "BarEntryNoOptions": {
+      "description": "The keys of an entry table besides `widget`: an optional `id` and the\nwidget's options, flat.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "A stable identity for this item: ASCII letters, digits, `-` or `_`,\nunique across all zones. Omitted, the widget name is used (then\n`<name>_2`, `<name>_3`, ... for repeats, in file order).",
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        }
+      }
+    },
+    "BarLayoutConfig": {
+      "description": "The three ordered Bar zones. A missing `[layout]` is the default\narrangement; a zone missing from a present `[layout]` is empty.",
+      "type": "object",
+      "properties": {
+        "center": {
+          "description": "Items centered on the Bar, in order.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/BarLayoutEntry"
+          }
+        },
+        "end": {
+          "description": "Items aligned to the trailing edge, in order.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/BarLayoutEntry"
+          }
+        },
+        "start": {
+          "description": "Items aligned to the leading edge, in order.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/BarLayoutEntry"
+          }
+        }
+      }
+    },
+    "BarLayoutEntry": {
+      "description": "One layout entry: a widget name, or a table with `widget`, an optional\n`id` and that widget's options.",
+      "anyOf": [
+        {
+          "description": "A widget name; its id is generated and its options are the defaults.",
+          "$ref": "#/$defs/BarWidgetKind"
+        },
+        {
+          "description": "A widget with an optional explicit id and options.",
+          "$ref": "#/$defs/BarLayoutEntryTable"
+        }
+      ]
+    },
+    "BarLayoutEntryTable": {
+      "description": "The table form of a layout entry, one shape per widget.",
+      "oneOf": [
+        {
+          "description": "The Tiling workspace strip.",
+          "type": "object",
+          "properties": {
+            "widget": {
+              "type": "string",
+              "const": "spaces"
+            }
+          },
+          "$ref": "#/$defs/BarEntryNoOptions",
+          "required": [
+            "widget"
+          ]
+        },
+        {
+          "description": "The playing media.",
+          "type": "object",
+          "properties": {
+            "widget": {
+              "type": "string",
+              "const": "media"
+            }
+          },
+          "$ref": "#/$defs/BarEntryNoOptions",
+          "required": [
+            "widget"
+          ]
+        },
+        {
+          "description": "The current weather.",
+          "type": "object",
+          "properties": {
+            "widget": {
+              "type": "string",
+              "const": "weather"
+            }
+          },
+          "$ref": "#/$defs/BarEntryNoOptions",
+          "required": [
+            "widget"
+          ]
+        },
+        {
+          "description": "The CPU usage.",
+          "type": "object",
+          "properties": {
+            "widget": {
+              "type": "string",
+              "const": "cpu"
+            }
+          },
+          "$ref": "#/$defs/BarEntryCpuOptions",
+          "required": [
+            "widget"
+          ]
+        },
+        {
+          "description": "The battery state.",
+          "type": "object",
+          "properties": {
+            "widget": {
+              "type": "string",
+              "const": "battery"
+            }
+          },
+          "$ref": "#/$defs/BarEntryNoOptions",
+          "required": [
+            "widget"
+          ]
+        },
+        {
+          "description": "The Keep Awake toggle.",
+          "type": "object",
+          "properties": {
+            "widget": {
+              "type": "string",
+              "const": "keep_awake"
+            }
+          },
+          "$ref": "#/$defs/BarEntryNoOptions",
+          "required": [
+            "widget"
+          ]
+        },
+        {
+          "description": "The Wi-Fi state.",
+          "type": "object",
+          "properties": {
+            "widget": {
+              "type": "string",
+              "const": "wifi"
+            }
+          },
+          "$ref": "#/$defs/BarEntryNoOptions",
+          "required": [
+            "widget"
+          ]
+        },
+        {
+          "description": "The clock.",
+          "type": "object",
+          "properties": {
+            "widget": {
+              "type": "string",
+              "const": "clock"
+            }
+          },
+          "$ref": "#/$defs/BarEntryClockOptions",
+          "required": [
+            "widget"
+          ]
+        }
+      ]
+    },
+    "BarWidgetKind": {
+      "description": "A widget the Bar can place in a layout zone.",
+      "oneOf": [
+        {
+          "description": "The Tiling workspace strip.",
+          "type": "string",
+          "const": "spaces"
+        },
+        {
+          "description": "The playing media.",
+          "type": "string",
+          "const": "media"
+        },
+        {
+          "description": "The current weather.",
+          "type": "string",
+          "const": "weather"
+        },
+        {
+          "description": "The CPU usage.",
+          "type": "string",
+          "const": "cpu"
+        },
+        {
+          "description": "The battery state.",
+          "type": "string",
+          "const": "battery"
+        },
+        {
+          "description": "The Keep Awake toggle.",
+          "type": "string",
+          "const": "keep_awake"
+        },
+        {
+          "description": "The Wi-Fi state.",
+          "type": "string",
+          "const": "wifi"
+        },
+        {
+          "description": "The clock.",
+          "type": "string",
+          "const": "clock"
+        }
+      ]
+    },
+    "HourCycle": {
+      "description": "Whether the clock counts hours 0 to 23 or 1 to 12 with a day period.",
+      "oneOf": [
+        {
+          "description": "24-hour clock, `00` to `23`.",
+          "type": "string",
+          "const": "h23"
+        },
+        {
+          "description": "12-hour clock with AM/PM.",
+          "type": "string",
+          "const": "h12"
+        }
+      ]
+    },
     "WeatherConfig": {
       "description": "Weather settings for the status bar.",
       "type": "object",

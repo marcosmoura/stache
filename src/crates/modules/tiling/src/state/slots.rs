@@ -107,18 +107,8 @@ pub(super) fn transplant(state: &mut TilingState, from: WindowInstance, to: Wind
     let group = source.tab_group;
     // `to` leaves the place it had.
     let own = state.windows.get(&to).and_then(|window| window.desired.workspace);
-    if let Some(id) = own
-        && let Some(workspace) = state.workspaces.iter_mut().find(|ws| ws.id == id)
-    {
-        workspace.order.retain(|held| *held != to);
-        if workspace.focused_window == Some(to) {
-            workspace.focused_window = state
-                .focus_history
-                .iter()
-                .rev()
-                .find(|held| **held != to && workspace.order.contains(held))
-                .copied();
-        }
+    if let Some(id) = own {
+        super::intents::leave_workspace(state, id, to);
     }
     state.focus_history.retain(|held| *held != to);
     // `to` takes the position of `from`.

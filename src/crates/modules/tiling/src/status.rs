@@ -108,7 +108,8 @@ fn who_is(snapshot: &crate::state::TilingSnapshot, application: ApplicationId) -
 
 /// The animation diagnostics of one published snapshot: one line per
 /// application that moves without animation,
-/// `animation: <name> (<bundle id>) moves without animation: <reason>`, then one
+/// `animation: <name> (<bundle id>) moves without animation for <kinds>: <reason>`
+/// (`moves`, `resizes` or `moves and resizes`), then one
 /// metrics summary line per application with data.
 #[must_use]
 pub fn animation_diagnostics(
@@ -116,10 +117,24 @@ pub fn animation_diagnostics(
     report: &crate::animation::AnimationReport,
 ) -> Vec<String> {
     let mut out = Vec::new();
-    for (application, reason) in &report.fallbacks {
+    // One line per application and reason, naming the kinds it holds (a lease
+    // reason holds both).
+    let mut lines: Vec<(ApplicationId, crate::animation::FallbackReason, Vec<&str>)> = Vec::new();
+    for entry in &report.fallbacks {
+        let kind = match entry.kind {
+            crate::animation::MotionKind::Move => "moves",
+            crate::animation::MotionKind::Resize => "resizes",
+        };
+        match lines.iter_mut().find(|(a, r, _)| *a == entry.application && *r == entry.reason) {
+            Some((_, _, kinds)) => kinds.push(kind),
+            None => lines.push((entry.application, entry.reason, vec![kind])),
+        }
+    }
+    for (application, reason, kinds) in lines {
         out.push(format!(
-            "animation: {} moves without animation: {reason}",
-            who_is(snapshot, *application)
+            "animation: {} moves without animation for {}: {reason}",
+            who_is(snapshot, application),
+            kinds.join(" and ")
         ));
     }
     for (application, summary) in &report.metrics {
@@ -619,7 +634,9 @@ mod animation_diagnostics_tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::animation::{AnimationReport, FallbackReason, MetricsSummary};
+    use crate::animation::{
+        AnimationReport, FallbackEntry, FallbackReason, MetricsSummary, MotionKind,
+    };
     use crate::state::{AppRecord, TilingState};
     use crate::test_support::{app, info};
 
@@ -633,6 +650,19 @@ mod animation_diagnostics_tests {
             tracked: true,
         });
         state
+    }
+
+    fn entry(
+        application: stache_macos::ApplicationId,
+        kind: MotionKind,
+        reason: FallbackReason,
+    ) -> FallbackEntry {
+        FallbackEntry {
+            application,
+            kind,
+            reason,
+            until: None,
+        }
     }
 
     fn summary() -> MetricsSummary {
@@ -672,11 +702,16 @@ mod animation_diagnostics_tests {
             ),
         ] {
             let report = AnimationReport {
-                fallbacks: vec![(app(1), reason)],
+                // A lease reason holds both kinds: still one line.
+                fallbacks: vec![
+                    entry(app(1), MotionKind::Move, reason),
+                    entry(app(1), MotionKind::Resize, reason),
+                ],
                 metrics: Vec::new(),
             };
             assert_eq!(animation_diagnostics(&snapshot, &report), [format!(
-                "animation: Safari (com.apple.Safari) moves without animation: {text}"
+                "animation: Safari (com.apple.Safari) moves without animation for moves and resizes: \
+                 {text}"
             )]);
         }
     }
@@ -704,7 +739,7 @@ mod animation_diagnostics_tests {
     fn an_unknown_application_is_named_without_internals() {
         let snapshot = state_with_safari().snapshot();
         let report = AnimationReport {
-            fallbacks: vec![(app(7), FallbackReason::LateEnd)],
+            fallbacks: vec![entry(app(7), MotionKind::Resize, FallbackReason::LateEnd)],
             metrics: Vec::new(),
         };
         let lines = animation_diagnostics(&snapshot, &report);
@@ -719,12 +754,13 @@ mod animation_diagnostics_tests {
         let source = TilingStatusSource::default();
         source.running(cell);
         source.set_animation_source(Some(Box::new(|| AnimationReport {
-            fallbacks: vec![(app(1), FallbackReason::Overflow)],
+            fallbacks: vec![entry(app(1), MotionKind::Move, FallbackReason::Overflow)],
             metrics: vec![(app(1), summary())],
         })));
         let diagnostics = source.read().diagnostics;
         let position = |prefix: &str| diagnostics.iter().position(|line| line.starts_with(prefix));
-        let fallback = position("animation: Safari (com.apple.Safari) moves without animation: ");
+        let fallback =
+            position("animation: Safari (com.apple.Safari) moves without animation for moves: ");
         let metrics = position("animation metrics: Safari (com.apple.Safari): ");
         assert!(fallback.is_some() && metrics.is_some(), "{diagnostics:?}");
         assert!(fallback < metrics);

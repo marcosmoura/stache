@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 01 — Scaffold
@@ -39,13 +39,13 @@ Nothing is copied from the deleted tree or from `_legacy/`. Root configuration f
 
 ## Acceptance criteria
 
-- [ ] UI-01-01: No file from the old `src/ui/` remains; `git grep` finds no reference to Linaria, wyw, stylelint, simple-icons or the parity gate outside `_legacy/` and `docs/specs/`.
-- [ ] UI-01-02: `bun run build` succeeds and emits one CSS asset that contains the Placeholder's StyleX rules inside cascade layers, and a separate JS chunk for the Placeholder window.
-- [ ] UI-01-03: `?surface=shell|test|access|bar` and no `surface` render the placeholder with the surface name; an unknown or empty value renders the fallback and makes zero IPC calls.
-- [ ] UI-01-04: `bun run check:generated` passes with the bindings at `src/ui/src/ipc/bindings.gen.ts`.
-- [ ] UI-01-05: An import of `@tauri-apps/api` outside `src/ui/src/ipc/` fails `bun run lint`; an invalid StyleX property fails `bun run lint`.
-- [ ] UI-01-06: `bun run lint`, `bun run format:check` and `bun run test` pass, and `bun run test` runs the Playwright scenarios.
-- [ ] UI-01-07: `docs/architecture/ui.md` describes the new layout, conventions and harnesses; `AGENTS.md`, `docs/guides/testing.md`, `docs/features/bar.md` and `docs/index.md` no longer describe the deleted UI as shipped on this branch.
+- [x] UI-01-01: No file from the old `src/ui/` remains; `git grep` finds no reference to Linaria, wyw, stylelint, simple-icons or the parity gate outside `_legacy/` and `docs/specs/`.
+- [x] UI-01-02: `bun run build` succeeds and emits one CSS asset that contains the Placeholder's StyleX rules inside cascade layers, and a separate JS chunk for the Placeholder window.
+- [x] UI-01-03: `?surface=shell|test|access|bar` and no `surface` render the placeholder with the surface name; an unknown or empty value renders the fallback and makes zero IPC calls.
+- [x] UI-01-04: `bun run check:generated` passes with the bindings at `src/ui/src/ipc/bindings.gen.ts`.
+- [x] UI-01-05: An import of `@tauri-apps/api` outside `src/ui/src/ipc/` fails `bun run lint`; an invalid StyleX property fails `bun run lint`.
+- [x] UI-01-06: `bun run lint`, `bun run format:check` and `bun run test` pass, and `bun run test` runs the Playwright scenarios.
+- [x] UI-01-07: `docs/architecture/ui.md` describes the new layout, conventions and harnesses; `AGENTS.md`, `docs/guides/testing.md`, `docs/features/bar.md` and `docs/index.md` no longer describe the deleted UI as shipped on this branch.
 
 ## Tests
 

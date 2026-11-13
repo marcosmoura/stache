@@ -336,6 +336,10 @@ impl EffectEnv {
                 self.visibility.execute_unhide(&self.exec(stamp), application);
                 self.complete(stamp, CompletionResult::Visibility(application));
             }
+            Effect::ActivateApp { stamp, application } => {
+                self.visibility.execute_activate(&self.exec(stamp), application);
+                self.complete(stamp, CompletionResult::Visibility(application));
+            }
             Effect::Focus { stamp, window } => {
                 self.visibility.execute_focus(
                     &self.exec(stamp),
@@ -375,6 +379,9 @@ impl EffectEnv {
             }
             Effect::UnhideApp { application, .. } => {
                 self.visibility.cancel_planned(Planned::Unhide(application));
+            }
+            Effect::ActivateApp { application, .. } => {
+                self.visibility.cancel_planned(Planned::Activate(application));
             }
             Effect::Focus { .. } => self.visibility.finish_focus(),
             _ => {}
@@ -569,6 +576,7 @@ const fn effect_stamp(effect: &Effect) -> Option<Stamp> {
         | Effect::ListApplications { stamp }
         | Effect::HideApp { stamp, .. }
         | Effect::UnhideApp { stamp, .. }
+        | Effect::ActivateApp { stamp, .. }
         | Effect::Focus { stamp, .. }
         | Effect::WriteFrame { stamp, .. } => Some(*stamp),
         Effect::CancelFrame { .. } | Effect::Publish => None,
@@ -884,6 +892,22 @@ impl Engine {
     /// Applies one input; `false` when the actor halted.
     fn apply(&mut self, input: Input, now: Instant) -> bool {
         let retime = matches!(input, Input::Displays(_));
+        // A switch (intent or native activation) retries abandoned hides. A
+        // focus refused because its workspace is inactive is no switch: it
+        // sends nothing native (decided before the transition, with the
+        // intent's own rule, so every other input keeps its order).
+        let refused = match (&input, &self.state) {
+            (Input::Intent(crate::intent::Intent::FocusWorkspace(name)), Some(state)) => {
+                state.refuses_focus(name)
+            }
+            _ => false,
+        };
+        if matches!(input, Input::Intent(_) | Input::Activated(_))
+            && !refused
+            && let Some(visibility) = &self.visibility
+        {
+            visibility.rearm_abandoned();
+        }
         self.observe_visibility(&input);
         self.note_border_visibility(&input, now);
         if let Some(state) = &self.state {
@@ -905,7 +929,10 @@ impl Engine {
         // transition: their windows keep their layout slot.
         self.sync_owned_hidden(&mut state);
         // The same for the instant-fallback applications.
+        // A rate or lag fallback whose cool-down passed ends here, before the
+        // plan this input makes.
         if let Some(animation) = &self.animation {
+            animation.expire_fallbacks(now);
             state.set_animation_fallback(animation.fallback_apps());
         }
         let lease = match &input {
@@ -934,7 +961,10 @@ impl Engine {
             self.fail_panicked();
             return false;
         };
-        self.note_animation(&state, lease, terminated);
+        self.note_animation(&state, lease, terminated, now);
+        if let Some(animation) = &self.animation {
+            self.diag.animation_fallback(&state, &animation.take_fallback_events());
+        }
         self.diag.observe(&state);
         self.diag.effects(&state, &effects);
         let outbox = state.take_tab_outbox();
@@ -983,6 +1013,7 @@ impl Engine {
         state: &TilingState,
         lease: Option<(ApplicationId, stache_macos::windows::EnhancedUiNote)>,
         terminated: Option<ApplicationId>,
+        now: Instant,
     ) {
         use stache_macos::windows::EnhancedUiNote;
 
@@ -997,10 +1028,10 @@ impl Engine {
         };
         match note {
             EnhancedUiNote::ReEnabled { .. } if lease_stats.cannot_keep_up() => {
-                animation.enter_fallback(application, FallbackReason::ReEnablesEnhancedUi);
+                animation.enter_fallback(application, FallbackReason::ReEnablesEnhancedUi, now);
             }
             EnhancedUiNote::SetFailed(_) if lease_stats.set_failed() => {
-                animation.enter_fallback(application, FallbackReason::EnhancedUiStuck);
+                animation.enter_fallback(application, FallbackReason::EnhancedUiStuck, now);
             }
             _ => {}
         }
@@ -1062,10 +1093,12 @@ impl Engine {
         let planned = visibility.plan(&requirement, &live, enabled, now);
         let stamp = stamp?;
         self.diag.planned(state, &planned);
+        self.diag.kept_last(state, requirement.kept_last);
         for request in planned {
             let effect = match request {
                 Planned::Hide(application) => Effect::HideApp { stamp, application },
                 Planned::Unhide(application) => Effect::UnhideApp { stamp, application },
+                Planned::Activate(application) => Effect::ActivateApp { stamp, application },
             };
             if let Err(error) = self.runner.submit(effect) {
                 visibility.cancel_planned(request);
@@ -1155,6 +1188,19 @@ impl Engine {
         snapshot.admission = admission.clone();
         if let Some(visibility) = &self.visibility {
             snapshot.hidden_apps = visibility.owned();
+        }
+        if let Some(animation) = &self.animation {
+            let now = self.clock.now();
+            snapshot.animation_fallbacks = animation
+                .fallback_entries()
+                .into_iter()
+                .map(|entry| {
+                    (
+                        entry,
+                        entry.until.map(|until| until.saturating_duration_since(now)),
+                    )
+                })
+                .collect();
         }
         self.last_admission = admission;
         self.cell.publish(snapshot);

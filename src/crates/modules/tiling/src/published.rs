@@ -45,6 +45,20 @@ pub struct TilingPublishedState {
     pub windows: Vec<PublishedWindow>,
     /// The focused workspace and window.
     pub focus: PublishedFocus,
+    /// The last focus request refused because its workspace was inactive;
+    /// absent when there is none or its workspace no longer exists.
+    #[serde(default)]
+    pub refused_focus: Option<PublishedRefusedFocus>,
+}
+
+/// A focus request refused because its workspace was inactive.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublishedRefusedFocus {
+    /// The workspace name.
+    pub workspace: String,
+    /// Increases by one (wrapping) on every refusal of a generation.
+    pub serial: u32,
 }
 
 /// One workspace.
@@ -63,6 +77,10 @@ pub struct PublishedWorkspace {
     pub focused: bool,
     /// Its position in Tiling's workspace order, from zero.
     pub order: u32,
+    /// It has no window and Stache cannot show it as an empty desktop, so a
+    /// focus request is refused.
+    #[serde(default)]
+    pub inactive: bool,
 }
 
 /// One managed window.
@@ -153,6 +171,7 @@ pub fn project(snapshot: &TilingSnapshot) -> TilingPublishedState {
             visible: workspace.visible,
             focused: workspace.focused,
             order: u32::try_from(index).unwrap_or(u32::MAX),
+            inactive: snapshot.unreachable.contains(&workspace.id),
         })
         .collect();
 
@@ -206,7 +225,19 @@ pub fn project(snapshot: &TilingSnapshot) -> TilingPublishedState {
             .map(window_key),
     };
 
-    TilingPublishedState { workspaces, windows, focus }
+    let refused_focus = snapshot.refused_focus.and_then(|refused| {
+        workspace_name(snapshot, refused.workspace).map(|workspace| PublishedRefusedFocus {
+            workspace,
+            serial: refused.serial,
+        })
+    });
+
+    TilingPublishedState {
+        workspaces,
+        windows,
+        focus,
+        refused_focus,
+    }
 }
 
 fn workspace_name(snapshot: &TilingSnapshot, id: crate::state::WorkspaceId) -> Option<String> {

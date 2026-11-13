@@ -1,0 +1,1 @@
+export { WidgetRegistryProvider } from './WidgetRegistryProvider';

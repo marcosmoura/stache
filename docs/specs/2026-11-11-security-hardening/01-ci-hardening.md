@@ -94,6 +94,10 @@ true. No product code changes.
   gate stays a local check. The "first Quality run passes" criterion is judged on the run after
   this change.
 
+- Changed when `main` was merged in (2026-11-13): `main` replaced `test:parity` with `test:e2e`,
+  whose font-dependent screenshot baselines skip themselves without Maple Mono NF. The reason for
+  the split is gone, so the workflow runs `bun run test` again, as on `main`.
+
 - Changed after review (2026-11-11): the pin test allows a job-level `permissions:` block, so a
   later workflow can raise one job above the read-only default; the top-level rule is unchanged
   and `quality.yml` has no job-level block. The lock guard is checked per job, block scalars with

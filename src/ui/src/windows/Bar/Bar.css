@@ -1,0 +1,22 @@
+/*
+ * Bar window rules StyleX cannot express (descendant selectors), scoped to the
+ * Bar's root element. In the reset layer, so component styles still win.
+ */
+@layer reset {
+  /*
+   * A widget's persistent node (see `utils/nodes.ts`) is only a mount point: it
+   * must not create a box, or the item's `height: 100%` would resolve against
+   * an auto-height parent and shrink to its content.
+   */
+  :where([data-surface='bar']) :where([data-widget-node]) {
+    display: contents;
+  }
+
+  :where([data-surface='bar']) :where(img, svg) {
+    display: block;
+
+    max-width: 100%;
+
+    -webkit-user-drag: none;
+  }
+}

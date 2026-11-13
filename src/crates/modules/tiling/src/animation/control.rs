@@ -11,7 +11,8 @@ use stache_sdk::CancellationToken;
 
 use super::{
     AnimationFrame, AnimationJob, AnimationSettings, AnimationShared, AnimationSink,
-    AnimationWorker, FallbackReason, FrameCounters, MetricsSummary, ReadReplyFn,
+    AnimationWorker, FallbackEntry, FallbackEvent, FallbackReason, FrameCounters, MetricsSummary,
+    MotionKind, ReadReplyFn,
 };
 use crate::actor::{Clock, FrameControl, FrameJob};
 use crate::backend::WindowBackend;
@@ -135,18 +136,27 @@ impl AnimationSink for LiveSink {
                     reply(FrameReply::Done(FrameAck { outcome, sent_at: None }));
                 }
                 Ok(request) => {
-                    // The border follows the frame as it is sent (same tick).
-                    self.frames.report_border(
-                        job.window,
-                        job.plan_sequence,
-                        job.target,
-                        crate::borders::BorderFrameKind::AnimationFrame,
-                    );
+                    // The border follows the frame once it was written (its
+                    // acknowledgement), never at send: a frame the shard
+                    // replaced (dropped, latest wins) was never reached by the
+                    // window, so the border is never ahead of it.
+                    let borders = self.frames.border_frames();
+                    let (window, plan_sequence, target) =
+                        (job.window, job.plan_sequence, job.target);
                     let reply = Once::new(reply);
                     let answer = reply.clone();
                     batch.push((
                         request,
                         Box::new(move |frame_reply| {
+                            if let (Some(borders), FrameReply::Done(ack)) = (&borders, &frame_reply)
+                                && let Some((frame, kind)) = crate::borders::outcome_frame(
+                                    target,
+                                    &ack.outcome,
+                                    crate::borders::BorderFrameKind::AnimationFrame,
+                                )
+                            {
+                                borders.report(window, plan_sequence, frame, kind);
+                            }
                             if let Some(reply) = answer.take() {
                                 reply(frame_reply);
                             }
@@ -251,8 +261,9 @@ pub struct AnimationControl {
 /// What status reports about animations, read without any AX call.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AnimationReport {
-    /// Applications that move without animation, with the reason.
-    pub fallbacks: Vec<(ApplicationId, FallbackReason)>,
+    /// Applications that move without animation, per kind, with the reason
+    /// and the end of a cool-down.
+    pub fallbacks: Vec<FallbackEntry>,
     /// A metrics summary per application with data.
     pub metrics: Vec<(ApplicationId, MetricsSummary)>,
 }
@@ -392,20 +403,52 @@ impl AnimationControl {
         self.slot().worker.as_ref().map(|w| w.pacing_notes()).unwrap_or_default()
     }
 
-    /// The applications that move without animation. The actor copies them
-    /// into the pure state before each transition.
+    /// The applications and kinds that move without animation. The actor
+    /// copies them into the pure state before each transition.
     #[must_use]
-    pub fn fallback_apps(&self) -> std::collections::BTreeSet<ApplicationId> {
+    pub fn fallback_apps(&self) -> std::collections::BTreeSet<(ApplicationId, MotionKind)> {
         self.shared.fallback.ids()
     }
 
-    /// Puts `application` in instant fallback for `reason`, while animations
-    /// are on. `true` when it was newly added.
-    pub fn enter_fallback(&self, application: ApplicationId, reason: FallbackReason) -> bool {
+    /// Ends every fallback whose cool-down passed by `now` and clears that
+    /// kind's history, so it takes two new bad records of three to fall back
+    /// again. The actor calls it before each transition (so before a plan).
+    pub fn expire_fallbacks(&self, now: Instant) -> Vec<FallbackEntry> {
+        let left = self.shared.fallback.expire(now);
+        if !left.is_empty() {
+            let mut book = self.shared.book();
+            for entry in &left {
+                book.forget_kind(entry.application, entry.kind);
+            }
+        }
+        left
+    }
+
+    /// The applications in fallback, per kind, without the metrics.
+    #[must_use]
+    pub fn fallback_entries(&self) -> Vec<FallbackEntry> { self.shared.fallback.entries() }
+
+    /// The fallback entries and exits since the last call, for the log.
+    #[must_use]
+    pub fn take_fallback_events(&self) -> Vec<FallbackEvent> { self.shared.fallback.take_events() }
+
+    /// Puts `application` in instant fallback for `reason` (an Enhanced UI
+    /// lease reason: both kinds), while animations are on. `true` when it was
+    /// newly added for any kind.
+    pub fn enter_fallback(
+        &self,
+        application: ApplicationId,
+        reason: FallbackReason,
+        now: Instant,
+    ) -> bool {
         if self.slot().worker.is_none() {
             return false;
         }
-        self.shared.fallback.insert(application, reason)
+        let mut added = false;
+        for kind in MotionKind::ALL {
+            added |= self.shared.fallback.insert(application, kind, reason, now);
+        }
+        added
     }
 
     /// Forgets a terminated application: its fallback and its metrics.

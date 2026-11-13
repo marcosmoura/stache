@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use stache_sdk::{ConfigError, ModuleConfig, ModuleId};
 
+use crate::layout::BarLayoutConfig;
+
 /// Default bar height in pixels.
 const DEFAULT_HEIGHT: u16 = 28;
 /// Default bar padding in pixels.
@@ -159,6 +161,27 @@ pub struct BarConfig {
     pub padding: u16,
     /// Weather status bar configuration.
     pub weather: WeatherConfig,
+    /// Which widgets the Bar shows, in three ordered zones: `start` (leading
+    /// edge), `center` (centered on the Bar) and `end` (trailing edge).
+    /// An entry is a widget name (`spaces`, `media`, `weather`, `cpu`,
+    /// `battery`, `keep_awake`, `wifi`, `clock`) or a table with `widget`, an
+    /// optional unique `id` (ASCII letters, digits, `-` or `_`) and that
+    /// widget's options: `clock` takes `show_date` and `show_seconds` (default
+    /// true) and `hour_cycle` (`"h23"` or `"h12"`, default `"h23"`); `cpu`
+    /// takes `temperature_alert` (1 to 150 degrees Celsius, default 85). A
+    /// widget may appear more than once. Without `[layout]` the default below
+    /// is used; a zone left out of a present `[layout]` is empty.
+    ///
+    /// Example:
+    ///   start = ["spaces"]
+    ///   center = ["media"]
+    ///   end = ["weather", { widget = "cpu", temperature_alert = 90 }, { widget = "clock", id = "main_clock", show_seconds = false }]
+    #[allow(
+        clippy::doc_link_with_quotes,
+        clippy::doc_markdown,
+        reason = "the example is TOML, rendered verbatim into the template comment"
+    )]
+    pub layout: BarLayoutConfig,
 }
 
 impl Default for BarConfig {
@@ -168,6 +191,7 @@ impl Default for BarConfig {
             height: DEFAULT_HEIGHT,
             padding: DEFAULT_PADDING,
             weather: WeatherConfig::default(),
+            layout: BarLayoutConfig::default(),
         }
     }
 }
@@ -189,7 +213,13 @@ impl ModuleConfig for BarConfig {
             return Err(ConfigError::new("weather.api_keys must not contain a NUL byte"));
         }
         check_refresh_interval(self.weather.refresh_interval)
-            .map_err(|message| ConfigError::new(format!("weather.refresh_interval: {message}")))
+            .map_err(|message| ConfigError::new(format!("weather.refresh_interval: {message}")))?;
+        self.layout.validate()
+    }
+
+    /// Drops another widget's options from layout entry tables, warning.
+    fn prune_section(section: &mut serde_json::Value) -> Vec<String> {
+        crate::layout::prune_foreign_options(section)
     }
 
     /// Materializes dimensions that the legacy derive rendered as zero and
@@ -279,6 +309,11 @@ mod tests {
                     "default_location": "",
                     "precise_location": false,
                     "refresh_interval": 20,
+                },
+                "layout": {
+                    "start": ["spaces"],
+                    "center": ["media"],
+                    "end": ["weather", "cpu", "battery", "keep_awake", "wifi", "clock"],
                 },
             })
         );
@@ -552,6 +587,83 @@ mod tests {
         assert_eq!(found["maximum"], 1440, "{found}");
     }
 
+    #[test]
+    fn an_entry_id_is_a_plain_optional_string_in_the_schema() {
+        let schema = catalog().schema_json(BarConfig::ID).expect("schema").expect("render");
+        let schema: serde_json::Value = serde_json::from_str(&schema).expect("JSON");
+        for fields in [
+            "BarEntryNoOptions",
+            "BarEntryCpuOptions",
+            "BarEntryClockOptions",
+        ] {
+            let table = &schema["$defs"][fields];
+            let id = &table["properties"]["id"];
+            assert_eq!(id["type"], "string", "no null in TOML: {id}");
+            assert_eq!(id["minLength"], 1, "{id}");
+            assert_eq!(id["pattern"], "^[A-Za-z0-9_-]+$", "{id}");
+            assert!(table.get("required").is_none(), "{table}");
+        }
+        // Nothing decodes a null id either.
+        let null: Result<crate::layout::BarLayoutEntry, _> =
+            serde_json::from_value(json!({ "widget": "clock", "id": null }));
+        assert!(null.is_err());
+    }
+
+    #[test]
+    fn the_entry_schema_has_one_object_per_widget_with_only_its_options() {
+        let schema = catalog().schema_json(BarConfig::ID).expect("schema").expect("render");
+        let schema: serde_json::Value = serde_json::from_str(&schema).expect("JSON");
+        let defs = &schema["$defs"];
+        let variants = defs["BarLayoutEntryTable"]["oneOf"].as_array().expect("oneOf");
+        let mut seen = Vec::new();
+        for variant in variants {
+            let widget = variant["properties"]["widget"]["const"].as_str().expect("const");
+            assert_eq!(variant["required"], json!(["widget"]), "{variant}");
+            let target = variant["$ref"].as_str().expect("$ref");
+            let fields = &defs[target.trim_start_matches("#/$defs/")];
+            let mut keys: Vec<&str> = fields["properties"]
+                .as_object()
+                .expect("properties")
+                .keys()
+                .map(String::as_str)
+                .collect();
+            keys.sort_unstable();
+            let expected: &[&str] = match widget {
+                "clock" => &["hour_cycle", "id", "show_date", "show_seconds"],
+                "cpu" => &["id", "temperature_alert"],
+                _ => &["id"],
+            };
+            assert_eq!(keys, expected, "{widget}");
+            seen.push(widget.to_owned());
+        }
+        assert_eq!(seen, [
+            "spaces",
+            "media",
+            "weather",
+            "cpu",
+            "battery",
+            "keep_awake",
+            "wifi",
+            "clock"
+        ]);
+        let alert = &defs["BarEntryCpuOptions"]["properties"]["temperature_alert"];
+        assert_eq!((&alert["minimum"], &alert["maximum"]), (&json!(1), &json!(150)));
+        assert_eq!(alert["default"], 85);
+        let clock = &defs["BarEntryClockOptions"]["properties"];
+        assert_eq!(clock["show_date"]["default"], true);
+        assert_eq!(clock["show_seconds"]["default"], true);
+        assert_eq!(clock["hour_cycle"]["default"], "h23");
+        assert_eq!(
+            defs["HourCycle"]["oneOf"]
+                .as_array()
+                .expect("variants")
+                .iter()
+                .map(|v| v["const"].clone())
+                .collect::<Vec<_>>(),
+            [json!("h23"), json!("h12")]
+        );
+    }
+
     fn find_key<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a serde_json::Value> {
         match value {
             serde_json::Value::Object(map) => {
@@ -620,5 +732,442 @@ mod tests {
         assert_eq!(resolve("$HOME/.env", Some(home)), some("/cfg/stache/$HOME/.env"));
         assert!(resolve("~/x", None).is_err());
         assert!(resolve("~", None).is_err());
+    }
+
+    // ------------------------------------------------------------ layout
+
+    use crate::layout::{BarLayoutItem, BarLayoutView, BarWidgetKind as K};
+
+    fn ids(view: &BarLayoutView) -> [Vec<(String, K)>; 3] {
+        let pairs = |items: &[BarLayoutItem]| {
+            items.iter().map(|item| (item.id().to_owned(), item.widget())).collect()
+        };
+        [pairs(&view.start), pairs(&view.center), pairs(&view.end)]
+    }
+
+    fn items(list: &[(&str, K)]) -> Vec<(String, K)> {
+        list.iter().map(|(id, kind)| ((*id).to_owned(), *kind)).collect()
+    }
+
+    #[test]
+    fn a_missing_layout_section_is_the_default_arrangement() {
+        let view = decode("# defaults\n").layout.normalized();
+        assert_eq!(ids(&view), [
+            items(&[("spaces", K::Spaces)]),
+            items(&[("media", K::Media)]),
+            items(&[
+                ("weather", K::Weather),
+                ("cpu", K::Cpu),
+                ("battery", K::Battery),
+                ("keep_awake", K::KeepAwake),
+                ("wifi", K::Wifi),
+                ("clock", K::Clock),
+            ]),
+        ]);
+    }
+
+    #[test]
+    fn a_missing_zone_in_a_present_layout_is_empty_and_empty_layouts_are_valid() {
+        let view = decode("[layout]\nend = [\"clock\"]\n").layout.normalized();
+        assert_eq!(ids(&view), [vec![], vec![], items(&[("clock", K::Clock)])]);
+        inspect("[layout]\n").expect("an empty layout is valid");
+        let view = decode("[layout]\n").layout.normalized();
+        assert_eq!(view, BarLayoutView::default());
+        let view = decode("[layout]\nstart = []\ncenter = []\nend = []\n").layout.normalized();
+        assert_eq!(view, BarLayoutView::default());
+    }
+
+    #[test]
+    fn string_table_and_mixed_entries_decode_with_every_widget_name() {
+        let text = "[layout]\nstart = [\"spaces\", { widget = \"media\" }]\ncenter = [{ widget = \"weather\", id = \"w-1\" }]\nend = [\"cpu\", \"battery\", \"keep_awake\", \"wifi\", { widget = \"clock\", id = \"Clock_A\" }]\n";
+        inspect(text).expect("valid");
+        assert_eq!(ids(&decode(text).layout.normalized()), [
+            items(&[("spaces", K::Spaces), ("media", K::Media)]),
+            items(&[("w-1", K::Weather)]),
+            items(&[
+                ("cpu", K::Cpu),
+                ("battery", K::Battery),
+                ("keep_awake", K::KeepAwake),
+                ("wifi", K::Wifi),
+                ("Clock_A", K::Clock),
+            ]),
+        ]);
+    }
+
+    #[test]
+    fn generated_ids_count_repeats_in_file_order_and_skip_explicit_ids() {
+        let text = "[layout]\nstart = [\"clock\", \"cpu\"]\ncenter = [{ widget = \"cpu\", id = \"clock_2\" }, \"clock\"]\nend = [\"clock\", { widget = \"wifi\", id = \"cpu\" }, \"cpu\"]\n";
+        assert_eq!(ids(&decode(text).layout.normalized()), [
+            items(&[("clock", K::Clock), ("cpu_2", K::Cpu)]),
+            items(&[("clock_2", K::Cpu), ("clock_3", K::Clock)]),
+            items(&[("clock_4", K::Clock), ("cpu", K::Wifi), ("cpu_3", K::Cpu)]),
+        ]);
+    }
+
+    #[test]
+    fn layout_rejections_name_their_field_path() {
+        for (text, field) in [
+            ("[layout]\nend = [\"cpu\", \"cpu\", \"nope\"]\n", "layout.end[2]"),
+            (
+                "[layout]\nend = [\"cpu\", \"cpu\", { widget = \"nope\" }]\n",
+                "layout.end[2].widget",
+            ),
+            ("[layout]\nstart = [{ id = \"x\" }]\n", "layout.start[0]"),
+            (
+                "[layout]\nstart = [{ widget = \"cpu\", id = \"\" }]\n",
+                "layout.start[0].id",
+            ),
+            (
+                "[layout]\nstart = [{ widget = \"cpu\", id = \"a b\" }]\n",
+                "layout.start[0].id",
+            ),
+            (
+                "[layout]\nstart = [{ widget = \"cpu\", id = \"é\" }]\n",
+                "layout.start[0].id",
+            ),
+            (
+                "[layout]\nstart = [{ widget = \"cpu\", id = 3 }]\n",
+                "layout.start[0].id",
+            ),
+            ("[layout]\ncenter = [1]\n", "layout.center[0]"),
+            ("[layout]\ncenter = [[\"cpu\"]]\n", "layout.center[0]"),
+            ("[layout]\ncenter = \"cpu\"\n", "layout.center"),
+            ("layout = 1\n", "layout"),
+            ("[layout]\nend = [\"Clock\"]\n", "layout.end[0]"),
+            ("[layout]\nend = [\"keepAwake\"]\n", "layout.end[0]"),
+        ] {
+            let error = inspect(text).expect_err(text);
+            assert_eq!(error.kind, DiagnosticKind::Type, "{text}: {error}");
+            assert_eq!(error.field.as_deref(), Some(field), "{text}: {error}");
+        }
+    }
+
+    #[test]
+    fn duplicate_explicit_ids_are_rejected_with_both_paths() {
+        let error = inspect(
+            "[layout]\nstart = [{ widget = \"cpu\", id = \"a\" }]\nend = [\"clock\", { widget = \"wifi\", id = \"a\" }]\n",
+        )
+        .expect_err("duplicate");
+        assert_eq!(error.kind, DiagnosticKind::Validation, "{error}");
+        assert!(error.message.contains("layout.end[1].id"), "{error}");
+        assert!(error.message.contains("layout.start[0].id"), "{error}");
+        // A generated id never collides: an explicit `cpu` pushes the plain one to `cpu_2`.
+        inspect("[layout]\nstart = [\"cpu\", { widget = \"wifi\", id = \"cpu\" }]\n")
+            .expect("valid");
+    }
+
+    #[test]
+    fn unknown_keys_inside_an_entry_table_warn_and_do_not_reject() {
+        let warnings =
+            inspect("[layout]\nend = [\"cpu\", { widget = \"clock\", format = \"HH:mm\" }]\n")
+                .expect("valid");
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("format"), "{warnings:?}");
+        let warnings = inspect("[layout]\nmiddle = []\n").expect("valid");
+        assert_eq!(warnings, ["layout.middle"]);
+    }
+
+    #[test]
+    fn the_layout_round_trips_and_appears_in_the_schema_and_template() {
+        let catalog = catalog();
+        let template = catalog.template(BarConfig::ID).expect("template");
+        assert!(template.contains("\n[layout]\n"), "{template}");
+        assert!(template.contains("start = [\"spaces\"]"), "{template}");
+        assert!(
+            template.contains("{ widget = \"clock\", id = \"main_clock\", show_seconds = false }"),
+            "the commented example: {template}"
+        );
+        let schema = catalog.schema_json(BarConfig::ID).expect("schema").expect("render");
+        for spelling in [
+            "spaces",
+            "media",
+            "weather",
+            "cpu",
+            "battery",
+            "keep_awake",
+            "wifi",
+            "clock",
+        ] {
+            assert!(schema.contains(&format!("\"{spelling}\"")), "{spelling}");
+        }
+        let text = "[layout]\nend = [\"cpu\", { widget = \"clock\", id = \"c\" }, { widget = \"wifi\" }]\n";
+        let config = decode(text);
+        let encoded = serde_json::to_value(&config.layout).expect("encode");
+        assert_eq!(
+            encoded,
+            json!({ "start": [], "center": [], "end": ["cpu", { "widget": "clock", "id": "c", "show_date": true, "show_seconds": true, "hour_cycle": "h23" }, { "widget": "wifi" }] })
+        );
+        let again: BarConfig = catalog
+            .decode_json(
+                BarConfig::ID,
+                Path::new("bar.toml"),
+                serde_json::to_value(&config).expect("json"),
+            )
+            .expect("decode json")
+            .into_parts()
+            .0
+            .downcast::<BarConfig>()
+            .map(|boxed| *boxed)
+            .expect("type");
+        assert_eq!(again, config);
+    }
+
+    use crate::layout::{BarLayoutEntry, ClockOptions, CpuOptions, HourCycle, NoOptions};
+
+    fn end(text: &str) -> Vec<BarLayoutItem> {
+        decode(&format!("[layout]\nend = [{text}]\n")).layout.normalized().end
+    }
+
+    #[test]
+    fn entry_options_default_when_omitted() {
+        let items = end(
+            "\"clock\", { widget = \"clock\" }, \"cpu\", { widget = \"cpu\", id = \"c\" }, { widget = \"wifi\" }",
+        );
+        let clock = ClockOptions {
+            show_date: true,
+            show_seconds: true,
+            hour_cycle: HourCycle::H23,
+        };
+        let cpu = CpuOptions { temperature_alert: 85 };
+        assert_eq!(items, [
+            BarLayoutItem::Clock {
+                id: "clock".into(),
+                options: clock
+            },
+            BarLayoutItem::Clock {
+                id: "clock_2".into(),
+                options: clock
+            },
+            BarLayoutItem::Cpu { id: "cpu".into(), options: cpu },
+            BarLayoutItem::Cpu { id: "c".into(), options: cpu },
+            BarLayoutItem::Wifi {
+                id: "wifi".into(),
+                options: NoOptions {}
+            },
+        ]);
+        let published = serde_json::to_value(&items).expect("encode");
+        assert_eq!(
+            published,
+            json!([
+                { "widget": "clock", "id": "clock", "options": { "show_date": true, "show_seconds": true, "hour_cycle": "h23" } },
+                { "widget": "clock", "id": "clock_2", "options": { "show_date": true, "show_seconds": true, "hour_cycle": "h23" } },
+                { "widget": "cpu", "id": "cpu", "options": { "temperature_alert": 85 } },
+                { "widget": "cpu", "id": "c", "options": { "temperature_alert": 85 } },
+                { "widget": "wifi", "id": "wifi", "options": {} },
+            ])
+        );
+    }
+
+    #[test]
+    fn entry_options_decode_in_any_key_order() {
+        let expected = [
+            BarLayoutItem::Clock {
+                id: "k".into(),
+                options: ClockOptions {
+                    show_date: false,
+                    show_seconds: false,
+                    hour_cycle: HourCycle::H12,
+                },
+            },
+            BarLayoutItem::Cpu {
+                id: "cpu".into(),
+                options: CpuOptions { temperature_alert: 90 },
+            },
+        ];
+        for text in [
+            "{ widget = \"clock\", id = \"k\", show_date = false, show_seconds = false, hour_cycle = \"h12\" }, { widget = \"cpu\", temperature_alert = 90 }",
+            "{ hour_cycle = \"h12\", show_seconds = false, id = \"k\", show_date = false, widget = \"clock\" }, { temperature_alert = 90, widget = \"cpu\" }",
+        ] {
+            assert_eq!(end(text), expected, "{text}");
+        }
+        // A decoder that keeps file order sees `widget` first or last; both work.
+        for value in [
+            r#"{ "widget": "cpu", "temperature_alert": 150 }"#,
+            r#"{ "temperature_alert": 150, "widget": "cpu" }"#,
+        ] {
+            let entry: BarLayoutEntry = serde_json::from_str(value).expect(value);
+            let layout = crate::layout::BarLayoutConfig {
+                start: vec![entry],
+                center: vec![],
+                end: vec![],
+            };
+            assert_eq!(layout.normalized().start, [BarLayoutItem::Cpu {
+                id: "cpu".into(),
+                options: CpuOptions { temperature_alert: 150 },
+            }]);
+        }
+        assert_eq!(end("{ widget = \"cpu\", temperature_alert = 1 }"), [
+            BarLayoutItem::Cpu {
+                id: "cpu".into(),
+                options: CpuOptions { temperature_alert: 1 }
+            }
+        ]);
+    }
+
+    #[test]
+    fn bad_option_values_reject_the_file_with_their_field_path() {
+        for (entry, field) in [
+            (
+                "{ widget = \"cpu\", temperature_alert = 0 }",
+                "layout.end[1].temperature_alert",
+            ),
+            (
+                "{ widget = \"cpu\", temperature_alert = 151 }",
+                "layout.end[1].temperature_alert",
+            ),
+            (
+                "{ widget = \"cpu\", temperature_alert = 300 }",
+                "layout.end[1].temperature_alert",
+            ),
+            (
+                "{ widget = \"cpu\", temperature_alert = -1 }",
+                "layout.end[1].temperature_alert",
+            ),
+            (
+                "{ widget = \"cpu\", temperature_alert = 9.5 }",
+                "layout.end[1].temperature_alert",
+            ),
+            (
+                "{ widget = \"cpu\", temperature_alert = \"90\" }",
+                "layout.end[1].temperature_alert",
+            ),
+            (
+                "{ widget = \"clock\", show_seconds = \"no\" }",
+                "layout.end[1].show_seconds",
+            ),
+            (
+                "{ widget = \"clock\", show_date = 1 }",
+                "layout.end[1].show_date",
+            ),
+            (
+                "{ widget = \"clock\", hour_cycle = \"h24\" }",
+                "layout.end[1].hour_cycle",
+            ),
+            (
+                "{ widget = \"clock\", hour_cycle = \"H12\" }",
+                "layout.end[1].hour_cycle",
+            ),
+            (
+                "{ widget = \"clock\", hour_cycle = 12 }",
+                "layout.end[1].hour_cycle",
+            ),
+            ("{ show_seconds = false }", "layout.end[1]"),
+        ] {
+            let text = format!("[layout]\nend = [\"wifi\", {entry}]\n");
+            let error = inspect(&text).expect_err(&text);
+            assert_eq!(error.kind, DiagnosticKind::Type, "{text}: {error}");
+            assert_eq!(error.field.as_deref(), Some(field), "{text}: {error}");
+        }
+        // Validation also guards a configuration built in code.
+        let mut config = BarConfig::default();
+        config.layout.end = vec![BarLayoutEntry::Table(
+            crate::layout::BarLayoutEntryTable::Cpu(crate::layout::BarEntryFields {
+                id: None,
+                options: CpuOptions { temperature_alert: 0 },
+            }),
+        )];
+        let error = config.validate().expect_err("out of range");
+        assert!(
+            error.message().contains("layout.end[0].temperature_alert"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn unknown_keys_and_another_widgets_options_warn() {
+        for (entry, warning) in [
+            (
+                "{ widget = \"clock\", temperature_alert = 90 }",
+                "layout.end.0.temperature_alert",
+            ),
+            (
+                "{ widget = \"clock\", temperature_alert = \"bad\" }",
+                "layout.end.0.temperature_alert",
+            ),
+            (
+                "{ widget = \"cpu\", show_seconds = false }",
+                "layout.end.0.show_seconds",
+            ),
+            (
+                "{ widget = \"cpu\", hour_cycle = \"nope\" }",
+                "layout.end.0.hour_cycle",
+            ),
+            (
+                "{ widget = \"wifi\", show_date = true }",
+                "layout.end.0.show_date",
+            ),
+            ("{ widget = \"wifi\", color = \"red\" }", "layout.end.0.color"),
+            (
+                "{ widget = \"cpu\", temperature_alert = 70, format = 1 }",
+                "layout.end.0.format",
+            ),
+        ] {
+            let text = format!("[layout]\nend = [{entry}]\n");
+            let warnings = inspect(&text).expect(&text);
+            assert_eq!(warnings, [warning], "{text}");
+        }
+        // The foreign option is dropped; the entry keeps its own defaults.
+        assert_eq!(
+            end("{ widget = \"wifi\", show_date = false, temperature_alert = 3 }"),
+            [BarLayoutItem::Wifi {
+                id: "wifi".into(),
+                options: NoOptions {}
+            }]
+        );
+        assert_eq!(
+            end("{ widget = \"clock\", temperature_alert = 3, show_date = false }"),
+            [BarLayoutItem::Clock {
+                id: "clock".into(),
+                options: ClockOptions {
+                    show_date: false,
+                    ..ClockOptions::default()
+                },
+            }]
+        );
+        // A decoder that keeps file order reports a foreign option after `widget`
+        // as ignored and drops it.
+        let entry: BarLayoutEntry =
+            serde_json::from_str(r#"{ "widget": "cpu", "show_date": "x" }"#).expect("ignored");
+        assert_eq!(
+            entry,
+            BarLayoutEntry::Table(crate::layout::BarLayoutEntryTable::new(K::Cpu, None))
+        );
+    }
+
+    #[test]
+    fn the_template_example_shows_an_entry_with_an_option_and_round_trips() {
+        let catalog = catalog();
+        let template = catalog.template(BarConfig::ID).expect("template");
+        assert!(
+            template.contains("{ widget = \"cpu\", temperature_alert = 90 }"),
+            "{template}"
+        );
+        let decoded = catalog
+            .decode(BarConfig::ID, Path::new("bar.toml"), &template)
+            .expect("template decodes")
+            .into_parts();
+        assert!(decoded.1.is_empty(), "{:?}", decoded.1);
+        let options = "[layout]\nend = [{ widget = \"clock\", hour_cycle = \"h12\" }, { widget = \"cpu\", temperature_alert = 70, id = \"c\" }]\n";
+        let config = decode(options);
+        let again: BarConfig = catalog
+            .decode_json(
+                BarConfig::ID,
+                Path::new("bar.toml"),
+                serde_json::to_value(&config).expect("json"),
+            )
+            .expect("decode json")
+            .into_parts()
+            .0
+            .downcast::<BarConfig>()
+            .map(|boxed| *boxed)
+            .expect("type");
+        assert_eq!(again, config);
+    }
+
+    #[test]
+    fn migration_never_writes_a_layout_so_the_default_applies() {
+        let mut section = json!({ "enabled": true, "height": 30, "padding": 8 });
+        BarConfig::migrate_legacy_section(&mut section);
+        assert!(section.get("layout").is_none(), "{section}");
     }
 }

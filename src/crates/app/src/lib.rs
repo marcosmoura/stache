@@ -17,11 +17,13 @@ pub mod bindings;
 pub mod caps_recovery;
 pub mod catalog;
 pub mod commands;
+pub mod config_documents;
 pub mod config_edit;
 pub mod display;
 pub mod frontmost_context;
 pub mod hold_to_quit;
 pub mod host;
+pub mod host_job;
 pub mod input;
 pub mod keep_awake;
 pub mod keybindings;
@@ -30,6 +32,8 @@ pub mod media_resources;
 #[cfg(all(feature = "panel-native-check", not(feature = "smoke")))]
 pub mod panel_check;
 pub mod permissions;
+pub mod popover;
+pub mod popover_actions;
 pub mod published_state;
 pub mod session_action;
 pub mod shutdown;
@@ -96,8 +100,9 @@ fn take_activation() {
     });
 }
 
+/// The window bookkeeping, managed once the window backend exists.
 #[derive(Clone)]
-struct WindowsState(Arc<NativeWindows>);
+pub(crate) struct WindowsState(pub(crate) Arc<NativeWindows>);
 
 /// Emits Bar bridge events to exactly one window label.
 struct AppBarEvents(tauri::AppHandle);
@@ -110,7 +115,6 @@ impl bar_bridge::BarEventSink for AppBarEvents {
 
 struct AppUi {
     app: tauri::AppHandle,
-    main_thread: Arc<dyn MainThreadExecutor>,
     bar: Arc<bar_bridge::BarBridge>,
 }
 
@@ -120,11 +124,13 @@ impl HostUi for AppUi {
         // projections.
         self.bar.host_changed();
         let _ = self.app.emit(StatusChanged::NAME, StatusChanged { status: status.clone() });
-        let app = self.app.clone();
-        let snapshot = status.clone();
-        let _ = self.main_thread.execute(Box::new(move || {
-            let _ = tray::update(&app, &snapshot);
-        }));
+    }
+
+    fn config_changed(&self, files: &[String]) {
+        let _ = self.app.emit(
+            config_documents::ConfigChanged::NAME,
+            config_documents::ConfigChanged { files: files.to_vec() },
+        );
     }
 }
 
@@ -466,6 +472,10 @@ fn run_with(
 
     let app = tauri::Builder::default()
         .manage(HostState(host.clone()))
+        .manage(config_documents::ConfigFilesState {
+            catalog: Arc::new(catalog.clone()),
+            paths: config_paths.clone(),
+        })
         .invoke_handler(invoke)
         .setup(move |app| {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
@@ -513,7 +523,6 @@ fn run_with(
             // change; there is no timer behind it.
             let ui = Arc::new(AppUi {
                 app: app.handle().clone(),
-                main_thread: Arc::clone(&main_thread),
                 bar: Arc::clone(&bar_bridge),
             });
             // Weather resolves `weather.api_keys` against the configuration
@@ -581,6 +590,8 @@ fn run_with(
                 Arc::new(WindowsOwner::new(window_backend.clone())),
             );
             app.manage(gate.clone());
+            #[cfg(not(feature = "smoke"))]
+            prewarm_popover(setup_host.clone(), window_backend.clone(), &logger);
             let hook_host = setup_host.clone();
             match SignalBridge::install(move || setup_host.request_shutdown()) {
                 Ok(bridge) => {
@@ -712,6 +723,50 @@ fn run_with(
 }
 
 /// Formats the one-shot host startup measurement read by release tooling.
+/// How long after the host reports ready the popover is prewarmed.
+#[cfg(not(feature = "smoke"))]
+const POPOVER_PREWARM_DELAY: Duration = Duration::from_secs(1);
+
+/// Builds the popover hidden off the startup path, once the host is ready, so
+/// the first tray click only positions and shows it. Skipped once shutdown is
+/// requested; a failure is logged and the first click creates it instead.
+/// The smoke run keeps its zero-webview and empty-bookkeeping checks.
+#[cfg(not(feature = "smoke"))]
+fn prewarm_popover(host: HostHandle, windows: Arc<NativeWindows>, logger: &Arc<dyn Logger>) {
+    let thread_logger = Arc::clone(logger);
+    let spawned =
+        std::thread::Builder::new()
+            .name("stache-popover-prewarm".into())
+            .spawn(move || {
+                while !host.status().ready {
+                    if host.shutdown_requested() || host.is_finished() {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                std::thread::sleep(POPOVER_PREWARM_DELAY);
+                if host.shutdown_requested() {
+                    return;
+                }
+                if let Err(error) = windows.prewarm_popover() {
+                    thread_logger.log(LogRecord {
+                        level: LogLevel::Warn,
+                        module: ModuleId::new("host"),
+                        operation: Operation::Start,
+                        message: format!("popover prewarm failed: {error}"),
+                    });
+                }
+            });
+    if let Err(error) = spawned {
+        logger.log(LogRecord {
+            level: LogLevel::Warn,
+            module: ModuleId::new("host"),
+            operation: Operation::Start,
+            message: format!("popover prewarm thread failed: {error}"),
+        });
+    }
+}
+
 fn tray_ready_message(ready_after: Duration, webviews: usize) -> String {
     format!(
         "startup: tray ready after {} ms, webviews={webviews}",

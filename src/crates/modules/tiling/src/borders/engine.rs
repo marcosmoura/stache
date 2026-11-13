@@ -328,6 +328,9 @@ struct Tracked {
     /// Part 09: the entry just stopped being collapsed while hidden: its next
     /// show grows from zero width.
     grow_next: bool,
+    /// The plan of an in-flight Tiling write that holds the model frame back
+    /// (the route owns the border's frame until it ends).
+    owned_plan: Option<u64>,
 }
 
 /// What an external frame change does to a border.
@@ -1543,6 +1546,38 @@ impl BorderEngine {
         }
     }
 
+    /// Whether the route owns the border's frame for `entry`: a Tiling write is
+    /// in flight and reported a frame.
+    ///
+    /// While a Tiling write is in flight the route owns the border's frame:
+    /// it moves with each acknowledged frame of that write. The model's
+    /// observed frame lags behind it (a coalesced read from the motion), so
+    /// applying it would pull the border back mid-animation. It is not
+    /// consumed either: a write that ends without reporting a frame (a
+    /// partial, cancelled or sealed one) leaves it to be applied then.
+    fn tiling_owns(&self, entry: &BorderEntry) -> bool {
+        entry
+            .write_pending
+            .is_some_and(|plan| self.route.reported(entry.window) >= plan)
+    }
+
+    /// Whether a write that held the model frame back just ended, and if so
+    /// whether a confirming frame was reported for its plan. Its end is
+    /// Tiling's own, never an external change: a confirming frame stays (the
+    /// model may still show a frame from the motion); without one, the held
+    /// model frame applies.
+    fn ended_write(&self, entry: &BorderEntry) -> Option<bool> {
+        self.ledger
+            .get(&entry.window)
+            .and_then(|tracked| tracked.owned_plan)
+            .filter(|_| entry.write_pending.is_none())
+            .map(|plan| self.route.confirmed(entry.window, plan))
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one linear diff of a window's border"
+    )]
     fn diff_entry(&mut self, now: Instant, entry: &BorderEntry, batch: &mut OverlayBatch) {
         let epoch = self.gate.epoch();
         if self.destroyed.contains(&entry.window) {
@@ -1570,13 +1605,15 @@ impl BorderEngine {
                 collapsed: entry.collapsed,
                 collapse_until: None,
                 grow_next: false,
+                owned_plan: None,
             });
             return;
         };
+        let ended = self.ended_write(entry);
         // The public fallback and live follow decide what a frame change that
         // Tiling did not cause does (see the module documentation).
         let mut skip_move = false;
-        if known != entry.frame {
+        if known != entry.frame && ended.is_none() {
             if let Some(hold) = self.holds.get_mut(&entry.window) {
                 hold.last = now;
             } else if self.external_change(entry) {
@@ -1590,6 +1627,7 @@ impl BorderEngine {
                 }
             }
         }
+        let tiling_owns = self.tiling_owns(entry);
         let Some(tracked) = self.ledger.get_mut(&entry.window) else {
             return;
         };
@@ -1602,8 +1640,13 @@ impl BorderEngine {
             tracked.handle,
             entry.plan_sequence,
         );
-        let frame_changed = tracked.frame != entry.frame;
-        tracked.frame = entry.frame;
+        let frame_changed = ended != Some(true) && tracked.frame != entry.frame;
+        if tiling_owns && tracked.shown {
+            tracked.owned_plan = entry.write_pending;
+        } else {
+            tracked.frame = entry.frame;
+            tracked.owned_plan = None;
+        }
         let was_collapsed = std::mem::replace(&mut tracked.collapsed, entry.collapsed);
         if !tracked.shown {
             tracked.grow_next = (tracked.grow_next || was_collapsed) && !entry.collapsed;
@@ -1629,6 +1672,7 @@ impl BorderEngine {
         self.diff_appearance(now, entry, was_collapsed, batch);
         if frame_changed
             && !skip_move
+            && !tiling_owns
             && let Some(handle) = handle
         {
             batch.push_at(

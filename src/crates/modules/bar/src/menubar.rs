@@ -66,7 +66,9 @@ pub const MENU_RETRY: Duration = Duration::from_secs(2);
 /// The longest [`MenuMonitor::end`] waits for the worker to finish.
 pub const MENU_JOIN: Duration = Duration::from_secs(2);
 
-/// Receives each changed observation. Must not block.
+/// Receives each changed observation. Must not block. It is called with the
+/// worker's state locked, so it must not take a lock held by a caller of
+/// [`MenuMonitor::request_stop`].
 pub type Publish = Arc<dyn Fn(MenuBarObservation) + Send + Sync>;
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -335,11 +337,16 @@ fn run(
         let (observation, next_prior) = observe(&result, prior, observer_error.as_deref());
         prior = next_prior;
         if published.as_ref() != Some(&observation) {
-            // A request_stop that raced the sample drops the publication.
-            if !lock(&shared.state).stop {
+            // A request_stop that raced the sample drops the publication. The
+            // state stays locked through the publish, so a stop (and the
+            // owner's "not observed" that follows it) never lands between the
+            // check and the publish and is never overwritten by it.
+            let state = lock(&shared.state);
+            if !state.stop {
                 publish(observation.clone());
                 published = Some(observation);
             }
+            drop(state);
         }
         let schedule = Schedule {
             failed: result.is_err(),

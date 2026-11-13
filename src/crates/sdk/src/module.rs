@@ -79,6 +79,19 @@ pub trait ModuleConfig: Clone + Send + Sync + PartialEq + 'static {
         let _ = section;
         Vec::new()
     }
+
+    /// Removes keys the typed decoder cannot classify where it reads them,
+    /// before every decode, and returns their paths as unknown-key warnings.
+    ///
+    /// A decoder sees a table's keys in alphabetical order, so a key whose
+    /// meaning depends on a sibling read later (a widget option before its
+    /// `widget`) cannot be ignored in place. Paths use the warning form of
+    /// the decoder (`layout.end.1.show_seconds`). The default leaves the
+    /// section untouched.
+    fn prune_section(section: &mut serde_json::Value) -> Vec<String> {
+        let _ = section;
+        Vec::new()
+    }
 }
 
 /// The static facts a module publishes before it is started.

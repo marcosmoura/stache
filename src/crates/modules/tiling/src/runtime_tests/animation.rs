@@ -20,6 +20,7 @@ use stache_macos::{DisplayId, DisplayLayout, FakeFrameClockFactory};
 
 use super::*;
 use crate::actor::AppDirectory;
+use crate::animation::FallbackReason;
 use crate::backend::SystemWindowBackend;
 use crate::config::TilingConfig;
 use crate::drag::{DragPoint, DragSignal};
@@ -257,6 +258,8 @@ struct World {
     visible: usize,
     /// The fake frame clocks the runtime paces its animations with.
     clocks: FakeFrameClockFactory,
+    /// The actor's clock; ticks are fired at its time.
+    clock: Arc<dyn crate::actor::Clock>,
 }
 
 fn window_node(ax: &FakeWindowAx, cg: u32) -> NodeId {
@@ -307,6 +310,7 @@ impl World {
             FakeFrameClockFactory::failing("timer"),
             one_display(),
             &[],
+            None,
         )
     }
 
@@ -324,6 +328,7 @@ impl World {
             FakeFrameClockFactory::failing("timer"),
             one_display(),
             eui,
+            None,
         )
     }
 
@@ -335,7 +340,7 @@ impl World {
         clocks: FakeFrameClockFactory,
         layout: DisplayLayout,
     ) -> Self {
-        Self::boot_with(counts, config, counts.iter().sum(), clocks, layout, &[])
+        Self::boot_with(counts, config, counts.iter().sum(), clocks, layout, &[], None)
     }
 
     fn boot_with(
@@ -345,6 +350,7 @@ impl World {
         clocks: FakeFrameClockFactory,
         layout: DisplayLayout,
         eui: &[Result<bool, AxError>],
+        extras: Option<(Arc<dyn crate::actor::Clock>, stache_sdk::ScopedLogger)>,
     ) -> Self {
         let ax = FakeWindowAx::new();
         let mut applications = Vec::new();
@@ -388,10 +394,19 @@ impl World {
             applications.iter().map(|a| a.info.clone()).collect();
         let mut options = TrackingOptions::new("");
         options.frame_clocks = Some(Arc::new(clocks.clone()));
-        let runtime = TrackingRuntime::start(
+        let clock = match extras {
+            Some((clock, logger)) => {
+                options.logger = Some(logger);
+                clock
+            }
+            None => Arc::new(crate::actor::SystemClock) as Arc<dyn crate::actor::Clock>,
+        };
+        let runtime = TrackingRuntime::start_with_clock(
             Arc::clone(&spy) as Arc<dyn WindowBackend>,
             directory as Arc<dyn AppDirectory>,
             &options,
+            Arc::clone(&clock),
+            None,
         )
         .expect("start");
         runtime.submit_displays(None, layout).expect("displays");
@@ -411,6 +426,7 @@ impl World {
             revision: 1,
             visible,
             clocks,
+            clock,
         };
         world.wait_settled("the first layout");
         world
@@ -974,7 +990,7 @@ impl World {
     fn drive(&self, displays: &[DisplayId], what: &str, mut done: impl FnMut() -> bool) {
         wait_until(what, || {
             for display in displays {
-                self.clocks.fire(*display, Instant::now());
+                self.clocks.fire(*display, self.clock.now());
             }
             std::thread::sleep(Duration::from_millis(2));
             done()
@@ -1532,14 +1548,14 @@ fn a_slow_application_falls_back_while_the_others_keep_animating() {
     world.change_layout(0);
     let report = world.runtime.animation().report();
     assert_eq!(report.fallbacks.len(), 1, "{report:?}");
-    assert_eq!(report.fallbacks[0].0, slow);
+    assert_eq!(report.fallbacks[0].application, slow);
     let line = world
         .diagnostics()
         .into_iter()
         .find(|line| line.starts_with("animation: "))
         .expect("the fallback is reported");
     assert!(
-        line.starts_with("animation: App 2 (com.test.app2) moves without animation: ")
+        line.starts_with("animation: App 2 (com.test.app2) moves without animation for resizes: ")
             && line.ends_with(" in 2 of its last 3 layout changes"),
         "{line}"
     );
@@ -1646,7 +1662,8 @@ fn a_third_party_that_keeps_re_enabling_enhanced_ui_falls_back_to_direct_writes(
     });
     assert_eq!(
         world.diagnostics()[0],
-        "animation: App 1 (com.test.app1) moves without animation: turns Enhanced UI back on"
+        "animation: App 1 (com.test.app1) moves without animation for moves and resizes: turns \
+         Enhanced UI back on"
     );
     world.wait_settled("the second animation");
     let base = world.spy.batches().len();
@@ -1693,6 +1710,7 @@ fn three_windows_keep_animating_at_120_hz(write_ms: u64, expect_drops: bool) {
         DisplayLayout::new(vec![display(1, true, Some(120.0), 0.0)]),
     );
     let nodes = world.nodes(0).to_vec();
+    let application = world.token(nodes[0]).application();
     let slow = nodes.clone();
     world.ax.on_node_write(move |node| {
         if slow.contains(&node) {
@@ -1732,6 +1750,43 @@ fn three_windows_keep_animating_at_120_hz(write_ms: u64, expect_drops: bool) {
             "round {round} ({layout}) reached its target"
         );
         let report = world.runtime.animation().report();
+        // The three windows of one layout change are one record.
+        let records = world.runtime.animation().shared().book().records(application);
+        assert_eq!(
+            records.len(),
+            round + 1,
+            "round {round} ({layout}): one record per layout change: {records:?}"
+        );
+        // The rate and end lag are wall-clock measurements of real sleeps, so a
+        // loaded machine can really make this application miss the thresholds.
+        // While the measurements are healthy (they are at these write costs on
+        // an idle machine), it must keep animating; once they are not, the
+        // only correct outcome is the fallback they call for, and the rounds
+        // after it move directly by design. The thresholds themselves are
+        // pinned with a fake clock in `animation::fallback_tests`.
+        let bad = records.iter().rev().take(3).filter(|r| r.rate_bad() || r.lag_bad()).count();
+        if bad >= 2 {
+            assert!(
+                matches!(
+                    report.fallbacks.as_slice(),
+                    [crate::animation::FallbackEntry {
+                        application: app,
+                        reason: FallbackReason::BelowMinimumRate | FallbackReason::LateEnd,
+                        ..
+                    }] if *app == application
+                ),
+                "round {round} ({layout}): measured too slow, so in fallback: {report:?}"
+            );
+            // Slow because pending frames were replaced, never because every
+            // frame was queued: at these write costs a correct sink always
+            // drops frames, and more so under load.
+            let dropped: usize = report.metrics.iter().map(|(_, m)| m.dropped).sum();
+            assert!(
+                dropped > 0,
+                "round {round} ({layout}): slow without dropped frames: {report:?}"
+            );
+            return;
+        }
         assert!(
             report.fallbacks.is_empty(),
             "round {round} ({layout}): {report:?}"
@@ -1832,4 +1887,92 @@ fn three_windows_ramp_and_end_exact(write_ms: u64, expect_drops: bool) {
         let dropped: usize = report.metrics.iter().map(|(_, m)| m.dropped).sum();
         assert!(dropped > 0, "the application could not keep up: {report:?}");
     }
+}
+
+/// The real time plus a jump a test sets: the actor and the animation worker
+/// run in real time, and a cool-down passes in one step.
+#[derive(Default)]
+struct JumpClock {
+    jump: Mutex<Duration>,
+}
+
+impl crate::actor::Clock for JumpClock {
+    fn now(&self) -> Instant { Instant::now() + *lock(&self.jump) }
+}
+
+#[derive(Default)]
+struct CaptureLog {
+    lines: Mutex<Vec<String>>,
+}
+
+impl stache_sdk::Logger for CaptureLog {
+    fn log(&self, record: stache_sdk::LogRecord) { lock(&self.lines).push(record.message); }
+}
+
+impl CaptureLog {
+    fn has(&self, part: &str) -> bool { lock(&self.lines).iter().any(|line| line.contains(part)) }
+}
+
+/// Through the real actor: an application whose writes are slow enters the
+/// fallback for resizes (logged, listed by `query status` with a retry time);
+/// once its cool-down passed on the actor clock the next input ends it (logged),
+/// status no longer lists it and its next resize animates again.
+#[test]
+fn a_fallback_is_listed_logged_and_ends_after_its_cool_down() {
+    let clock = Arc::new(JumpClock::default());
+    let log = Arc::new(CaptureLog::default());
+    let logger = stache_sdk::ScopedLogger::new(
+        Arc::clone(&log) as Arc<dyn stache_sdk::Logger>,
+        stache_sdk::ModuleId::new("tiling"),
+        stache_sdk::Operation::Start,
+    );
+    let mut world = World::boot_with(
+        &[1],
+        one_workspace(0),
+        1,
+        FakeFrameClockFactory::new(),
+        one_display(),
+        &[],
+        Some((Arc::clone(&clock) as Arc<dyn crate::actor::Clock>, logger)),
+    );
+    let slow = Arc::new(AtomicBool::new(true));
+    let gate = Arc::clone(&slow);
+    world.ax.on_node_write(move |_| {
+        if gate.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(150));
+        }
+    });
+    world.change_layout(200);
+    world.change_layout(0);
+    let status = crate::ipc::status(&world.runtime.snapshot());
+    let [entry] = status.animation_fallbacks.as_slice() else {
+        panic!("one fallback listed: {status:?}");
+    };
+    assert_eq!((entry.name.as_str(), entry.kind.as_str()), ("App 1", "resize"));
+    assert!(
+        entry.reason.ends_with("in 2 of its last 3 layout changes"),
+        "{entry:?}"
+    );
+    assert!(
+        entry.retry_in_ms.is_some_and(|ms| ms > 0 && ms <= 60_000),
+        "a retry time: {entry:?}"
+    );
+    assert!(log.has(
+        "animation: App 1 (com.test.app1) moves without animation for resizes (until a cool-down \
+         passes): "
+    ));
+
+    // Healthy again, and the cool-down passes on the actor clock.
+    slow.store(false, Ordering::SeqCst);
+    *lock(&clock.jump) += Duration::from_secs(61);
+    let base = world.change_layout(200);
+    assert!(
+        world.stages_of(0, base).iter().any(|s| *s != FrameStage::Direct),
+        "the next resize animates again"
+    );
+    let status = crate::ipc::status(&world.runtime.snapshot());
+    assert!(status.animation_fallbacks.is_empty(), "{status:?}");
+    assert!(
+        log.has("animation: App 1 (com.test.app1) animates resizes again (its cool-down passed): ")
+    );
 }

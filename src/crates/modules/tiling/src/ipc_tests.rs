@@ -110,6 +110,25 @@ pub fn standard() -> (Built, WindowInstance, WindowInstance) {
     (built, editor, browser)
 }
 
+/// The standard world with `b` inactive: the browser window moves to the
+/// hidden `f` (the secondary display shows nothing), Finder is not running and
+/// every application has a window, so nothing can host an empty desktop.
+pub fn inactive_b() -> Built {
+    let (mut built, _, browser) = standard();
+    built.send(Input::Intent(Intent::SendWindowToWorkspace {
+        window: Some(browser),
+        workspace: "f".to_owned(),
+    }));
+    assert!(
+        built
+            .state
+            .snapshot()
+            .unreachable
+            .contains(&built.state.workspaces.iter().find(|ws| ws.name == "b").expect("b").id)
+    );
+    built
+}
+
 // ------------------------------------------------------------- fake actor
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1020,6 +1039,40 @@ fn unknown_and_ambiguous_numeric_targets_are_window_not_found() {
             body::invalid_focus("99999999999999999999")
         )
     );
+}
+
+// ---------------------------------------------------- inactive workspaces
+
+#[test]
+fn focusing_an_inactive_workspace_is_the_workspace_is_inactive_error() {
+    let rig = Rig::new(inactive_b().state);
+    assert_eq!(
+        rig.err("workspace", json!({"focus": "b"})),
+        (HandlerErrorKind::Handler, body::WORKSPACE_INACTIVE.to_owned())
+    );
+    assert_eq!(body::WORKSPACE_INACTIVE, "Workspace is inactive");
+    assert_eq!(rig.actor.submitted(), vec![Intent::FocusWorkspace(
+        "b".to_owned()
+    )]);
+    let snapshot = rig.actor.snapshot().expect("snapshot");
+    assert_eq!(snapshot.refused_focus.map(|refused| refused.serial), Some(1));
+    assert_eq!(snapshot.focus.workspace, snapshot.workspace("a").map(|ws| ws.id));
+}
+
+#[test]
+fn an_inactive_focus_stops_every_later_action() {
+    let rig = Rig::new(inactive_b().state);
+    let (kind, message) = rig.err(
+        "workspace",
+        json!({"focus": "b", "layout": "grid", "balance": true}),
+    );
+    assert_eq!(
+        (kind, message.as_str()),
+        (HandlerErrorKind::Handler, body::WORKSPACE_INACTIVE)
+    );
+    assert_eq!(rig.actor.submitted(), vec![Intent::FocusWorkspace(
+        "b".to_owned()
+    )]);
 }
 
 // ------------------------------------------- first / middle failure stops

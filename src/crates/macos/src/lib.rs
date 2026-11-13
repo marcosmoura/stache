@@ -26,6 +26,7 @@ pub mod main_thread;
 pub mod menu;
 pub mod menu_bar;
 pub mod panel;
+pub mod popover;
 pub mod settings;
 pub mod system;
 pub mod termination;
@@ -106,7 +107,10 @@ pub use menu_bar::{
     MenuBarObserver, MenuBarResolution, MenuBarSample, MenuBarVisibility, SystemMenuBarBackend,
     pointer_in_menu_bar_row, window_list_has_menu_bar,
 };
-pub use panel::{NativeWindowHandle, PanelAdapter, PanelError, SystemPanelAdapter};
+pub use panel::{
+    NativeWindowHandle, PanelAdapter, PanelError, SystemPanelAdapter, TopLeftFrame, appkit_rect,
+};
+pub use popover::{IconAnchor, POPOVER_MARGIN, PopoverScreen, locate_icon, popover_origin};
 pub use settings::{
     SettingsError, open_accessibility_settings, open_battery_settings, open_wifi_settings,
 };

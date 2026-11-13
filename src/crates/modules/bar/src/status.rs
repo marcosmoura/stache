@@ -13,6 +13,7 @@ use specta::Type;
 use stache_sdk::{AcceptedWatch, WindowPhase, WindowWatch};
 
 use crate::config::BarConfig;
+use crate::layout::BarLayoutView;
 use crate::providers::{
     BatteryReading, CpuReading, MediaReading, MediaStatus, MediaUpdate, ProviderDiagnostic,
     ProviderKind, ProviderUpdate, WifiReading,
@@ -186,6 +187,8 @@ pub struct BarPublished {
     pub height: u16,
     /// The accepted `padding` in points.
     pub padding: u16,
+    /// The accepted, normalized `[layout]`.
+    pub layout: BarLayoutView,
     /// The last failure or degraded condition.
     pub detail: Option<String>,
     /// The CPU reading; `None` until the first sample.
@@ -231,6 +234,7 @@ struct Observable {
     menu: MenuBarObservation,
     height: u16,
     padding: u16,
+    layout: BarLayoutView,
     feed_owed: bool,
     providers: Providers,
     weather_epoch: u64,
@@ -255,6 +259,7 @@ struct Inner {
     menu: MenuBarObservation,
     height: u16,
     padding: u16,
+    layout: BarLayoutView,
     providers: Providers,
     /// Outside [`Observable`]: a weather note never bumps the sequence.
     weather: WeatherStatus,
@@ -275,6 +280,7 @@ impl Inner {
             menu: self.menu.clone(),
             height: self.height,
             padding: self.padding,
+            layout: self.layout.clone(),
             feed_owed: self.feed_owed,
             providers: self.providers.clone(),
             weather_epoch: self.weather_epoch,
@@ -385,6 +391,7 @@ impl BarStatusSource {
                     frame: inner.frame,
                     height: inner.height,
                     padding: inner.padding,
+                    layout: inner.layout.clone(),
                     detail: inner.detail.clone(),
                     cpu: inner.providers.cpu,
                     battery: inner.providers.battery,
@@ -509,11 +516,12 @@ impl BarStatusSource {
         self.with(|inner| inner.generation = generation);
     }
 
-    /// Records the accepted `height`/`padding` the UI lays out with.
-    pub(crate) fn accepted(&self, height: u16, padding: u16) {
+    /// Records the accepted `height`/`padding` and layout the UI lays out with.
+    pub(crate) fn accepted(&self, height: u16, padding: u16, layout: BarLayoutView) {
         self.with(|inner| {
             inner.height = height;
             inner.padding = padding;
+            inner.layout = layout;
         });
     }
 

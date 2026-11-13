@@ -46,6 +46,12 @@ const APPS: [(&str, &str); 10] = [
     ("com.example.DeviceHub", "Device Hub"),
 ];
 
+std::thread_local! {
+    /// Adjusts the next desktop before it starts (its native starting state).
+    static BOOT_HOOK: std::cell::Cell<Option<fn(&mut Desktop)>> =
+        const { std::cell::Cell::new(None) };
+}
+
 /// How the system reports the hides and unhides Stache caused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Delivery {
@@ -98,6 +104,8 @@ struct RecordingRunner {
     writes: Arc<Mutex<Vec<Write>>>,
     /// Application lists requested.
     lists: Arc<std::sync::atomic::AtomicUsize>,
+    /// Native focus requests queued (`Effect::Focus`).
+    focuses: Arc<Mutex<Vec<WindowInstance>>>,
 }
 
 /// One queued frame write.
@@ -113,6 +121,9 @@ impl EffectRunner for RecordingRunner {
         if let Effect::WriteFrame { window, target, animate, .. } = effect {
             self.writes.lock().expect("writes").push(Write { window, target, animate });
         }
+        if let Effect::Focus { window, .. } = effect {
+            self.focuses.lock().expect("focuses").push(window);
+        }
         if matches!(effect, Effect::ListApplications { .. }) {
             self.lists.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
@@ -122,8 +133,13 @@ impl EffectRunner for RecordingRunner {
     fn close(&self) { self.inner.close(); }
 }
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent opt-in switches of the fake desktop"
+)]
 struct Desktop {
     writes: Arc<Mutex<Vec<Write>>>,
+    focuses: Arc<Mutex<Vec<WindowInstance>>>,
     lists: Arc<std::sync::atomic::AtomicUsize>,
     /// Whether a Device Hub window joins Ghostty on the terminal workspace.
     hub: bool,
@@ -148,6 +164,17 @@ struct Desktop {
     successor: Option<usize>,
     /// Whether Code has a second window, the one it reports as focused.
     second_code: bool,
+    /// macOS as measured: a hide is not applied while it would leave no
+    /// visible regular application (a windowless shown Finder counts), and
+    /// hiding the frontmost application activates a remaining visible one.
+    last_app_kept: bool,
+    /// Running regular applications without any window that the fake system
+    /// counts as visible while shown (with [`Self::last_app_kept`]).
+    bare: Vec<usize>,
+    /// The visibility control the runner and the actor share.
+    vis: Arc<VisibilityControl>,
+    /// Exact activation requests already turned into activations.
+    activations_seen: usize,
 }
 
 /// The order the startup inputs reach the actor in (see [`Desktop::boot_in`]).
@@ -184,6 +211,7 @@ impl Desktop {
         order: Option<Order>,
     ) -> Self {
         let writes = Arc::new(Mutex::new(Vec::new()));
+        let focuses = Arc::new(Mutex::new(Vec::new()));
         let lists = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let native = Arc::new(Native::new(Duration::from_millis(500)));
         let bundles: Vec<&str> = APPS.iter().map(|(bundle, _)| *bundle).collect();
@@ -217,6 +245,7 @@ impl Desktop {
                 inner: InlineRunner::new(env),
                 writes: Arc::clone(&writes),
                 lists: Arc::clone(&lists),
+                focuses: Arc::clone(&focuses),
             }),
             Arc::clone(&rig.sink),
             Arc::clone(&rig.clock) as Arc<dyn crate::actor::Clock>,
@@ -226,6 +255,7 @@ impl Desktop {
         rig.engine = engine;
         let mut desktop = Self {
             writes,
+            focuses,
             lists,
             hub,
             animations,
@@ -242,7 +272,14 @@ impl Desktop {
             frontmost,
             successor: None,
             second_code: false,
+            last_app_kept: false,
+            bare: Vec::new(),
+            vis: Arc::clone(&vis),
+            activations_seen: 0,
         };
+        if let Some(hook) = BOOT_HOOK.take() {
+            hook(&mut desktop);
+        }
         if let Some(order) = order {
             desktop.boot_in(order);
             return desktop;
@@ -438,6 +475,11 @@ impl Desktop {
             self.rig.pump();
             let requests = self.native.backend.visibility_requests();
             if requests.len() == self.seen {
+                // An activation Stache requested with no hide or unhide (a
+                // desktop host) still takes effect.
+                if self.last_app_kept && self.follow_activations() {
+                    continue;
+                }
                 return;
             }
             let fresh: Vec<_> = requests[self.seen..].to_vec();
@@ -454,6 +496,27 @@ impl Desktop {
             }
             for (key, operation) in fresh {
                 let index = self.keys.iter().position(|k| *k == key).expect("known app");
+                if self.last_app_kept && operation == VisibilityOperation::Hide {
+                    let Some(mut next) = self.other_visible(index) else {
+                        // Accepted, never applied: it is the last visible one.
+                        continue;
+                    };
+                    if index == self.frontmost
+                        && self.bare.contains(&next)
+                        && let Some(hidden) = self.hidden_with_windows(index)
+                    {
+                        // Measured: with only a windowless app left that is not
+                        // frontmost, macOS shows and activates a hidden app
+                        // with windows instead.
+                        self.shown[hidden] = true;
+                        self.notify(hidden, LifecycleKind::Unhidden);
+                        next = hidden;
+                    }
+                    if index == self.frontmost {
+                        self.frontmost = next;
+                        self.submit(Input::Activated(self.ids[next]));
+                    }
+                }
                 let kind = if operation == VisibilityOperation::Hide {
                     LifecycleKind::Hidden
                 } else {
@@ -470,7 +533,51 @@ impl Desktop {
                     Delivery::Never => {}
                 }
             }
+            // Activations take effect after the hides sent with them: a hide
+            // sent before its host's activation is seen meets the old
+            // frontmost application.
+            if self.last_app_kept {
+                self.follow_activations();
+            }
         }
+    }
+
+    /// Every activation Stache requested makes that application frontmost,
+    /// and the system reports it.
+    fn follow_activations(&mut self) -> bool {
+        let exact = self.native.backend.exact_activation_requests();
+        let fresh = exact.len() > self.activations_seen;
+        for key in exact[self.activations_seen..].iter().copied() {
+            let index = self.keys.iter().position(|k| *k == key).expect("known app");
+            self.frontmost = index;
+            self.submit(Input::Activated(self.ids[index]));
+        }
+        self.activations_seen = exact.len();
+        fresh
+    }
+
+    /// A visible regular application other than `app`, Finder first: an app
+    /// with a shown tracked window, or a shown Finder even without a window.
+    /// (The agents, Zoom and a windowless Device Hub stand for the user's
+    /// hidden applications.)
+    fn other_visible(&self, app: usize) -> Option<usize> {
+        if app != FINDER && self.shown[FINDER] {
+            return Some(FINDER);
+        }
+        managed_shown(self)
+            .iter()
+            .filter_map(|name| APPS.iter().position(|(_, n)| n == name))
+            .find(|index| *index != app)
+            .or_else(|| self.bare.iter().copied().find(|bare| *bare != app && self.shown[*bare]))
+    }
+
+    /// A hidden application other than `app` with a tracked window.
+    fn hidden_with_windows(&self, app: usize) -> Option<usize> {
+        let snap = self.snap();
+        snap.windows
+            .iter()
+            .filter_map(|window| self.ids.iter().position(|id| *id == window.application))
+            .find(|index| *index != app && !self.shown[*index])
     }
 
     fn notify(&mut self, app: usize, kind: LifecycleKind) {
@@ -496,6 +603,32 @@ impl Desktop {
         self.release_late();
         self.submit(Input::Intent(Intent::FocusWorkspace(name.to_owned())));
         self.settle();
+    }
+
+    /// `stache tiling window --send-to-workspace NAME` for an exact window.
+    fn send_window(&mut self, window: WindowInstance, workspace: &str) {
+        self.release_late();
+        self.submit(Input::Intent(Intent::SendWindowToWorkspace {
+            window: Some(window),
+            workspace: workspace.to_owned(),
+        }));
+        self.settle();
+    }
+
+    /// Empties the focused `terminal` (Ghostty and Device Hub) by sending
+    /// Device Hub's window to `misc`, then Ghostty's to `target`: an empty
+    /// workspace is inactive when nothing can host the desktop, so the
+    /// kept-last state is reached by this route instead of a switch.
+    fn empty_terminal_into(&mut self, target: &str) {
+        let hub = self
+            .snap()
+            .windows
+            .iter()
+            .find(|window| window.application == self.ids[DEVICE_HUB])
+            .map(|window| window.token)
+            .expect("a Device Hub window");
+        self.send_window(hub, "misc");
+        self.send_window(self.token(GHOSTTY, 1), target);
     }
 
     /// The user brings `app` forward with Cmd-Tab: the system unhides it,
@@ -2245,4 +2378,1239 @@ fn a_spent_window_is_found_by_the_series_of_the_exit_space_change() {
     assert!(tabs.order().contains(&single), "back in its slot");
     assert!(tabs.order().contains(&other));
     assert!(written(&tabs, single) > before, "written to its tile");
+}
+
+// ------------------------------------------------- reload re-evaluates windows
+
+impl Desktop {
+    /// An accepted `tiling.toml` reload, as the module submits it.
+    fn reload(&mut self, revision: u64, value: serde_json::Value) {
+        self.release_late();
+        let config: TilingConfig = serde_json::from_value(value).expect("config");
+        self.submit(Input::Config {
+            revision,
+            config: Arc::new(config),
+        });
+        self.settle();
+    }
+
+    /// The published `tilingState` strip: workspace names in order.
+    fn strip(&self) -> Vec<String> {
+        let published = crate::published::project(&self.snap());
+        published.workspaces.iter().map(|ws| ws.name.clone()).collect()
+    }
+
+    fn published_workspace_of(&self, window: WindowInstance) -> Option<String> {
+        let published = crate::published::project(&self.snap());
+        let key = crate::published::window_key(window);
+        published
+            .windows
+            .iter()
+            .find(|w| w.key == key)
+            .and_then(|w| w.workspace.clone())
+    }
+
+    fn focused_workspace(&self) -> Option<String> {
+        crate::published::project(&self.snap()).focus.workspace
+    }
+}
+
+fn ab(extra: &serde_json::Value) -> serde_json::Value {
+    let mut value = json!({
+        "enabled": true,
+        "workspaces": [
+            { "name": "a", "rules": [{ "app_id": "com.mitchellh.ghostty" }] },
+            { "name": "b", "rules": [{ "app_id": "com.microsoft.VSCode" }] },
+        ],
+    });
+    if let (Some(map), Some(more)) = (value.as_object_mut(), extra.as_object()) {
+        for (key, item) in more {
+            map.insert(key.clone(), item.clone());
+        }
+    }
+    value
+}
+
+/// Workspaces `a` (rule: Ghostty = X) and `b` (rule: Code = Y); the unmatched
+/// Spotify, `WhatsApp` and Chrome (Z) in `a`, which is focused and visible.
+fn ab_desktop() -> Desktop {
+    let mut desk = Desktop::boot(Delivery::Immediate, GHOSTTY);
+    desk.reload(2, ab(&json!({})));
+    assert_eq!(desk.strip(), ["a", "b"]);
+    assert_eq!(desk.workspace_of(desk.token(GHOSTTY, 1)), "a");
+    assert_eq!(desk.workspace_of(desk.token(CODE, 2)), "b");
+    for (app, serial) in [(SPOTIFY, 3), (WHATSAPP, 4), (CHROME, 5)] {
+        assert_eq!(
+            desk.workspace_of(desk.token(app, serial)),
+            "a",
+            "{}",
+            APPS[app].1
+        );
+    }
+    assert_eq!(desk.visible_workspace(), "a");
+    assert_eq!(desk.focused_workspace().as_deref(), Some("a"));
+    assert!(!desk.shown[CODE] && desk.shown[GHOSTTY] && desk.shown[SPOTIFY]);
+    desk
+}
+
+#[test]
+fn reload_a_new_workspace_takes_an_existing_window_by_its_rule() {
+    let mut desk = ab_desktop();
+    let code = desk.token(CODE, 2);
+    desk.reload(
+        3,
+        json!({
+            "enabled": true,
+            "workspaces": [
+                { "name": "a", "rules": [{ "app_id": "com.mitchellh.ghostty" }] },
+                { "name": "b" },
+                { "name": "c", "rules": [{ "app_id": "com.microsoft.VSCode" }] },
+            ],
+        }),
+    );
+    assert_eq!(desk.strip(), ["a", "b", "c"]);
+    assert_eq!(desk.workspace_of(code), "c");
+    assert_eq!(desk.published_workspace_of(code).as_deref(), Some("c"));
+    assert_eq!(desk.workspace_of(desk.token(SPOTIFY, 3)), "a");
+    assert_eq!(desk.visible_workspace(), "a");
+    assert_eq!(desk.focused_workspace().as_deref(), Some("a"));
+    assert!(!desk.shown[CODE], "a window on a hidden workspace stays hidden");
+    desk.focus_workspace("c");
+    assert!(desk.shown[CODE] && !desk.shown[GHOSTTY]);
+}
+
+#[test]
+fn reload_removing_the_visible_workspace_places_its_windows_and_lays_them_out() {
+    let mut desk = ab_desktop();
+    let mark = desk.mark();
+    desk.reload(
+        3,
+        json!({
+            "enabled": true,
+            "workspaces": [{ "name": "b", "rules": [{ "app_id": "com.microsoft.VSCode" }] }],
+        }),
+    );
+    assert_eq!(desk.strip(), ["b"]);
+    for (app, serial) in [
+        (GHOSTTY, 1),
+        (CODE, 2),
+        (SPOTIFY, 3),
+        (WHATSAPP, 4),
+        (CHROME, 5),
+    ] {
+        assert_eq!(
+            desk.workspace_of(desk.token(app, serial)),
+            "b",
+            "{}",
+            APPS[app].1
+        );
+        assert!(desk.shown[app], "{} is on the visible workspace", APPS[app].1);
+    }
+    assert_eq!(desk.visible_workspace(), "b");
+    assert_eq!(desk.focused_workspace().as_deref(), Some("b"));
+    let written: Vec<_> = desk.writes_since(mark).iter().map(|w| w.window).collect();
+    assert!(
+        written.contains(&desk.token(CODE, 2)),
+        "the visible workspace is laid out"
+    );
+    assert!(written.contains(&desk.token(GHOSTTY, 1)));
+}
+
+#[test]
+fn reload_reversing_the_order_moves_nothing_and_writes_nothing() {
+    let mut desk = ab_desktop();
+    let mark = desk.mark();
+    let requests = desk.native.backend.visibility_requests().len();
+    desk.reload(
+        3,
+        json!({
+            "enabled": true,
+            "workspaces": [
+                { "name": "b", "rules": [{ "app_id": "com.microsoft.VSCode" }] },
+                { "name": "a", "rules": [{ "app_id": "com.mitchellh.ghostty" }] },
+            ],
+        }),
+    );
+    assert_eq!(desk.strip(), ["b", "a"]);
+    let snap = desk.snap();
+    let names: Vec<_> = snap.workspaces.iter().map(|ws| ws.name.as_str()).collect();
+    assert_eq!(names, ["b", "a"], "the query order is the configuration order");
+    assert_eq!(desk.workspace_of(desk.token(CODE, 2)), "b");
+    assert_eq!(desk.workspace_of(desk.token(SPOTIFY, 3)), "a");
+    assert_eq!(desk.visible_workspace(), "a");
+    assert_eq!(desk.focused_workspace().as_deref(), Some("a"));
+    assert!(desk.writes_since(mark).is_empty());
+    assert_eq!(desk.native.backend.visibility_requests().len(), requests);
+}
+
+#[test]
+fn reload_renaming_a_workspace_takes_its_windows_by_rule() {
+    let mut desk = ab_desktop();
+    let code = desk.token(CODE, 2);
+    desk.reload(
+        3,
+        json!({
+            "enabled": true,
+            "workspaces": [
+                { "name": "a", "rules": [{ "app_id": "com.mitchellh.ghostty" }] },
+                { "name": "b2", "rules": [{ "app_id": "com.microsoft.VSCode" }] },
+            ],
+        }),
+    );
+    assert_eq!(desk.strip(), ["a", "b2"]);
+    assert_eq!(desk.workspace_of(code), "b2");
+    assert_eq!(desk.visible_workspace(), "a");
+    assert!(!desk.shown[CODE]);
+    assert_eq!(desk.focused_workspace().as_deref(), Some("a"));
+}
+
+#[test]
+fn reload_of_a_non_workspace_key_re_evaluates_nothing() {
+    let mut desk = ab_desktop();
+    // A rule-matching window sent elsewhere by hand would be moved back by a
+    // re-evaluation: it must stay.
+    let ghostty = desk.token(GHOSTTY, 1);
+    desk.submit(Input::Intent(Intent::SendWindowToWorkspace {
+        window: Some(ghostty),
+        workspace: "b".into(),
+    }));
+    desk.settle();
+    assert_eq!(desk.workspace_of(ghostty), "b");
+    let before = desk.snap();
+    let mark = desk.mark();
+    let requests = desk.native.backend.visibility_requests().len();
+    desk.reload(3, ab(&json!({ "animations": { "duration": 350 } })));
+    let after = desk.snap();
+    assert_eq!(after.workspaces, before.workspaces);
+    assert_eq!(after.focus, before.focus);
+    assert_eq!(desk.workspace_of(ghostty), "b");
+    assert!(desk.writes_since(mark).is_empty(), "no frame write");
+    assert_eq!(
+        desk.native.backend.visibility_requests().len(),
+        requests,
+        "no hide or unhide"
+    );
+}
+
+#[test]
+fn the_users_reload_of_nine_workspaces_places_running_apps_without_a_restart() {
+    let mut desk = Desktop::boot_with(Delivery::Immediate, GHOSTTY, true, false);
+    let hub = desk.token(DEVICE_HUB, 6);
+    let spotify = desk.token(SPOTIFY, 3);
+    assert_eq!(desk.workspace_of(hub), "terminal");
+    assert_eq!(desk.workspace_of(spotify), "music");
+    assert_eq!(desk.strip(), [
+        "terminal",
+        "coding",
+        "browser",
+        "music",
+        "communication",
+        "misc",
+        "guitar",
+        "files",
+        "tasks"
+    ]);
+    assert!(desk.shown[DEVICE_HUB]);
+    desk.reload(
+        2,
+        json!({
+            "enabled": true,
+            "master": { "position": "left", "ratio": 75 },
+            "ignore": [
+                { "app_id": "com.apple.finder", "title": "Copy" },
+                { "app_name": "Raycast" },
+            ],
+            "workspaces": [
+                { "name": "files", "layout": "grid", "screen": "main",
+                  "rules": [{ "app_id": "com.apple.finder" }] },
+                { "name": "terminal", "layout": "master", "screen": "main",
+                  "rules": [{ "app_id": "com.mitchellh.ghostty" }] },
+                { "name": "coding", "layout": "monocle", "screen": "main",
+                  "rules": [{ "app_id": "com.microsoft.VSCode" }, { "app_id": "dev.zed.Zed" }] },
+                { "name": "browser", "layout": "monocle", "screen": "secondary",
+                  "rules": [{ "app_id": "com.google.Chrome" }] },
+                { "name": "design", "layout": "floating", "screen": "main",
+                  "rules": [{ "app_id": "com.example.DeviceHub" }] },
+                { "name": "communication", "layout": "floating", "screen": "main",
+                  "rules": [{ "app_id": "net.whatsapp.WhatsApp" }, { "app_id": "com.hnc.Discord" }] },
+                { "name": "media", "layout": "monocle", "screen": "main",
+                  "rules": [{ "app_id": "com.spotify.client" }] },
+                { "name": "misc", "layout": "floating", "screen": "main" },
+                { "name": "tasks", "layout": "grid", "screen": "main" },
+            ],
+        }),
+    );
+    assert_eq!(desk.strip(), [
+        "files",
+        "terminal",
+        "coding",
+        "browser",
+        "design",
+        "communication",
+        "media",
+        "misc",
+        "tasks"
+    ]);
+    assert_eq!(
+        desk.workspace_of(hub),
+        "design",
+        "the moved rule places the running app"
+    );
+    assert_eq!(desk.published_workspace_of(hub).as_deref(), Some("design"));
+    assert_eq!(
+        desk.workspace_of(spotify),
+        "media",
+        "the renamed workspace's app"
+    );
+    assert_eq!(desk.workspace_of(desk.token(GHOSTTY, 1)), "terminal");
+    assert_eq!(desk.workspace_of(desk.token(CODE, 2)), "coding");
+    assert_eq!(desk.workspace_of(desk.token(WHATSAPP, 4)), "communication");
+    assert_eq!(desk.workspace_of(desk.token(CHROME, 5)), "browser");
+    assert_eq!(desk.visible_workspace(), "terminal");
+    assert_eq!(desk.focused_workspace().as_deref(), Some("terminal"));
+    assert!(desk.shown[GHOSTTY]);
+    assert!(!desk.shown[DEVICE_HUB], "moved to a hidden workspace: hidden");
+    desk.focus_workspace("design");
+    assert!(desk.shown[DEVICE_HUB] && !desk.shown[GHOSTTY]);
+    desk.focus_workspace("media");
+    assert!(desk.shown[SPOTIFY] && !desk.shown[DEVICE_HUB]);
+}
+
+impl Desktop {
+    /// Native focus requests queued so far.
+    fn focus_mark(&self) -> usize { self.focuses.lock().expect("focuses").len() }
+
+    fn focuses_since(&self, mark: usize) -> Vec<WindowInstance> {
+        self.focuses.lock().expect("focuses")[mark..].to_vec()
+    }
+
+    fn published_focus_window(&self) -> Option<WindowInstance> {
+        let snap = self.snap();
+        let key = crate::published::project(&snap).focus.window?;
+        crate::published::resolve_window_key(&snap, &key)
+    }
+}
+
+#[test]
+fn reload_moving_the_focused_window_to_a_hidden_workspace_refocuses_natively() {
+    let mut desk = ab_desktop();
+    let ghostty = desk.token(GHOSTTY, 1);
+    // A second Ghostty window stays on the visible workspace: the application
+    // is only partly moved and must stay shown.
+    let scratch = desk.window_with(
+        GHOSTTY,
+        "scratch",
+        "AXStandardWindow",
+        (1200.0, 800.0),
+        SnapshotOrigin::Created,
+    );
+    desk.settle();
+    desk.app_focuses(GHOSTTY, ghostty);
+    desk.cmd_tab(GHOSTTY);
+    assert_eq!(desk.published_focus_window(), Some(ghostty));
+    assert_eq!(desk.workspace_of(scratch), "a");
+    let mark = desk.focus_mark();
+    desk.reload(
+        3,
+        json!({
+            "enabled": true,
+            "workspaces": [
+                { "name": "a" },
+                { "name": "b", "rules": [{ "app_id": "com.microsoft.VSCode" }] },
+                { "name": "c", "rules": [{ "title": "~" }] },
+            ],
+        }),
+    );
+    assert_eq!(desk.workspace_of(ghostty), "c");
+    assert_eq!(desk.workspace_of(scratch), "a");
+    assert_eq!(desk.focused_workspace().as_deref(), Some("a"));
+    let focused = desk.published_focus_window().expect("a focused window");
+    assert_ne!(focused, ghostty);
+    assert_eq!(desk.workspace_of(focused), "a");
+    assert_eq!(
+        desk.focuses_since(mark),
+        vec![focused],
+        "one native focus request, for the published focus"
+    );
+    assert!(
+        desk.shown[GHOSTTY],
+        "Ghostty keeps a window on the visible workspace"
+    );
+}
+
+#[test]
+fn reload_moving_the_focused_window_to_a_visible_workspace_keeps_the_focus() {
+    let mut desk = ab_desktop();
+    let ghostty = desk.token(GHOSTTY, 1);
+    desk.submit(Input::Displays(Arc::new(stache_macos::DisplayLayout::new(
+        vec![
+            crate::test_support::display(1, true, Some(60.0), 0.0),
+            crate::test_support::display(2, false, Some(60.0), 1920.0),
+        ],
+    ))));
+    desk.settle();
+    assert_eq!(desk.published_focus_window(), Some(ghostty));
+    let mark = desk.focus_mark();
+    desk.reload(
+        3,
+        json!({
+            "enabled": true,
+            "workspaces": [
+                { "name": "a", "screen": "main" },
+                { "name": "b", "screen": "main",
+                  "rules": [{ "app_id": "com.microsoft.VSCode" }] },
+                { "name": "c", "screen": "secondary",
+                  "rules": [{ "app_id": "com.mitchellh.ghostty" }] },
+            ],
+        }),
+    );
+    assert_eq!(desk.workspace_of(ghostty), "c");
+    assert_eq!(
+        desk.focused_workspace().as_deref(),
+        Some("c"),
+        "focus follows the window"
+    );
+    assert_eq!(desk.published_focus_window(), Some(ghostty));
+    assert!(desk.focuses_since(mark).is_empty(), "it still has native focus");
+    assert!(desk.shown[GHOSTTY]);
+    let snap = desk.snap();
+    let visible: Vec<_> = snap
+        .workspaces
+        .iter()
+        .filter(|ws| ws.visible)
+        .map(|ws| ws.name.as_str())
+        .collect();
+    assert_eq!(visible, ["a", "c"]);
+}
+
+#[test]
+fn a_reload_without_re_evaluation_requests_no_native_focus() {
+    let mut desk = ab_desktop();
+    let mark = desk.focus_mark();
+    desk.reload(3, ab(&json!({ "animations": { "duration": 350 } })));
+    desk.reload(
+        4,
+        json!({
+            "enabled": true,
+            "workspaces": [
+                { "name": "a", "layout": "grid", "rules": [{ "app_id": "com.mitchellh.ghostty" }] },
+                { "name": "b", "rules": [{ "app_id": "com.microsoft.VSCode" }] },
+            ],
+        }),
+    );
+    assert!(desk.focuses_since(mark).is_empty());
+}
+
+// ------------------------------------------- focusing an empty workspace
+
+impl Desktop {
+    fn two_displays(&mut self) {
+        self.submit(Input::Displays(Arc::new(stache_macos::DisplayLayout::new(
+            vec![
+                crate::test_support::display(1, true, Some(60.0), 0.0),
+                crate::test_support::display(2, false, Some(60.0), 1920.0),
+            ],
+        ))));
+        self.settle();
+    }
+
+    fn visible_set(&self) -> Vec<String> {
+        let snap = self.snap();
+        snap.workspaces
+            .iter()
+            .filter(|ws| ws.visible)
+            .map(|ws| ws.name.clone())
+            .collect()
+    }
+
+    /// Applications hidden or unhidden since `mark` (visibility requests).
+    fn requests_since(&self, mark: usize) -> Vec<(&'static str, VisibilityOperation)> {
+        self.native.backend.visibility_requests()[mark..]
+            .iter()
+            .map(|(key, operation)| {
+                let index = self.keys.iter().position(|k| k == key).expect("known app");
+                (APPS[index].1, *operation)
+            })
+            .collect()
+    }
+}
+
+/// The managed applications the desktop shows (Finder, the agents, Zoom and
+/// a Device Hub without a window have no managed window and are never hidden).
+fn managed_shown(desk: &Desktop) -> Vec<&'static str> {
+    let unmanaged = ["MenuBarAgent", "BetterDisplay", "zoom.us", "Finder"];
+    desk.shown_set()
+        .into_iter()
+        .filter(|name| !unmanaged.contains(name) && (desk.hub || *name != "Device Hub"))
+        .collect()
+}
+
+/// `terminal` (Ghostty and Device Hub, frontmost Ghostty) is visible; the CLI
+/// focuses the empty `target`, then `terminal` again.
+fn empty_round_trip(delivery: Delivery, target: &str) {
+    let mut desk = Desktop::boot_with(delivery, GHOSTTY, true, false);
+    desk.release_late();
+    // Hiding the frontmost Ghostty makes the system activate Device Hub, which
+    // is being hidden too.
+    desk.successor = Some(DEVICE_HUB);
+    assert_eq!(managed_shown(&desk), ["Ghostty", "Device Hub"]);
+    let mark = desk.native.backend.visibility_requests().len();
+    desk.focus_workspace(target);
+    desk.release_late();
+    assert_eq!(desk.visible_workspace(), target, "{delivery:?}");
+    assert_eq!(desk.focused_workspace().as_deref(), Some(target));
+    assert_eq!(desk.snap().focus.window, None, "{delivery:?}: nothing to focus");
+    let requests = desk.requests_since(mark);
+    for app in ["Ghostty", "Device Hub"] {
+        assert!(
+            requests.contains(&(app, VisibilityOperation::Hide)),
+            "{delivery:?} {target}: {app} hidden: {requests:?}"
+        );
+    }
+    assert!(
+        managed_shown(&desk).is_empty(),
+        "{delivery:?} {target}: the empty workspace shows nothing: {:?}",
+        desk.shown_set()
+    );
+    desk.focus_workspace("terminal");
+    desk.release_late();
+    assert_eq!(desk.visible_workspace(), "terminal", "{delivery:?}");
+    assert_eq!(
+        managed_shown(&desk),
+        ["Ghostty", "Device Hub"],
+        "{delivery:?} {target}: back"
+    );
+    assert_eq!(desk.snap().focus.window, Some(desk.token(GHOSTTY, 1)));
+}
+
+#[test]
+fn focusing_an_empty_floating_workspace_hides_the_previous_one() {
+    for delivery in [
+        Delivery::Immediate,
+        Delivery::Twice,
+        Delivery::Late,
+        Delivery::Never,
+    ] {
+        empty_round_trip(delivery, "misc");
+    }
+}
+
+#[test]
+fn focusing_an_empty_tiled_workspace_hides_the_previous_one() {
+    for delivery in [
+        Delivery::Immediate,
+        Delivery::Twice,
+        Delivery::Late,
+        Delivery::Never,
+    ] {
+        empty_round_trip(delivery, "tasks");
+    }
+}
+
+#[test]
+fn focusing_an_empty_workspace_from_one_assigned_to_a_missing_display_hides_it() {
+    // One display: `browser` (screen = "secondary") falls back to main.
+    for target in ["misc", "tasks"] {
+        let mut desk = Desktop::boot(Delivery::Immediate, CHROME);
+        assert_eq!(desk.visible_workspace(), "browser");
+        assert_eq!(managed_shown(&desk), ["Google Chrome"]);
+        desk.focus_workspace(target);
+        assert_eq!(desk.visible_workspace(), target);
+        assert!(
+            managed_shown(&desk).is_empty(),
+            "{target}: {:?}",
+            desk.shown_set()
+        );
+        desk.focus_workspace("browser");
+        assert_eq!(managed_shown(&desk), ["Google Chrome"], "{target}: back");
+    }
+}
+
+#[test]
+fn focusing_an_empty_workspace_with_two_displays_hides_only_its_display() {
+    for target in ["misc", "tasks"] {
+        let mut desk = Desktop::boot(Delivery::Immediate, GHOSTTY);
+        desk.two_displays();
+        desk.cmd_tab(GHOSTTY);
+        assert_eq!(desk.visible_set(), ["terminal", "browser"]);
+        assert_eq!(managed_shown(&desk), ["Ghostty", "Google Chrome"]);
+        desk.focus_workspace(target);
+        assert_eq!(desk.visible_set(), ["browser", target]);
+        assert_eq!(desk.focused_workspace().as_deref(), Some(target));
+        assert_eq!(
+            managed_shown(&desk),
+            ["Google Chrome"],
+            "{target}: the other display keeps its workspace"
+        );
+        desk.focus_workspace("terminal");
+        assert_eq!(desk.visible_set(), ["terminal", "browser"]);
+        assert_eq!(
+            managed_shown(&desk),
+            ["Ghostty", "Google Chrome"],
+            "{target}: back"
+        );
+    }
+}
+
+// ------------------------------------------------- reload and native focus
+
+#[test]
+fn reload_removing_the_focused_workspace_of_a_secondary_display_keeps_the_focus_there() {
+    let mut desk = Desktop::boot(Delivery::Immediate, GHOSTTY);
+    desk.two_displays();
+    desk.reload(
+        2,
+        json!({
+            "enabled": true,
+            "workspaces": [
+                { "name": "a", "screen": "main",
+                  "rules": [{ "app_id": "com.mitchellh.ghostty" }] },
+                { "name": "s1", "screen": "secondary",
+                  "rules": [{ "app_id": "com.google.Chrome" }] },
+                { "name": "s2", "screen": "secondary" },
+            ],
+        }),
+    );
+    let chrome = desk.token(CHROME, 5);
+    desk.cmd_tab(CHROME);
+    assert_eq!(desk.focused_workspace().as_deref(), Some("s1"));
+    assert_eq!(desk.published_focus_window(), Some(chrome));
+    let mark = desk.focus_mark();
+    desk.reload(
+        3,
+        json!({
+            "enabled": true,
+            "workspaces": [
+                { "name": "a", "screen": "main",
+                  "rules": [{ "app_id": "com.mitchellh.ghostty" }] },
+                { "name": "s2", "screen": "secondary" },
+            ],
+        }),
+    );
+    assert_eq!(
+        desk.workspace_of(chrome),
+        "s2",
+        "the display's visible workspace"
+    );
+    assert_eq!(
+        desk.focused_workspace().as_deref(),
+        Some("s2"),
+        "focus stays on the display that had it"
+    );
+    assert_eq!(desk.published_focus_window(), Some(chrome));
+    assert!(
+        desk.focuses_since(mark).is_empty(),
+        "Chrome still has native focus"
+    );
+    assert!(desk.shown[CHROME] && desk.shown[GHOSTTY]);
+}
+
+#[test]
+fn reload_moving_the_only_focused_window_to_a_hidden_workspace_leaves_nothing_focused() {
+    let mut desk = Desktop::boot(Delivery::Immediate, GHOSTTY);
+    desk.reload(
+        2,
+        json!({
+            "enabled": true,
+            "workspaces": [
+                { "name": "a", "rules": [{ "app_id": "com.mitchellh.ghostty" }] },
+                { "name": "z", "rules": [{ "app_id": "com.microsoft.VSCode" },
+                                         { "app_id": "com.spotify.client" },
+                                         { "app_id": "net.whatsapp.WhatsApp" },
+                                         { "app_id": "com.google.Chrome" }] },
+            ],
+        }),
+    );
+    let ghostty = desk.token(GHOSTTY, 1);
+    assert_eq!(desk.visible_workspace(), "a");
+    assert_eq!(desk.published_focus_window(), Some(ghostty));
+    let mark = desk.focus_mark();
+    desk.reload(
+        3,
+        json!({
+            "enabled": true,
+            "workspaces": [
+                { "name": "a" },
+                { "name": "z", "rules": [{ "app_id": "com.microsoft.VSCode" },
+                                         { "app_id": "com.spotify.client" },
+                                         { "app_id": "net.whatsapp.WhatsApp" },
+                                         { "app_id": "com.google.Chrome" }] },
+                { "name": "c", "rules": [{ "app_id": "com.mitchellh.ghostty" }] },
+            ],
+        }),
+    );
+    assert_eq!(desk.workspace_of(ghostty), "c");
+    assert_eq!(desk.visible_workspace(), "a");
+    assert_eq!(desk.focused_workspace().as_deref(), Some("a"));
+    assert_eq!(desk.published_focus_window(), None, "no window is left in `a`");
+    assert!(desk.focuses_since(mark).is_empty(), "nothing to focus natively");
+    assert!(managed_shown(&desk).is_empty(), "{:?}", desk.shown_set());
+}
+
+#[test]
+fn reload_ignoring_the_focused_window_releases_it_and_keeps_the_workspace() {
+    let mut desk = ab_desktop();
+    let ghostty = desk.token(GHOSTTY, 1);
+    assert_eq!(desk.published_focus_window(), Some(ghostty));
+    let mark = desk.focus_mark();
+    let requests = desk.native.backend.visibility_requests().len();
+    desk.reload(
+        3,
+        ab(&json!({ "ignore": [{ "app_id": "com.mitchellh.ghostty" }] })),
+    );
+    let snap = desk.snap();
+    assert!(snap.window(ghostty).is_none(), "released from tiling");
+    assert_eq!(desk.focused_workspace().as_deref(), Some("a"));
+    assert_ne!(desk.published_focus_window(), Some(ghostty));
+    assert!(
+        desk.focuses_since(mark).is_empty(),
+        "the released window keeps the native focus"
+    );
+    assert!(desk.shown[GHOSTTY], "a released application is never hidden");
+    assert!(
+        !desk.requests_since(requests).iter().any(|(app, _)| *app == "Ghostty"),
+        "{:?}",
+        desk.requests_since(requests)
+    );
+}
+
+/// A Finder window on the hidden `files` workspace.
+fn finder_window(desk: &mut Desktop) -> WindowInstance {
+    let finder = desk.window_with(
+        FINDER,
+        "Documents",
+        "AXStandardWindow",
+        (1200.0, 800.0),
+        SnapshotOrigin::Created,
+    );
+    desk.settle();
+    assert_eq!(desk.workspace_of(finder), "files");
+    finder
+}
+
+/// terminal -> `target` (empty) -> terminal, with macOS keeping the last
+/// visible regular application.
+fn empty_and_back(desk: &mut Desktop, target: &str) {
+    desk.focus_workspace(target);
+    assert_eq!(desk.visible_workspace(), target);
+    assert!(
+        managed_shown(desk).is_empty(),
+        "{target}: Ghostty is hidden: {:?}",
+        desk.shown_set()
+    );
+    assert!(desk.shown[FINDER], "{target}: Finder hosts the desktop");
+    assert_eq!(desk.frontmost, FINDER, "{target}: macOS made Finder active");
+    desk.focus_workspace("terminal");
+    assert_eq!(desk.visible_workspace(), "terminal");
+    assert_eq!(managed_shown(desk), ["Ghostty"], "{target}: back");
+    assert_eq!(desk.snap().focus.window, Some(desk.token(GHOSTTY, 1)));
+    assert_eq!(
+        desk.native.backend.exact_activation_requests().last(),
+        Some(&desk.keys[GHOSTTY]),
+        "{target}: Ghostty is focused natively again"
+    );
+    assert_eq!(desk.frontmost, GHOSTTY);
+    assert!(desk.shown[FINDER], "{target}: a windowless Finder stays shown");
+}
+
+#[test]
+fn an_empty_workspace_hides_the_last_app_once_a_windowless_finder_is_shown_again() {
+    for target in ["tasks", "misc"] {
+        let mut desk = Desktop::boot(Delivery::Immediate, GHOSTTY);
+        desk.last_app_kept = true;
+        let finder = finder_window(&mut desk);
+        assert!(!desk.shown[FINDER], "Finder's window is on a hidden workspace");
+        // The window closes: a windowless Finder is not kept hidden.
+        desk.rig.push(WindowEventKind::Window {
+            window: finder,
+            change: WindowChange::Destroyed,
+        });
+        desk.settle();
+        assert!(desk.shown[FINDER], "{target}: Finder is shown again");
+        empty_and_back(&mut desk, target);
+    }
+}
+
+#[test]
+fn an_empty_workspace_hides_the_last_app_when_finder_was_never_hidden() {
+    for target in ["tasks", "misc"] {
+        let mut desk = Desktop::boot(Delivery::Immediate, GHOSTTY);
+        desk.last_app_kept = true;
+        assert!(desk.shown[FINDER]);
+        empty_and_back(&mut desk, target);
+    }
+}
+
+#[test]
+fn a_hide_kept_by_a_hidden_finder_is_abandoned_then_retried_at_the_next_switch() {
+    let mut desk = Desktop::boot(Delivery::Immediate, GHOSTTY);
+    desk.last_app_kept = true;
+    finder_window(&mut desk);
+    assert!(!desk.shown[FINDER]);
+    desk.focus_workspace("tasks");
+    for _ in 0..6 {
+        desk.rig.clock.advance(crate::visibility::CONFIRMATION_TIMEOUT);
+        desk.settle();
+    }
+    assert_eq!(managed_shown(&desk), ["Ghostty"], "kept on screen by macOS");
+    let log = desk.vis.diagnostics();
+    assert!(
+        log.iter().any(|line| line.contains("hide abandoned")
+            && line.contains("Finder is hidden because it has windows on a hidden workspace")),
+        "{log:?}"
+    );
+    let sent = desk.native.backend.visibility_requests().len();
+    desk.rig.clock.advance(Duration::from_secs(60));
+    desk.settle();
+    assert_eq!(
+        desk.native.backend.visibility_requests().len(),
+        sent,
+        "abandoned: no endless retry"
+    );
+    // A switch to a workspace with a window: Spotify is shown, Ghostty can go.
+    desk.focus_workspace("music");
+    assert_eq!(desk.visible_workspace(), "music");
+    assert_eq!(managed_shown(&desk), ["Spotify"], "the stuck app is hidden now");
+    assert!(!desk.shown[FINDER], "Finder keeps its hidden window hidden");
+}
+
+#[test]
+fn a_windowless_finder_hidden_by_an_earlier_run_is_shown_at_startup() {
+    BOOT_HOOK.set(Some(|desk: &mut Desktop| {
+        // An earlier Stache run hid Finder; this run does not own that.
+        desk.shown[FINDER] = false;
+        desk.last_app_kept = true;
+    }));
+    let mut desk = Desktop::boot(Delivery::Immediate, GHOSTTY);
+    assert!(
+        desk.requests_since(0).contains(&("Finder", VisibilityOperation::Unhide)),
+        "{:?}",
+        desk.requests_since(0)
+    );
+    assert!(desk.shown[FINDER], "Finder is shown during startup");
+    empty_and_back(&mut desk, "tasks");
+}
+
+#[test]
+fn a_windowless_finder_hidden_mid_run_is_shown_only_when_a_switch_needs_it() {
+    let mut desk = Desktop::boot(Delivery::Immediate, GHOSTTY);
+    desk.last_app_kept = true;
+    // The user hides Finder (Ghostty is visible, so macOS allows it).
+    desk.shown[FINDER] = false;
+    desk.notify(FINDER, LifecycleKind::Hidden);
+    desk.settle();
+    let mark = desk.native.backend.visibility_requests().len();
+    desk.rig.clock.advance(Duration::from_secs(5));
+    desk.settle();
+    assert!(!desk.shown[FINDER], "left alone while nothing needs it");
+    assert!(desk.requests_since(mark).is_empty());
+    desk.focus_workspace("tasks");
+    let requests = desk.requests_since(mark);
+    assert_eq!(
+        requests[..2],
+        [
+            ("Finder", VisibilityOperation::Unhide),
+            ("Ghostty", VisibilityOperation::Hide)
+        ],
+        "Finder is shown before the last app is hidden"
+    );
+    assert!(desk.shown[FINDER] && managed_shown(&desk).is_empty());
+    assert_eq!(desk.frontmost, FINDER);
+}
+
+/// terminal -> tasks with Finder holding a window on hidden `files` and a
+/// windowless Device Hub running.
+fn hosted_by_device_hub(hub_hidden: bool) -> Desktop {
+    let mut desk = Desktop::boot(Delivery::Immediate, GHOSTTY);
+    desk.last_app_kept = true;
+    desk.bare = vec![DEVICE_HUB];
+    finder_window(&mut desk);
+    assert!(!desk.shown[FINDER]);
+    if hub_hidden {
+        // Someone else hid it.
+        desk.shown[DEVICE_HUB] = false;
+        desk.notify(DEVICE_HUB, LifecycleKind::Hidden);
+        desk.settle();
+    }
+    let mark = desk.native.backend.visibility_requests().len();
+    let activations = desk.native.backend.exact_activation_requests().len();
+    desk.focus_workspace("tasks");
+    assert_eq!(desk.visible_workspace(), "tasks");
+    let requests = desk.requests_since(mark);
+    let expected: &[_] = if hub_hidden {
+        &[
+            ("Device Hub", VisibilityOperation::Unhide),
+            ("Ghostty", VisibilityOperation::Hide),
+        ]
+    } else {
+        &[("Ghostty", VisibilityOperation::Hide)]
+    };
+    assert_eq!(requests, expected, "the host is shown before the last app hides");
+    assert_eq!(
+        desk.native.backend.exact_activation_requests()[activations..],
+        [desk.keys[DEVICE_HUB]],
+        "the host is activated"
+    );
+    assert!(managed_shown(&desk).is_empty(), "{:?}", desk.shown_set());
+    assert!(desk.shown[DEVICE_HUB], "the host stays shown");
+    assert!(!desk.shown[FINDER], "Finder keeps its window hidden");
+    assert_eq!(desk.frontmost, DEVICE_HUB);
+    desk
+}
+
+#[test]
+fn a_windowless_app_hosts_an_empty_workspace_while_finder_holds_a_hidden_window() {
+    for hub_hidden in [false, true] {
+        let mut desk = hosted_by_device_hub(hub_hidden);
+        desk.focus_workspace("terminal");
+        assert_eq!(managed_shown(&desk), ["Ghostty"]);
+        assert_eq!(desk.snap().focus.window, Some(desk.token(GHOSTTY, 1)));
+        assert_eq!(desk.frontmost, GHOSTTY);
+        assert!(desk.shown[DEVICE_HUB], "the host is not hidden by Stache");
+        assert!(!desk.shown[FINDER]);
+        assert!(
+            !desk.vis.diagnostics().iter().any(|line| line.contains("hide abandoned")),
+            "{:?}",
+            desk.vis.diagnostics()
+        );
+    }
+}
+
+#[test]
+fn without_a_windowless_app_the_hide_is_abandoned_then_retried_at_the_next_switch() {
+    // Device Hub has a window on `terminal`: no application is windowless.
+    let mut desk = Desktop::boot_with(Delivery::Immediate, GHOSTTY, true, false);
+    desk.last_app_kept = true;
+    finder_window(&mut desk);
+    let activations = desk.native.backend.exact_activation_requests().len();
+    desk.empty_terminal_into("tasks");
+    for _ in 0..6 {
+        desk.rig.clock.advance(crate::visibility::CONFIRMATION_TIMEOUT);
+        desk.settle();
+    }
+    assert_eq!(managed_shown(&desk).len(), 1, "kept on screen by macOS");
+    assert_eq!(
+        desk.native.backend.exact_activation_requests().len(),
+        activations,
+        "no host to activate"
+    );
+    let log = desk.vis.diagnostics();
+    assert!(
+        log.iter().any(|line| line.contains("hide abandoned")
+            && line.contains("no windowless application was available as host either")),
+        "{log:?}"
+    );
+    desk.focus_workspace("music");
+    assert_eq!(managed_shown(&desk), ["Spotify"], "retried at the next switch");
+}
+
+#[test]
+fn a_refused_focus_does_not_retry_an_abandoned_hide() {
+    let mut desk = Desktop::boot_with(Delivery::Immediate, GHOSTTY, true, false);
+    desk.last_app_kept = true;
+    finder_window(&mut desk);
+    desk.empty_terminal_into("tasks");
+    for _ in 0..6 {
+        desk.rig.clock.advance(crate::visibility::CONFIRMATION_TIMEOUT);
+        desk.settle();
+    }
+    let abandoned = |desk: &Desktop| {
+        desk.vis
+            .diagnostics()
+            .iter()
+            .filter(|line| line.contains("hide abandoned"))
+            .count()
+    };
+    assert_eq!(abandoned(&desk), 1, "{:?}", desk.vis.diagnostics());
+    assert!(desk.inactive().contains(&"guitar".to_owned()));
+    let requests = desk.native.backend.visibility_requests().len();
+    let activations = desk.native.backend.exact_activation_requests().len();
+    for serial in 1..=3 {
+        desk.focus_workspace("guitar");
+        for _ in 0..6 {
+            desk.rig.clock.advance(crate::visibility::CONFIRMATION_TIMEOUT);
+            desk.settle();
+        }
+        assert_eq!(desk.refused(), Some(("guitar".to_owned(), serial)));
+    }
+    assert!(
+        desk.requests_since(requests).is_empty(),
+        "{:?}",
+        desk.requests_since(requests)
+    );
+    assert_eq!(
+        desk.native.backend.exact_activation_requests().len(),
+        activations
+    );
+    assert_eq!(abandoned(&desk), 1, "no new warning per press");
+    // A real switch still retries the hide.
+    desk.focus_workspace("music");
+    assert_eq!(managed_shown(&desk), ["Spotify"], "retried at the next switch");
+}
+
+#[test]
+fn a_host_that_opens_a_window_becomes_an_ordinary_app() {
+    let mut desk = hosted_by_device_hub(false);
+    let hub = desk.window_with(
+        DEVICE_HUB,
+        "Device Hub",
+        "AXStandardWindow",
+        (900.0, 600.0),
+        SnapshotOrigin::Created,
+    );
+    desk.settle();
+    // Its rule places it on `terminal`; the active app's new window takes the
+    // focus there, as for any new window.
+    assert_eq!(desk.workspace_of(hub), "terminal");
+    assert_eq!(desk.visible_workspace(), "terminal");
+    assert_eq!(desk.snap().focus.window, Some(hub));
+    assert!(desk.shown[DEVICE_HUB] && desk.shown[GHOSTTY]);
+    assert!(!desk.shown[FINDER]);
+}
+
+#[test]
+fn a_windowless_finder_hosts_before_any_other_windowless_app() {
+    let mut desk = Desktop::boot(Delivery::Immediate, GHOSTTY);
+    desk.last_app_kept = true;
+    desk.bare = vec![DEVICE_HUB];
+    let activations = desk.native.backend.exact_activation_requests().len();
+    empty_and_back(&mut desk, "tasks");
+    assert!(
+        !desk.native.backend.exact_activation_requests()[activations..]
+            .contains(&desk.keys[DEVICE_HUB]),
+        "Device Hub is never activated"
+    );
+}
+
+#[test]
+fn the_last_visible_app_is_not_sent_a_hide_macos_would_refuse() {
+    // Every other application is hidden or being hidden, Finder holds a hidden
+    // window and Device Hub has a window: nothing can host the desktop.
+    let mut desk = Desktop::boot_with(Delivery::Immediate, GHOSTTY, true, false);
+    desk.last_app_kept = true;
+    for app in [ZOOM, BETTERDISPLAY] {
+        desk.shown[app] = false;
+        desk.notify(app, LifecycleKind::Hidden);
+    }
+    finder_window(&mut desk);
+    let mark = desk.native.backend.visibility_requests().len();
+    desk.empty_terminal_into("tasks");
+    assert_eq!(desk.visible_workspace(), "terminal");
+    assert_eq!(desk.requests_since(mark), [(
+        "Device Hub",
+        VisibilityOperation::Hide
+    )]);
+    assert_eq!(desk.snap().visibility.kept_last, Some(desk.ids[GHOSTTY]));
+    assert_eq!(managed_shown(&desk), ["Ghostty"]);
+    assert_eq!(desk.frontmost, GHOSTTY, "never deactivated by a refused hide");
+    desk.rig.clock.advance(Duration::from_secs(10));
+    desk.settle();
+    assert_eq!(desk.requests_since(mark).len(), 1, "nothing re-sent");
+    assert!(
+        !desk.vis.diagnostics().iter().any(|line| line.contains("hide abandoned")),
+        "{:?}",
+        desk.vis.diagnostics()
+    );
+    // Device Hub's window joins Ghostty's on the hidden `tasks`, so the way
+    // back shows the other hidden application again too.
+    desk.send_window(desk.token(DEVICE_HUB, 6), "tasks");
+    assert_eq!(managed_shown(&desk), ["Ghostty"], "still hidden meanwhile");
+    let activations = desk.native.backend.exact_activation_requests().len();
+    desk.focus_workspace("tasks");
+    assert_eq!(managed_shown(&desk), ["Ghostty", "Device Hub"]);
+    assert_eq!(desk.snap().focus.window, Some(desk.token(GHOSTTY, 1)));
+    assert_eq!(
+        desk.native.backend.exact_activation_requests()[activations..].last(),
+        Some(&desk.keys[GHOSTTY]),
+        "focused natively on the way back"
+    );
+}
+
+#[test]
+fn a_return_while_the_kept_hide_is_unsettled_focuses_the_window_natively() {
+    // Zoom's visibility is unknown, so the hide is sent and macOS keeps Ghostty.
+    let mut desk = Desktop::boot_with(Delivery::Immediate, GHOSTTY, true, false);
+    desk.last_app_kept = true;
+    finder_window(&mut desk);
+    desk.empty_terminal_into("tasks");
+    desk.rig.clock.advance(crate::visibility::CONFIRMATION_TIMEOUT);
+    desk.settle();
+    // Back before the hide is abandoned.
+    let activations = desk.native.backend.exact_activation_requests().len();
+    desk.focus_workspace("tasks");
+    assert_eq!(desk.visible_workspace(), "tasks");
+    assert!(managed_shown(&desk).contains(&"Ghostty"));
+    assert_eq!(desk.snap().focus.window, Some(desk.token(GHOSTTY, 1)));
+    assert_eq!(
+        desk.native.backend.exact_activation_requests()[activations..].last(),
+        Some(&desk.keys[GHOSTTY]),
+        "focused natively on the way back"
+    );
+    assert_eq!(desk.frontmost, GHOSTTY);
+}
+
+// ------------------------------------------------------ inactive workspaces
+
+/// The user's nine workspaces on one display (Device Hub stands for the
+/// remaining applications with a window, on `design`). With `secondary`,
+/// `browser` is on the other display.
+fn nine_workspaces(browser_screen: &str) -> serde_json::Value {
+    json!({
+        "enabled": true,
+        "workspaces": [
+            { "name": "files", "layout": "grid", "screen": "main",
+              "rules": [{ "app_id": "com.apple.finder" }] },
+            { "name": "terminal", "layout": "master", "screen": "main",
+              "rules": [{ "app_id": "com.mitchellh.ghostty" }] },
+            { "name": "coding", "layout": "monocle", "screen": "main",
+              "rules": [{ "app_id": "com.microsoft.VSCode" }] },
+            { "name": "browser", "layout": "monocle", "screen": browser_screen,
+              "rules": [{ "app_id": "com.google.Chrome" }] },
+            { "name": "design", "layout": "floating", "screen": "main",
+              "rules": [{ "app_id": "com.example.DeviceHub" }] },
+            { "name": "communication", "layout": "floating", "screen": "main",
+              "rules": [{ "app_id": "net.whatsapp.WhatsApp" }] },
+            { "name": "media", "layout": "monocle", "screen": "main",
+              "rules": [{ "app_id": "com.spotify.client" }] },
+            { "name": "misc", "layout": "floating", "screen": "main" },
+            { "name": "tasks", "layout": "grid", "screen": "main" },
+        ],
+    })
+}
+
+impl Desktop {
+    /// The published `inactive` workspaces.
+    fn inactive(&self) -> Vec<String> {
+        crate::published::project(&self.snap())
+            .workspaces
+            .into_iter()
+            .filter(|ws| ws.inactive)
+            .map(|ws| ws.name)
+            .collect()
+    }
+
+    /// The published refused focus: workspace and counter.
+    fn refused(&self) -> Option<(String, u32)> {
+        crate::published::project(&self.snap())
+            .refused_focus
+            .map(|refused| (refused.workspace, refused.serial))
+    }
+
+    /// No kept-last state and no abandoned hide so far.
+    fn never_stuck(&self) {
+        assert_eq!(self.snap().visibility.kept_last, None);
+        assert!(
+            !self.vis.diagnostics().iter().any(|line| line.contains("hide abandoned")),
+            "{:?}",
+            self.vis.diagnostics()
+        );
+    }
+}
+
+/// The user's setup: Ghostty on `terminal`, a Finder window on `files`, every
+/// other application with a window, macOS keeping the last visible
+/// application.
+fn users_desktop() -> (Desktop, WindowInstance) {
+    let mut desk = Desktop::boot_with(Delivery::Immediate, GHOSTTY, true, false);
+    desk.last_app_kept = true;
+    desk.reload(2, nine_workspaces("main"));
+    let finder = finder_window(&mut desk);
+    assert_eq!(desk.visible_workspace(), "terminal");
+    assert_eq!(desk.workspace_of(desk.token(GHOSTTY, 1)), "terminal");
+    assert!(!desk.shown[FINDER], "Finder's window is on a hidden workspace");
+    (desk, finder)
+}
+
+#[test]
+fn an_empty_workspace_without_a_desktop_host_is_inactive_until_finder_closes_its_window() {
+    let (mut desk, finder) = users_desktop();
+    assert_eq!(desk.inactive(), ["misc", "tasks"]);
+    assert_eq!(desk.refused(), None);
+
+    // The key for `tasks` is refused: nothing native happens.
+    let requests = desk.native.backend.visibility_requests().len();
+    let activations = desk.native.backend.exact_activation_requests().len();
+    let focuses = desk.focus_mark();
+    let writes = desk.mark();
+    desk.focus_workspace("tasks");
+    assert_eq!(
+        desk.snap().last_intent.as_ref().map(|record| record.outcome.clone()),
+        Some(crate::intent::IntentOutcome::Rejected(
+            crate::intent::IntentRejection::InactiveWorkspace
+        ))
+    );
+    assert_eq!(desk.visible_workspace(), "terminal");
+    assert_eq!(desk.focused_workspace().as_deref(), Some("terminal"));
+    assert!(desk.requests_since(requests).is_empty());
+    assert_eq!(
+        desk.native.backend.exact_activation_requests().len(),
+        activations
+    );
+    assert!(desk.focuses_since(focuses).is_empty());
+    assert!(desk.writes_since(writes).is_empty());
+    assert!(managed_shown(&desk).contains(&"Ghostty"));
+    assert_eq!(desk.refused(), Some(("tasks".to_owned(), 1)));
+    desk.focus_workspace("tasks");
+    assert_eq!(desk.refused(), Some(("tasks".to_owned(), 2)));
+    desk.never_stuck();
+
+    // The Finder window closes: Finder hosts the desktop again.
+    desk.rig.push(WindowEventKind::Window {
+        window: finder,
+        change: WindowChange::Destroyed,
+    });
+    desk.settle();
+    assert!(desk.shown[FINDER]);
+    assert!(desk.inactive().is_empty());
+    assert_eq!(desk.refused(), Some(("tasks".to_owned(), 2)), "kept, unchanged");
+
+    // Now the key works and only the desktop is left.
+    desk.focus_workspace("tasks");
+    assert_eq!(desk.visible_workspace(), "tasks");
+    assert!(managed_shown(&desk).is_empty(), "{:?}", desk.shown_set());
+    assert!(desk.shown[FINDER]);
+    assert_eq!(desk.frontmost, FINDER, "Finder is active");
+    desk.never_stuck();
+
+    // Coming back focuses Ghostty.
+    desk.focus_workspace("terminal");
+    assert_eq!(desk.visible_workspace(), "terminal");
+    assert_eq!(managed_shown(&desk), ["Ghostty"]);
+    assert_eq!(desk.snap().focus.window, Some(desk.token(GHOSTTY, 1)));
+    assert_eq!(
+        desk.native.backend.exact_activation_requests().last(),
+        Some(&desk.keys[GHOSTTY])
+    );
+    assert_eq!(desk.frontmost, GHOSTTY);
+    desk.never_stuck();
+}
+
+#[test]
+fn a_window_on_another_display_makes_an_empty_workspace_reachable() {
+    let mut desk = Desktop::boot_with(Delivery::Immediate, GHOSTTY, true, false);
+    desk.last_app_kept = true;
+    desk.two_displays();
+    desk.reload(2, nine_workspaces("secondary"));
+    finder_window(&mut desk);
+    desk.cmd_tab(GHOSTTY);
+    assert_eq!(desk.visible_set(), ["terminal", "browser"]);
+    assert!(!desk.shown[FINDER]);
+    assert!(desk.inactive().is_empty(), "Chrome stays on the other display");
+
+    desk.focus_workspace("tasks");
+    assert_eq!(desk.visible_set(), ["browser", "tasks"]);
+    assert_eq!(managed_shown(&desk), ["Google Chrome"]);
+    desk.never_stuck();
+    desk.focus_workspace("terminal");
+    assert_eq!(managed_shown(&desk), ["Ghostty", "Google Chrome"]);
+
+    // Chrome's window moves to the hidden `coding`: the other display shows
+    // nothing, and Chrome still has a window, so nothing hosts the desktop.
+    desk.send_window(desk.token(CHROME, 5), "coding");
+    assert_eq!(desk.inactive(), ["misc", "tasks"]);
+    let requests = desk.native.backend.visibility_requests().len();
+    desk.focus_workspace("tasks");
+    assert_eq!(desk.refused(), Some(("tasks".to_owned(), 1)));
+    assert!(desk.requests_since(requests).is_empty());
+    assert_eq!(desk.visible_set(), ["terminal", "browser"]);
 }

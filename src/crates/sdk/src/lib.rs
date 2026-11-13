@@ -56,11 +56,12 @@ pub mod windows;
 pub use cache_lease::{CacheLease, CacheLeaseError, LeaseClock, LeaseWait};
 pub use cli::{CliContribution, CliExecutor, CommandCatalog, CommandCatalogError};
 pub use config::{
-    AcceptedConfig, AcceptedSubscription, AcceptedWait, AcceptedWatch, CatalogError, ChangeSet,
-    ConfigCatalog, ConfigEdit, ConfigEditError, ConfigEnvironment, ConfigFileId, ConfigPaths,
-    ConfigStore, ConfigStoreError, ConfigWatcher, DiagnosticKind, FileOutcome, GlobalConfig,
-    Initial, LoggingConfig, PathEntry, PathError, PathReport, PathState, ReloadOutcome,
-    SourceLocation, StartupCommands, WatchError, inspect_paths, set_enabled,
+    AcceptedConfig, AcceptedSubscription, AcceptedWait, AcceptedWatch, Appearance, CatalogError,
+    ChangeSet, ConfigCatalog, ConfigEdit, ConfigEditError, ConfigEnvironment, ConfigFileId,
+    ConfigPaths, ConfigStore, ConfigStoreError, ConfigWatcher, DiagnosticKind, FileOutcome,
+    GlobalConfig, Initial, LoggingConfig, PathEntry, PathError, PathReport, PathState,
+    ReloadOutcome, SourceLocation, StartupCommands, UiConfig, WatchError, inspect_paths,
+    set_enabled,
 };
 pub use context::ModuleContext;
 pub use durable::{DurableError, DurableLease};

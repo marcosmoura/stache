@@ -1,5 +1,12 @@
 import { propertyGroups } from 'stylelint-config-clean-order';
 
+/*
+ * Stylelint covers real CSS files only (`src/ui/src/main.css`). StyleX style
+ * objects are JavaScript and are linted by oxlint with the matching rules:
+ * `@stylexjs/sort-keys` (`order: 'clean'`), `@stylexjs/valid-styles` and the
+ * local `stache-stylex/no-low-performance-animation-properties`.
+ */
+
 const propertiesOrder = propertyGroups.map((properties) => ({
   emptyLineBefore: 'always',
   noEmptyLineBetween: true,
@@ -28,6 +35,8 @@ export default {
     'comment-empty-line-before': [
       'always',
       {
+        // oxfmt removes the blank line before a comment that opens a block.
+        except: ['first-nested'],
         ignore: ['stylelint-commands', 'after-comment'],
       },
     ],
@@ -39,10 +48,4 @@ export default {
       },
     ],
   },
-  overrides: [
-    {
-      files: ['**/*.styles.tsx'],
-      customSyntax: 'postcss-styled-syntax',
-    },
-  ],
 };

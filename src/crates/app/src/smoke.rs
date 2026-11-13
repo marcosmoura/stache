@@ -7,11 +7,12 @@
 //! - `stache-macos::run_on_main` runs a callback on the actual `AppKit` main
 //!   thread and an activation observer delivers there and removes itself;
 //! - launch creates zero webviews;
-//! - the explicit test window opens, reuses and closes, and its real React DOM
-//!   proves generated invoke plus `statusChanged` inside `WebKit`;
-//! - closing that last window leaves the host and its socket running;
+//! - the tray popover opens through the host, its real React Overview proves
+//!   generated invoke plus `statusChanged` inside `WebKit`, and it hides and
+//!   shows again as the same webview (hidden, never destroyed);
+//! - hiding the popover leaves the host and its socket running;
 //! - an isolated, valid, still disabled config edit is accepted through the
-//!   real control socket and its revision reaches the React DOM;
+//!   real control socket and its new warning reaches the React DOM;
 //! - a second process is rejected by the next-identity instance lock before
 //!   starting Tauri;
 //! - SIGTERM to this owned PID converges on the normal idempotent shutdown.
@@ -30,12 +31,12 @@ use stache_macos::{ActivationObserver, is_main_thread, run_on_main};
 use stache_sdk::ipc::IpcClient;
 use stache_sdk::{
     AppEnvironment, AppPaths, ConfigFileId, ConfigPaths, InstanceError, InstanceLock, ModuleId,
-    WindowBackend,
 };
 use tauri::{AppHandle, Manager};
 
 use crate::bindings::{ConfigFileState, ModuleState};
 use crate::host::HostHandle;
+use crate::popover::POPOVER_LABEL;
 use crate::shutdown::{NativeOwner, NativeSlot, OwnerAnswer, Teardown};
 use crate::windows::NativeWindows;
 
@@ -85,8 +86,14 @@ name = "stache-smoke disabled baseline"
 strategy = "exact"
 "#;
 
-/// Changed file the reload must accept: still valid, still disabled.
+/// Unknown key the reload adds: the host reports it as a warning, which the
+/// popover Overview renders, so the reload is visible in the DOM.
+const RELOAD_WARNING: &str = "smoke_marker";
+
+/// Changed file the reload must accept: still valid, still disabled, with one
+/// ignored key.
 const RELOAD_CONFIG: &str = r#"enabled = false
+smoke_marker = "reload"
 
 [[output]]
 name = "stache-smoke disabled reload"
@@ -176,11 +183,11 @@ pub(crate) fn register_hanging_owner(teardown: &Teardown) {
     teardown.register_owner(NativeSlot::Hud, Arc::new(HangingOwner));
 }
 
-/// Opens the test window and waits for an external quit, or fails after 120 s.
+/// Shows the popover and waits for an external quit, or fails after 120 s.
 ///
 /// The caller registers the hanging owner when the run wants the hung variant.
-/// The window is the same explicit test window the smoke checks use, so a
-/// person can bring it frontmost and press Cmd-Q once or twice.
+/// The window is the same popover the smoke checks use, so a person can bring
+/// Stache frontmost and press Cmd-Q once or twice.
 pub(crate) fn start_hold(app: &AppHandle, host: &HostHandle, windows: &Arc<NativeWindows>) {
     let app = app.clone();
     let host = host.clone();
@@ -195,12 +202,11 @@ pub(crate) fn start_hold(app: &AppHandle, host: &HostHandle, windows: &Arc<Nativ
 
 fn run_hold(app: &AppHandle, host: &HostHandle, windows: &NativeWindows) {
     wait_host_ready(host, HOLD_READY_BOUND, "the hold scenario");
-    let id = windows
-        .open_test_window()
-        .unwrap_or_else(|error| fail(&format!("test window request failed: {error}")));
-    let label = format!("stache-test-{}", id.get());
-    wait_for_window(app, &label, true);
-    pass(&format!("test window {label} visible"));
+    windows
+        .open_popover()
+        .unwrap_or_else(|error| fail(&format!("popover request failed: {error}")));
+    wait_for_window(app, POPOVER_LABEL, true);
+    pass(&format!("popover {POPOVER_LABEL} visible"));
     pass("holding for an external quit");
     if !host.wait_until_teardown_requested(HOLD_BOUND) {
         fail("no external quit arrived within 120 s");
@@ -382,28 +388,31 @@ fn run_checks(context: &SmokeContext) {
         Err(error) => fail(&format!("activation check did not report: {error}")),
     }
 
-    let first = match context.windows.open_test_window() {
-        Ok(id) => id,
-        Err(error) => fail(&format!("test window request failed: {error}")),
-    };
-    let label = format!("stache-test-{}", first.get());
-    wait_for_window(&context.app, &label, true);
-    pass("explicit test window created");
+    let label = POPOVER_LABEL;
+    context
+        .windows
+        .open_popover()
+        .unwrap_or_else(|error| fail(&format!("popover request failed: {error}")));
+    if !context.windows.popover_visible() {
+        fail("the popover did not report shown");
+    }
+    wait_for_window(&context.app, label, true);
+    pass("the host created and showed the popover");
 
     let window = context
         .app
-        .get_webview_window(&label)
-        .unwrap_or_else(|| fail("test window disappeared"));
+        .get_webview_window(label)
+        .unwrap_or_else(|| fail("popover disappeared"));
     let deadline = Instant::now() + Duration::from_secs(20);
-    while !context.windows.is_loaded(&label) {
+    while !context.windows.is_loaded(label) {
         if Instant::now() >= deadline {
-            fail("test window page did not finish loading");
+            fail("popover page did not finish loading");
         }
         thread::sleep(Duration::from_millis(25));
     }
     eval_script(&window, READY_SCRIPT);
-    wait_for_fragment(&context.app, &label, "smoke-ready");
-    pass("WebKit rendered Host ready/config and generated invoke succeeded");
+    wait_for_fragment(&context.app, label, "smoke-ready");
+    pass("WebKit rendered the popover Overview and generated invoke succeeded");
 
     let initial = context.host.status();
     let initial_module = initial
@@ -440,45 +449,64 @@ fn run_checks(context: &SmokeContext) {
 
     let reloaded_revision = wait_for_disabled_revision(context, &initial_revision);
     eval_script(&window, &event_script(&initial_revision, &reloaded_revision));
-    wait_for_fragment(&context.app, &label, "smoke-event");
+    wait_for_fragment(&context.app, label, "smoke-event");
     pass(&format!(
         "StatusChanged reached the React DOM and the snapshot at disabled revision {reloaded_revision}"
     ));
 
-    let second = match context.windows.open_test_window() {
-        Ok(id) => id,
-        Err(error) => fail(&format!("test window reuse failed: {error}")),
-    };
-    if first != second {
-        fail("the same owner/key created a second window");
-    }
-    pass("same owner/key reused the test window");
+    // Mark the document so the reopen proves the same page, not a reload.
+    eval_script(&window, MARK_SCRIPT);
+    wait_for_fragment(&context.app, label, "smoke-marked");
 
-    context.windows.close(first);
-    wait_for_window(&context.app, &label, false);
-    if !context.windows.is_empty() {
-        fail("closed window stayed in the bookkeeping map");
+    context.windows.hide_popover();
+    if context.windows.popover_visible() {
+        fail("the popover still reports shown after hide");
     }
-    pass("test window closed and removed");
+    // Hidden, not destroyed: the webview and its bookkeeping entry stay.
+    wait_for_hidden(&window);
+    if context.app.get_webview_window(label).is_none() {
+        fail("hiding the popover destroyed its webview");
+    }
+    if context.windows.len() != 1
+        || !context.windows.is_live_label(crate::windows::HOST_OWNER, label)
+    {
+        fail("hiding the popover changed the window bookkeeping");
+    }
+    pass("the popover hid and kept its webview and bookkeeping");
 
-    // Closing the last window must only release its bookkeeping. Give a wrong
-    // teardown time to surface, then prove the host still answers on its socket.
+    // Hiding the only window must not start a teardown. Give a wrong teardown
+    // time to surface, then prove the host still answers on its socket.
     let deadline = Instant::now() + Duration::from_millis(500);
     while Instant::now() < deadline {
         if context.host.shutdown_requested() {
-            fail("closing the last window started the host shutdown");
+            fail("hiding the popover started the host shutdown");
         }
         thread::sleep(Duration::from_millis(25));
     }
     if context.host.shutdown_requested() {
-        fail("closing the last window started the host shutdown");
+        fail("hiding the popover started the host shutdown");
     }
     IpcClient::new(&socket).status().unwrap_or_else(|error| {
         fail(&format!(
-            "the host stopped answering after a window close: {error}"
+            "the host stopped answering after the popover hid: {error}"
         ));
     });
-    pass("closing the last window keeps the host running");
+
+    context
+        .windows
+        .open_popover()
+        .unwrap_or_else(|error| fail(&format!("popover reopen failed: {error}")));
+    if !context.windows.popover_visible() {
+        fail("the popover did not report shown again");
+    }
+    if context.windows.len() != 1 {
+        fail("reopening the popover created a second window");
+    }
+    eval_script(&window, REOPEN_SCRIPT);
+    wait_for_fragment(&context.app, label, "smoke-reopened");
+    pass("the popover showed again as the same page");
+    context.windows.hide_popover();
+    pass("hiding the popover keeps the host running");
 
     let executable = match env::current_exe() {
         Ok(executable) => executable,
@@ -517,28 +545,27 @@ const READY_SCRIPT: &str = r"
   const tick = async () => {
     try {
       const status = await window.__TAURI_INTERNALS__.invoke('host_status');
-      const info = await window.__TAURI_INTERNALS__.invoke('app_info');
-      const text = document.body.innerText;
       const proxy = status && status.config &&
         status.config.find((entry) => entry.file === 'proxyAudio.toml');
       const module = status && status.modules &&
         status.modules.find((entry) => entry.id === 'proxyAudio');
-      if (status && status.ready && info && info.identifier &&
+      const overview = document.querySelector('[data-surface=popover] [data-testid=overview]');
+      const row = document.querySelector('[data-module=proxyAudio]');
+      const toggle = row && row.querySelector('[role=switch]');
+      if (status && status.ready &&
           module && module.enabled === false && module.state === 'disabled' &&
           proxy && proxy.state === 'valid' && proxy.active === true &&
-          text.includes('Host ready') && text.includes('global.toml') &&
-          text.includes('proxyAudio.toml')) {
+          overview && row && row.dataset.state === 'disabled' &&
+          toggle && toggle.getAttribute('aria-checked') === 'false') {
         finish('ready');
         return;
       }
       if (Date.now() >= deadline) {
         if (!status || !status.ready) finish('fail-notready');
-        else if (!info || !info.identifier) finish('fail-info');
         else if (!module || module.enabled !== false || module.state !== 'disabled') finish('fail-proxy-state');
         else if (!proxy || proxy.state !== 'valid' || proxy.active !== true) finish('fail-proxy-file');
-        else if (!text.includes('Host test surface')) finish('fail-surface-' + encodeURIComponent(location.search + '|' + text.slice(0, 80)));
-        else if (!text.includes('global.toml')) finish('fail-global');
-        else if (!text.includes('proxyAudio.toml')) finish('fail-proxy');
+        else if (!overview) finish('fail-surface-' + encodeURIComponent(location.search + '|' + document.body.innerText.slice(0, 80)));
+        else if (!row) finish('fail-row');
         else finish('fail-dom');
         return;
       }
@@ -552,31 +579,31 @@ const READY_SCRIPT: &str = r"
 })();
 ";
 
+/// Marks the popover document so a later probe can tell it was not reloaded.
+const MARK_SCRIPT: &str = r"
+(() => {
+  window.__stacheSmokeMark = 'kept';
+  location.hash = '#smoke-marked';
+})();
+";
+
+/// After the popover shows again: the same document, still on the Overview.
+const REOPEN_SCRIPT: &str = r"
+(() => {
+  const finish = (value) => { location.hash = '#smoke-' + value; };
+  if (window.__stacheSmokeMark !== 'kept') finish('fail-reloaded');
+  else if (!document.querySelector('[data-testid=overview]')) finish('fail-overview');
+  else finish('reopened');
+})();
+";
+
 const EVENT_SCRIPT: &str = r"
 (() => {
   const previous = '__PREVIOUS__';
   const expected = '__EXPECTED__';
+  const warning = '__WARNING__';
   const deadline = Date.now() + 20000;
   const finish = (value) => { location.hash = '#smoke-' + value; };
-  const findCard = (name) => {
-    const cards = Array.from(document.querySelectorAll('li'));
-    for (const card of cards) {
-      const heading = card.querySelector('h3');
-      if (heading && heading.textContent === name) return card;
-    }
-    return null;
-  };
-  const rowValue = (card, label) => {
-    const rows = Array.from(card.querySelectorAll('div'));
-    for (const row of rows) {
-      const term = Array.from(row.children).find((child) => child.tagName === 'DT');
-      if (term && term.textContent === label) {
-        const value = Array.from(row.children).find((child) => child.tagName === 'DD');
-        return value ? value.textContent : null;
-      }
-    }
-    return null;
-  };
   const inspect = (status) => {
     const module = status && status.modules &&
       status.modules.find((entry) => entry.id === 'proxyAudio');
@@ -587,19 +614,11 @@ const EVENT_SCRIPT: &str = r"
     if (module.revision !== expected) return 'fail-snapshot-revision';
     if (module.enabled !== false || module.state !== 'disabled') return 'fail-snapshot-state';
     if (!file || file.state !== 'valid' || file.active !== true) return 'fail-snapshot-file';
-    const card = findCard('proxyAudio');
-    const configCard = findCard('proxyAudio.toml');
-    if (!card || !configCard) return 'fail-dom-card';
-    if (rowValue(card, 'Revision') !== expected || rowValue(card, 'Enabled') !== 'No') {
-      return 'fail-dom-revision';
-    }
-    const badge = card.querySelector('[data-state]');
-    if (!badge || badge.textContent !== 'Disabled') return 'fail-dom-state';
-    const configBadge = configCard.querySelector('[data-state]');
-    if (!configBadge || configBadge.textContent !== 'Valid' ||
-        configCard.textContent.indexOf('Active configuration') === -1) {
-      return 'fail-dom-file';
-    }
+    if (!file.warnings.some((entry) => entry.includes(warning))) return 'fail-snapshot-warning';
+    const row = document.querySelector('[data-module=proxyAudio]');
+    if (!row || row.dataset.state !== 'disabled') return 'fail-dom-state';
+    const note = document.querySelector('[data-file=\x22proxyAudio.toml\x22]');
+    if (!note || note.textContent.indexOf(warning) === -1) return 'fail-dom-warning';
     return 'event';
   };
   const tick = async () => {
@@ -625,7 +644,10 @@ const EVENT_SCRIPT: &str = r"
 ";
 
 fn event_script(previous: &str, expected: &str) -> String {
-    EVENT_SCRIPT.replace("__PREVIOUS__", previous).replace("__EXPECTED__", expected)
+    EVENT_SCRIPT
+        .replace("__PREVIOUS__", previous)
+        .replace("__EXPECTED__", expected)
+        .replace("__WARNING__", RELOAD_WARNING)
 }
 
 fn wait_for_disabled_revision(context: &SmokeContext, previous: &str) -> String {
@@ -678,6 +700,16 @@ fn wait_for_fragment(app: &AppHandle, label: &str, expected: &str) {
             fail(&format!("WebKit probe did not report `{expected}`"));
         }
         thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn wait_for_hidden(window: &tauri::WebviewWindow) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while window.is_visible().unwrap_or(true) {
+        if Instant::now() >= deadline {
+            fail("the popover did not become hidden");
+        }
+        thread::sleep(Duration::from_millis(20));
     }
 }
 
@@ -745,5 +777,7 @@ mod tests {
         assert!(script.contains("const expected = '18446744073709551615';"));
         assert!(!script.contains("__PREVIOUS__"));
         assert!(!script.contains("__EXPECTED__"));
+        assert!(script.contains("const warning = 'smoke_marker';"));
+        assert!(!script.contains("__WARNING__"));
     }
 }

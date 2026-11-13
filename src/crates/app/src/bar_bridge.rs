@@ -122,9 +122,9 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use stache_bar::{
-    ArtworkLookup, ArtworkStore, BarConfig, BarFrameView, BarPanelState, BarPublished,
-    BarRuntimeState, BarStatusSource, BarWeather, BatteryReading, CpuReading, MediaReading,
-    MenuBarObservation, StatusSubscription, WeatherRead, WeatherService, WifiReading,
+    ArtworkLookup, ArtworkStore, BarConfig, BarFrameView, BarLayoutView, BarPanelState,
+    BarPublished, BarRuntimeState, BarStatusSource, BarWeather, BatteryReading, CpuReading,
+    MediaReading, MenuBarObservation, StatusSubscription, WeatherRead, WeatherService, WifiReading,
 };
 
 use crate::bar_actions::{ActionSource, BarAction, BarActionOutcome, BarActions};
@@ -173,6 +173,9 @@ pub struct BarView {
     pub height: u32,
     /// The accepted `padding` in points.
     pub padding: u32,
+    /// The accepted `[layout]` of `bar.toml`, normalized: every item has a
+    /// unique `id`. Changes only with an accepted reload.
+    pub layout: BarLayoutView,
     /// The last failure or degraded condition.
     pub detail: Option<String>,
     /// The CPU reading; absent until the first sample.
@@ -393,6 +396,7 @@ fn view_of(published: &BarPublished, projected: &Projected) -> BarView {
         frame: published.frame,
         height: u32::from(published.height),
         padding: u32::from(published.padding),
+        layout: published.layout.clone(),
         detail: published.detail.clone(),
         cpu: published.cpu,
         battery: published.battery,

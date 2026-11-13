@@ -7,9 +7,10 @@
 //! the returned text; this module never touches disk.
 
 use std::fmt;
-use std::ops::Range;
 
 use toml_edit::{Document, Item, Value};
+
+use crate::config::edit_ops::{ConfigEditOp, PathSegment, apply_edit};
 
 /// The outcome of applying an edit to source text.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -41,6 +42,41 @@ pub enum ConfigEditError {
         /// The spelling of the value that was found.
         found: String,
     },
+    /// A path segment crosses a value that is not a table or array.
+    NotATable {
+        /// The offending path.
+        path: String,
+    },
+    /// The path does not exist.
+    PathNotFound {
+        /// The missing path.
+        path: String,
+    },
+    /// The path does not name an array.
+    NotAnArray {
+        /// The offending path.
+        path: String,
+    },
+    /// An array index is out of range.
+    IndexOutOfRange {
+        /// The array path.
+        path: String,
+        /// The requested index.
+        index: u32,
+        /// The array length.
+        len: usize,
+    },
+    /// A rename target already exists.
+    KeyExists {
+        /// The existing path.
+        path: String,
+    },
+    /// The value cannot be written as TOML (for example `null`).
+    Unrepresentable(String),
+    /// The edit shape is not supported.
+    Unsupported(String),
+    /// The planned text does not hold the requested document.
+    Unverified,
 }
 
 impl fmt::Display for ConfigEditError {
@@ -50,6 +86,17 @@ impl fmt::Display for ConfigEditError {
             Self::NotBoolean { found } => {
                 write!(f, "the `enabled` value must be a boolean, found `{found}`")
             }
+            Self::NotATable { path } => write!(f, "`{path}` is not a table or array"),
+            Self::PathNotFound { path } => write!(f, "`{path}` does not exist"),
+            Self::NotAnArray { path } => write!(f, "`{path}` is not an array"),
+            Self::IndexOutOfRange { path, index, len } => {
+                write!(f, "index {index} is out of range for `{path}` (length {len})")
+            }
+            Self::KeyExists { path } => write!(f, "`{path}` already exists"),
+            Self::Unrepresentable(message) | Self::Unsupported(message) => f.write_str(message),
+            Self::Unverified => f.write_str(
+                "the edit did not produce the requested value; the file was not changed",
+            ),
         }
     }
 }
@@ -62,7 +109,9 @@ impl std::error::Error for ConfigEditError {}
 /// stays. When it is absent `enabled = <bool>` is inserted into the root
 /// key/value block: after the last root key, or, when the file has no root
 /// keys, after the leading comment lines (so a `#:schema` line stays first) and
-/// before the first table header.
+/// before the first table header. This is the generic
+/// [`ConfigEditOp::Set`](crate::config::edit_ops::ConfigEditOp::Set) on
+/// `["enabled"]`, after refusing a non-boolean `enabled`.
 ///
 /// # Errors
 /// Returns [`ConfigEditError`] when the text is not valid TOML or `enabled` is
@@ -71,37 +120,19 @@ pub fn set_enabled(text: &str, enabled: bool) -> Result<ConfigEdit, ConfigEditEr
     let document = Document::parse(text).map_err(|error| {
         ConfigEditError::Parse(error.message().lines().next().unwrap_or("").to_owned())
     })?;
-    let literal = if enabled { "true" } else { "false" };
-    if let Some(item) = document.get("enabled") {
-        let Item::Value(Value::Boolean(current)) = item else {
-            return Err(ConfigEditError::NotBoolean { found: describe(item) });
-        };
-        if *current.value() == enabled {
-            return Ok(ConfigEdit::Unchanged);
-        }
-        let span = item.span().ok_or_else(|| ConfigEditError::Parse("no span".to_owned()))?;
-        return Ok(ConfigEdit::Changed(replace(text, span, literal)));
+    if let Some(item) = document.get("enabled")
+        && !matches!(item, Item::Value(Value::Boolean(_)))
+    {
+        return Err(ConfigEditError::NotBoolean { found: describe(item) });
     }
-    // Match the file's line endings so an insert never mixes LF into CRLF.
-    let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };
-    let line = format!("enabled = {literal}{newline}");
-    let mut scan = Scan::default();
-    for (_, item) in document.iter() {
-        scan.visit(item);
-    }
-    let Scan {
-        last_value_end,
-        first_table_start,
-    } = scan;
-    let edited = last_value_end.map_or_else(
-        || insert_before_tables(text, first_table_start, &line, newline),
-        |end| insert_after_keys(text, end, &line, newline),
-    );
-    Ok(ConfigEdit::Changed(edited))
+    apply_edit(text, &ConfigEditOp::Set {
+        path: vec![PathSegment::Key("enabled".to_owned())],
+        value: serde_json::Value::Bool(enabled),
+    })
 }
 
 /// Inserts the line after the line that holds the last root key's value.
-fn insert_after_keys(text: &str, end: usize, line: &str, newline: &str) -> String {
+pub(crate) fn insert_after_keys(text: &str, end: usize, line: &str, newline: &str) -> String {
     let at = text[end..].find('\n').map_or(text.len(), |offset| end + offset + 1);
     let mut output = String::with_capacity(text.len() + line.len() + 2);
     output.push_str(&text[..at]);
@@ -114,7 +145,7 @@ fn insert_after_keys(text: &str, end: usize, line: &str, newline: &str) -> Strin
 }
 
 /// Inserts the line after the leading comment block, before the first table.
-fn insert_before_tables(
+pub(crate) fn insert_before_tables(
     text: &str,
     first_table_start: Option<usize>,
     line: &str,
@@ -132,14 +163,6 @@ fn insert_before_tables(
         output.push_str(newline);
     }
     output.push_str(&text[at..]);
-    output
-}
-
-fn replace(text: &str, span: Range<usize>, with: &str) -> String {
-    let mut output = String::with_capacity(text.len());
-    output.push_str(&text[..span.start]);
-    output.push_str(with);
-    output.push_str(&text[span.end..]);
     output
 }
 
@@ -167,15 +190,15 @@ fn max_end(current: Option<usize>, candidate: Option<usize>) -> Option<usize> {
 
 /// Root key/value ends and the earliest table header found in a document.
 #[derive(Default)]
-struct Scan {
-    last_value_end: Option<usize>,
-    first_table_start: Option<usize>,
+pub(crate) struct Scan {
+    pub(crate) last_value_end: Option<usize>,
+    pub(crate) first_table_start: Option<usize>,
 }
 
 impl Scan {
     /// Visits a root item. Dotted and implicit tables only group children, so
     /// they are descended; explicit tables and arrays of tables are headers.
-    fn visit(&mut self, item: &Item) {
+    pub(crate) fn visit(&mut self, item: &Item) {
         match item {
             Item::Value(value) => {
                 self.last_value_end = max_end(self.last_value_end, value.span().map(|s| s.end));

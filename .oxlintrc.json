@@ -17,6 +17,14 @@
   },
   "jsPlugins": [
     {
+      "name": "@stylexjs",
+      "specifier": "@stylexjs/eslint-plugin"
+    },
+    {
+      "name": "stache-stylex",
+      "specifier": "./scripts/lint/stylex-animation.js"
+    },
+    {
       "name": "@stylistic",
       "specifier": "@stylistic/eslint-plugin"
     },
@@ -34,6 +42,14 @@
     }
   ],
   "rules": {
+    "@stylexjs/enforce-extension": "error",
+    "@stylexjs/no-unused": "error",
+    "@stylexjs/no-conflicting-props": "error",
+    "@stylexjs/no-nonstandard-styles": "error",
+    "@stylexjs/sort-keys": ["error", { "order": "clean", "allowLineSeparatedGroups": false }],
+    "stache-stylex/no-low-performance-animation-properties": "error",
+    "@stylexjs/valid-shorthands": "error",
+    "@stylexjs/valid-styles": "error",
     "@stylistic/padding-line-between-statements": [
       "error",
       {
@@ -46,11 +62,22 @@
         "prev": ["if", "for", "while", "do", "switch", "try", "block"],
         "next": "*"
       },
-      { "blankLine": "always", "prev": "*", "next": "return" },
-      { "blankLine": "always", "prev": ["const", "let", "var"], "next": "*" },
-      { "blankLine": "any", "prev": ["const", "let", "var"], "next": ["const", "let", "var"] }
+      {
+        "blankLine": "always",
+        "prev": "*",
+        "next": "return"
+      },
+      {
+        "blankLine": "always",
+        "prev": ["const", "let", "var"],
+        "next": "*"
+      },
+      {
+        "blankLine": "any",
+        "prev": ["const", "let", "var"],
+        "next": ["const", "let", "var"]
+      }
     ],
-    "eslint/curly": ["error", "all"],
     "@tanstack/query/exhaustive-deps": "error",
     "@tanstack/query/infinite-query-property-order": "error",
     "@tanstack/query/mutation-property-order": "error",
@@ -58,6 +85,7 @@
     "@tanstack/query/no-unstable-deps": "error",
     "@tanstack/query/no-void-query-fn": "error",
     "@tanstack/query/stable-query-client": "error",
+    "eslint/curly": ["error", "all"],
     "import/first": "error",
     "import/no-duplicates": "error",
     "import/no-dynamic-require": "error",
@@ -84,5 +112,114 @@
         "allowConstantExport": true
       }
     ]
-  }
+  },
+  "overrides": [
+    {
+      "files": ["src/ui/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "motion/react",
+                "importNames": ["motion"],
+                "message": "Use `import * as m from 'motion/react-m'`: the full `motion` component throws inside LazyMotion strict."
+              },
+              {
+                "name": "framer-motion",
+                "message": "Import from 'motion/react' or 'motion/react-m'."
+              }
+            ],
+            "patterns": [
+              {
+                "group": ["@tauri-apps/*", "@tauri-apps/**"],
+                "message": "Only src/ui/src/ipc/ (and the test harnesses) may import @tauri-apps/*."
+              },
+              {
+                "group": ["**/bindings.gen", "**/bindings.gen.ts"],
+                "message": "Only src/ui/src/ipc/ (and the test harnesses) may import the generated bindings."
+              },
+              {
+                "group": [
+                  "**/palette.stylex",
+                  "**/palette.stylex.ts",
+                  "./palette.stylex",
+                  "./palette.stylex.ts",
+                  "@/theme/palette.stylex",
+                  "@/theme/palette.stylex.ts"
+                ],
+                "message": "The raw palette is for token files only; use the semantic tokens in @/theme/tokens.stylex."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/ui/src/theme/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "motion/react",
+                "importNames": ["motion"],
+                "message": "Use `import * as m from 'motion/react-m'`: the full `motion` component throws inside LazyMotion strict."
+              },
+              {
+                "name": "framer-motion",
+                "message": "Import from 'motion/react' or 'motion/react-m'."
+              }
+            ],
+            "patterns": [
+              {
+                "group": ["@tauri-apps/*", "@tauri-apps/**"],
+                "message": "Only src/ui/src/ipc/ (and the test harnesses) may import @tauri-apps/*."
+              },
+              {
+                "group": ["**/bindings.gen", "**/bindings.gen.ts"],
+                "message": "Only src/ui/src/ipc/ (and the test harnesses) may import the generated bindings."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/ui/src/ipc/**", "src/ui/tests/**", "src/ui/e2e/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "motion/react",
+                "importNames": ["motion"],
+                "message": "Use `import * as m from 'motion/react-m'`: the full `motion` component throws inside LazyMotion strict."
+              },
+              {
+                "name": "framer-motion",
+                "message": "Import from 'motion/react' or 'motion/react-m'."
+              }
+            ],
+            "patterns": [
+              {
+                "group": [
+                  "**/palette.stylex",
+                  "**/palette.stylex.ts",
+                  "./palette.stylex",
+                  "./palette.stylex.ts",
+                  "@/theme/palette.stylex",
+                  "@/theme/palette.stylex.ts"
+                ],
+                "message": "The raw palette is for token files only; use the semantic tokens in @/theme/tokens.stylex."
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
 }

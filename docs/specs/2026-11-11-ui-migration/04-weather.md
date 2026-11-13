@@ -1,12 +1,12 @@
 ---
-status: draft
+status: done
 ---
 
 # 04 — Weather
 
 ## Scope
 
-The Weather widget in `widgets/Weather/`: the inputs command, the two providers fetched from the webview, refresh rules, icon tables and click. Depends on part 02. No Rust change.
+The Weather widget in `windows/Bar/widgets/Weather/`: the inputs command, the two providers fetched from the webview, refresh rules, icon tables and click. Depends on part 02. No Rust change.
 
 ## Requirements
 
@@ -21,14 +21,14 @@ The Weather widget in `widgets/Weather/`: the inputs command, the two providers 
 
 ## Acceptance criteria
 
-- [ ] MIG-04-01: Provider selection, the unconfigured case and every location rule are covered, including no request without a location.
-- [ ] MIG-04-02: Requests carry exactly the documented parameters; the key and coordinates appear in no query key, log, thrown message or rendered text.
-- [ ] MIG-04-03: Refresh follows the configured interval, a new revision or epoch refetches and aborts the previous request, and reconnect refetches.
-- [ ] MIG-04-04: Every failure mode renders `Loading...` with no secret in the error; success renders the icon and rounded-up temperature; `null` feels-like renders `0°C`.
-- [ ] MIG-04-05: Every icon name and WMO code in the tables maps to an existing icon; unknown values use the default.
-- [ ] MIG-04-06: The click sends `bar_action("weather")`.
-- [ ] MIG-04-07: `docs/features/bar.md` restores the Weather UI section as shipped.
-- [ ] MIG-04-08: `bun run lint`, `bun run format:check` and `bun run test` pass.
+- [x] MIG-04-01: Provider selection, the unconfigured case and every location rule are covered, including no request without a location.
+- [x] MIG-04-02: Requests carry exactly the documented parameters; the key and coordinates appear in no query key, log, thrown message or rendered text.
+- [x] MIG-04-03: Refresh follows the configured interval, a new revision or epoch refetches and aborts the previous request, and reconnect refetches.
+- [x] MIG-04-04: Every failure mode renders `Loading...` with no secret in the error; success renders the icon and rounded-up temperature; `null` feels-like renders `0°C`.
+- [x] MIG-04-05: Every icon name and WMO code in the tables maps to an existing icon; unknown values use the default.
+- [x] MIG-04-06: The click sends `bar_action("weather")`.
+- [x] MIG-04-07: `docs/features/bar.md` restores the Weather UI section as shipped.
+- [x] MIG-04-08: `bun run lint`, `bun run format:check` and `bun run test` pass.
 
 ## Tests
 
@@ -42,3 +42,4 @@ The Weather widget in `widgets/Weather/`: the inputs command, the two providers 
 ## Notes
 
 - Behavior reference on `main`: `docs/features/bar.md` (Weather sections) and `Weather.api.ts`, `Weather.query.ts`, `Weather.codes.ts`, `Weather.icons.ts`.
+- Outcome: a location fix with missing or non-finite coordinates counts as no location, so no request is made (`main` threw). Nothing was run against the real provider hosts.

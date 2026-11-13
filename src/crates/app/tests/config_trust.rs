@@ -93,6 +93,8 @@ struct NoUi;
 
 impl HostUi for NoUi {
     fn status(&self, _: &HostStatus) {}
+
+    fn config_changed(&self, _: &[String]) {}
 }
 
 struct NoRecords;

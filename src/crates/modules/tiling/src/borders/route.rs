@@ -153,6 +153,8 @@ struct RouteEntry {
     plan: u64,
     /// The newest plan sequence a confirming frame was reported for.
     confirmed: u64,
+    /// The newest plan sequence any frame was reported for by the frame paths.
+    reported: u64,
     /// Counts confirming events (a `Settled`/`Readback` report or a
     /// completed reveal write): the engine re-attempts the Space confirmation
     /// of a window it could not confirm once per such event.
@@ -454,6 +456,7 @@ impl SharedBorderRoute {
             handle,
             plan,
             confirmed: 0,
+            reported: 0,
             confirmations: 0,
             visible: false,
             frame: None,
@@ -505,6 +508,11 @@ impl SharedBorderRoute {
     /// The newest frame known for `window` (reported or sent), if any.
     pub(super) fn latest_frame(&self, window: WindowInstance) -> Option<Rect> {
         lock(&self.table).entries.get(&window).and_then(|entry| entry.frame)
+    }
+
+    /// The newest plan sequence the frame paths reported a frame for (0: none).
+    pub(super) fn reported(&self, window: WindowInstance) -> u64 {
+        lock(&self.table).entries.get(&window).map_or(0, |entry| entry.reported)
     }
 
     /// Whether a confirming frame for `plan` or later was reported.
@@ -651,6 +659,7 @@ impl BorderFrames for SharedBorderRoute {
                 return;
             }
             entry.plan = plan_sequence;
+            entry.reported = plan_sequence;
             entry.stamp += 1;
             if kind.confirms() {
                 entry.confirmed = entry.confirmed.max(plan_sequence);

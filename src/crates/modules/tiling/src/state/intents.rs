@@ -10,8 +10,8 @@ use stache_macos::windows::WindowInstance;
 
 use super::transition::on_focused;
 use super::{
-    Effect, FOCUS_HISTORY_CAPACITY, FocusState, TilingState, WORKSPACE_HISTORY_CAPACITY,
-    WorkspaceId, frames,
+    Effect, FOCUS_HISTORY_CAPACITY, FocusState, RefusedFocus, TilingState,
+    WORKSPACE_HISTORY_CAPACITY, WorkspaceId, frames,
 };
 use crate::config::LayoutType;
 use crate::geometry::Rect;
@@ -182,6 +182,11 @@ fn focus_workspace(state: &mut TilingState, name: &str, fx: &mut Vec<Effect>) ->
         return noop(IntentNoOp::Unchanged);
     }
     let id = workspace.id;
+    if refuses_focus(state, name) {
+        let serial = state.refused_focus.map_or(1, |refused| refused.serial.wrapping_add(1));
+        state.refused_focus = Some(RefusedFocus { workspace: id, serial });
+        return reject(IntentRejection::InactiveWorkspace);
+    }
     switch_to(state, id, fx);
     IntentOutcome::Applied
 }
@@ -191,10 +196,11 @@ fn cycle_workspace(state: &mut TilingState, cycle: Cycle, fx: &mut Vec<Effect>) 
         return noop(IntentNoOp::NoFocusedWorkspace);
     };
     let screen = state.workspaces[index].screen;
+    let unreachable = unreachable_now(state);
     let on_screen: Vec<WorkspaceId> = state
         .workspaces
         .iter()
-        .filter(|ws| ws.screen == screen)
+        .filter(|ws| ws.screen == screen && !unreachable.contains(&ws.id))
         .map(|ws| ws.id)
         .collect();
     if on_screen.len() < 2 {
@@ -204,6 +210,18 @@ fn cycle_workspace(state: &mut TilingState, cycle: Cycle, fx: &mut Vec<Effect>) 
     let next = step(current, on_screen.len(), cycle);
     switch_to(state, on_screen[next], fx);
     IntentOutcome::Applied
+}
+
+/// Whether `FocusWorkspace(name)` is refused as inactive in this state: the
+/// workspace exists, is not the visible focused one, and is unreachable.
+pub(super) fn refuses_focus(state: &TilingState, name: &str) -> bool {
+    state.workspaces.iter().find(|ws| ws.name == name).is_some_and(|workspace| {
+        !(workspace.visible && workspace.focused) && unreachable_now(state).contains(&workspace.id)
+    })
+}
+
+fn unreachable_now(state: &TilingState) -> Vec<WorkspaceId> {
+    crate::workspaces::unreachable(state, &crate::workspaces::visibility_requirement(state))
 }
 
 const fn step(current: usize, len: usize, cycle: Cycle) -> usize {
@@ -796,39 +814,25 @@ fn resize_master(
 
 // --------------------------------------------------------------------- send
 
-/// Moves `token` to `destination` (appended, legacy) and repairs focus.
-fn move_window(
-    state: &mut TilingState,
-    token: WindowInstance,
-    destination: WorkspaceId,
-    fx: &mut Vec<Effect>,
-) {
-    let Some(source) = state.windows.get(&token).and_then(|w| w.desired.workspace) else {
-        return;
-    };
-    let was_focused = state.focus.window == Some(token);
-    if let Some(workspace) = state.workspaces.iter_mut().find(|ws| ws.id == source) {
+/// Takes `token` out of workspace `id`'s order; when it was that workspace's
+/// focused window, the most recently focused window still there takes over.
+pub(super) fn leave_workspace(state: &mut TilingState, id: WorkspaceId, token: WindowInstance) {
+    let history = &state.focus_history;
+    if let Some(workspace) = state.workspaces.iter_mut().find(|ws| ws.id == id) {
         workspace.order.retain(|held| *held != token);
         if workspace.focused_window == Some(token) {
-            workspace.focused_window = state
-                .focus_history
+            workspace.focused_window = history
                 .iter()
                 .rev()
                 .find(|held| **held != token && workspace.order.contains(held))
                 .copied();
         }
     }
-    if let Some(workspace) = state.workspaces.iter_mut().find(|ws| ws.id == destination) {
-        workspace.order.push(token);
-    }
-    if let Some(window) = state.windows.get_mut(&token) {
-        window.desired.workspace = Some(destination);
-    }
-    state.frames.pinned.remove(&token);
-    if !was_focused {
-        return;
-    }
-    // Focus stays in the workspace it was in, on its next window.
+}
+
+/// Focus stays in workspace `source` after its focused window left: its next
+/// window takes the focus (state and native).
+pub(super) fn refocus_in(state: &mut TilingState, source: WorkspaceId, fx: &mut Vec<Effect>) {
     let replacement = state
         .workspaces
         .iter()
@@ -845,6 +849,30 @@ fn move_window(
             ws.focused_window = Some(next);
         }
         request_focus(state, next, fx);
+    }
+}
+
+/// Moves `token` to `destination` (appended, legacy) and repairs focus.
+fn move_window(
+    state: &mut TilingState,
+    token: WindowInstance,
+    destination: WorkspaceId,
+    fx: &mut Vec<Effect>,
+) {
+    let Some(source) = state.windows.get(&token).and_then(|w| w.desired.workspace) else {
+        return;
+    };
+    let was_focused = state.focus.window == Some(token);
+    leave_workspace(state, source, token);
+    if let Some(workspace) = state.workspaces.iter_mut().find(|ws| ws.id == destination) {
+        workspace.order.push(token);
+    }
+    if let Some(window) = state.windows.get_mut(&token) {
+        window.desired.workspace = Some(destination);
+    }
+    state.frames.pinned.remove(&token);
+    if was_focused {
+        refocus_in(state, source, fx);
     }
 }
 

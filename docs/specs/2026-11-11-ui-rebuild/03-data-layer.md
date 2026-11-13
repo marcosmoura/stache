@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 03 — Data layer
@@ -47,14 +47,14 @@ A feed keeps one query's data current from a host event. `createFeed` takes the 
 
 ## Acceptance criteria
 
-- [ ] UI-03-01: The feed applies events and snapshots in sequence order for every interleaving in the test matrix, and never regresses to an older sequence.
-- [ ] UI-03-02: A sequence above `Number.MAX_SAFE_INTEGER` orders correctly.
-- [ ] UI-03-03: Mount, unmount, mount under StrictMode leaves one listener; unmounting the last consumer leaves zero; a `listen` that resolves after disposal is unlistened at once and requests no snapshot.
-- [ ] UI-03-04: Subscription and snapshot failures surface as query errors and clear on the next successful write.
-- [ ] UI-03-05: Two components selecting different slices of the Bar snapshot re-render only when their own slice changes.
-- [ ] UI-03-06: Two `Provider`s from one `createStoreContext` hold independent state; the hook throws outside a provider; an object selector with `useShallow` does not loop.
-- [ ] UI-03-07: `docs/architecture/ui.md` documents the IPC boundary, the query and feed rules and the zustand conventions.
-- [ ] UI-03-08: `bun run lint`, `bun run format:check` and `bun run test` pass.
+- [x] UI-03-01: The feed applies events and snapshots in sequence order for every interleaving in the test matrix, and never regresses to an older sequence.
+- [x] UI-03-02: A sequence above `Number.MAX_SAFE_INTEGER` orders correctly.
+- [x] UI-03-03: Mount, unmount, mount under StrictMode leaves one listener; unmounting the last consumer leaves zero; a `listen` that resolves after disposal is unlistened at once and requests no snapshot.
+- [x] UI-03-04: Subscription and snapshot failures surface as query errors and clear on the next successful write.
+- [x] UI-03-05: Two components selecting different slices of the Bar snapshot re-render only when their own slice changes.
+- [x] UI-03-06: Two `Provider`s from one `createStoreContext` hold independent state; the hook throws outside a provider; an object selector with `useShallow` does not loop.
+- [x] UI-03-07: `docs/architecture/ui.md` documents the IPC boundary, the query and feed rules and the zustand conventions.
+- [x] UI-03-08: `bun run lint`, `bun run format:check` and `bun run test` pass.
 
 ## Tests
 
@@ -68,3 +68,4 @@ A feed keeps one query's data current from a host event. `createFeed` takes the 
 
 - Read the host contracts from the generated bindings and the Rust command docs, not from the deleted UI.
 - Mutations for Bar click commands arrive with the widgets that use them.
+- Decision (orchestrator, during implementation): feed-backed queries use `queryFn: skipToken`, so only the feed writes them and no fetch can overwrite an ordered value. They are read with `useQuery` and a `select`, not `useSuspenseQuery`.

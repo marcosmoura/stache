@@ -226,6 +226,9 @@ struct StoreState {
     global_revision: u64,
 }
 
+/// Called with every newly accepted global configuration.
+pub type GlobalObserver = Arc<dyn Fn(&GlobalConfig) + Send + Sync>;
+
 /// Reads configuration files and applies them to a registry.
 ///
 /// The store owns no lifecycle state: a rejected candidate leaves the
@@ -235,6 +238,7 @@ pub struct ConfigStore {
     catalog: ConfigCatalog,
     paths: ConfigPaths,
     log_filter: Arc<LogFilter>,
+    global_observers: Mutex<Vec<GlobalObserver>>,
     bindings: Mutex<BTreeMap<ModuleId, Arc<dyn Binding>>>,
     state: Mutex<StoreState>,
     reload_lock: Mutex<()>,
@@ -254,6 +258,7 @@ impl ConfigStore {
             catalog,
             paths,
             log_filter,
+            global_observers: Mutex::new(Vec::new()),
             bindings: Mutex::new(BTreeMap::new()),
             state: Mutex::new(StoreState::default()),
             reload_lock: Mutex::new(()),
@@ -271,6 +276,21 @@ impl ConfigStore {
     /// The shared filter updated when the global level changes.
     #[must_use]
     pub const fn log_filter(&self) -> &Arc<LogFilter> { &self.log_filter }
+
+    /// Registers a callback for every accepted global configuration: the first
+    /// load (including the default for a missing file) and every applied
+    /// reload. A rejected or unchanged reload never calls it. The callback runs
+    /// on the reloading thread and must not block.
+    pub fn on_global_accepted(&self, observer: GlobalObserver) {
+        lock(&self.global_observers).push(observer);
+    }
+
+    fn notify_global(&self, config: &GlobalConfig) {
+        let observers: Vec<GlobalObserver> = lock(&self.global_observers).clone();
+        for observer in observers {
+            observer(config);
+        }
+    }
 
     /// Binds a registered module to its catalog entry.
     ///
@@ -541,6 +561,7 @@ impl ConfigStore {
         state.diagnostics.remove(&file);
         drop(state);
         self.log_filter.set_level(config.log_level());
+        self.notify_global(&config);
         ReloadOutcome::Applied { revision }
     }
 
@@ -634,6 +655,7 @@ impl ConfigStore {
         state.global = Some(config.clone());
         drop(state);
         self.log_filter.set_level(config.log_level());
+        self.notify_global(config);
     }
 
     fn record(&self, diagnostic: ConfigDiagnostic) {
@@ -1255,6 +1277,26 @@ mod tests {
             matches!(store.reload_global(), ReloadOutcome::Rejected(_)),
             "an identical bad global save must be retried"
         );
+    }
+
+    #[test]
+    fn global_observers_see_accepted_configs_only() {
+        let (_root, _registry, store, _handle) = setup();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&seen);
+        store.on_global_accepted(Arc::new(move |config: &GlobalConfig| {
+            sink.lock().expect("seen").push(config.ui.appearance);
+        }));
+        assert!(matches!(store.load_global(), Initial::Default(_)));
+        fs::write(store.paths().global_file(), "[ui]\nappearance = \"dark\"\n").expect("dark");
+        assert!(matches!(store.reload_global(), ReloadOutcome::Applied { .. }));
+        assert!(matches!(store.reload_global(), ReloadOutcome::Unchanged));
+        fs::write(store.paths().global_file(), "[ui]\nappearance = \"sepia\"\n").expect("bad");
+        assert!(matches!(store.reload_global(), ReloadOutcome::Rejected(_)));
+        assert_eq!(*seen.lock().expect("seen"), [
+            crate::config::global::Appearance::System,
+            crate::config::global::Appearance::Dark,
+        ]);
     }
 
     #[test]

@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use stache_app::access::SettingsOpener;
-use stache_app::bindings::{AccessState, HostStatus, ModuleState};
+use stache_app::bindings::{AccessState, HostStatus, ModuleState, ModuleStatusView};
 use stache_app::caps_recovery::KeybindingsCapsRecovery;
 use stache_app::hold_to_quit::{HoldToQuitFactory, HudOwner};
 use stache_app::host::{
@@ -29,7 +29,6 @@ use stache_app::shutdown::{
     TerminalDriver, TerminalProgress, Wake, report_terminate_install_failure,
 };
 use stache_app::startup::CommandRunner;
-use stache_app::tray::{TrayItem, TrayRow};
 use stache_app::wallpapers::WallpapersFactory;
 use stache_app::windows::{
     CloseOutcome, NativeWindowSpec, NativeWindows, WindowHost, WindowsOwner,
@@ -298,6 +297,8 @@ impl HostUi for FakeWorld {
     fn status(&self, status: &HostStatus) {
         self.statuses.lock().expect("statuses").push(status.clone());
     }
+
+    fn config_changed(&self, _: &[String]) {}
 }
 
 #[derive(Default)]
@@ -633,9 +634,14 @@ struct FakeWindowHost {
     opened: Mutex<Vec<NativeWindowSpec>>,
     focused: Mutex<Vec<String>>,
     closed: Mutex<Vec<String>>,
+    appearances: Mutex<Vec<stache_sdk::Appearance>>,
 }
 
 impl WindowHost for FakeWindowHost {
+    fn apply_appearance(&self, appearance: stache_sdk::Appearance) {
+        self.appearances.lock().expect("appearances").push(appearance);
+    }
+
     fn open(&self, spec: &NativeWindowSpec) -> Result<(), String> {
         self.opened.lock().expect("opened").push(spec.clone());
         Ok(())
@@ -1173,12 +1179,11 @@ fn a_blocking_startup_command_does_not_delay_ready_controls_or_shutdown() {
             pid_file.display()
         ),
     );
-    let windows = Arc::new(RecordingWindows::default());
     let mut harness = Harness::new(
         FakePermissions::new(PermissionStatus::Granted),
         Arc::new(InlineMain),
         Arc::new(stache_app::startup::ProcessCommands::new()),
-        windows.clone(),
+        Arc::new(RecordingWindows::default()),
     );
     let started = Instant::now();
     harness.start(&fixture, false, None);
@@ -1193,19 +1198,19 @@ fn a_blocking_startup_command_does_not_delay_ready_controls_or_shutdown() {
         std::thread::sleep(Duration::from_millis(10));
     }
     let pid = fs::read_to_string(&pid_file).expect("pid").trim().to_owned();
-    harness.handle.open_test_window();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while windows.opened.load(Ordering::SeqCst) == 0 {
-        assert!(
-            Instant::now() < deadline,
-            "tray window command was not processed"
-        );
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    assert_eq!(
-        windows.opened.load(Ordering::SeqCst),
-        1,
-        "tray commands must run while startup is still executing"
+    // A runner-processed control returns its outcome while startup still runs;
+    // an unprocessed one would time out as `Unavailable`.
+    let outcome = harness.handle.set_enabled_outcome("missing", true);
+    assert!(
+        !matches!(
+            outcome,
+            stache_app::popover_actions::ModuleEnableOutcome::Unavailable { .. }
+        ),
+        "controls must run while startup is still executing: {outcome:?}"
+    );
+    assert!(
+        fs::read_to_string(&pid_file).is_ok(),
+        "startup child still running"
     );
     harness.handle.request_shutdown();
     assert!(harness.wait_exit(), "shutdown must not wait for the child");
@@ -1613,21 +1618,22 @@ fn queued_main_thread_work_is_drained_after_shutdown_without_waiting_on_it() {
         host.clone(),
         Arc::new(DiscardLogger),
     ));
+    // A gated, denied host opens the Accessibility guide on its own.
     let mut harness = Harness::new(
-        FakePermissions::new(PermissionStatus::Granted),
+        FakePermissions::new(PermissionStatus::Denied),
         queued.clone(),
         Arc::new(FakeCommands::default()),
         windows.clone(),
     );
+    harness.gated = true;
     harness.start(&fixture, false, None);
     harness.wait_ready();
     harness
         .teardown
         .register_owner(NativeSlot::Windows, Arc::new(WindowsOwner::new(windows.clone())));
-    harness.handle.open_test_window();
     let deadline = Instant::now() + Duration::from_secs(10);
     while windows.is_empty() {
-        assert!(Instant::now() < deadline, "test window was not requested");
+        assert!(Instant::now() < deadline, "the guide window was not requested");
         std::thread::sleep(Duration::from_millis(5));
     }
     assert!(host.opened.lock().expect("opened").is_empty());
@@ -1671,15 +1677,16 @@ fn an_off_main_executor_that_never_drains_still_reaches_the_outcome() {
         Arc::new(FakeWindowHost::default()),
         Arc::new(DiscardLogger),
     ));
+    // A gated, denied host opens the Accessibility guide on its own.
     let mut harness = Harness::new(
-        FakePermissions::new(PermissionStatus::Granted),
+        FakePermissions::new(PermissionStatus::Denied),
         main.clone(),
         Arc::new(FakeCommands::default()),
         windows,
     );
+    harness.gated = true;
     harness.start(&fixture, false, None);
     harness.wait_ready();
-    harness.handle.open_test_window();
     let deadline = Instant::now() + Duration::from_secs(10);
     while main.len() == 0 {
         assert!(Instant::now() < deadline, "the open job was not queued");
@@ -1744,17 +1751,26 @@ impl NotunesHarness {
     }
 }
 
-fn tray_row<'a>(rows: &'a [TrayRow], id: &str) -> &'a TrayItem {
-    rows.iter()
-        .find_map(|row| match row {
-            TrayRow::Item(item) if item.id == id => Some(item),
-            TrayRow::Item(_) | TrayRow::Separator => None,
-        })
-        .unwrap_or_else(|| panic!("no tray row `{id}`"))
+/// The status row the popover's Overview reads for one module.
+fn module_view(status: &HostStatus, id: &str) -> ModuleStatusView {
+    status
+        .modules
+        .iter()
+        .find(|module| module.id == id)
+        .cloned()
+        .unwrap_or_else(|| panic!("no module `{id}`"))
+}
+
+/// Enabled, running and not paused: what the Overview shows as a checked
+/// enable switch and a Pause action.
+fn assert_enabled_running(status: &HostStatus, id: &str) {
+    let view = module_view(status, id);
+    assert!(view.enabled && !view.paused, "{view:?}");
+    assert_eq!(view.state, ModuleState::Running, "{view:?}");
 }
 
 #[test]
-fn notunes_start_publishes_generic_status_and_tray_rows_without_opening_anything() {
+fn notunes_start_publishes_generic_status_without_opening_anything() {
     let fixture = fixture();
     fixture.write("notunes.toml", "enabled = true\n");
     let mut notunes = NotunesHarness::new(FakePermissions::new(PermissionStatus::Granted));
@@ -1782,19 +1798,18 @@ fn notunes_start_publishes_generic_status_and_tray_rows_without_opening_anything
     );
     assert!(status.error.is_none(), "{:?}", status.error);
 
-    let rows = stache_app::tray::rows(&status);
-    assert_eq!(tray_row(&rows, "enable:notunes").checked, Some(true));
-    assert_eq!(tray_row(&rows, "state:notunes").label, "  notunes: running");
-    assert_eq!(tray_row(&rows, "pause:notunes").label, "Pause notunes");
-    let first = rows
+    assert_enabled_running(&status, "notunes");
+    let first = status
+        .modules
         .iter()
-        .position(|row| matches!(row, TrayRow::Item(item) if item.id == "state:testModule"))
-        .expect("test module rows");
-    let blocker = rows
+        .position(|module| module.id == "testModule")
+        .expect("test module");
+    let blocker = status
+        .modules
         .iter()
-        .position(|row| matches!(row, TrayRow::Item(item) if item.id == "state:notunes"))
-        .expect("blocker rows");
-    assert!(first < blocker, "tray rows keep registration order");
+        .position(|module| module.id == "notunes")
+        .expect("blocker");
+    assert!(first < blocker, "status keeps registration order");
 
     assert_eq!(
         notunes.backend.termination_requests(),
@@ -4481,9 +4496,7 @@ fn enable_writes_toml_and_pause_writes_nothing() {
     assert_eq!(hold.fakes.leaser.held(), 1);
     assert_eq!(hold.fakes.hud_backend.panels_live(), 1);
 
-    let rows = stache_app::tray::rows(&hold.harness.handle.status());
-    assert_eq!(tray_row(&rows, "enable:commandQuit").checked, Some(true));
-    assert_eq!(tray_row(&rows, "pause:commandQuit").label, "Pause commandQuit");
+    assert_enabled_running(&hold.harness.handle.status(), "commandQuit");
 
     hold.harness.handle.pause("commandQuit");
     hold.wait_state(ModuleState::Paused);
@@ -4569,11 +4582,10 @@ fn a_hud_install_failure_is_failed_start_and_retry_recovers() {
     );
     assert_eq!(hold.fakes.leaser.held(), 0, "full rollback");
     assert_eq!(hold.fakes.apps.activation_observers(), 0);
-    let rows = stache_app::tray::rows(&hold.harness.handle.status());
-    assert!(
-        rows.iter()
-            .any(|row| matches!(row, TrayRow::Item(item) if item.id == "retry:commandQuit")),
-        "the tray offers Retry"
+    assert_eq!(
+        module_view(&hold.harness.handle.status(), "commandQuit").state,
+        ModuleState::Failed,
+        "a failed module is eligible for Retry"
     );
     assert_eq!(hold.q_down(), Disposition::Pass, "callbacks are inert");
     hold.harness.handle.retry("commandQuit");
@@ -5545,6 +5557,59 @@ fn wait_until(label: &str, condition: impl Fn() -> bool) {
 }
 
 #[test]
+fn ui_appearance_is_applied_app_wide_at_startup_and_on_every_accepted_reload() {
+    use stache_sdk::Appearance;
+    let fixture = fixture();
+    fixture.write("global.toml", "[ui]\nappearance = \"dark\"\n");
+    let permissions = FakePermissions::new(PermissionStatus::Denied);
+    let (mut harness, windows, host) = guide_harness(permissions, true);
+    harness.start(&fixture, false, None);
+    harness.wait_ready();
+    wait_until("the guidance window", || access_labels(&host).len() == 1);
+    assert_eq!(
+        *host.appearances.lock().expect("appearances"),
+        [Appearance::Dark],
+        "the first accepted value is applied to the application"
+    );
+    let client = IpcClient::new(fixture.app.socket_path().expect("socket"));
+
+    fixture.write("global.toml", "[ui]\nappearance = \"light\"\n");
+    let report = client.reload().expect("reload");
+    assert!(!report.has_failures(), "{report:?}");
+    wait_until("the light re-apply", || {
+        host.appearances.lock().expect("appearances").contains(&Appearance::Light)
+    });
+
+    fixture.write("global.toml", "[ui]\nappearance = \"sepia\"\n");
+    let report = client.reload().expect("rejected reload");
+    assert!(report.has_failures(), "{report:?}");
+
+    // A later accepted change that is neither the default nor the current
+    // value: once it is applied, the rejected reload was handled before it
+    // and must have applied nothing (not even a fallback to the default).
+    fixture.write("global.toml", "[ui]\nappearance = \"dark\"\n");
+    let report = client.reload().expect("reload");
+    assert!(!report.has_failures(), "{report:?}");
+    wait_until("the dark re-apply", || {
+        host.appearances.lock().expect("appearances").last() == Some(&Appearance::Dark)
+            && host.appearances.lock().expect("appearances").len() > 2
+    });
+    assert_eq!(
+        *host.appearances.lock().expect("appearances"),
+        [Appearance::Dark, Appearance::Light, Appearance::Dark],
+        "a rejected reload changes nothing"
+    );
+    assert_eq!(
+        host.opened.lock().expect("opened").len(),
+        1,
+        "nothing is recreated"
+    );
+    assert_eq!(windows.len(), 1);
+    harness.handle.request_shutdown();
+    assert!(harness.wait_exit());
+}
+
+#[test]
 fn blocked_opens_one_window_a_grant_closes_it_and_a_revocation_opens_one_again() {
     let fixture = fixture();
     let permissions = FakePermissions::new(PermissionStatus::Denied);
@@ -5758,9 +5823,7 @@ fn enable_writes_toml_runs_the_trigger_and_pause_writes_nothing() {
     assert_eq!(menu.fakes.menu.opens(), 1);
     assert_eq!(menu.fakes.menu.ax.call_count(), 0, "no read until a trigger");
 
-    let rows = stache_app::tray::rows(&menu.harness.handle.status());
-    assert_eq!(tray_row(&rows, "enable:menuAnywhere").checked, Some(true));
-    assert_eq!(tray_row(&rows, "pause:menuAnywhere").label, "Pause menuAnywhere");
+    assert_enabled_running(&menu.harness.handle.status(), "menuAnywhere");
 
     menu.harness.handle.pause("menuAnywhere");
     menu.wait_state(ModuleState::Paused);
@@ -5920,10 +5983,9 @@ fn a_start_failure_is_failed_with_full_rollback_and_retry_recovers() {
     );
     assert_eq!(menu.fakes.apps.activation_observers(), 0, "full rollback");
     assert!(!menu.fakes.tap.is_live(TapKind::Suppressing));
-    let rows = stache_app::tray::rows(&menu.harness.handle.status());
-    assert!(
-        rows.iter()
-            .any(|row| matches!(row, TrayRow::Item(item) if item.id == "retry:menuAnywhere"))
+    assert_eq!(
+        module_view(&menu.harness.handle.status(), "menuAnywhere").state,
+        ModuleState::Failed
     );
     menu.harness.handle.retry("menuAnywhere");
     menu.wait_state(ModuleState::Running);
