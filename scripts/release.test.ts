@@ -159,7 +159,7 @@ function fakeRunner(root: string, options: FakeOptions = {}) {
         if (args[0] === '-d' && args[1] === '-r-') {
           return ok(
             options.requirement ??
-              `designated => identifier "com.marcosmoura.stache" and certificate leaf = H"${'ab'.repeat(20)}"\n`,
+              `designated => identifier "com.marcosmoura.stache" and certificate root = H"${'ab'.repeat(20)}"\n`,
           );
         }
 
@@ -759,6 +759,17 @@ describe('RELEASE-03-13 fail closed while signing', () => {
     expect(readdirSync(join(root, 'target')).filter((name) => name.includes('staging'))).toEqual(
       [],
     );
+  });
+
+  it('accepts a requirement anchored on the certificate as leaf or as root', () => {
+    for (const anchor of ['leaf', 'root']) {
+      const root = makeRoot();
+      const requirement = `designated => identifier "x" and certificate ${anchor} = H"${'ab'.repeat(20)}"\n`;
+
+      release(root, { requirement }, signEnv, 'self-sign').result();
+
+      expect(existsSync(join(output(root), 'SHA256SUMS'))).toBe(true);
+    }
   });
 
   it('refuses a missing hardened-runtime flag', () => {

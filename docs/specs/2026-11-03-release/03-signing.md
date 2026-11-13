@@ -39,7 +39,8 @@ updates signed with it, on the owner's Mac and on any Mac that installed an earl
 - **Verification** on the staged app, the app in the mounted DMG and the app expanded from the zip:
   `codesign --verify --strict --deep`; `codesign -dvvv` shows the identity as the authority and the
   hardened-runtime flag; and `codesign -d -r-` shows a designated requirement anchored on the
-  certificate (`certificate leaf`), never on a `cdhash`.
+  certificate (`certificate root` for a self-signed certificate, which is its own root, or
+  `certificate leaf`), never on a `cdhash`.
 - **Record.** `release.json` records `signing: "self-signed"`, `notarized: false`, and the SHA-256
   fingerprint of the signing certificate, which is public and lets a person compare releases. An
   ad-hoc run keeps recording `ad-hoc`. No output claims Developer ID, notarization or stapling.

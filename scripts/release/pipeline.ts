@@ -482,7 +482,8 @@ function checkSelfSignature(run: Runner, path: string, identity: string) {
   const requirement = check(run('codesign', ['-d', '-r-', path]), `codesign -d -r- ${path}`);
   const designated = `${requirement.stdout}\n${requirement.stderr}`;
 
-  if (!designated.includes('certificate leaf') || designated.includes('cdhash')) {
+  // A self-signed certificate is its own root, so codesign anchors on `certificate root`.
+  if (!/certificate (leaf|root) = H"/.test(designated) || designated.includes('cdhash')) {
     throw new ReleaseError(
       `${path} designated requirement is not anchored on the certificate: ${designated.trim()}`,
     );

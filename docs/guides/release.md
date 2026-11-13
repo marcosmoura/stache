@@ -59,7 +59,7 @@ still mounted under them.
 
 macOS ties privacy grants such as Accessibility to the code signature. An ad-hoc signature
 differs on every build, so every update asks for the grant again. A signature from one certificate
-has a designated requirement anchored on that certificate (`certificate leaf`), so the grant
+has a designated requirement anchored on that certificate (`certificate root`, or `certificate leaf` for one with an issuer), so the grant
 survives updates signed with it.
 
 ### What it does not do
@@ -88,7 +88,7 @@ matches. After the build (whose child also loses `STACHE_SIGNING_IDENTITY`, `GH_
 3. On the staged app, the app in the mounted DMG and the app expanded from the zip:
    `codesign --verify --strict --deep`; `codesign -dvvv` shows `Authority=<identity>` and the
    hardened-runtime flag; `codesign -d -r-` shows a designated requirement containing
-   `certificate leaf` and no `cdhash`.
+   `certificate root` or `certificate leaf`, and no `cdhash`.
 
 Any failure exits non-zero and leaves no `SHA256SUMS` or `release.json`. macOS may ask once to let
 `codesign` use the key.
