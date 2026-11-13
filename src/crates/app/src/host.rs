@@ -93,12 +93,15 @@ use crate::access::{
     enclosing_app,
 };
 use crate::bindings::{AccessState, AccessView, HostStatus, ModuleStatusView, config_file_view};
+use crate::config_documents::{ConfigEditOutcome, ConfigEditRequest, run_edit};
 use crate::config_edit::{CommitOutcome, EnableEditError, plan_enabled};
+use crate::host_job::{HostJob, JobWait};
 use crate::keep_awake::KeepAwakeIpc;
 use crate::permissions::{
     PermissionHost, PermissionManager, PermissionPoll, PermissionTicker, PollSchedule,
     RefreshReport, RefreshTrigger, TickGate,
 };
+use crate::popover_actions::ModuleEnableOutcome;
 use crate::session_action::{
     self, SESSION_WAIT, SessionAction, SessionActionOutcome, SessionControl, SessionJob,
     SessionUnavailable,
@@ -1132,7 +1135,16 @@ pub struct HostServices {
 pub trait HostUi: Send + Sync {
     /// Publishes a new status snapshot.
     fn status(&self, status: &HostStatus);
+
+    /// Announces that catalog files changed on disk (`config-changed`).
+    fn config_changed(&self, files: &[String]);
 }
+
+/// The longest a `config_edit` caller waits for the host runner.
+const CONFIG_EDIT_WAIT: Duration = Duration::from_secs(10);
+
+/// The longest a popover enable request waits for the host runner.
+const ENABLE_WAIT: Duration = Duration::from_secs(15);
 
 /// A typed host setup or action failure.
 #[derive(Debug)]
@@ -1256,7 +1268,95 @@ impl HostHandle {
 
     /// Requests a configuration-backed enable change.
     pub fn set_enabled(&self, id: impl Into<String>, enabled: bool) {
-        self.send(HostCommand::SetEnabled { id: id.into(), enabled });
+        self.send(HostCommand::SetEnabled {
+            id: id.into(),
+            enabled,
+            job: None,
+        });
+    }
+
+    /// Requests a configuration-backed enable change and returns what the
+    /// host did once the runner processed it (applied, unchanged or refused
+    /// with the message it also publishes). The wait is bounded and a
+    /// shutdown wakes it; a request still queued then is cancelled and never
+    /// runs. Call only off the main thread.
+    #[must_use]
+    pub fn set_enabled_outcome(&self, id: impl Into<String>, enabled: bool) -> ModuleEnableOutcome {
+        self.set_enabled_within(id, enabled, ENABLE_WAIT)
+    }
+
+    pub(crate) fn set_enabled_within(
+        &self,
+        id: impl Into<String>,
+        enabled: bool,
+        bound: Duration,
+    ) -> ModuleEnableOutcome {
+        if self.shutdown_requested() {
+            return ModuleEnableOutcome::unavailable("the host is shutting down");
+        }
+        let job = HostJob::new();
+        let command = HostCommand::SetEnabled {
+            id: id.into(),
+            enabled,
+            job: Some(Arc::clone(&job)),
+        };
+        if self.sender.send(command).is_err() {
+            return ModuleEnableOutcome::unavailable("the host is not running");
+        }
+        match job.wait(bound, || self.shutdown_requested() || self.is_finished()) {
+            JobWait::Done(outcome) => outcome,
+            JobWait::Cancelled { stopped: true } => {
+                ModuleEnableOutcome::unavailable("the host is shutting down")
+            }
+            JobWait::Cancelled { stopped: false } => {
+                ModuleEnableOutcome::unavailable("the host did not answer in time")
+            }
+            JobWait::Uncertain => {
+                ModuleEnableOutcome::unavailable("the host did not confirm the change in time")
+            }
+        }
+    }
+
+    /// Runs one settings-editor edit on the host runner and returns its
+    /// outcome: plan, commit, one reload and `config-changed`, in command order.
+    ///
+    /// The wait is bounded; a shutdown or a missing runner is `unavailable`.
+    /// Call only off the main thread.
+    #[must_use]
+    pub fn config_edit(&self, request: ConfigEditRequest) -> ConfigEditOutcome {
+        self.config_edit_within(request, CONFIG_EDIT_WAIT)
+    }
+
+    /// [`Self::config_edit`] with an explicit bound. An edit still queued when
+    /// the wait ends is cancelled: the runner skips it and writes nothing.
+    pub(crate) fn config_edit_within(
+        &self,
+        request: ConfigEditRequest,
+        bound: Duration,
+    ) -> ConfigEditOutcome {
+        if self.shutdown_requested() {
+            return ConfigEditOutcome::unavailable("the host is shutting down");
+        }
+        let job = HostJob::new();
+        if self
+            .sender
+            .send(HostCommand::ConfigEdit { request, job: Arc::clone(&job) })
+            .is_err()
+        {
+            return ConfigEditOutcome::unavailable("the host is not running");
+        }
+        match job.wait(bound, || self.shutdown_requested() || self.is_finished()) {
+            JobWait::Done(outcome) => outcome,
+            JobWait::Cancelled { stopped: true } => {
+                ConfigEditOutcome::unavailable("the host is shutting down")
+            }
+            JobWait::Cancelled { stopped: false } => ConfigEditOutcome::unavailable(
+                "the host did not answer in time; nothing was written",
+            ),
+            JobWait::Uncertain => {
+                ConfigEditOutcome::unavailable("the host did not confirm the edit in time")
+            }
+        }
     }
 
     /// Requests a session-only pause.
@@ -1839,7 +1939,12 @@ impl HostDriver {
 }
 
 enum HostCommand {
-    SetEnabled { id: String, enabled: bool },
+    SetEnabled {
+        id: String,
+        enabled: bool,
+        /// The popover's answer slot; the tray sends none.
+        job: Option<Arc<HostJob<ModuleEnableOutcome>>>,
+    },
     Condition(String),
     Pause(String),
     Resume(String),
@@ -1850,6 +1955,11 @@ enum HostCommand {
     Refresh,
     StartupFinished(Option<String>),
     ConfigChanges(ChangeSet),
+    ConfigEdit {
+        request: ConfigEditRequest,
+        /// Claimed before `run_edit`; a cancelled job writes nothing.
+        job: Arc<HostJob<ConfigEditOutcome>>,
+    },
     WatcherFailed(String),
     OpenTestWindow,
     OpenAccessibilitySettings,
@@ -1876,6 +1986,9 @@ struct Runner {
     persistent_errors: Vec<String>,
     /// The last failed tray or host action, cleared by a later successful one.
     last_action_error: Option<String>,
+    /// The hash of the bytes the host itself last committed per file, so the
+    /// watcher's echo of that write is not announced a second time.
+    echoes: BTreeMap<ConfigFileId, String>,
     ready: bool,
     recovery: Option<Arc<dyn StartupRecovery>>,
     /// The Accessibility launch gate, fed from every permission refresh.
@@ -1994,6 +2107,7 @@ impl Runner {
             tick_gate: TickGate::new(),
             persistent_errors: Vec::new(),
             last_action_error: None,
+            echoes: BTreeMap::new(),
             ready: false,
             recovery: None,
             gate: AccessGate::new(),
@@ -2042,38 +2156,60 @@ impl Runner {
             if self.handle.shutdown_requested() {
                 break;
             }
-            match command {
-                HostCommand::Shutdown => break,
-                HostCommand::Condition(message) | HostCommand::WatcherFailed(message) => {
-                    self.add_condition(message);
-                }
-                HostCommand::SetEnabled { id, enabled } => self.set_enabled(&id, enabled),
-                HostCommand::Pause(id) => self.pause(&id),
-                HostCommand::Resume(id) => self.resume(&id),
-                HostCommand::Session(job) => self.session_action(&job),
-                HostCommand::Retry(id) => self.retry(&id),
-                HostCommand::RefreshPermissions(trigger) => {
-                    self.refresh_permissions(trigger);
-                }
-                HostCommand::PermissionTick => {
-                    self.tick_gate.finish();
-                    self.permission_tick();
-                }
-                HostCommand::Refresh => {
-                    self.refresh_permissions(RefreshTrigger::Tick);
-                }
-                HostCommand::StartupFinished(error) => {
-                    if let Some(error) = error {
-                        self.add_condition(error);
-                    }
-                }
-                HostCommand::ConfigChanges(changes) => self.apply_config(&changes),
-                HostCommand::OpenTestWindow => self.open_test_window(),
-                HostCommand::OpenAccessibilitySettings => self.open_accessibility_settings(),
-                HostCommand::OpenAccessGuide => self.open_access_guide(),
+            if !self.run_command(command) {
+                break;
             }
         }
         self.finish(true);
+    }
+
+    /// Executes one queued command in order. `false` stops the loop.
+    fn run_command(&mut self, command: HostCommand) -> bool {
+        match command {
+            HostCommand::Shutdown => return false,
+            HostCommand::Condition(message) | HostCommand::WatcherFailed(message) => {
+                self.add_condition(message);
+            }
+            HostCommand::SetEnabled { id, enabled, job } => match job {
+                None => {
+                    let _ = self.set_enabled(&id, enabled);
+                }
+                Some(job) => {
+                    if job.begin() {
+                        job.finish(self.set_enabled(&id, enabled));
+                    }
+                }
+            },
+            HostCommand::Pause(id) => self.pause(&id),
+            HostCommand::Resume(id) => self.resume(&id),
+            HostCommand::Session(job) => self.session_action(&job),
+            HostCommand::Retry(id) => self.retry(&id),
+            HostCommand::RefreshPermissions(trigger) => {
+                self.refresh_permissions(trigger);
+            }
+            HostCommand::PermissionTick => {
+                self.tick_gate.finish();
+                self.permission_tick();
+            }
+            HostCommand::Refresh => {
+                self.refresh_permissions(RefreshTrigger::Tick);
+            }
+            HostCommand::StartupFinished(error) => {
+                if let Some(error) = error {
+                    self.add_condition(error);
+                }
+            }
+            HostCommand::ConfigChanges(changes) => self.apply_config(&changes),
+            HostCommand::ConfigEdit { request, job } => {
+                if job.begin() {
+                    job.finish(self.config_edit(&request));
+                }
+            }
+            HostCommand::OpenTestWindow => self.open_test_window(),
+            HostCommand::OpenAccessibilitySettings => self.open_accessibility_settings(),
+            HostCommand::OpenAccessGuide => self.open_access_guide(),
+        }
+        true
     }
 
     /// Runs the startup recovery step once, on its own cancellable thread.
@@ -2284,60 +2420,67 @@ impl Runner {
         }
     }
 
-    fn set_enabled(&mut self, id: &str, enabled: bool) {
+    /// Applies a configuration-backed enable change and reports what happened;
+    /// a refusal is also published as the action error.
+    fn set_enabled(&mut self, id: &str, enabled: bool) -> ModuleEnableOutcome {
         let Some(control) = self.controls.get(id).cloned() else {
-            self.record_action_error(format!("no module is registered as `{id}`"));
-            return;
+            return self.refuse_enable(format!("no module is registered as `{id}`"));
         };
         let module = control.id();
         let edit = match plan_enabled(self.store.catalog(), self.store.paths(), module, enabled) {
             Ok(edit) => edit,
-            Err(error) => {
-                self.record_action_error(error.to_string());
-                return;
-            }
+            Err(error) => return self.refuse_enable(error.to_string()),
         };
+        let hash = edit.hash();
         match edit.commit() {
-            Ok(CommitOutcome::Written) => {}
+            Ok(CommitOutcome::Written) => {
+                if let Some(hash) = hash {
+                    self.echoes.insert(ConfigFileId::module(module), hash);
+                }
+            }
             Ok(CommitOutcome::Unchanged) => {
                 if self.handle.shutdown_requested() {
-                    return;
+                    return ModuleEnableOutcome::unavailable("the host is shutting down");
                 }
                 // The file already has the requested value. Apply it once if the
                 // runtime has not accepted the current bytes, then retry an
                 // eligible failed start instead of only clearing the error.
                 if let Err(error) = self.sync_module_file(module) {
-                    self.record_action_error(error);
-                    return;
+                    return self.refuse_enable(error);
                 }
                 if let Err(error) = control.set_enabled(&self.registry, enabled) {
-                    self.record_action_error(error.to_string());
-                    return;
+                    return self.refuse_enable(error.to_string());
                 }
                 self.clear_action_error();
                 self.refresh_permissions(RefreshTrigger::Tick);
-                return;
+                return ModuleEnableOutcome::Unchanged;
             }
-            Err(error) => {
-                self.record_action_error(error.to_string());
-                return;
-            }
+            Err(error) => return self.refuse_enable(error.to_string()),
         }
         if self.handle.shutdown_requested() {
             // The committed write is not rolled back, but no registry or
             // permission work may follow a teardown request.
-            return;
+            return ModuleEnableOutcome::Applied;
         }
         if let Err(error) = self.sync_module_file(module) {
-            self.record_action_error(error);
-            return;
+            let outcome = self.refuse_enable(error);
+            self.ui.config_changed(&[ConfigFileId::module(module).file_name()]);
+            return outcome;
         }
         // A successful write clears an older action failure even when the
         // permission refresh itself reports nothing new.
         self.clear_action_error();
         self.refresh_permissions(RefreshTrigger::Tick);
+        self.ui.config_changed(&[ConfigFileId::module(module).file_name()]);
         // A failed reload during the permission refresh must not hide the
         // successful edit; `refresh_permissions` publishes.
+        ModuleEnableOutcome::Applied
+    }
+
+    /// Publishes `message` as the action error and returns it as a refusal.
+    fn refuse_enable(&mut self, message: String) -> ModuleEnableOutcome {
+        self.record_action_error(message.clone());
+        ModuleEnableOutcome::Refused { message }
     }
 
     fn sync_module_file(&self, module: ModuleId) -> Result<(), String> {
@@ -2611,6 +2754,57 @@ impl Runner {
         self.publish();
     }
 
+    /// Plans, commits and reloads one settings-editor edit, then publishes and
+    /// announces the file. A refused edit writes, publishes and announces
+    /// nothing.
+    fn config_edit(&mut self, request: &ConfigEditRequest) -> ConfigEditOutcome {
+        let run = run_edit(&self.store, request);
+        if let Some((file, hash)) = run.written {
+            self.echoes.insert(file, hash);
+            if self.handle.shutdown_requested() {
+                return run.outcome;
+            }
+            self.refresh_permissions(RefreshTrigger::Tick);
+            self.ui.config_changed(&[file.file_name()]);
+        }
+        run.outcome
+    }
+
+    /// The catalog files a watcher batch announces, in catalog order, without
+    /// the host's own echoes: a file whose bytes still hash to what the host
+    /// committed and whose reload was not rejected.
+    fn announced(
+        &mut self,
+        changes: &ChangeSet,
+        outcomes: &[stache_sdk::FileOutcome],
+    ) -> Vec<String> {
+        self.store
+            .catalog()
+            .ids()
+            .map(ConfigFileId::module)
+            .filter(|file| changes.rescan || changes.files.contains(file))
+            .filter(|file| {
+                let Some(expected) = self.echoes.get(file) else {
+                    return true;
+                };
+                let rejected = outcomes
+                    .iter()
+                    .any(|outcome| outcome.file == *file && outcome.outcome.diagnostic().is_some());
+                let current = std::fs::read(self.store.paths().file(*file))
+                    .ok()
+                    .map(|bytes| stache_sdk::config::content_hash(&bytes));
+                // One save can arrive as several batches; the echo entry stays
+                // until the bytes differ from the host's own write.
+                let echo = !rejected && current.as_deref() == Some(expected.as_str());
+                if !echo {
+                    self.echoes.remove(file);
+                }
+                !echo
+            })
+            .map(ConfigFileId::file_name)
+            .collect()
+    }
+
     fn apply_config(&mut self, changes: &ChangeSet) {
         let outcomes = self.store.apply(changes);
         if self.handle.shutdown_requested() {
@@ -2618,6 +2812,7 @@ impl Runner {
             // may follow a teardown request.
             return;
         }
+        let announced = self.announced(changes, &outcomes);
         let rejected: Vec<String> = outcomes
             .iter()
             .filter_map(|file| file.outcome.diagnostic())
@@ -2629,6 +2824,9 @@ impl Runner {
             self.last_action_error = Some(rejected.join("; "));
         }
         self.refresh_permissions(RefreshTrigger::Tick);
+        if !announced.is_empty() {
+            self.ui.config_changed(&announced);
+        }
     }
 
     fn open_test_window(&mut self) {
@@ -2777,7 +2975,7 @@ mod tests {
 
     use super::*;
 
-    struct AllowAll;
+    pub(super) struct AllowAll;
 
     impl PermissionProvider for AllowAll {
         fn status(&self, _: Permission) -> PermissionStatus { PermissionStatus::Granted }
@@ -2821,9 +3019,11 @@ mod tests {
 
     impl HostUi for QuietUi {
         fn status(&self, _: &HostStatus) {}
+
+        fn config_changed(&self, _: &[String]) {}
     }
 
-    fn quiet_teardown() -> Arc<Teardown> {
+    pub(super) fn quiet_teardown() -> Arc<Teardown> {
         Teardown::new(
             Arc::new(crate::shutdown::SystemClock),
             Arc::new(crate::shutdown::DiscardRecordChannel),
@@ -2844,7 +3044,7 @@ mod tests {
         )
     }
 
-    fn runner_over(
+    pub(super) fn runner_over(
         root: &Path,
         factories: ModuleFactories,
         catalog: ConfigCatalog,
@@ -5356,3 +5556,11 @@ mod tests {
         assert!(host.backend.calls().iter().any(|c| matches!(c, FakeBackendCall::Close)));
     }
 }
+
+#[cfg(test)]
+#[path = "config_documents_e2e.rs"]
+mod config_documents_e2e;
+
+#[cfg(test)]
+#[path = "popover_actions_tests.rs"]
+mod popover_actions_tests;

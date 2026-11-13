@@ -37,13 +37,16 @@ src/ui/
       bindings.gen.ts     generated, never edited
       window.ts           closeCurrentWindow(), dragRegion (window-level Tauri APIs)
       index.ts            re-exports commands, events, DTO types, subscribe and window.ts
-    queries/              feed.ts, host.ts, bar.ts, barActions.ts and access.ts (command mutations)
+    queries/              feed.ts, host.ts, bar.ts, barActions.ts, access.ts (command mutations) and
+                          popover.ts (config_files query, hide_popover mutation), overview.ts
+                          (the popover Overview's command mutations), configDocument.ts
+                          (document query, serialized edit queue, open_config_file)
     hooks/                useMediaQuery (compact mode)
-    stores/               createStoreContext (scoped zustand stores), <store>/ (ticker/)
+    stores/               createStoreContext (scoped zustand stores), <store>/ (ticker/, popover/)
     utils/                errorMessage (text of a thrown value)
     theme/                palette.stylex.ts, tokens.stylex.ts, motion.ts
     components/<Name>/    shared components (Icon, ScrollingLabel)
-    windows/<Name>/       one directory per window (Bar, AccessibilityGuide, TestWindow,
+    windows/<Name>/       one directory per window (Bar, AccessibilityGuide, TestWindow, Popover,
                           Placeholder, UnknownSurface)
       Bar/                Bar.tsx, Bar.style.ts, Bar.css, Bar.test.tsx, index.ts
         components/       Bar-only components (BarItem/)
@@ -54,6 +57,10 @@ src/ui/
         utils/            nodes.ts (persistent DOM node per item id) + test
       AccessibilityGuide/ AccessibilityGuide.tsx, .style.ts, .test.tsx, .state.ts (+ test), index.ts
         components/       HeroBadge/, GuideSteps/, IdentityCard/, Troubleshooting/, ActionFooter/
+      Popover/            Popover.tsx, .style.ts, .test.tsx, .tabs.ts (+ test), index.ts
+        components/       Sidebar/, OverviewTab/ (OverviewTab.tsx, .style.ts, .model.ts + tests),
+                          FileTab/ (FileTab.tsx, SchemaForm.tsx, Select.tsx, schema.ts, values.ts,
+                          form.ts, .model.ts, .style.ts + tests)
       TestWindow/         TestWindow.tsx, .style.ts, .test.tsx, .labels.ts (+ test), index.ts
         components/       StateBadge/, ModuleList/, ConfigList/
         styles/           card.style.ts (section, list, card and callout styles)
@@ -66,7 +73,8 @@ src/ui/
 Dependencies point one way: `windows/Bar` → `windows/Bar/providers` →
 `windows/Bar/widgets` → `windows/Bar/components`, `windows/Bar/styles` → `components` → `theme`; widgets also read `queries`, `stores` and `hooks`;
 `queries` → `ipc`; `stores` never import `ipc`, `queries` or widgets. The
-Accessibility guide and the test window read `queries`, `ipc` (window wrappers) and `utils`.
+Accessibility guide and the test window read `queries`, `ipc` (window wrappers) and `utils`;
+the popover reads `queries`, `ipc` and `stores`.
 
 ## Conventions
 
@@ -137,14 +145,16 @@ Token files are `src/ui/src/theme/*.stylex.ts` and export only `defineVars` /
   13px, weight 500, line height 1.6em, 17px titles, 12.5px steps; 16px panel and
   12px control radii, 48px header, 36px buttons, 44/64px hero badges),
   `statusPage` (the test window: 13px/1.5 system text, 20px title, a 54rem column,
-  8px cards) and `bar` (the Bar text style and item shape: `fontSize` 13px,
+  8px cards), `popover` (the tray popover's native macOS look, part 05: see
+  [Popover native look](#popover-native-look))
+  and `bar` (the Bar text style and item shape: `fontSize` 13px,
   `fontWeight` 500, `lineHeight` 1.6, `itemRadius` 12px, `itemPaddingInline`
   10px, `itemBorderWidth` 1px, `labelFadeWidth` 10px, `iconSize` 18px (widget
   icons), `labelMaxWidth` 256px and `labelMaxWidthCompact` 160px (the widest
   a widget's text label grows before it scrolls), and Media's `mediaIconSize`
   22px, `mediaArtworkSize` 24px, `mediaLabelMaxWidth` 560px and
   `mediaLabelMaxWidthCompact` 400px, `inactiveOpacity` 0.4: an inactive Spaces
-  workspace's icon). Every color is `light-dark(<latte>, <mocha>)`,
+  workspace's icon). Every color outside `popover` is `light-dark(<latte>, <mocha>)`,
   composed at compile time from the palette consts.
 - **Bar values.** Today's Bar (on `main`) maps onto the tokens as follows; dark
   is the Mocha value, light its Latte counterpart: item rest surface
@@ -154,6 +164,28 @@ Token files are `src/ui/src/theme/*.stylex.ts` and export only `defineVars` /
   `success`, sky `color.highlight`; the gap inside an item `space.sm` (6px) and
   between items in a zone `space.xs` (4px). Tabular numbers are
   `font-variant-numeric: tabular-nums` on the Bar window.
+- **Popover native look.** <a id="popover-native-look"></a>The `popover` group never
+  reads the palette: its colours are WebKit's system colour keywords, so light and dark
+  follow the app appearance with no hand-picked dark values. `label`, `secondaryLabel`,
+  `tertiaryLabel` (`-apple-system-label` and its levels), `separator`
+  (`-apple-system-separator`), `accent` (`-apple-system-control-accent`, the user's
+  accent), `onAccent` (`-apple-system-alternate-selected-text`), `selection`
+  (`-apple-system-selected-content-background`), `focus` (`-webkit-focus-ring-color`),
+  `red`/`orange`/`green`/`gray`/`yellow` (`-apple-system-*`), `tintOpaque` and `menu`
+  (`-apple-system-control-background`). Documented exceptions, where WebKit has no
+  keyword: `tint` is `transparent` (the page shows the native `.popover` material);
+  the fills `card`, `tabHover`, `control`, `controlHover` and `switchOff` are
+  `color-mix` of `-apple-system-label` at 5–14% (the system fill colours have no CSS
+  keyword); `banner` is `color-mix` of the system orange; the switch knob is white with a
+  neutral black shadow, and the select menu's drop shadow is neutral black. Type is the
+  system stack (`family`), 13px body with a 16px line height, 11px secondary text and
+  11px semibold section headings, a 13px semibold header, tabular figures on the panel;
+  `familyMono` is used only for the file path. Geometry: a 12px panel radius (the same
+  as `POPOVER_CORNER_RADIUS` in `panel.rs`), 36px header, 44px sidebar with 28px tabs
+  (6px radius), 8px group radius, 28px rows, 22px push buttons and pop-up buttons (5px
+  radius), a 26×15px switch, 7px status dots. `windows/Popover/nativeLook.test.ts` fails if
+  any popover source imports the palette or uses the `color` group, or if the `popover`
+  group reads the palette.
 - **Static consts** (`tokens.stylex.ts`): `duration`, `easing`, `zIndex` and
   `media` (`reducedMotion`, `reducedTransparency`, `moreContrast`, `compact`)
   never theme. A `media` const works as a conditional style key
@@ -300,7 +332,8 @@ behavior.
 
 `router.ts` exports the `surfaces` table, `DEFAULT_SURFACE` and `resolveRoute(search)`.
 Every surface maps to a `React.lazy` window, so each window is its own chunk: `bar` maps
-to `windows/Bar`, `access` to `windows/AccessibilityGuide`, `test` to `windows/TestWindow`
+to `windows/Bar`, `access` to `windows/AccessibilityGuide`, `test` to `windows/TestWindow`,
+`popover` to `windows/Popover` ([popover](../features/popover.md#ui-shell))
 and `shell` to `windows/Placeholder` (the development fallback). Rules:
 
 - `surface` absent → `shell`.
@@ -389,6 +422,30 @@ only a rejected `invoke` is an error. Everything else imports from `@/ipc`.
   `quit_app`; `useRequestAccessibility()`, `useOpenAccessibilitySettings()` and
   `useQuitApp()` return the `useMutation` result. The guide disables a button
   while its mutation is pending and shows a rejected `invoke` in its alert line.
+- **Popover** (`queries/popover.ts`). `configFilesOptions()` (`commands.configFiles()`,
+  key `['config', 'files']`), invalidated by the popover on `config-changed`,
+  `status-changed` and `popover-shown`; `hidePopoverOptions()`/`useHidePopover()` for
+  `hide_popover`. `queries/overview.ts`: `mutationOptions` factories for
+  `set_module_enabled`, `module_session_action`, `retry_module`, `open_test_window` and
+  `open_accessibility_guide` (`useOpenTestWindow()`, `useOpenAccessibilityGuide()`); the
+  Overview reuses the access mutations for the gate banner and Quit.
+  `queries/configDocument.ts`: `configDocumentOptions(file)` (key
+  `['config', 'document', file]`), `createDocumentEditor(client, file)` (one queue per
+  file: each `config_edit` waits for the previous one, sends the `baseHash` the caller
+  captured when it built the op, then refetches; resolves to `ok`, `stale` or `error` with the message) and
+  `useOpenConfigFile()`.
+- **Settings form** (`windows/Popover/components/FileTab/`). `schema.ts` is the pure
+  walk from a JSON Schema to a field tree (`boolean`, `enum`, `number`, `string`,
+  `const`, `object`, `map`, `array`, `optional`, `union`, `unknown`) plus `matches`,
+  `variantOf` and `seed`. `values.ts` builds the edit ops (`setOp`, `removeOp`,
+  `insertOp`, `moveOp`, `renameOp`; an array absent from the file is written whole).
+  `form.ts` holds the `FormContext` (file value, defaults, read-only, edit, open in
+  editor), `effectiveAt` (file, else catalog default, else schema default), `useWrite`
+  (pending and inline message) and `useDraft` (text drafts, Esc, the disk conflict).
+  `SchemaForm.tsx` renders one component per kind: `ScalarRow` (switch, `Select`, number
+  with steppers, text, constant), `Section` (collapsible), `UnionBlock`, `OptionalBlock`,
+  `MapBody`/`MapEntry`, `ListBody` and `CardsBody`/`Card`; every row carries
+  `data-path` (`workspaces[1].layout`). Behaviour: [popover](../features/popover.md#settings-editor).
 - `hostStatusFeed`/`hostStatusOptions`: `commands.hostStatus()` and
   `events.statusChanged` (no sequences). `barFeed`/`barSnapshotOptions`:
   `commands.barSnapshot()` and `events.barChanged`, ordered by `sequence`,
@@ -545,7 +602,9 @@ selects the start of the current second, or of the current minute with
 `show_seconds = false` (computed from a `Date`), so it re-renders once a
 second or once a minute. `now` is a moment; the Clock formats it with
 `Intl.DateTimeFormat`, never by arithmetic. `createTicker()` makes an
-independent ticker (tests). The sample scoped store lives in
+independent ticker (tests). **Popover** (`stores/popover/`): the scoped
+`popoverStore` (`{ tab, actions: { select } }`, `tab` starting at `OVERVIEW_TAB`), one per
+mounted popover, so the selected tab lasts for the session. The sample scoped store lives in
 `stores/createStoreContext.test.tsx`.
 
 ## Test harnesses
@@ -601,7 +660,10 @@ independent ticker (tests). The sample scoped store lives in
   framed `shot-rest`/`shot-active` element, for the screenshot specs.
 - **Window scenarios**: `e2e/scenarios/access.spec.ts` (blocked, request,
   error, revoked, open and self-close; unbundled, Escape, Close, Quit),
-  `test-window.spec.ts` and `bar-session.spec.ts` (a whole Bar session with the
+  `test-window.spec.ts`, `popover-shell.spec.ts` (sidebar, badges, keyboard, remembered
+  tab, refetch, Escape), `popover-overview.spec.ts` (enable, pause/resume, retry, the gate
+  banner and quit on the user's setup), `popover-settings.spec.ts` (the settings editor
+  over `e2e/fakeConfig.ts`, an in-memory store of real TOML text) and `bar-session.spec.ts` (a whole Bar session with the
   production registry and the default layout). `tests/ipc.ts`
   `mockCurrentWindow(label)` gives Vitest a current window for `closeCurrentWindow`.
 - **Screenshot specs** (`src/ui/e2e/screenshots/`): see
@@ -652,8 +714,22 @@ The shipped surface is:
 ```text
 commands.appInfo()      -> AppInfo       static product name, version, identifier
 commands.hostStatus()   -> HostStatus    last published snapshot, no module locks
+commands.configDocument(file)  -> ConfigDocumentOutcome  document | unknownFile
+commands.configFiles()         -> ConfigFileView[]       HostStatus.config, catalog order
+commands.configEdit(request)   -> ConfigEditOutcome      committed | unchanged | stale | invalid | refused
+commands.openConfigFile(file)  -> OpenConfigFileOutcome  opened | unknownFile | failed
 events.statusChanged    -> StatusChanged { status }
+events.configChanged    -> ConfigChanged { files }
 ```
+
+The config commands are the settings editor's surface (see
+[config.md](config.md#edits)). `file` is a catalog file name such as
+`tiling.toml`; no command takes a path. `ConfigEditRequest { file, baseHash, op }`
+carries a `ConfigEditOp` (`set`, `remove`, `insert`, `move`, `rename`, tagged by
+`op`) over a `PathSegment[]` path (`string | number`). JSON values are typed as
+`JsonValue`. Every outcome is a union tagged by `status`; an edit never rejects
+the promise. `configChanged` fires after every committed edit and every watcher
+batch that touched catalog files.
 
 `host_status` reads the host's published snapshot cell, so it never waits for a
 module, a worker join or a socket operation.
@@ -836,8 +912,9 @@ rendered as the received text and never converted to a number. It calls only
 `stache-smoke` harness reads (see [testing](../guides/testing.md#native-host-smoke-opt-in)).
 
 `src/crates/app/capabilities/test-window.json` grants the test labels only
-`core:event:allow-listen`, `core:event:allow-unlisten` and
-`core:window:allow-close`. `app.security.capabilities` lists it explicitly, so a
+`allow-app-info`, `allow-host-status`, `core:event:allow-listen`,
+`core:event:allow-unlisten` and `core:window:allow-close` (every app command is in
+the app manifest, so an ungranted one is refused, read-only or not). `app.security.capabilities` lists it explicitly, so a
 new capability file is not silently enabled. No filesystem, shell, dialog, HTTP,
 media, weather, system or tray permission applies.
 
@@ -876,8 +953,8 @@ logical pixels (not resizable), labelled `stache-access-<n>`:
   `quitApp()` (`HostHandle::request_shutdown`).
 - `src/crates/app/capabilities/access-window.json` grants `stache-access-*`
   labels only `core:event:allow-listen`, `core:event:allow-unlisten`,
-  `core:window:allow-close`, `core:window:allow-start-dragging` (header drag) and
-  `allow-request-accessibility`,
+  `core:window:allow-close`, `core:window:allow-start-dragging` (header drag),
+  `allow-app-info`, `allow-host-status` and `allow-request-accessibility`,
   `allow-open-accessibility-settings`, `allow-quit-app`. `build.rs` declares those
   three commands in the Tauri app manifest, so they are ACL-gated: the test
   window's capability does not include them and cannot call them. Their

@@ -158,6 +158,78 @@ export const statusPage = stylex.defineVars({
   ruleWidth: '3px',
 });
 
+/**
+ * The tray popover: a native macOS look (part 05). Colors are WebKit's
+ * `-apple-system-*` semantic keywords and the user's accent, so they follow the
+ * app appearance and the system settings with no hand-picked dark values;
+ * fills are `color-mix` of the label color. Never the Catppuccin palette.
+ */
+export const popover = stylex.defineVars({
+  /** The system UI stack; monospace only for file paths. */
+  family: '-apple-system, BlinkMacSystemFont, system-ui, sans-serif',
+  familyMono: 'ui-monospace, "SF Mono", Menlo, monospace',
+  fontSize: '13px',
+  fontWeight: '400',
+  lineHeight: '16px',
+  titleSize: '13px',
+  titleWeight: '600',
+  /** The native corner radius of the material behind the webview (panel.rs). */
+  panelRadius: '12px',
+  headerHeight: '36px',
+  sidebarWidth: '44px',
+  tabSize: '28px',
+  tabRadius: '6px',
+  iconSize: '16px',
+  badgeSize: '7px',
+  smallSize: '11px',
+  sectionSize: '11px',
+  /** An inset group of rows. */
+  cardRadius: '8px',
+  rowHeight: '28px',
+  tileSize: '22px',
+  tileRadius: '5px',
+  /** A push button and a stepper button. */
+  buttonHeight: '22px',
+  buttonRadius: '5px',
+  /** NSSwitch (small). */
+  switchWidth: '26px',
+  switchHeight: '15px',
+  dotSize: '7px',
+  /** Text levels. */
+  label: '-apple-system-label',
+  secondaryLabel: '-apple-system-secondary-label',
+  tertiaryLabel: '-apple-system-tertiary-label',
+  separator: '-apple-system-separator',
+  /** The user's accent, the text on it, and the focus ring. */
+  accent: '-apple-system-control-accent',
+  onAccent: '-apple-system-alternate-selected-text',
+  selection: '-apple-system-selected-content-background',
+  focus: '-webkit-focus-ring-color',
+  /** Status tones: the system red, orange, green and gray. */
+  red: '-apple-system-red',
+  orange: '-apple-system-orange',
+  green: '-apple-system-green',
+  gray: '-apple-system-gray',
+  yellow: '-apple-system-yellow',
+  /** The page stays transparent, so the native material shows. */
+  tint: 'transparent',
+  /** Reduced transparency: the opaque window background. */
+  tintOpaque: '-apple-system-control-background',
+  /** A translucent inset group, as in Control Center and System Settings. */
+  card: 'color-mix(in srgb, -apple-system-label 5%, transparent)',
+  /** A hovered row or tab. */
+  tabHover: 'color-mix(in srgb, -apple-system-label 8%, transparent)',
+  /** A push button's face and a text field's fill. */
+  control: 'color-mix(in srgb, -apple-system-label 9%, transparent)',
+  controlHover: 'color-mix(in srgb, -apple-system-label 14%, transparent)',
+  /** An off switch track. */
+  switchOff: 'color-mix(in srgb, -apple-system-label 12%, transparent)',
+  /** A menu's raised surface. */
+  menu: '-apple-system-control-background',
+  /** The Accessibility banner: a soft orange fill. */
+  banner: 'color-mix(in srgb, -apple-system-orange 14%, transparent)',
+});
+
 /** Elevation shadows. */
 export const shadow = stylex.defineVars({
   none: 'none',

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { DEFAULT_SURFACE, resolveRoute, surfaces, type Surface } from './router';
 
-const known: Surface[] = ['shell', 'test', 'access', 'bar'];
+const known: Surface[] = ['shell', 'test', 'access', 'bar', 'popover'];
 
 describe('resolveRoute', () => {
   it.each(known)('resolves ?surface=%s to its window', (surface) => {
@@ -11,7 +11,7 @@ describe('resolveRoute', () => {
     expect(route).toEqual({ kind: 'window', surface, Window: surfaces[surface] });
   });
 
-  it('lists exactly the four surfaces', () => {
+  it('lists exactly the five surfaces', () => {
     expect(Object.keys(surfaces).sort()).toEqual([...known].sort());
   });
 
@@ -48,7 +48,7 @@ describe('resolveRoute', () => {
     expect(resolveRoute('?surface=SHELL')).toMatchObject({ kind: 'fallback' });
   });
 
-  it('maps bar, test and access to their own windows and shell to the Placeholder', () => {
+  it('maps bar, test, access and popover to their own windows and shell to the Placeholder', () => {
     expect(new Set(known.map((surface) => surfaces[surface])).size).toBe(known.length);
   });
 });

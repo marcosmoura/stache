@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 03 — Overview tab
@@ -29,14 +29,16 @@ Files expected to change: `src/crates/app/src/bindings.rs`, `src/crates/app/src/
 
 ## Acceptance criteria
 
-- [ ] TP-03-01: Each command maps to the same host command as the old tray row (Rust tests against the host fake).
-- [ ] TP-03-02: Enable, Pause/Resume, Retry eligibility matches the old `rows` rules for every module state (table test in the UI).
-- [ ] TP-03-03: The gate banner appears only while blocked/revoked and its actions call the right commands.
-- [ ] TP-03-04: Opening the Test Window or the guide hides the popover.
-- [ ] TP-03-05: Docs updated; `bun run lint`, `bun run format:check`, `bun run check:generated` and `bun run test` pass.
+- [x] TP-03-01: Each command maps to the same host command as the old tray row (Rust tests against the host fake).
+- [x] TP-03-02: Enable, Pause/Resume, Retry eligibility matches the old `rows` rules for every module state (table test in the UI).
+- [x] TP-03-03: The gate banner appears only while blocked/revoked and its actions call the right commands.
+- [x] TP-03-04: Opening the Test Window or the guide hides the popover.
+- [x] TP-03-05: Docs updated; `bun run lint`, `bun run format:check`, `bun run check:generated` and `bun run test` pass.
 
 ## Tests
 
 - Vitest browser: `OverviewTab.test.tsx` for each module state, pending and error rendering, the banner.
 - **End-to-end scenario** (Playwright, fake host modelled on the user's setup: tiling and bar running, keepAwake disabled, proxyAudio failed): enable keepAwake and see it turn running after the status event; pause tiling and resume it; retry proxyAudio; block the gate and use the banner; quit.
 - Rust: a host-level test that drives the new commands through a real `ConfigStore` in a temp dir and checks the file edit and module state for enable.
+
+Implementation decisions (2026-11-13): Pause/Resume is the command `module_session_action(module, action)` returning `SessionActionOutcome` (`stale` shows nothing; other non-applied outcomes show inline). Enable stays pending until a status shows the requested flag or a new host error (superseded after review: `set_module_enabled` returns a typed `ModuleEnableOutcome` once the runner processed it and Enable settles on that outcome, so an identical repeated refusal still settles); Retry settles on the next `status-changed`. File diagnostics and warnings are a "Configuration" card listing only files that have them. Long texts clamp to three lines with the full text as a tooltip. The host runner's command `match` moved unchanged into `run_command` so tests can drive it.

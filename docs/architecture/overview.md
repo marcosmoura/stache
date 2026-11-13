@@ -140,8 +140,9 @@ Read when changing the shipped foundation boundaries.
 The desktop path claims the Next identity instance lock, then creates the tray on the AppKit main
 thread before any slow service. A background host thread owns one registry, configuration store and
 watcher, permission policy, socket server and module control handles; tray/Tauri callbacks enqueue
-commands and never wait for module code, a worker join or the socket. Status is published to the tray
-and as the `status-changed` event; `host_status` reads that snapshot without taking module locks.
+commands and never wait for module code, a worker join or the socket. A left tray click toggles the
+host-only [popover](../features/popover.md) panel (`stache-popover`); the right-click menu is only
+Open Stache and Quit. Status is published as the `status-changed` event; `host_status` reads that snapshot without taking module locks.
 `HostStatus.access` reports the Accessibility launch gate described below. After creating the tray the host writes one info record, `startup: tray ready after N ms,
 webviews=N`, which the release measurement reads; see
 [performance.md](../guides/performance.md).

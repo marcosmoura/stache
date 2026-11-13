@@ -11,6 +11,7 @@ pub mod bounds;
 pub mod catalog;
 pub mod diagnostics;
 pub mod edit;
+pub mod edit_ops;
 pub mod global;
 pub mod loader;
 pub mod paths;
@@ -23,6 +24,10 @@ pub use accepted::{AcceptedConfig, AcceptedSubscription, AcceptedWait, AcceptedW
 pub use catalog::{CatalogError, ConfigCatalog, DecodedConfig};
 pub use diagnostics::{ConfigDiagnostic, ConfigFileId, DiagnosticKind, SourceLocation};
 pub use edit::{ConfigEdit, ConfigEditError, set_enabled};
+pub use edit_ops::{
+    ConfigEditOp, ConfigPath, PathSegment, apply_edit, apply_json, content_hash, display_path,
+    document_json,
+};
 pub use global::{Appearance, GlobalConfig, LoggingConfig, StartupCommands, UiConfig};
 pub use paths::{ConfigEnvironment, ConfigPaths, PathError, stale_jsonc_hint};
 pub use store::{

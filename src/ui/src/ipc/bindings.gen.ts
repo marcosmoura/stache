@@ -75,11 +75,55 @@ export const commands = {
 	 *  produces UI; the strip changes only through the next `BarChanged`.
 	 */
 	barTilingAction: (request: BarTilingRequest) => __TAURI_INVOKE<BarTilingOutcome>("bar_tiling_action", { request }),
+	/**  Reads one catalog file as a document for the settings editor. */
+	configDocument: (file: string) => __TAURI_INVOKE<ConfigDocumentOutcome_Serialize>("config_document", { file }),
+	/**
+	 *  Every catalog file in catalog order with its state, diagnostic and warnings,
+	 *  from the last published host status. Touches no disk or module lock.
+	 */
+	configFiles: () => __TAURI_INVOKE<ConfigFileView_Serialize[]>("config_files"),
+	/**  Applies one surgical edit to a catalog file, validated and stale-checked. */
+	configEdit: (request: ConfigEditRequest_Deserialize) => __TAURI_INVOKE<ConfigEditOutcome_Serialize>("config_edit", { request }),
+	/**
+	 *  Opens a catalog file with the default app, creating it from the template
+	 *  first when missing.
+	 */
+	openConfigFile: (file: string) => __TAURI_INVOKE<OpenConfigFileOutcome>("open_config_file", { file }),
+	/**  Hides the popover (Esc in the popover). Returns at once. */
+	hidePopover: () => __TAURI_INVOKE<void>("hide_popover"),
+	/**
+	 *  Sets a module's configuration-backed `enabled` flag and returns the host's
+	 *  typed outcome once the runner processed it (bounded; a shutdown wakes it).
+	 *  The new state also arrives through `status-changed`.
+	 */
+	setModuleEnabled: (id: string, enabled: boolean) => __TAURI_INVOKE<ModuleEnableOutcome>("set_module_enabled", { id, enabled }),
+	/**
+	 *  Pauses or resumes one module for this session and returns the outcome.
+	 *
+	 *  Runs the generic session action. `action` names what the
+	 *  caller's observed state implies (`pause` for a module it saw unpaused); a
+	 *  request the host has moved past is `stale`.
+	 */
+	moduleSessionAction: (module: string, action: SessionAction) => __TAURI_INVOKE<SessionActionOutcome>("module_session_action", { module, action }),
+	/**
+	 *  Retries a module. The host applies the tray's rule: a failed module, or an
+	 *  enabled, unpaused unavailable one. Returns at once.
+	 */
+	retryModule: (id: string) => __TAURI_INVOKE<void>("retry_module", { id }),
+	/**  Opens or focuses the test window (the popover hides first). Returns at once. */
+	openTestWindow: () => __TAURI_INVOKE<void>("open_test_window"),
+	/**
+	 *  Opens or focuses the Accessibility guidance window while the gate is not
+	 *  open (the popover hides first). Returns at once.
+	 */
+	openAccessibilityGuide: () => __TAURI_INVOKE<void>("open_accessibility_guide"),
 };
 
 /** Events */
 export const events = {
 	barChanged: makeEvent<BarChanged_Serialize, BarChanged_Deserialize>("bar-changed"),
+	configChanged: makeEvent<ConfigChanged, ConfigChanged>("config-changed"),
+	popoverShown: makeEvent<PopoverShown, PopoverShown>("popover-shown"),
 	statusChanged: makeEvent<StatusChanged_Serialize, StatusChanged_Deserialize>("status-changed"),
 };
 
@@ -1681,6 +1725,274 @@ export type CommandQuitConfig_Serialize = {
 	animation: HudAnimation,
 };
 
+/**
+ *  Event emitted after every committed edit and every watcher batch.
+ *
+ *  A batch is announced when it touched catalog files, whatever the reload
+ *  outcome (including rejected and deleted files). A watcher batch that only echoes the host's own
+ *  committed bytes is not announced twice.
+ */
+export type ConfigChanged = {
+	/**  Catalog file names, in catalog order. */
+	files: string[],
+};
+
+/**  A configuration diagnostic as the editor shows it. */
+export type ConfigDiagnosticView = ConfigDiagnosticView_Serialize | ConfigDiagnosticView_Deserialize;
+
+/**  A configuration diagnostic as the editor shows it. */
+export type ConfigDiagnosticView_Deserialize = {
+	/**  Human-readable reason. */
+	message: string,
+	/**  1-indexed line when the parser reported one. */
+	line?: number | null,
+	/**  1-indexed column when the parser reported one. */
+	column?: number | null,
+	/**  The field path when known, for example `workspaces[1].layout`. */
+	field?: string | null,
+};
+
+/**  A configuration diagnostic as the editor shows it. */
+export type ConfigDiagnosticView_Serialize = {
+	/**  Human-readable reason. */
+	message: string,
+	/**  1-indexed line when the parser reported one. */
+	line: number | null,
+	/**  1-indexed column when the parser reported one. */
+	column: number | null,
+	/**  The field path when known, for example `workspaces[1].layout`. */
+	field: string | null,
+};
+
+/**  One catalog file read as a document. */
+export type ConfigDocument = ConfigDocument_Serialize | ConfigDocument_Deserialize;
+
+/**  The result of `config_document`. */
+export type ConfigDocumentOutcome = ConfigDocumentOutcome_Serialize | ConfigDocumentOutcome_Deserialize;
+
+/**  The result of `config_document`. */
+export type ConfigDocumentOutcome_Deserialize =
+/**  The document. */
+{ status: "document";
+/**  The document. */
+document: ConfigDocument_Deserialize } |
+/**  The name is not a catalog file. */
+{ status: "unknownFile";
+/**  The requested name. */
+file: string };
+
+/**  The result of `config_document`. */
+export type ConfigDocumentOutcome_Serialize =
+/**  The document. */
+{ status: "document";
+/**  The document. */
+document: ConfigDocument_Serialize } |
+/**  The name is not a catalog file. */
+{ status: "unknownFile";
+/**  The requested name. */
+file: string };
+
+/**  The on-disk state of one document. */
+export type ConfigDocumentState =
+/**  The file is absent; defaults apply. */
+"missing" |
+/**  The file parses and validates. */
+"valid" |
+/**  The file exists but is rejected; it is read-only until fixed. */
+"invalid" |
+/**  The file is a symlink; it is read-only and never replaced. */
+"symlink";
+
+/**  One catalog file read as a document. */
+export type ConfigDocument_Deserialize = {
+	/**  File name, for example `tiling.toml`. */
+	file: string,
+	/**  Absolute path. */
+	path: string,
+	/**  On-disk state. */
+	state: ConfigDocumentState,
+	/**
+	 *  Content hash of the exact bytes (FNV-1a 64, hex), `None` when missing.
+	 *  Send it back as `baseHash` with an edit.
+	 */
+	hash?: string | null,
+	/**  The parsed file: only keys present in it. `None` when missing or invalid. */
+	value?: JsonValue | null,
+	/**  The catalog default for the whole file. */
+	default: JsonValue,
+	/**  The file's JSON Schema. */
+	schema: JsonValue,
+	/**  Why the file is rejected, when it is. */
+	diagnostic?: ConfigDiagnosticView_Deserialize | null,
+	/**  Unknown keys in an otherwise valid file. */
+	warnings: string[],
+};
+
+/**  One catalog file read as a document. */
+export type ConfigDocument_Serialize = {
+	/**  File name, for example `tiling.toml`. */
+	file: string,
+	/**  Absolute path. */
+	path: string,
+	/**  On-disk state. */
+	state: ConfigDocumentState,
+	/**
+	 *  Content hash of the exact bytes (FNV-1a 64, hex), `None` when missing.
+	 *  Send it back as `baseHash` with an edit.
+	 */
+	hash: string | null,
+	/**  The parsed file: only keys present in it. `None` when missing or invalid. */
+	value: JsonValue | null,
+	/**  The catalog default for the whole file. */
+	default: JsonValue,
+	/**  The file's JSON Schema. */
+	schema: JsonValue,
+	/**  Why the file is rejected, when it is. */
+	diagnostic: ConfigDiagnosticView_Serialize | null,
+	/**  Unknown keys in an otherwise valid file. */
+	warnings: string[],
+};
+
+/**  One surgical edit of a configuration document. */
+export type ConfigEditOp =
+/**  Sets or inserts a value; `null` removes the key. */
+{ op: "set";
+/**  The target item. */
+path: PathSegment[];
+/**  The JSON value to write. */
+value: JsonValue } |
+/**  Removes a key (reset to default) or an array element. */
+{ op: "remove";
+/**  The item to remove. */
+path: PathSegment[] } |
+/**  Inserts an element into an array or array of tables. */
+{ op: "insert";
+/**  The array. */
+path: PathSegment[];
+/**  The position of the new element. */
+index: number;
+/**  The new element. */
+value: JsonValue } |
+/**  Moves an array element, keeping its comments with it. */
+{ op: "move";
+/**  The array. */
+path: PathSegment[];
+/**  The current position. */
+from: number;
+/**  The new position. */
+to: number } |
+/**  Renames a map key, keeping its value and comments. */
+{ op: "rename";
+/**  The map (table) that holds the key. */
+path: PathSegment[];
+/**  The current key. */
+from: string;
+/**  The new key; refused when it exists. */
+to: string };
+
+/**  The result of `config_edit`. */
+export type ConfigEditOutcome = ConfigEditOutcome_Serialize | ConfigEditOutcome_Deserialize;
+
+/**  The result of `config_edit`. */
+export type ConfigEditOutcome_Deserialize =
+/**  The file was written and reloaded once. */
+{ status: "committed";
+/**  The new content hash. */
+hash: string;
+/**  The reload outcome. */
+reload: ConfigReloadView_Deserialize } |
+/**  The document already holds the requested value; nothing was written. */
+{ status: "unchanged";
+/**  The current hash. */
+hash?: string | null } |
+/**  The file changed since `baseHash`; nothing was written. Refetch. */
+{ status: "stale";
+/**  The current hash, `None` when the file is missing. */
+hash?: string | null } |
+/**
+ *  The candidate failed parsing, decoding or validation; nothing was
+ *  written. `field` falls back to the edited path.
+ */
+{ status: "invalid";
+/**  The catalog's diagnostic. */
+diagnostic: ConfigDiagnosticView_Deserialize } |
+/**  The edit was refused; nothing was written. */
+{ status: "refused";
+/**  Why. */
+reason: ConfigEditRefusal;
+/**  Human-readable detail. */
+message: string };
+
+/**  The result of `config_edit`. */
+export type ConfigEditOutcome_Serialize =
+/**  The file was written and reloaded once. */
+{ status: "committed";
+/**  The new content hash. */
+hash: string;
+/**  The reload outcome. */
+reload: ConfigReloadView_Serialize } |
+/**  The document already holds the requested value; nothing was written. */
+{ status: "unchanged";
+/**  The current hash. */
+hash: string | null } |
+/**  The file changed since `baseHash`; nothing was written. Refetch. */
+{ status: "stale";
+/**  The current hash, `None` when the file is missing. */
+hash: string | null } |
+/**
+ *  The candidate failed parsing, decoding or validation; nothing was
+ *  written. `field` falls back to the edited path.
+ */
+{ status: "invalid";
+/**  The catalog's diagnostic. */
+diagnostic: ConfigDiagnosticView_Serialize } |
+/**  The edit was refused; nothing was written. */
+{ status: "refused";
+/**  Why. */
+reason: ConfigEditRefusal;
+/**  Human-readable detail. */
+message: string };
+
+/**  Why an edit was refused without a diagnostic of the candidate. */
+export type ConfigEditRefusal =
+/**  The name is not a catalog file. */
+"unknownFile" |
+/**  The file is a symlink. */
+"symlink" |
+/**  The file could not be read. */
+"unreadable" |
+/**  The current file is invalid and therefore read-only. */
+"currentInvalid" |
+/**  The path, index or value does not fit the document. */
+"path" |
+/**  Writing the file failed. */
+"write" |
+/**  The host is not running or did not answer in time. */
+"unavailable";
+
+/**  One edit request from the editor. */
+export type ConfigEditRequest = ConfigEditRequest_Serialize | ConfigEditRequest_Deserialize;
+
+/**  One edit request from the editor. */
+export type ConfigEditRequest_Deserialize = {
+	/**  Catalog file name, for example `tiling.toml`. */
+	file: string,
+	/**  The `hash` of the document the edit is based on (`null` = missing). */
+	baseHash?: string | null,
+	/**  The operation. */
+	op: ConfigEditOp,
+};
+
+/**  One edit request from the editor. */
+export type ConfigEditRequest_Serialize = {
+	/**  Catalog file name, for example `tiling.toml`. */
+	file: string,
+	/**  The `hash` of the document the edit is based on (`null` = missing). */
+	baseHash: string | null,
+	/**  The operation. */
+	op: ConfigEditOp,
+};
+
 /**  The local state of one catalog file. */
 export type ConfigFileState =
 /**  The file is absent. */
@@ -1724,6 +2036,35 @@ export type ConfigFileView_Serialize = {
 	/**  Unknown keys in an otherwise valid file. */
 	warnings: string[],
 };
+
+/**  The reload that followed a committed edit. */
+export type ConfigReloadView = ConfigReloadView_Serialize | ConfigReloadView_Deserialize;
+
+/**  The reload that followed a committed edit. */
+export type ConfigReloadView_Deserialize =
+/**  The new configuration was accepted. */
+{ status: "applied";
+/**  The accepted revision as an exact decimal string. */
+revision: string } |
+/**  The new bytes decode to the accepted configuration. */
+{ status: "unchanged" } |
+/**  The runtime rejected the file; the last good configuration stays. */
+{ status: "rejected";
+/**  Why. */
+diagnostic: ConfigDiagnosticView_Deserialize };
+
+/**  The reload that followed a committed edit. */
+export type ConfigReloadView_Serialize =
+/**  The new configuration was accepted. */
+{ status: "applied";
+/**  The accepted revision as an exact decimal string. */
+revision: string } |
+/**  The new bytes decode to the accepted configuration. */
+{ status: "unchanged" } |
+/**  The runtime rejected the file; the last good configuration stays. */
+{ status: "rejected";
+/**  Why. */
+diagnostic: ConfigDiagnosticView_Serialize };
 
 /**  The `cpu` entry options. */
 export type CpuOptions = {
@@ -2072,6 +2413,24 @@ export type HudPosition =
 "right" |
 /**  Centered on the display. */
 "center";
+
+/**
+ *  The wire shape of an arbitrary JSON value, used only to type
+ *  `serde_json::Value` fields in the generated client without 64-bit integers.
+ */
+export type JsonValue =
+/**  `null`. */
+null |
+/**  A boolean. */
+boolean |
+/**  A number. */
+number | null |
+/**  A string. */
+string |
+/**  An array. */
+JsonValue[] |
+/**  An object. */
+{ [key in string]: JsonValue };
 
 /**  One actionable runtime condition. */
 export type KeepAwakeCondition = {
@@ -2624,6 +2983,27 @@ export type MenuBarState =
  */
 "unknown";
 
+/**
+ *  What the host did with one popover enable request, after the runner
+ *  processed it.
+ */
+export type ModuleEnableOutcome =
+/**  The file was written and the module reloaded. */
+{ kind: "applied" } |
+/**  The file already held the value; the runtime was synced to it. */
+{ kind: "unchanged" } |
+/**
+ *  The host refused or failed; the same message is published as the host
+ *  error.
+ */
+{ kind: "refused";
+/**  The host's message. */
+message: string } |
+/**  The host did not process the request (shutdown, not running, timeout). */
+{ kind: "unavailable";
+/**  Why. */
+message: string };
+
 /**  Observed lifecycle state of one module, without SDK-only payloads. */
 export type ModuleState =
 /**  Configured but not started. */
@@ -2788,6 +3168,30 @@ export type NoTunesConfig_Serialize = {
 	 */
 	target_app?: string,
 };
+
+/**  The result of `open_config_file`. */
+export type OpenConfigFileOutcome =
+/**  The default app was asked to open the file. */
+{ status: "opened" } |
+/**  The name is not a catalog file. */
+{ status: "unknownFile" } |
+/**  Creating or opening the file failed. */
+{ status: "failed";
+/**  Why. */
+message: string };
+
+/**  One segment of a [`ConfigPath`]: a table key or an array index. */
+export type PathSegment =
+/**  A table, inline table or map key. */
+string |
+/**  An index into an array or array of tables. */
+number;
+
+/**
+ *  Emitted to the popover each time it is shown, so it can focus the
+ *  selected tab and refetch.
+ */
+export type PopoverShown = Record<string, never>;
 
 /**  A typed provider condition shown outside the Bar visuals (module status). */
 export type ProviderDiagnostic = {

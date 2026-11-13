@@ -18,7 +18,24 @@ The tray today is a native `NSMenu` rebuilt from `tray::rows(&HostStatus)` ([tra
 
 For mockup and visual direction only (user, 2026-11-13); do not reproduce them: [Menu Bar Actions](https://dribbble.com/shots/21256312-Menu-Bar-Actions), [System Status Tool Explorations](https://dribbble.com/shots/21908743-System-Status-Tool-Explorations-MacOS). The shipped look follows the app's own tokens and themes (`docs/architecture/ui.md`).
 
+A third reference (a menu-bar time tracker screenshot the user shared in chat, not stored in the repo) sets the direction the popover takes from all three:
+
+- A frosted, translucent material panel with a generous corner radius (about 16–20 pt), a soft shadow, and a light and a dark variant that follow the app appearance.
+- Rows are an icon tile (a small rounded square with a subtle fill), a title in medium weight, an optional secondary line in a muted colour, and a trailing control. Rows are spaced generously and have no visible borders.
+- Related rows are grouped on an inset card with a slightly lighter or darker fill, not with lines. Hairline separators are kept for menu-like action lists.
+- The primary state or action is a filled accent pill (icon plus short tabular-number text, such as a running state). Secondary actions are circular icon buttons on a subtle fill.
+- The footer action list uses a leading icon and a label: Open Test Window, then a separator, then Quit with a power icon.
+
+A fourth reference (a dark share-dialog screenshot, also only in chat) guides the settings form:
+
+- Section headings are small and muted, above groups of rows, with a hairline between groups.
+- An enum value is a quiet inline trigger at the trailing edge (the value plus a chevron, no box until hover or focus, then a thin accent outline). It opens a floating menu on a raised surface. Each option has a title and its schema description as a muted second line, and the selected option has a check mark and a highlighted background.
+- A text input is a filled, borderless field with a muted placeholder. The one primary action stands out as a filled accent button, and secondary actions are neutral filled buttons.
+- The footer is a band with a slightly different fill from the body.
+
 ## Non-goals
+
+- The Bar, Test Window and Accessibility guide keep their Catppuccin palette; only the popover goes native (part 05, user request 2026-11-13).
 
 - No undo/redo, no settings search, no import/export.
 - No per-module hand-written settings screens: every file tab uses the same generic form. A custom widget for one field type (a color, a shortcut) is out of scope; such values are text fields.
@@ -44,12 +61,13 @@ For mockup and visual direction only (user, 2026-11-13); do not reproduce them: 
 
 ## Parts
 
-| Part                         | Summary                                                                                      | Status |
-| ---------------------------- | -------------------------------------------------------------------------------------------- | ------ |
-| [01](01-config-documents.md) | Host: config document read, generic surgical edit, stale check, change event, commands       | draft  |
-| [02](02-popover-window.md)   | Native popover panel, tray left/right click, `popover` surface shell with sidebar and tabs   | draft  |
-| [03](03-overview-tab.md)     | Overview tab: module controls, Accessibility banner, footer; host commands for those actions | draft  |
-| [04](04-settings-editor.md)  | Schema-driven settings form for every file tab with live two-way sync                        | draft  |
+| Part                         | Summary                                                                                       | Status |
+| ---------------------------- | --------------------------------------------------------------------------------------------- | ------ |
+| [01](01-config-documents.md) | Host: config document read, generic surgical edit, stale check, change event, commands        | done   |
+| [02](02-popover-window.md)   | Native popover panel, tray left/right click, `popover` surface shell with sidebar and tabs    | done   |
+| [03](03-overview-tab.md)     | Overview tab: module controls, Accessibility banner, footer; host commands for those actions  | done   |
+| [04](04-settings-editor.md)  | Schema-driven settings form for every file tab with live two-way sync                         | done   |
+| [05](05-native-look.md)      | Native macOS look for the popover: system colours, font, material and controls; Bar untouched | done   |
 
 After part 04 the user tries it in the running app; the steps are in part 04's notes. Native behavior (anchoring, key focus, dismissal) stays unverified until then.
 

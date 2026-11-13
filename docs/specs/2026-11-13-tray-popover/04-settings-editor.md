@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 04 — Settings editor
@@ -24,12 +24,12 @@ Files expected to change: `src/ui/src/windows/Popover/` (a `FileTab`, a `SchemaF
 
 ## Acceptance criteria
 
-- [ ] TP-04-01: The schema walk produces a field tree for all ten committed schemas with no unknown fallback (test over `schemas/*.json`), and handles a synthetic unknown construct with the fallback.
-- [ ] TP-04-02: Each control kind writes the right op (set/remove/insert/move/rename) with the current hash, at the D8 moment.
-- [ ] TP-04-03: Validation failure and `stale` keep the draft and show the message / refetch.
-- [ ] TP-04-04: An external change updates unfocused fields and shows "Changed on disk" on a focused one.
-- [ ] TP-04-05: Missing, invalid and symlinked files render as specified.
-- [ ] TP-04-06: Docs updated; `bun run lint`, `bun run format:check`, `bun run check:generated` and `bun run test` pass.
+- [x] TP-04-01: The schema walk produces a field tree for all ten committed schemas with no unknown fallback (test over `schemas/*.json`), and handles a synthetic unknown construct with the fallback.
+- [x] TP-04-02: Each control kind writes the right op (set/remove/insert/move/rename) with the current hash, at the D8 moment.
+- [x] TP-04-03: Validation failure and `stale` keep the draft and show the message / refetch.
+- [x] TP-04-04: An external change updates unfocused fields and shows "Changed on disk" on a focused one.
+- [x] TP-04-05: Missing, invalid and symlinked files render as specified.
+- [x] TP-04-06: Docs updated; `bun run lint`, `bun run format:check`, `bun run check:generated` and `bun run test` pass.
 
 ## Tests
 
@@ -40,3 +40,5 @@ Files expected to change: `src/ui/src/windows/Popover/` (a `FileTab`, a `SchemaF
 ## Notes
 
 Manual check in the running app after this part (ask before launching): open with a left click on each display; type in a text field; click outside, press Esc and click the icon again to close; right-click menu; edit `tiling.toml` gap in the popover and watch the windows re-tile; edit the same file in an editor with the popover open and see it update; save an invalid file and see the read-only state; open over a full-screen app.
+
+Implementation decisions (2026-11-13): out-of-range numbers are caught in the form from the schema bounds before sending (host refusals still show inline); an invalid file shows its diagnostic and a read-only form on the defaults with a note; new workspaces are seeded `{ name = "new" }` and new map keys `new_key`; an array that exists only as a default is written whole on its first change; "Use disk value" keeps focus so the blur does not save the draft. Drag-to-reorder has no automated test; button and keyboard moves do.

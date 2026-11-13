@@ -1,12 +1,14 @@
 {
   "identifier": "access-window",
-  "description": "Least-privilege surface for the Accessibility guidance window. It can listen for host events, close itself and call the three guidance commands; no filesystem, shell, opener, dialog, HTTP or plugin permissions are granted.",
+  "description": "Least-privilege surface for the Accessibility guidance window. It can listen for host events, close itself, call the read-only app_info and host_status commands and the three guidance commands; no filesystem, shell, opener, dialog, HTTP or plugin permissions are granted.",
   "windows": ["stache-access-*"],
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "core:window:allow-close",
     "core:window:allow-start-dragging",
+    "allow-app-info",
+    "allow-host-status",
     "allow-request-accessibility",
     "allow-open-accessibility-settings",
     "allow-quit-app"

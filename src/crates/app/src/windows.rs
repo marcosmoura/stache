@@ -5,14 +5,18 @@
 //! it. Windows are labelled `stache-<surface>-<n>`: `stache-test-<n>` is granted
 //! only the test-window capability and `stache-access-<n>` only the access-window
 //! capability. `stache-bar-<n>` is the non-activating Bar panel; no production
-//! module requests it yet.
+//! module requests it yet. `stache-popover` is the tray popover: one
+//! host-only, key-capable panel created once and then shown and hidden
+//! ([`NativeWindows::toggle_popover`]); no module request can open its surface.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use stache_macos::{NativeWindowHandle, PanelAdapter, SystemPanelAdapter, TopLeftFrame};
+use stache_macos::{
+    IconAnchor, NativeWindowHandle, PanelAdapter, SystemPanelAdapter, TopLeftFrame,
+};
 use stache_sdk::{
     Appearance, LogLevel, LogRecord, Logger, MainThreadExecutor, ModuleId, Operation, SurfaceId,
     WindowBackend, WindowError, WindowFrame, WindowId, WindowKind, WindowOrigin, WindowPhase,
@@ -20,6 +24,9 @@ use stache_sdk::{
 };
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
+use crate::popover::{
+    POPOVER_HEIGHT, POPOVER_LABEL, POPOVER_SURFACE, POPOVER_WIDTH, PopoverShown, PopoverToggle,
+};
 use crate::shutdown::{NativeOwner, OwnerAnswer};
 
 /// Owner used for the explicit developer test window.
@@ -57,11 +64,12 @@ pub struct WindowChrome {
 /// Maps a surface to its native chrome.
 ///
 /// The access surface is frameless and transparent; the Bar panel is frameless,
-/// transparent and shadowless; every other surface keeps the decorated, opaque
-/// builder defaults.
+/// transparent and shadowless; the popover is frameless and transparent, its
+/// shadow and rounded material drawn by its native panel; every other surface
+/// keeps the decorated, opaque builder defaults.
 #[must_use]
 pub fn chrome_for(surface: SurfaceId) -> WindowChrome {
-    if surface == BAR_SURFACE {
+    if surface == BAR_SURFACE || surface == POPOVER_SURFACE {
         WindowChrome {
             decorations: false,
             transparent: true,
@@ -132,6 +140,11 @@ pub trait WindowHost: Send + Sync {
     /// `System` clears it). Every live and later window and panel inherits it,
     /// so no window carries an appearance of its own.
     fn apply_appearance(&self, _appearance: Appearance) {}
+    /// Places the hosted popover under the tray icon, shows it as key and
+    /// tells its page it was shown.
+    fn show_popover(&self, _label: &str, _anchor: IconAnchor) {}
+    /// Orders the hosted popover out.
+    fn hide_popover(&self, _label: &str) {}
     /// Closes an existing window and reports what happened to it.
     fn close(&self, label: &str) -> CloseOutcome;
     /// The OS destroyed this window (its `Destroyed` event). Called on the main
@@ -153,6 +166,8 @@ pub trait WindowEvents: Send + Sync {
     fn page_loaded(&self, label: &str);
     /// The page in this window failed to load.
     fn page_failed(&self, label: &str, reason: String);
+    /// The popover panel lost key (a click outside it or on the tray icon).
+    fn popover_resigned(&self, _label: &str) {}
 }
 
 /// What one native close request did.
@@ -285,6 +300,30 @@ impl PanelHosting {
         }
     }
 
+    /// Hosts the popover Tauri just built in its key-capable panel; a resign
+    /// key reaches `events`. Same failure contract as [`adopt`](Self::adopt).
+    fn adopt_popover<E: fmt::Display>(
+        &self,
+        label: &str,
+        ns_window: NsWindow<E>,
+        events: Arc<OnceLock<std::sync::Weak<dyn WindowEvents>>>,
+    ) -> Result<(), String> {
+        let owned = label.to_owned();
+        let on_resign = Box::new(move || {
+            if let Some(events) = events.get().and_then(std::sync::Weak::upgrade) {
+                events.popover_resigned(&owned);
+            }
+        });
+        let result = native_handle(ns_window).and_then(|handle| {
+            self.adapter.host_popover(label, &handle, on_resign).map_err(|e| e.to_string())
+        });
+        if result.is_err() {
+            self.adapter.unhost(label);
+            self.labels().remove(label);
+        }
+        result
+    }
+
     /// Must run before Tauri closes or destroys the window.
     fn before_close(&self, label: &str) {
         self.adapter.unhost(label);
@@ -303,8 +342,10 @@ impl WindowHost for TauriWindowHost {
         let _ = self.events.set(events);
     }
 
+    #[allow(clippy::too_many_lines)] // One builder with the panel and popover paths.
     fn open(&self, spec: &NativeWindowSpec) -> Result<(), String> {
-        let panel = spec.kind == WindowKind::NonActivatingPanel;
+        let popover = spec.surface == POPOVER_SURFACE;
+        let panel = popover || spec.kind == WindowKind::NonActivatingPanel;
         let builder = WebviewWindowBuilder::new(
             &self.app,
             &spec.label,
@@ -319,7 +360,17 @@ impl WindowHost for TauriWindowHost {
         .shadow(spec.chrome.shadow);
         // No `.theme(..)`: in tao it sets the whole application's appearance,
         // which `apply_appearance` owns. Windows inherit it.
-        let builder = if panel {
+        let builder = if popover {
+            builder
+                .focused(false)
+                .skip_taskbar(true)
+                .closable(false)
+                .minimizable(false)
+                .maximizable(false)
+                .hidden_title(true)
+                .disable_drag_drop_handler()
+                .zoom_hotkeys_enabled(false)
+        } else if panel {
             let origin = spec.origin.unwrap_or(WindowOrigin { x: 0, y: 0 });
             builder
                 .position(f64::from(origin.x), f64::from(origin.y))
@@ -363,7 +414,14 @@ impl WindowHost for TauriWindowHost {
                 return Err(error.to_string());
             }
         };
-        if panel {
+        if popover {
+            // Hosted hidden; `show_popover` orders it in.
+            let events = Arc::clone(&self.events);
+            if let Err(error) = self.panels.adopt_popover(&spec.label, window.ns_window(), events) {
+                let _ = window.destroy();
+                return Err(error);
+            }
+        } else if panel {
             // Never `show()` + `set_focus()`: Tauri's window stays hidden and
             // its webview is displayed in a non-activating panel.
             if let Err(error) = self.panels.adopt(&spec.label, window.ns_window()) {
@@ -400,6 +458,20 @@ impl WindowHost for TauriWindowHost {
             }));
             // Tauri's hidden window moves later (queued); the panel moves now.
             self.panels.reposition(label, frame);
+        }
+    }
+
+    fn show_popover(&self, label: &str, anchor: IconAnchor) {
+        if !self.panels.is_panel(label) {
+            return;
+        }
+        let _ = self.panels.adapter.show_popover(label, anchor);
+        let _ = tauri_specta::Event::emit_to(&PopoverShown {}, &self.app, label);
+    }
+
+    fn hide_popover(&self, label: &str) {
+        if self.panels.is_panel(label) {
+            self.panels.adapter.hide_popover(label);
         }
     }
 
@@ -498,6 +570,22 @@ struct WindowShared {
     /// The last accepted `[ui] appearance`, applied application-wide; `None`
     /// until the first accepted value so startup always applies it.
     appearance: Mutex<Option<Appearance>>,
+    /// The popover's visibility and the last tray icon rectangle.
+    popover: Mutex<(PopoverToggle, IconAnchor)>,
+    /// Set by [`NativeWindows::release_all`]; a later prewarm builds nothing.
+    released: AtomicBool,
+}
+
+/// The popover's fixed request.
+fn popover_request() -> Result<WindowRequest, WindowError> {
+    Ok(WindowRequest::new(
+        stache_sdk::WindowKey::new("popover")
+            .map_err(|error| WindowError::Backend(error.to_string()))?,
+        POPOVER_SURFACE,
+        stache_sdk::WindowSize::new(POPOVER_WIDTH, POPOVER_HEIGHT)
+            .map_err(|error| WindowError::Backend(error.to_string()))?,
+        WindowKind::NonActivatingPanel,
+    ))
 }
 
 impl NativeWindows {
@@ -516,6 +604,8 @@ impl NativeWindows {
             phases: WindowPhases::new(),
             state: Mutex::new(WindowState::default()),
             appearance: Mutex::new(None),
+            popover: Mutex::new((PopoverToggle::default(), IconAnchor::default())),
+            released: AtomicBool::new(false),
         });
         let events: Arc<dyn WindowEvents> = shared.clone();
         shared.host.attach_events(Arc::downgrade(&events));
@@ -540,6 +630,112 @@ impl NativeWindows {
             stache_sdk::WindowKind::Standard,
         );
         self.open(HOST_OWNER, &request)
+    }
+
+    /// A left click on the tray icon at `anchor`: shows the popover under it,
+    /// or hides a shown one (including the click that just took key away
+    /// from it; see [`PopoverToggle::click`]).
+    ///
+    /// # Errors
+    /// Returns a dispatch failure.
+    pub fn toggle_popover(&self, anchor: IconAnchor) -> Result<(), WindowError> {
+        self.toggle_popover_at(anchor, std::time::Instant::now())
+    }
+
+    /// [`toggle_popover`](Self::toggle_popover) at an explicit time.
+    ///
+    /// # Errors
+    /// Returns a dispatch failure.
+    pub fn toggle_popover_at(
+        &self,
+        anchor: IconAnchor,
+        now: std::time::Instant,
+    ) -> Result<(), WindowError> {
+        let (was_visible, show) = {
+            let mut popover = self.shared.popover();
+            popover.1 = anchor;
+            let was_visible = popover.0.is_visible();
+            (was_visible, popover.0.click(now))
+        };
+        if show {
+            self.present_popover(anchor)
+        } else if was_visible {
+            self.dispatch_popover_hide()
+        } else {
+            // The click that took key away: the resign already hid it.
+            Ok(())
+        }
+    }
+
+    /// Records the tray icon rectangle of a click that did not toggle (a
+    /// right click), for a later [`open_popover`](Self::open_popover).
+    pub fn note_tray_anchor(&self, anchor: IconAnchor) { self.shared.popover().1 = anchor; }
+
+    /// Shows the popover under the last tray icon rectangle (`Open Stache`).
+    ///
+    /// # Errors
+    /// Returns a dispatch failure.
+    pub fn open_popover(&self) -> Result<(), WindowError> {
+        let anchor = {
+            let mut popover = self.shared.popover();
+            popover.0.open();
+            popover.1
+        };
+        self.present_popover(anchor)
+    }
+
+    /// Hides a shown popover; does nothing otherwise.
+    pub fn hide_popover(&self) {
+        if self.shared.popover().0.hide() {
+            let _ = self.dispatch_popover_hide();
+        }
+    }
+
+    /// Whether the popover is shown, for status and tests.
+    #[must_use]
+    pub fn popover_visible(&self) -> bool { self.shared.popover().0.is_visible() }
+
+    /// Creates the popover window hidden ahead of the first click, through
+    /// the same creation path; shows nothing and emits no `popover-shown`. A
+    /// click before or during it reuses the one window. Does nothing once
+    /// the windows were released for shutdown.
+    ///
+    /// # Errors
+    /// Returns a dispatch failure; a creation failure is logged and the next
+    /// click creates the window as usual.
+    pub fn prewarm_popover(&self) -> Result<(), WindowError> {
+        if self.shared.released.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        self.open_validated(HOST_OWNER, &popover_request()?, Some(POPOVER_LABEL))
+            .map(|_| ())
+    }
+
+    /// Creates the popover window once, then shows it under `anchor`.
+    fn present_popover(&self, anchor: IconAnchor) -> Result<(), WindowError> {
+        let request = popover_request()?;
+        let result =
+            self.open_validated(HOST_OWNER, &request, Some(POPOVER_LABEL)).and_then(|_| {
+                let shared = Arc::clone(&self.shared);
+                self.shared.dispatch(move |host| {
+                    if shared.live_id(POPOVER_LABEL).is_some() && shared.popover().0.is_visible() {
+                        host.show_popover(POPOVER_LABEL, anchor);
+                    }
+                })
+            });
+        if result.is_err() {
+            self.shared.popover().0.hide();
+        }
+        result
+    }
+
+    fn dispatch_popover_hide(&self) -> Result<(), WindowError> {
+        let shared = Arc::clone(&self.shared);
+        self.shared.dispatch(move |host| {
+            if shared.live_id(POPOVER_LABEL).is_some() {
+                host.hide_popover(POPOVER_LABEL);
+            }
+        })
     }
 
     /// Removes a window that the OS destroyed, without asking it to close.
@@ -593,6 +789,8 @@ impl NativeWindows {
             state.by_id.clear();
             state.by_key.clear();
             state.releases.push(answer.clone());
+            self.shared.released.store(true, Ordering::SeqCst);
+            self.shared.popover().0.hide();
             state.settle();
             labels
         };
@@ -642,6 +840,10 @@ impl WindowShared {
     }
 
     fn is_live(&self, id: WindowId) -> bool { self.lock().by_id.contains_key(&id) }
+
+    fn popover(&self) -> std::sync::MutexGuard<'_, (PopoverToggle, IconAnchor)> {
+        self.popover.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 
     fn appearance(&self) -> Option<Appearance> {
         *self.appearance.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -706,6 +908,17 @@ impl WindowEvents for WindowShared {
             self.phases.advance(id, WindowPhase::Failed(reason));
         }
     }
+
+    /// Runs on the main thread, so the hide runs inline, before the tray
+    /// click that may have caused it.
+    fn popover_resigned(&self, label: &str) {
+        if label == POPOVER_LABEL
+            && self.popover().0.resigned(std::time::Instant::now())
+            && self.live_id(label).is_some()
+        {
+            self.host.hide_popover(label);
+        }
+    }
 }
 
 /// Validates the narrow native surface again at the backend boundary.
@@ -759,7 +972,13 @@ impl NativeWindows {
         &self,
         owner: ModuleId,
         request: &WindowRequest,
+        fixed_label: Option<&str>,
     ) -> Result<WindowId, WindowError> {
+        if request.surface == TEST_SURFACE || request.surface == ACCESS_SURFACE {
+            // Opening another host window (from the popover or the tray)
+            // dismisses the popover first.
+            self.hide_popover();
+        }
         let key = (owner, request.key.as_str().to_owned());
         let reserved = {
             let mut state = self.shared.lock();
@@ -768,7 +987,10 @@ impl NativeWindows {
                 Reserved::Existing(entry.id, entry.label, entry.kind)
             } else {
                 let id = WindowId::new(self.shared.next.fetch_add(1, Ordering::Relaxed) + 1);
-                let label = format!("stache-{}-{}", request.surface.as_str(), id.get());
+                let label = fixed_label.map_or_else(
+                    || format!("stache-{}-{}", request.surface.as_str(), id.get()),
+                    str::to_owned,
+                );
                 let entry = Entry {
                     id,
                     label: label.clone(),
@@ -817,6 +1039,9 @@ impl NativeWindows {
                 Err(error) => {
                     shared.phases.advance(id, WindowPhase::Failed(error.clone()));
                     shared.forget(id);
+                    if spec.label == POPOVER_LABEL {
+                        shared.popover().0.hide();
+                    }
                     shared.log(LogLevel::Warn, format!("cannot create window {label}: {error}"));
                 }
             }
@@ -850,14 +1075,14 @@ impl NativeWindows {
             WindowKind::NonActivatingPanel,
         )
         .with_origin(origin);
-        self.open_validated(HOST_OWNER, &request)
+        self.open_validated(HOST_OWNER, &request, None)
     }
 }
 
 impl WindowBackend for NativeWindows {
     fn open(&self, owner: ModuleId, request: &WindowRequest) -> Result<WindowId, WindowError> {
         validate(request)?;
-        self.open_validated(owner, request)
+        self.open_validated(owner, request, None)
     }
 
     fn focus(&self, window: WindowId) -> Result<(), WindowError> {
@@ -1010,7 +1235,7 @@ impl NativeOwner for WindowsOwner {
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
-    use std::sync::atomic::AtomicBool;
+    use std::time::Duration;
 
     use stache_macos::PanelAdapter;
     use stache_sdk::{
@@ -1032,6 +1257,8 @@ mod tests {
         gone: AtomicBool,
         moved: Mutex<Vec<(String, WindowFrame)>>,
         appearances: Mutex<Vec<Appearance>>,
+        /// Popover shows and hides, in main-thread order.
+        popover: Mutex<Vec<String>>,
         /// Opens and appearance applications, in main-thread order.
         order: Mutex<Vec<String>>,
         events: Mutex<Option<std::sync::Weak<dyn WindowEvents>>>,
@@ -1068,6 +1295,14 @@ mod tests {
 
         fn focus(&self, label: &str) {
             self.focused.lock().expect("focused").push(label.to_owned());
+        }
+
+        fn show_popover(&self, label: &str, anchor: IconAnchor) {
+            self.popover.lock().expect("popover").push(format!("show {label} {}", anchor.x));
+        }
+
+        fn hide_popover(&self, label: &str) {
+            self.popover.lock().expect("popover").push(format!("hide {label}"));
         }
 
         fn apply_appearance(&self, appearance: Appearance) {
@@ -1354,6 +1589,227 @@ mod tests {
             !answer.is_answered(),
             "a window without its Destroyed event is not acknowledged"
         );
+    }
+
+    const ICON: IconAnchor = IconAnchor {
+        x: 2000.0,
+        y: 0.0,
+        width: 48.0,
+        height: 66.0,
+    };
+
+    fn popover_log(host: &FakeHost) -> Vec<String> { host.popover.lock().expect("popover").clone() }
+
+    #[test]
+    fn the_popover_is_created_once_then_shown_and_hidden() {
+        let (windows, host) = windows();
+        let now = std::time::Instant::now();
+        windows.toggle_popover_at(ICON, now).expect("show");
+        windows.toggle_popover_at(ICON, now + Duration::from_secs(1)).expect("hide");
+        windows
+            .toggle_popover_at(ICON, now + Duration::from_secs(2))
+            .expect("show again");
+        let opened = host.opened.lock().expect("opened").clone();
+        assert_eq!(opened.len(), 1, "created once");
+        assert_eq!(opened[0].label, POPOVER_LABEL);
+        assert_eq!(opened[0].surface, POPOVER_SURFACE);
+        assert_eq!((opened[0].width, opened[0].height), (480, 640));
+        assert_eq!(opened[0].chrome, chrome_for(POPOVER_SURFACE));
+        assert!(!opened[0].chrome.decorations && opened[0].chrome.transparent);
+        assert_eq!(popover_log(&host), [
+            "show stache-popover 2000",
+            "hide stache-popover",
+            "show stache-popover 2000",
+        ]);
+        assert!(windows.popover_visible());
+        assert!(
+            host.focused.lock().expect("focused").is_empty(),
+            "never focused like a window"
+        );
+        assert_eq!(windows.live_label(HOST_OWNER).as_deref(), Some(POPOVER_LABEL));
+    }
+
+    #[test]
+    fn hide_popover_hides_only_a_shown_popover() {
+        let (windows, host) = windows();
+        windows.hide_popover();
+        assert!(popover_log(&host).is_empty());
+        windows.open_popover().expect("open");
+        windows.hide_popover();
+        windows.hide_popover();
+        assert_eq!(popover_log(&host), [
+            "show stache-popover 0",
+            "hide stache-popover"
+        ]);
+    }
+
+    #[test]
+    fn open_stache_uses_the_icon_of_the_last_right_click() {
+        let (windows, host) = windows();
+        windows.note_tray_anchor(ICON);
+        windows.open_popover().expect("open");
+        // Opening a shown popover shows it again (it regains key).
+        windows.open_popover().expect("again");
+        assert_eq!(popover_log(&host), [
+            "show stache-popover 2000",
+            "show stache-popover 2000"
+        ]);
+    }
+
+    #[test]
+    fn a_resign_key_hides_and_the_racing_tray_click_keeps_it_closed() {
+        let (windows, host) = windows();
+        windows.toggle_popover(ICON).expect("show");
+        // The press on the tray icon takes key away first.
+        host.events().popover_resigned(POPOVER_LABEL);
+        assert!(!windows.popover_visible());
+        windows.toggle_popover(ICON).expect("the same click");
+        assert!(!windows.popover_visible());
+        assert_eq!(popover_log(&host), [
+            "show stache-popover 2000",
+            "hide stache-popover"
+        ]);
+        // A later click opens again.
+        windows
+            .toggle_popover_at(ICON, std::time::Instant::now() + Duration::from_secs(1))
+            .expect("later");
+        assert!(windows.popover_visible());
+        // A resign for another label or a hidden popover does nothing.
+        host.events().popover_resigned("stache-test-9");
+        windows.hide_popover();
+        host.events().popover_resigned(POPOVER_LABEL);
+        assert_eq!(popover_log(&host).len(), 4);
+    }
+
+    #[test]
+    fn opening_the_test_window_or_the_guide_hides_the_popover_first() {
+        let (windows, host) = windows();
+        windows.open_popover().expect("open");
+        windows.open_test_window().expect("test");
+        assert!(!windows.popover_visible());
+        assert_eq!(popover_log(&host), [
+            "show stache-popover 0",
+            "hide stache-popover"
+        ]);
+        windows.open_popover().expect("open");
+        windows
+            .open(
+                HOST_OWNER,
+                &crate::windows::access_window_request().expect("request"),
+            )
+            .expect("guide");
+        assert!(!windows.popover_visible());
+        assert_eq!(
+            popover_log(&host).last().map(String::as_str),
+            Some("hide stache-popover")
+        );
+    }
+
+    #[test]
+    fn a_failed_popover_creation_resets_it_and_the_next_click_retries() {
+        let (windows, host) = windows();
+        host.fail_next.store(true, Ordering::SeqCst);
+        windows.toggle_popover(ICON).expect("dispatched");
+        assert!(!windows.popover_visible());
+        assert!(popover_log(&host).is_empty());
+        windows.toggle_popover(ICON).expect("retry");
+        assert!(windows.popover_visible());
+        assert_eq!(host.opened.lock().expect("opened").len(), 2);
+        assert_eq!(popover_log(&host), ["show stache-popover 2000"]);
+    }
+
+    #[test]
+    fn shutdown_releases_the_popover_through_the_windows_owner() {
+        let (windows, host) = windows();
+        windows.toggle_popover(ICON).expect("show");
+        let owner = WindowsOwner::new(windows.clone());
+        let answer = owner.release();
+        assert!(!windows.popover_visible());
+        assert_eq!(*host.closed.lock().expect("closed"), [POPOVER_LABEL]);
+        windows.window_closed(POPOVER_LABEL);
+        assert_eq!(answer.state(), OwnerState::Succeeded);
+        assert!(windows.is_empty());
+    }
+
+    #[test]
+    fn prewarm_builds_one_hidden_popover_and_the_first_click_only_shows_it() {
+        let (windows, host) = windows();
+        windows.prewarm_popover().expect("prewarm");
+        windows.prewarm_popover().expect("again");
+        assert_eq!(host.opened.lock().expect("opened").len(), 1);
+        assert_eq!(host.opened.lock().expect("opened")[0].label, POPOVER_LABEL);
+        assert!(popover_log(&host).is_empty(), "built hidden, nothing shown");
+        assert!(!windows.popover_visible());
+        windows.toggle_popover(ICON).expect("click");
+        assert_eq!(host.opened.lock().expect("opened").len(), 1);
+        assert_eq!(popover_log(&host), ["show stache-popover 2000"]);
+    }
+
+    #[test]
+    fn a_click_during_the_prewarm_shows_the_one_window_once() {
+        let executor = Arc::new(Queued::default());
+        let (building, host) = windows_with(executor.clone());
+        building.prewarm_popover().expect("prewarm");
+        building.toggle_popover(ICON).expect("click while building");
+        executor.run();
+        assert_eq!(host.opened.lock().expect("opened").len(), 1);
+        assert_eq!(popover_log(&host), ["show stache-popover 2000"]);
+        // A click before the prewarm: the prewarm reuses its window.
+        let (early, host) = windows();
+        early.toggle_popover(ICON).expect("click");
+        early.prewarm_popover().expect("prewarm");
+        assert_eq!(host.opened.lock().expect("opened").len(), 1);
+        assert_eq!(popover_log(&host), ["show stache-popover 2000"]);
+    }
+
+    #[test]
+    fn a_prewarm_after_shutdown_builds_nothing() {
+        let (windows, host) = windows();
+        let answer = WindowsOwner::new(windows.clone()).release();
+        assert_eq!(answer.state(), OwnerState::Succeeded);
+        windows.prewarm_popover().expect("inert");
+        assert!(host.opened.lock().expect("opened").is_empty());
+        assert!(windows.is_empty());
+    }
+
+    #[test]
+    fn a_failed_prewarm_still_lets_a_click_open_the_popover() {
+        let (windows, host) = windows();
+        host.fail_next.store(true, Ordering::SeqCst);
+        windows.prewarm_popover().expect("dispatched");
+        assert!(windows.is_empty());
+        windows.toggle_popover(ICON).expect("click");
+        assert_eq!(host.opened.lock().expect("opened").len(), 2);
+        assert_eq!(popover_log(&host), ["show stache-popover 2000"]);
+        assert!(windows.popover_visible());
+    }
+
+    #[test]
+    fn a_queued_show_after_a_hide_does_not_show() {
+        let executor = Arc::new(Queued::default());
+        let (windows, host) = windows_with(executor.clone());
+        windows.toggle_popover(ICON).expect("show");
+        windows.hide_popover();
+        executor.run();
+        assert_eq!(host.opened.lock().expect("opened").len(), 1);
+        assert_eq!(popover_log(&host), ["hide stache-popover"]);
+    }
+
+    #[test]
+    fn no_module_can_open_the_popover_surface() {
+        let (windows, host) = windows();
+        for owner in [ModuleId::new("bar"), HOST_OWNER] {
+            let standard = request("popover", "popover");
+            assert_eq!(
+                windows.open(owner, &standard),
+                Err(WindowError::UnsupportedSurface { surface: POPOVER_SURFACE })
+            );
+            assert_eq!(
+                windows.open(owner, &panel_request("popover", "popover")),
+                Err(WindowError::UnsupportedSurface { surface: POPOVER_SURFACE })
+            );
+        }
+        assert!(host.opened.lock().expect("opened").is_empty());
     }
 
     #[test]
@@ -1845,6 +2301,20 @@ mod tests {
         fn unhost(&self, label: &str) { self.log(&format!("unhost {label}")); }
 
         fn discard(&self, label: &str) { self.log(&format!("discard {label}")); }
+
+        fn host_popover(
+            &self,
+            label: &str,
+            _: &NativeWindowHandle,
+            on_resign: Box<dyn Fn()>,
+        ) -> Result<(), stache_macos::PanelError> {
+            self.log(&format!("host popover {label}"));
+            if self.fail_host {
+                return Err(stache_macos::PanelError::UnexpectedLayout { subviews: 0 });
+            }
+            on_resign();
+            Ok(())
+        }
     }
 
     fn hosting(fail_host: bool) -> (Arc<RecordingAdapter>, PanelHosting) {
@@ -1911,6 +2381,54 @@ mod tests {
         hosting.destroyed("w");
         assert_eq!(adapter.events(), ["host w", "discard w"]);
         assert!(!hosting.is_panel("w"));
+    }
+
+    #[derive(Default)]
+    struct ResignEvents(Mutex<Vec<String>>);
+
+    impl WindowEvents for ResignEvents {
+        fn page_loaded(&self, _: &str) {}
+
+        fn page_failed(&self, _: &str, _: String) {}
+
+        fn popover_resigned(&self, label: &str) {
+            self.0.lock().expect("resigned").push(label.to_owned());
+        }
+    }
+
+    #[test]
+    fn the_popover_is_hosted_with_a_resign_callback_that_reaches_the_events() {
+        let (adapter, hosting) = hosting(false);
+        let events = Arc::new(ResignEvents::default());
+        let sink: Arc<dyn WindowEvents> = events.clone();
+        let cell = Arc::new(OnceLock::new());
+        let _ = cell.set(Arc::downgrade(&sink));
+        let mut byte = 0_u8;
+        hosting.register(POPOVER_LABEL);
+        hosting.adopt_popover(POPOVER_LABEL, pointer(&mut byte), cell).expect("host");
+        assert_eq!(adapter.events(), ["host popover stache-popover"]);
+        assert_eq!(*events.0.lock().expect("resigned"), [POPOVER_LABEL]);
+        hosting.before_close(POPOVER_LABEL);
+        assert_eq!(
+            adapter.events().last().map(String::as_str),
+            Some("unhost stache-popover")
+        );
+    }
+
+    #[test]
+    fn a_popover_host_failure_unhosts_and_forgets_the_label() {
+        let (adapter, hosting) = hosting(true);
+        let mut byte = 0_u8;
+        hosting.register(POPOVER_LABEL);
+        let error = hosting
+            .adopt_popover(POPOVER_LABEL, pointer(&mut byte), Arc::new(OnceLock::new()))
+            .expect_err("host failure");
+        assert!(error.contains("unexpected layout"), "{error}");
+        assert_eq!(adapter.events(), [
+            "host popover stache-popover",
+            "unhost stache-popover"
+        ]);
+        assert!(!hosting.is_panel(POPOVER_LABEL));
     }
 
     #[test]

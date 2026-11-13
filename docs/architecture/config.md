@@ -282,36 +282,97 @@ content is saved again. A rejected or deleted file keeps the last good registry
 revision, status and resources and records a separate diagnostic. `ConfigStore`
 never executes `exec_on_startup`.
 
-## Tray enable edits
+## Edits
 
-The tray's configuration-backed **Enable** action does not reserialize the file.
-`plan_enabled` reads the current bytes (or the generated template when the file
-is missing), refuses a symlink or an unreadable/invalid current file, locates the
-root `enabled` boolean with `toml_edit` and validates the complete replacement
-text before any write. Only that value span is replaced, so its trailing comment,
-the `#:schema` line, every other comment, key order, tables and arrays of tables
-stay byte for byte. When `enabled` is absent, `enabled = <bool>` is inserted after
-the last root key, or, in a file with no root keys, after the leading comment
-lines and before the first table header, so `#:schema` stays on line 1. The
-inserted line uses the file's own line ending (CRLF when the file has one). After
-the edit the candidate must hold the requested root `enabled`, or the edit is
-refused and nothing is written. A root
-`enabled` that is not a boolean (including a `[enabled]` table) is refused. The commit prepares and syncs a same-directory temporary
-file first, then re-reads the original bytes as close to the rename as possible.
-A missing target uses a no-clobber rename, so a concurrently created file is
-never replaced. A non-cooperating writer can still change the file between that last
-check and the rename; compare-plus-rename is not an atomic compare-and-swap on
-POSIX. Refusing a configuration file that is itself a symlink is deliberate: the
-tray never replaces the link. A replacement keeps the original file's permission
-bits, but the rename creates a new inode, so hard links to the old file are not
-updated.
+The settings editor and the tray's **Enable** action share one comment-preserving
+edit (`stache_sdk::config::edit_ops`); nothing reserializes a file. An edit is a
+`ConfigEditOp` at a key path (`ConfigPath`, a list of table keys and array
+indices, so quoted keys such as `"CapsLock+a"` need no escaping):
 
-After a successful commit the host calls `ConfigStore::reload_one` once. The
-watcher later reports the same bytes as unchanged, so a module is not reconfigured
-twice. An unchanged enabled value still syncs the disk state and retries an
-eligible failed start instead of only clearing the error. **Pause/Resume** never
-edit a file; a disabled module cannot be resumed from the tray. File diagnostics
-stay visible separately from runtime status.
+- `set { path, value }` sets or inserts a JSON value. A value already in the file
+  has only its value span replaced (its trailing comment stays); an existing
+  standard table or array of tables is set member by member. `null` is never
+  written: `set` with `null` is `remove`.
+- `remove { path }` removes a key (reset to default: the whole `key = value`
+  line) or an array element; removing a table or array-of-tables element removes
+  its header, body and sub-tables. Removing a missing key is unchanged.
+- `insert { path, index, value }` inserts an element into an inline array (in its
+  one-line or multi-line style) or a new `[[table]]` element.
+- `move { path, from, to }` reorders array elements; each array-of-tables
+  element moves with its header, body, sub-tables and the comment lines directly
+  above it, and each element of a one-element-per-line array moves with its
+  comments.
+- `rename { path, from, to }` renames a map key (re-rendering the headers of a
+  renamed table); it is refused when `to` exists.
+
+Only the touched span changes; the `#:schema` line, every other comment, key
+order, CRLF line endings and a missing trailing newline stay byte for byte. A new
+key goes after the last key of its table, before any sub-table header, in the
+file's line ending; in a file with no root keys a root key goes after the leading
+comment lines, so `#:schema` stays on line 1. An object (or a list of objects)
+set under the root or a standard table outside an array of tables becomes a
+`[table]` (or `[[table]]`) block appended at the end of the file; elsewhere
+values are written inline. A key under a dotted table is written as a dotted key
+in its nearest explicit table. Every planned text is re-parsed and compared with
+the same operation applied to the file's JSON value; a mismatch is refused and
+nothing is written. Path errors (a segment that crosses a non-table, an
+out-of-range index, an existing rename target, a value TOML cannot hold) are
+typed refusals.
+
+**Hash and stale.** A document's hash is FNV-1a 64-bit over the exact bytes as
+16 lowercase hex digits (`content_hash`; `None` for a missing file). It detects
+change, not tampering. Every editor edit carries the `baseHash` it was based on;
+`plan_edit` reads the file once and refuses with `stale` (writing nothing) when
+the bytes hash differently.
+
+**Validation.** `plan_edit` refuses a symlink, an unreadable file and a currently
+invalid file (an invalid file is read-only until a valid save lands). A missing
+file starts from the generated template. The candidate text is decoded and
+validated through the catalog exactly as a reload would before any write; a
+failure returns the catalog's message, line/column and field path (falling back
+to the edited path when the catalog names none). `set_enabled` (the tray) is
+`set` on the root `enabled` after refusing a non-boolean `enabled` (including a
+`[enabled]` table).
+
+**Commit.** The commit prepares and syncs a same-directory temporary file first,
+then re-reads the original bytes as close to the rename as possible; a change in
+between is reported as `stale`. A missing target uses a no-clobber rename, so a
+concurrently created file is never replaced. A non-cooperating writer can still
+change the file between that last check and the rename; compare-plus-rename is
+not an atomic compare-and-swap on POSIX. Refusing a configuration file that is
+itself a symlink is deliberate: an edit never replaces the link. A replacement
+keeps the original file's permission bits, but the rename creates a new inode,
+so hard links to the old file are not updated.
+
+After a successful commit the host calls `ConfigStore::reload_one` (or
+`reload_global` for `global.toml`) once, on the host runner, and returns the new
+hash and the reload outcome (`applied` with the revision, `unchanged`, or
+`rejected` with a diagnostic). The watcher later reports the same bytes as
+unchanged, so a module is not reconfigured twice. An unchanged enabled value
+still syncs the disk state and retries an eligible failed start instead of only
+clearing the error. **Pause/Resume** never edit a file; a disabled module cannot
+be resumed from the tray. File diagnostics stay visible separately from runtime
+status.
+
+## Document reads and change events
+
+`config_document(file)` reads one catalog file once, without touching a module
+lock: file name and path, state (`missing`, `valid`, `invalid`, `symlink`), hash,
+the parsed value (only the keys present in the file; `null` when missing or
+invalid), the catalog default, the JSON Schema, the diagnostic (message,
+line/column, field) and unknown-key warnings. A symlinked file is read through
+the link but is read-only. `config_files()` returns the last published
+`HostStatus.config`. `open_config_file(file)` creates a missing file from the
+template (no-clobber) and opens it with the default app (`open`). Files are named
+only by catalog file name; nothing accepts a path.
+
+The host emits `config-changed { files }` (catalog file names) after every
+committed edit (editor or tray) and after every watcher batch that touched
+catalog files, whatever the reload outcome (accepted, unchanged, rejected or
+deleted; a rescan names every file). It is emitted from the host runner after
+the reload and the status publication, holding no store lock. A watcher batch
+that only echoes the host's own committed bytes (same hash, not rejected) is not
+announced a second time, so one edit is one event.
 
 ## Reloading
 

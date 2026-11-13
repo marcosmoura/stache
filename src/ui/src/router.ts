@@ -1,7 +1,7 @@
 import { lazy, type ComponentType } from 'react';
 
 /** Every window surface the host opens, keyed by its `?surface=` value. */
-export type Surface = 'shell' | 'test' | 'access' | 'bar';
+export type Surface = 'shell' | 'test' | 'access' | 'bar' | 'popover';
 
 /** Props every routed window receives. */
 export type WindowProps = { surface: Surface };
@@ -21,6 +21,10 @@ const TestWindow = lazy(() =>
   import('@/windows/TestWindow').then((module) => ({ default: module.TestWindow })),
 );
 
+const Popover = lazy(() =>
+  import('@/windows/Popover').then((module) => ({ default: module.Popover })),
+);
+
 const Bar = lazy(() => import('@/windows/Bar').then((module) => ({ default: module.Bar })));
 
 const UnknownSurface = lazy(() =>
@@ -33,6 +37,7 @@ export const surfaces: Readonly<Record<Surface, ComponentType<WindowProps>>> = {
   test: TestWindow,
   access: AccessibilityGuide,
   bar: Bar,
+  popover: Popover,
 };
 
 /** The surface used when the `surface` parameter is absent. */

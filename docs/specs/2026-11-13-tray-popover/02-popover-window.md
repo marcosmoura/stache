@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 02 — Native popover and tray clicks
@@ -22,12 +22,12 @@ Files expected to change: `src/crates/app/src/tray.rs`, `src/crates/app/src/wind
 
 ## Acceptance criteria
 
-- [ ] TP-02-01: `popover_origin` is tested for an icon at the left edge, centre and right edge, on a secondary display with negative origin, and with a frame smaller than the panel.
-- [ ] TP-02-02: Left click toggles; right click shows exactly the two items; the old rows and their tests are removed or rewritten.
-- [ ] TP-02-03: The panel lifecycle (create once, show, hide on each trigger, toggle race, release on shutdown) is tested against a fake panel adapter.
-- [ ] TP-02-04: Only the host can open the `popover` surface; a module request for it is refused.
-- [ ] TP-02-05: The UI shell renders the sidebar with badges, navigates by keyboard, remembers the tab and calls `hide_popover` on Esc (Vitest browser + a Playwright scenario with the fake host).
-- [ ] TP-02-06: Docs updated; `bun run lint`, `bun run format:check`, `bun run check:generated` and `bun run test` pass.
+- [x] TP-02-01: `popover_origin` is tested for an icon at the left edge, centre and right edge, on a secondary display with negative origin, and with a frame smaller than the panel.
+- [x] TP-02-02: Left click toggles; right click shows exactly the two items; the old rows and their tests are removed or rewritten.
+- [x] TP-02-03: The panel lifecycle (create once, show, hide on each trigger, toggle race, release on shutdown) is tested against a fake panel adapter.
+- [x] TP-02-04: Only the host can open the `popover` surface; a module request for it is refused.
+- [x] TP-02-05: The UI shell renders the sidebar with badges, navigates by keyboard, remembers the tab and calls `hide_popover` on Esc (Vitest browser + a Playwright scenario with the fake host).
+- [x] TP-02-06: Docs updated; `bun run lint`, `bun run format:check`, `bun run check:generated` and `bun run test` pass.
 
 ## Tests
 
@@ -37,3 +37,7 @@ Files expected to change: `src/crates/app/src/tray.rs`, `src/crates/app/src/wind
 ## Notes
 
 Native behaviour (key focus without activation, all Spaces, full-screen, the toggle race) is verified by the user in the running app at the end of part 04.
+
+Implementation decisions (2026-11-13): no new `WindowKind`; the popover is a host-only entry recognised by its `popover` surface (fixed label `stache-popover`) with a key-capable panel path in the adapter (`host_popover`/`show_popover`/`hide_popover`, `NSPanel` subclass with `canBecomeKeyWindow`, `NSVisualEffectView`, 18 pt corners, level 101). `tray::update` is removed (the tooltip is fixed). The toggle guard is 400 ms and a left click acts on release; a right press records the icon rect used by `Open Stache`. Between this part and part 03 the branch has no UI entry for Enable/Pause/Retry/Test Window.
+
+The popover is prewarmed hidden about 1 s after the host reports ready, so the first tray click only positions and shows it (user report 2026-11-13).

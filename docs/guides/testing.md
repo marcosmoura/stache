@@ -343,8 +343,13 @@ the real cache, runtime, configuration or legacy identity.
   (the focused app only) in dark and light (`spaces.spec.ts`, reduced motion so the
   strip is settled), and the Accessibility guide blocked and revoked (480×640, the
   page captured with a transparent background) and the test window (full page) in
-  dark and light (`windows.spec.ts`, reduced motion so nothing is mid-animation).
-  They depend on the
+  dark and light (`windows.spec.ts`, reduced motion so nothing is mid-animation),
+  and the tray popover shell with every badge kind, its Overview with the user's modules and
+  the settings editor on `keepAwake`, `tiling` and an invalid `tiling.toml` (480×640,
+  transparent background) in dark and light (`popover.spec.ts`). The popover uses the
+  system font and WebKit's system colours; `popover.spec.ts` pins the user-dependent ones
+  (accent, selection, focus ring) to the macOS defaults, so it needs no font skip. The
+  other baselines depend on the
   system font 'Maple Mono NF': after loading, each test calls `skipWithoutMapleMono(page)`
   (`e2e/screenshots/font.ts`, a DOM measurement evaluated in the page, since WebKit's
   canvas does not see user-installed fonts) and, without the font, calls

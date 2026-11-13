@@ -345,6 +345,7 @@ pub fn config_file_view(
 /// listing DTOs are exported without a Tauri command: the pilot has no UI and
 /// its socket method is not a webview surface.
 #[must_use]
+#[allow(clippy::too_many_lines)] // One flat, ordered export list.
 pub fn builder() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new()
         .commands(collect_commands![
@@ -358,9 +359,24 @@ pub fn builder() -> Builder<tauri::Wry> {
             crate::bar_bridge::bar_weather,
             crate::bar_bridge::bar_media_artwork,
             crate::bar_bridge::bar_session_action,
-            crate::bar_bridge::bar_tiling_action
+            crate::bar_bridge::bar_tiling_action,
+            crate::config_documents::config_document,
+            crate::config_documents::config_files,
+            crate::config_documents::config_edit,
+            crate::config_documents::open_config_file,
+            crate::popover::hide_popover,
+            crate::popover_actions::set_module_enabled,
+            crate::popover_actions::module_session_action,
+            crate::popover_actions::retry_module,
+            crate::popover_actions::open_test_window,
+            crate::popover_actions::open_accessibility_guide
         ])
-        .events(collect_events![StatusChanged, BarChanged])
+        .events(collect_events![
+            StatusChanged,
+            BarChanged,
+            crate::config_documents::ConfigChanged,
+            crate::popover::PopoverShown
+        ])
         .typ::<AccessView>()
         .typ::<AccessState>()
         .typ::<GlobalConfig>()

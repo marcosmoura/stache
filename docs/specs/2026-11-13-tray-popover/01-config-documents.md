@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 01 — Host: config documents and generic edits
@@ -34,15 +34,15 @@ Files expected to change: `src/crates/sdk/src/config/` (the edit module that hol
 
 ## Acceptance criteria
 
-- [ ] TP-01-01: For each op, on fixture files with comments, CRLF, no trailing newline, quoted keys and arrays of tables, only the touched span changes (byte-equality test of the rest).
-- [ ] TP-01-02: `set_enabled` uses the generic edit and all its existing tests pass unchanged.
-- [ ] TP-01-03: An invalid value (wrong type, out of bounds, bad enum) is refused with the catalog's message and field path; the file bytes and mtime are unchanged.
-- [ ] TP-01-04: A stale `base_hash` is refused and writes nothing; a symlink, an invalid current file and an unknown file are refused.
-- [ ] TP-01-05: An edit to a missing file creates it from the template with the edit applied and `#:schema` on line 1.
-- [ ] TP-01-06: A committed edit reloads the module once; the watcher's later event for the same bytes reloads nothing.
-- [ ] TP-01-07: `config_document` returns present-keys value, default, schema, hash and diagnostic for missing, valid, invalid and symlinked files.
-- [ ] TP-01-08: `config-changed` fires after a commit and after an external save (including an invalid one and a delete).
-- [ ] TP-01-09: Bindings regenerated; docs describe the shipped behaviour; `bun run lint`, `bun run format:check`, `bun run check:generated` and `bun run test` pass.
+- [x] TP-01-01: For each op, on fixture files with comments, CRLF, no trailing newline, quoted keys and arrays of tables, only the touched span changes (byte-equality test of the rest).
+- [x] TP-01-02: `set_enabled` uses the generic edit and all its existing tests pass unchanged.
+- [x] TP-01-03: An invalid value (wrong type, out of bounds, bad enum) is refused with the catalog's message and field path; the file bytes and mtime are unchanged.
+- [x] TP-01-04: A stale `base_hash` is refused and writes nothing; a symlink, an invalid current file and an unknown file are refused.
+- [x] TP-01-05: An edit to a missing file creates it from the template with the edit applied and `#:schema` on line 1.
+- [x] TP-01-06: A committed edit reloads the module once; the watcher's later event for the same bytes reloads nothing.
+- [x] TP-01-07: `config_document` returns present-keys value, default, schema, hash and diagnostic for missing, valid, invalid and symlinked files.
+- [x] TP-01-08: `config-changed` fires after a commit and after an external save (including an invalid one and a delete).
+- [x] TP-01-09: Bindings regenerated; docs describe the shipped behaviour; `bun run lint`, `bun run format:check`, `bun run check:generated` and `bun run test` pass.
 
 ## Tests
 
@@ -54,3 +54,5 @@ Files expected to change: `src/crates/sdk/src/config/` (the edit module that hol
 ## Notes
 
 The JSON-to-TOML conversion must never write `null`; `set` with `null` on an `Option` field is `remove`.
+
+Implementation decisions (2026-11-13): the hash is FNV-1a 64-bit over the exact bytes (16 hex digits). A watcher batch that only repeats bytes the host itself just committed (and was not rejected) is not announced again, so one edit yields exactly one `config-changed`; every outside save is announced. A change between plan and the final re-read maps to `stale`. JSON fields cross the wire through the SDK marker type `JsonValue`. Objects set inside an array of tables are inline; elsewhere a new table is appended as a `[table]` block. Renaming a dotted-key table is a typed `unsupported` refusal. `open_config_file` runs `/usr/bin/open <path>` and is tested only for refusals.

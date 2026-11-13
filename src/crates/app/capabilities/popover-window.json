@@ -1,0 +1,23 @@
+{
+  "identifier": "popover-window",
+  "description": "Least-privilege surface for the tray popover (stache-popover). It can listen for host events and call host_status, hide_popover, the Overview's module and window commands (set_module_enabled, module_session_action, retry_module, open_test_window, open_accessibility_guide), the settings editor's config_files, config_document, config_edit and open_config_file, and the three Accessibility commands (request_accessibility, open_accessibility_settings, quit_app). No close, drag, filesystem, shell, opener, dialog, HTTP or plugin permissions are granted.",
+  "windows": ["stache-popover"],
+  "permissions": [
+    "allow-host-status",
+    "allow-hide-popover",
+    "allow-set-module-enabled",
+    "allow-module-session-action",
+    "allow-retry-module",
+    "allow-open-test-window",
+    "allow-open-accessibility-guide",
+    "allow-config-files",
+    "allow-config-document",
+    "allow-config-edit",
+    "allow-open-config-file",
+    "allow-request-accessibility",
+    "allow-open-accessibility-settings",
+    "allow-quit-app",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
+}
