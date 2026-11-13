@@ -1,4 +1,4 @@
-cargo-features = ["profile-rustflags", "trim-paths"]
+cargo-features = ["profile-rustflags"]
 
 [workspace]
 resolver = "2"
@@ -27,9 +27,9 @@ repository = "https://github.com/marcosmoura/stache"
 
 [workspace.dependencies]
 # Parser only (`HotKey`, `Modifiers`, `Code`); never its native manager.
-global-hotkey = { version = "0.8.0", default-features = false }
+global-hotkey = { version = "0.10.0", default-features = false }
 # The `Code` type shared by the parser and the native key table.
-keyboard-types = { version = "0.7.0", default-features = false }
+keyboard-types = { version = "0.8.3", default-features = false }
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }

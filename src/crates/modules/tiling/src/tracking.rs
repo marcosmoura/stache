@@ -756,10 +756,7 @@ impl TrackingRuntime {
     /// treat as unknown rather than as "nothing is running".
     #[must_use]
     pub fn running_applications(&self) -> Vec<stache_macos::FrontmostApplication> {
-        self.actions
-            .as_deref()
-            .map(ApplicationActions::running_details)
-            .unwrap_or_default()
+        self.actions.as_deref().map_or_default(ApplicationActions::running_details)
     }
 
     /// Restores every open `AXEnhancedUserInterface` lease now (ignoring the idle

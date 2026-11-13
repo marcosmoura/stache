@@ -61,7 +61,9 @@ impl BatteryBackend for SystemBattery {
             State::Discharging => BatteryPowerState::Discharging,
             State::Empty => BatteryPowerState::Empty,
             State::Full => BatteryPowerState::Full,
-            State::Unknown => BatteryPowerState::Unknown,
+            // `Paused` (plugged in, held at a charge limit) is new in starship-battery 0.12;
+            // 0.11 reported that case as `Unknown`, and the Bar has no paused state.
+            State::Unknown | State::Paused => BatteryPowerState::Unknown,
         };
         Ok(Some(BatteryReadout {
             percent: battery.state_of_charge().get::<percent>(),

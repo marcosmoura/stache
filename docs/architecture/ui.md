@@ -713,15 +713,15 @@ mounted popover, so the selected tab lasts for the session. The sample scoped st
 | ------------------- | -------------- | ------------------------------------------------------------------ |
 | `tauri`             | `=2.12.5`      | Host pin; `tauri-specta` enables its `specta` feature.             |
 | `tauri-build`       | `=2.7.4`       | Build crate; `tauri 2.12.5` requires `tauri-build ^2.7.4`.         |
-| `tauri-specta`      | `=2.0.0-rc.26` | Documented Tauri 2 binding tool.                                   |
-| `specta`            | `=2.0.0-rc.26` | Exact version required by `tauri-specta` and the exporter.         |
-| `specta-typescript` | `=0.0.13`      | TypeScript exporter used by the generator.                         |
+| `tauri-specta`      | `=2.0.0-rc.29` | Documented Tauri 2 binding tool.                                   |
+| `specta`            | `=2.0.0-rc.28` | Exact version required by `tauri-specta` and the exporter.         |
+| `specta-typescript` | `=0.0.15`      | TypeScript exporter used by the generator.                         |
 | `@tauri-apps/api`   | `2.12.4`       | Runtime imported by generated bindings; must match the core minor. |
 | `@tauri-apps/cli`   | `2.12.4`       | Build/dev CLI; it drives the same 2.12 core.                       |
 
-`tauri-specta =2.0.0-rc.26` declares `specta =2.0.0-rc.26` and
-`specta-typescript ^0.0.13`, so the resolved versions are
-`specta 2.0.0-rc.26` and `specta-typescript 0.0.13`. Do not upgrade one of them
+`tauri-specta =2.0.0-rc.29` declares `specta =2.0.0-rc.28` and
+`specta-typescript ^0.0.15`, so the resolved versions are
+`specta 2.0.0-rc.28` and `specta-typescript 0.0.15`. Do not upgrade one of them
 independently: newer `specta` and `specta-typescript` releases do not resolve until
 `tauri-specta` moves to them. `tauri` also enables its `specta` feature so `tauri::State`,
 `AppHandle` and window arguments are omitted from generated command parameters.

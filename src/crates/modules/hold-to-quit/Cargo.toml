@@ -15,7 +15,7 @@ testing = ["stache-macos/testing", "stache-sdk/testing"]
 [dependencies]
 schemars = "1.2.3"
 serde = { version = "1.0.229", features = ["derive"] }
-specta = { version = "=2.0.0-rc.26", features = ["derive"] }
+specta = { version = "=2.0.0-rc.28", features = ["derive"] }
 stache-macos = { path = "../../macos" }
 stache-sdk = { path = "../../sdk" }
 

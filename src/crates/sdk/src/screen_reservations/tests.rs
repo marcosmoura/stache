@@ -214,8 +214,9 @@ fn owners(registry: &Registry, display: DisplayId) -> Vec<(ModuleId, u64)> {
         .observe_screen_reservations()
         .read()
         .display(display)
-        .map(|entry| entry.contributions.iter().map(|c| (c.owner, c.generation)).collect())
-        .unwrap_or_default()
+        .map_or_default(|entry| {
+            entry.contributions.iter().map(|c| (c.owner, c.generation)).collect()
+        })
 }
 
 // --- identity, validation, gating --------------------------------------------

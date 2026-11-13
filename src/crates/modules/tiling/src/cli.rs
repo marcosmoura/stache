@@ -742,8 +742,7 @@ fn query_params(kind: &str, filters: &ArgMatches) -> QueryParams {
 fn window_params(sub: &ArgMatches) -> WindowParams {
     let resize: Vec<String> = sub
         .get_many::<String>("resize")
-        .map(|values| values.cloned().collect())
-        .unwrap_or_default();
+        .map_or_default(|values| values.cloned().collect());
     WindowParams {
         focus: sub.get_one::<String>("focus").cloned(),
         swap: sub.get_one::<String>("swap").cloned(),

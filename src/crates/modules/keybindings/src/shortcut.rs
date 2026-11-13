@@ -177,7 +177,7 @@ fn parse_ordinary(shortcut: &str) -> Result<PhysicalChord, ShortcutError> {
         (Modifiers::SHIFT, ModifierFlags::SHIFT),
         (Modifiers::CONTROL, ModifierFlags::CONTROL),
         (Modifiers::ALT, ModifierFlags::OPTION),
-        (Modifiers::SUPER, ModifierFlags::COMMAND),
+        (Modifiers::META, ModifierFlags::COMMAND),
     ] {
         if hotkey.mods.contains(from) {
             modifiers = modifiers | to;
@@ -267,7 +267,7 @@ mod tests {
             (Modifiers::SHIFT, S),
             (Modifiers::CONTROL, K),
             (Modifiers::ALT, O),
-            (Modifiers::SUPER, C),
+            (Modifiers::META, C),
         ] {
             if hotkey.mods.contains(from) {
                 modifiers = modifiers | to;
@@ -461,7 +461,6 @@ mod tests {
             "Command+A+Shift",
             "Command+A+B",
             "Fn+A",
-            "F25",
             "F0",
             "Command+ ",
             " ",
@@ -470,6 +469,9 @@ mod tests {
             assert!(parse(raw).is_err(), "{raw:?} must be rejected");
             assert_eq!(archived(raw), None, "{raw:?} must be rejected by the archive");
         }
+        // global-hotkey 0.10 parses F25 (0.8 rejected it); it has no Carbon virtual key, so
+        // registration reports it unsupported instead.
+        assert_eq!(ordinary("F25"), chord(Code::F25, ModifierFlags::NONE));
         // Legacy normalization drops a leading separator, so `+A` is plain `A`.
         assert_eq!(
             parse("+A").ok(),

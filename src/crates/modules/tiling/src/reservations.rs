@@ -147,7 +147,7 @@ impl HostReservations {
 
     /// Whether the snapshot lists any display.
     #[must_use]
-    pub fn has_topology(&self) -> bool { !self.displays.is_empty() }
+    pub const fn has_topology(&self) -> bool { !self.displays.is_empty() }
 
     /// What the host says about `native`.
     #[must_use]

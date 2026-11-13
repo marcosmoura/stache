@@ -293,8 +293,7 @@ impl TilingStatusSource {
                         .apps
                         .iter()
                         .find(|record| record.info.application == app.application)
-                        .map(|record| AppLabel::from_info(&record.info))
-                        .unwrap_or_default();
+                        .map_or_default(|record| AppLabel::from_info(&record.info));
                     describe_ambiguous(app, &label)
                 })
             {
@@ -445,13 +444,10 @@ impl AppLabel {
         let pid = self.pid.map(|pid| format!("pid {pid}"));
         match (&self.name, &self.bundle_id) {
             (Some(name), Some(bundle)) => {
-                format!(
-                    "{name} ({bundle}{})",
-                    pid.map(|p| format!(", {p}")).unwrap_or_default()
-                )
+                format!("{name} ({bundle}{})", pid.map_or_default(|p| format!(", {p}")))
             }
             (Some(one), None) | (None, Some(one)) => {
-                format!("{one}{}", pid.map(|p| format!(" ({p})")).unwrap_or_default())
+                format!("{one}{}", pid.map_or_default(|p| format!(" ({p})")))
             }
             (None, None) => pid.map_or_else(
                 || "an unidentified application".to_owned(),

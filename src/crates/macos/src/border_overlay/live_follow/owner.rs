@@ -132,7 +132,7 @@ impl SystemLiveFollow {
     /// The slot counters of the running owner.
     #[must_use]
     pub fn slot_counters(&self) -> SlotsCounters {
-        self.running.as_ref().map(|r| r.slots.counters()).unwrap_or_default()
+        self.running.as_ref().map_or_default(|r| r.slots.counters())
     }
 
     /// Stops within `budget`: closes the slots first, posts a stop, joins.

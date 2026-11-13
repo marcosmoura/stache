@@ -494,7 +494,7 @@ fn preset(state: &mut TilingState, name: &str) -> IntentOutcome {
         })
     });
     let area = frames::display_area(state, screen);
-    let presets = state.config.as_deref().map(|c| c.floating.presets.clone()).unwrap_or_default();
+    let presets = state.config.as_deref().map_or_default(|c| c.floating.presets.clone());
     let (usable, gaps) = area.unwrap_or((Rect::new(0.0, 0.0, 0.0, 0.0), crate::layout::Gaps::ZERO));
     let outcome = resolve_preset(&PresetRequest {
         presets: &presets,
@@ -751,7 +751,7 @@ pub(super) fn apply_user_resize(
         return UserResize::NoRatio;
     };
     let landscape = area.width >= area.height;
-    let master = state.config.as_deref().map(|c| c.master.position).unwrap_or_default();
+    let master = state.config.as_deref().map_or_default(|c| c.master.position);
     let resolved = match master {
         MasterPosition::Auto if landscape => MasterPosition::Left,
         MasterPosition::Auto => MasterPosition::Top,
@@ -790,7 +790,7 @@ fn resize_master(
     landscape: bool,
 ) -> IntentOutcome {
     use crate::config::MasterPosition;
-    let master = state.config.as_deref().map(|c| c.master.clone()).unwrap_or_default();
+    let master = state.config.as_deref().map_or_default(|c| c.master.clone());
     let resolved = match master.position {
         MasterPosition::Auto if landscape => MasterPosition::Left,
         MasterPosition::Auto => MasterPosition::Top,

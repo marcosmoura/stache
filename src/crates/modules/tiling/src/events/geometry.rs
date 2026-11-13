@@ -76,11 +76,11 @@ impl GeometryCoalescer {
 
     /// Pending token count.
     #[must_use]
-    pub fn len(&self) -> usize { self.pending.len() }
+    pub const fn len(&self) -> usize { self.pending.len() }
 
     /// Whether nothing is pending.
     #[must_use]
-    pub fn is_empty(&self) -> bool { self.pending.is_empty() }
+    pub const fn is_empty(&self) -> bool { self.pending.is_empty() }
 
     /// Whether a token has a pending sample.
     #[must_use]

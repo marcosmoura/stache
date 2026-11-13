@@ -77,16 +77,12 @@ impl EventBus {
     pub fn publish<E: Clone + Send + 'static>(&self, event: E) {
         let subscribers = {
             let subscribers = lock(&self.inner.subscribers);
-            subscribers
-                .by_type
-                .get(&TypeId::of::<E>())
-                .map(|registrations| {
-                    registrations
-                        .iter()
-                        .map(|registration| Arc::clone(&registration.subscriber))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default()
+            subscribers.by_type.get(&TypeId::of::<E>()).map_or_default(|registrations| {
+                registrations
+                    .iter()
+                    .map(|registration| Arc::clone(&registration.subscriber))
+                    .collect::<Vec<_>>()
+            })
         };
         for subscriber in subscribers {
             subscriber.deliver(&event);

@@ -371,8 +371,7 @@ fn query_exports() -> BTreeMap<(String, String), BTreeSet<String>> {
             let name = ["function ", "const ", "class ", "let "]
                 .iter()
                 .find_map(|keyword| rest.strip_prefix(keyword))
-                .map(identifier)
-                .unwrap_or_default();
+                .map_or_default(identifier);
             if exported || !name.is_empty() {
                 chunks.push((name.to_owned(), exported, String::new()));
             }
