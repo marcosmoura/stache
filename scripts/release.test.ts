@@ -89,6 +89,8 @@ interface FakeOptions {
   /** `security find-identity -p codesigning` output. */
   identities?: string;
   authority?: string;
+  /** Authority reported for the DMG only. */
+  dmgAuthority?: string;
   requirement?: string;
 }
 
@@ -148,10 +150,15 @@ function fakeRunner(root: string, options: FakeOptions = {}) {
         }
 
         if (args[0] === '-dvvv') {
+          const authority =
+            (args.at(-1)!.endsWith('.dmg') ? options.dmgAuthority : undefined) ??
+            options.authority ??
+            identity;
+
           return {
             status: 0,
             stdout: '',
-            stderr: `CodeDirectory v=20500 size=1 flags=0x10000(runtime) hashes=1\nAuthority=${options.authority ?? identity}\n`,
+            stderr: `CodeDirectory v=20500 size=1 flags=0x10000(runtime) hashes=1\nAuthority=${authority}\n`,
           };
         }
 
@@ -757,6 +764,7 @@ describe('RELEASE-03-13 fail closed while signing', () => {
     ['requirement display', { fail: (c, a) => c === 'codesign' && a[0] === '-d' }],
     ['certificate lookup', { fail: (c, a) => c === 'security' && a[0] === 'find-certificate' }],
     ['an authority that is not the identity', { authority: 'Someone Else' }],
+    ['a DMG authority that is not the identity', { dmgAuthority: 'Someone Else' }],
     [
       'a cdhash-based designated requirement',
       { requirement: `designated => cdhash H"${'ab'.repeat(20)}"\n` },

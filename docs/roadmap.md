@@ -2,8 +2,8 @@
 
 Read when checking what is finished, awaiting integration, specified or still planned.
 Snapshot: **2026-11-13**. Here, **finished/shipped means merged into `main`**, not a
-packaged public release. Only an ad-hoc development bundle exists; no release artifact
-has shipped.
+packaged public release. Only ad-hoc and self-signed local builds exist; no release
+artifact has shipped.
 
 ## Status overview
 
