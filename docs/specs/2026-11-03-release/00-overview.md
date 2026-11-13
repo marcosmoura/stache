@@ -6,7 +6,8 @@ branch: feat/release
 
 Read when turning Stache Next from a development bundle into a distributable product.
 **PLANNED, NOT SHIPPED.** Every part is `draft`, nothing below is a shipped capability,
-and no artifact has been signed, notarized or published. Base: `main` at `ad34b46`.
+and no artifact has been signed, notarized or published. Written against `ad34b46`;
+revised 2026-11-13 against `main` at `74bfd27` (see [Revision](#revision-2026-11-13)).
 
 ## Goal
 
@@ -17,16 +18,16 @@ app, and release gates that state only what was proven.
 
 ## Non-goals
 
-- No runtime features, Settings UI, new tray items or module behavior. Keep Awake,
+- No runtime features, new settings surface, new tray items or module behavior. Keep Awake,
   Wallpapers, Keybindings, Hold-to-Quit, MenuAnywhere, Bar and Tiling keep their own specs.
 - No auto-updater and no launch-at-login item. The legacy app had neither.
 - No automatic configuration migration. `stache config migrate` stays the only path that
   converts a legacy file; a release may detect one and print a diagnostic.
 - No Homebrew Core submission, App Store distribution or universal/Intel binary.
 - No silent removal or termination of the legacy application.
-- No repair of the Cmd-Q/logout coordinated-teardown gap, which keeps its own follow-up on
-  the [roadmap](../../roadmap.md) and its own draft spec, [Coordinated application teardown](../2026-11-03-teardown/00-overview.md),
-  on `feat/teardown`. This spec routes around it and publishes it as a limitation.
+- No further teardown work. [Coordinated application teardown](../2026-11-03-teardown/00-overview.md)
+  shipped: tray Quit, real Cmd-Q and SIGTERM are verified. Logout, restart and shutdown are
+  not verified, and this spec publishes that as a limitation.
 
 ## Shipped state today
 
@@ -34,16 +35,27 @@ Verified on disk at the base commit.
 
 - `src/crates/app/tauri.conf.json`: `productName` `Stache Next`, identifier
   `com.marcosmoura.stache.next`, version `0.25.0`, `bundle.targets` `["app"]`, ad-hoc
-  `signingIdentity` `"-"`, `minimumSystemVersion` `26.0`, no fixed windows and one
-  `test-window` capability. Four icons are referenced; `icons/64x64.png` and
+  `signingIdentity` `"-"`, `minimumSystemVersion` `26.0`, `entitlements`
+  `Entitlements.plist`, no fixed windows and three capabilities (`access-window`,
+  `bar-window`, `popover-window`). Four icons are referenced; `icons/64x64.png` and
   `icons/icon.png` are not, and `README.md` displays `icon.png`.
+- `bundle.resources` maps `resources/media-control/` into
+  `Contents/Resources/media-control/`: the Bar's vendored MediaRemote adapter, with two
+  Mach-O files (`MediaRemoteAdapterTestClient` and the `MediaRemoteAdapter.framework`
+  library), a perl script and `PROVENANCE.md`. Tauri flattens the framework's symlinks.
+  Upstream's build signs them ad hoc. `fix/security-hardening` re-vendors these files;
+  that branch is independent of this one.
 - The version is also in `package.json` and `[workspace.package]`, and `Cargo.lock` repeats
   it. Nothing keeps these in sync. `src/ui/tests/hostFixtures.ts` also holds `0.25.0`, as
   fixture payload rather than a manifest, so it stays outside the version check.
-- No `Info.plist`, entitlements file, DMG target or notarization configuration exists.
-  The tray-only behavior comes from `ActivationPolicy::Accessory` at runtime.
+- `src/crates/app/Info.plist` holds the two location usage strings the Bar's weather needs,
+  and `Entitlements.plist` holds only `com.apple.security.personal-information.location`.
+  No `LSUIElement`, DMG target or notarization configuration exists. The tray-only
+  behavior comes from `ActivationPolicy::Accessory` at runtime.
 - `.github/workflows/quality.yml` runs generated checks, lint, format, tests, coverage,
-  audits, `bun run build` and `bun run tauri:build` on `macos-26`. It uses no signing
+  audits, `bun run build` and `bun run tauri:build` on `macos-26`. `bun run test` already
+  includes `test:scripts`, a Node-environment Vitest project (`vitest.scripts.config.ts`)
+  that collects `scripts/**/*.test.ts`. It uses no signing
   secret and uploads no artifact. Its triggers are pushes to `main` and pull requests only;
   candidate tags on `feat/release` need Part 02's added candidate-tag trigger.
 - `build.rs` fails a release build without `custom-protocol`, which `bun run tauri:build`
@@ -55,7 +67,7 @@ Verified on disk at the base commit.
 - Cache and runtime directories derive from the compile-time constant
   `stache_sdk::paths::IDENTITY`, which no Tauri config reaches. Configuration resolves to
   `$XDG_CONFIG_HOME/stache` or `~/.config/stache`, the directory that also holds the legacy
-  `config.jsonc`.
+  `config.jsonc`. Stache Next reads `global.toml` and per-module `<id>.toml` files there.
 - The Tauri CLI (2.12.4) merges repeated `--config` arguments in order and passes the result
   to the build through `TAURI_CONFIG`. `PackageInfo.name` is compiled from the merged
   `productName`. An unbundled dev binary embeds an `Info.plist` with `CFBundleName` and the
@@ -72,7 +84,8 @@ binary. Its `Info.plist` sets `LSUIElement`, `NSHighResolutionCapable`,
 `resources/Frameworks`, and its README warns that the retained
 `MediaRemoteAdapter.framework` fails strict deep-signature validation. It has no updater
 and no login item. Its cache **and control socket** live under
-`~/Library/Caches/com.marcosmoura.stache`. This tree has none of those resources.
+`~/Library/Caches/com.marcosmoura.stache`. This tree bundles only the `media-control`
+adapter described above.
 
 ## Decisions
 
@@ -89,7 +102,8 @@ and no login item. Its cache **and control socket** live under
    [Blocked gates and merge consequence](#blocked-gates-and-merge-consequence).
 5. **First release version is `0.26.0`.** `[workspace.package] version` is authoritative;
    a check keeps `package.json` and `tauri.conf.json` identical to it.
-6. **No auto-updater, launch-at-login, Settings UI or automatic config migration.**
+6. **No auto-updater, launch-at-login or automatic config migration.** Settings are the
+   shipped tray popover editor and the TOML files; this spec adds no settings surface.
 7. **Coexistence is allowed for now.** Legacy Stache and Stache Next may both be installed.
    Once the migration is approved, removing the legacy app is an explicit documented user
    step, never automatic and never by process name.
@@ -98,9 +112,9 @@ and no login item. Its cache **and control socket** live under
 Decisions added by this spec, each resting on a verified fact above:
 
 9. **The cask stops the app with `signal: [["TERM", <bundle id>]]` and `on_upgrade: :signal`,
-   not `quit:`.** Homebrew documents `quit:` as equivalent to Cmd-Q, the route with the
-   known teardown gap, while SIGTERM converges on the coordinated teardown. Homebrew
-   matches `signal:` by bundle identifier, not executable name.
+   not `quit:`.** Both routes now reach the coordinated teardown, but `quit:` sends an Apple
+   Event and so needs Automation permission for the terminal, while SIGTERM needs none.
+   Homebrew matches `signal:` by bundle identifier, not executable name.
 10. **The DMG is built with `hdiutil` from the finished app.** Tauri's `dmg` target stays
     unused so one tool owns the layout and stapling order, and `bundle.targets` stays `["app"]`.
 11. **The first public artifact carries the final identity.** The merge gate puts Part 04
@@ -128,6 +142,22 @@ Decisions from the owner's answers:
     identity. The overlay cannot reach this constant, and without this rule a `tauri:dev` run would
     share the installed release's lock, socket and cache. See
     [Part 04](04-identity-switch.md#development-identity).
+
+Decisions from the 2026-11-13 revision:
+
+16. **Nested code is signed individually, inside out.** Every Mach-O under
+    `Contents/Resources/media-control/` is signed before the main executable, which is
+    signed before the bundle. `--deep` is never used to sign. The bundle verifier accepts
+    exactly the vendored files there and nothing else.
+17. **The committed entitlements stay, and stay minimal.** `Entitlements.plist` holds only
+    the location entitlement the Bar's weather needs under hardened runtime. The final
+    signature applies it to the main executable only, never to the nested adapter.
+18. **Both gates are still closed on 2026-11-13.** The owner confirmed that no Developer ID
+    credentials exist and legacy removal is not approved. This session implements Part 01,
+    Part 02, Part 03 up to its gate, Part 04 Stage 1 and Part 05's preparation, then keeps
+    `feat/release` unmerged. Parts 03, 04 and 05 stay `in-progress` and Part 06 `draft`.
+19. **`feat/release` starts from `main`, independent of `fix/security-hardening`.**
+    Whichever merges second resolves the overlap in `quality.yml` and this spec.
 
 ## Blocked gates and merge consequence
 
@@ -193,6 +223,16 @@ Answered by the owner.
    override.
 
 No open questions remain.
+
+## Revision 2026-11-13
+
+The tree moved after this spec was written. Changed to match `main`: the bundle carries the
+nested `media-control` adapter (Decision 16); `Info.plist` and `Entitlements.plist` exist
+and keep their location entries (Decision 17); the capabilities are the three shipped
+windows; the Test Window is gone, so manual checks open the tray popover; script tests use
+the existing `test:scripts` Vitest project instead of `bun test`; teardown shipped, so
+Cmd-Q is no longer a published gap; and the popover settings editor shipped, so "no
+Settings UI" is no longer a limitation. Decision 18 records how far this session goes.
 
 ## Affected docs
 

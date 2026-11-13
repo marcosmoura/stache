@@ -29,20 +29,22 @@ anything. This part cannot be `done`, and
 
 ## Identity surfaces
 
-The inventory at the base commit. Stage 1's test keeps it complete.
+The inventory, refreshed 2026-11-13. It names areas, not every file: Stage 1 derives the
+exact list with a search for both literals, and its test keeps that list complete.
 
-| Surface                 | Locations                                                                                                                                                                    |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Cache and runtime roots | `IDENTITY` and its doc comment in `src/crates/sdk/src/paths.rs`; the isolation claim in `sdk/src/instance.rs`                                                                |
-| Bundle                  | `productName` and `identifier` in `src/crates/app/tauri.conf.json`; `description` in `app/Cargo.toml`; `capabilities/test-window.json`                                       |
-| Generated app info      | `name` in `app/src/bindings.rs::app_info`; the identifier already reads `IDENTITY`                                                                                           |
-| Tray and window strings | `TRAY_ID`, tooltip, title and Quit label in `app/src/tray.rs`; title in `app/src/windows.rs`; comment in `app/src/catalog.rs`                                                |
-| CLI                     | `about` in `cli/src/commands.rs`; `cli/src/lib.rs`. `is_app_bundle` in `cli/src/mode.rs` matches `.app/Contents/MacOS` and needs no logic change; only its test path changes |
-| Tests asserting `.next` | `sdk/src/paths.rs` tests, `cli/src/cache.rs`, `cli/tests/commands.rs`, `cli/src/mode.rs`, `app/tests/cli_binary.rs`, `app/tests/bindings.rs`, `app/src/lib.rs`               |
-| UI                      | `src/ui/index.html`, `Placeholder.tsx`, `TestWindow.tsx`, their tests, `Shell.test.tsx`, and `tests/hostFixtures.ts` (whose `dev.stache.next` is a fixture value)            |
-| Tooling                 | `name` and `tauri:dev` in `package.json`; `scripts/measure/` `paths.ts`, `config.ts`, `launch.ts`, `process.ts`, `run.ts`, `report.ts`, `cli.ts`                             |
-| Docs                    | `README.md`, `AGENTS.md`, `docs/index.md`, `architecture/overview.md`, `architecture/ipc.md`, `guides/testing.md`, `guides/performance.md`                                   |
-| Not changed             | `_legacy/`, archived specs, and `~/.config/stache`, whose path never depended on the bundle identity. Development keeps `.next` through the overlay                          |
+| Surface                 | Locations                                                                                                                                                                                                  |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cache and runtime roots | `IDENTITY` and its doc comment in `src/crates/sdk/src/paths.rs`; the isolation claim in `sdk/src/instance.rs`                                                                                              |
+| Bundle                  | `productName` and `identifier` in `src/crates/app/tauri.conf.json`; `description` in `app/Cargo.toml`                                                                                                      |
+| Generated app info      | `name` in `app/src/bindings.rs::app_info`; the identifier already reads `IDENTITY`                                                                                                                         |
+| Tray and window strings | `TOOLTIP` and the Quit label in `app/src/tray.rs`; title in `app/src/windows.rs`; `app/src/access.rs`, `app/src/media_resources.rs`, `app/src/catalog.rs`                                                  |
+| CLI                     | `about` in `cli/src/commands.rs`; `cli/src/lib.rs`. `is_app_bundle` in `cli/src/mode.rs` matches `.app/Contents/MacOS` and needs no logic change; only its test path changes                               |
+| Tests asserting `.next` | `sdk/src/paths.rs` tests, `cli/src/cache.rs`, `cli/tests/commands.rs`, `cli/src/mode.rs`, `app/tests/cli_binary.rs`, `app/tests/bindings.rs`, `app/src/lib.rs`                                             |
+| UI                      | `src/ui/index.html`, `e2e/harness.html`, the Accessibility guide (`windows/AccessibilityGuide/`), the Popover Overview footer, their tests and e2e scenarios                                               |
+| Other crates            | Caps remap ownership strings in `macos/src/caps_remap/` and `modules/keybindings/src/caps/`; `sdk/src/durable.rs`; `modules/wallpapers/src/cli/tests.rs`                                                   |
+| Tooling                 | `name` and `tauri:dev` in `package.json`; `scripts/measure/` `paths.ts`, `config.ts`, `launch.ts`, `process.ts`, `run.ts`, `report.ts`, `cli.ts`; `scripts/measure-bar/`; `scripts/check-next-instance.ts` |
+| Docs                    | `README.md`, `AGENTS.md`, `docs/index.md`, `docs/architecture/`, `docs/guides/testing.md`, `docs/guides/performance.md` and the `docs/features/` pages that name the app                                   |
+| Not changed             | `_legacy/`, archived specs, and `~/.config/stache`, whose path never depended on the bundle identity. Development keeps `.next` through the overlay                                                        |
 
 ## Requirements
 
@@ -55,8 +57,12 @@ The inventory at the base commit. Stage 1's test keeps it complete.
   needed. `tray::rows` takes the name as an argument. `app_info` takes the `AppHandle`, which
   must leave the generated bindings unchanged.
 - **Fallback.** A `PRODUCT_NAME` constant in the app crate covers only places with no Tauri
-  context: the CLI `about` text, and `Placeholder.tsx`, `TestWindow.tsx` and `index.html` before or
-  without an `app_info` answer. `Placeholder.tsx` reads `app_info` as `TestWindow.tsx` already does.
+  context, such as the CLI `about` text. UI surfaces that show the product name read it from
+  `app_info`; where copy must render before or without that answer (`index.html`, static guide
+  copy), one UI constant holds the fallback.
+- **Persistent ownership strings are not display names.** Where a `.next` literal marks state
+  Stache owns across runs (the Caps remap owner, durable records), Stage 1 only inventories it;
+  whether it follows `IDENTITY` is decided in the Stage 3 commit, so no owned state is orphaned.
 - Add `src/crates/app/tests/identity.rs`. It asserts that `tauri.conf.json`'s identifier equals
   the release identity and its `productName` equals the constant, and fails when the other
   identity's literal appears in a tracked source outside a short allow-list. The allow-list holds
@@ -99,7 +105,7 @@ development stays on `.next`.
 - **Overlay.** Commit `src/crates/app/tauri.dev.conf.json`, holding only `productName` `Stache Next`
   and `identifier` `com.marcosmoura.stache.next`. The `tauri:dev` script adds it as a second
   `--config` after the base config. `tauri:build` keeps the base config alone.
-- **Dev-only.** The overlay is never packaged: no `bundle.resources` entry, no reference from
+- **Dev-only.** The overlay is never packaged: not in `bundle.resources`, no reference from
   `tauri:build` or `scripts/release.ts`. It carries no `version`, so the version check is unaffected.
 - **Runtime identity (Decision 15).** The overlay reaches Tauri's config but not
   `stache_sdk::paths::IDENTITY`, which the lock, socket and cache use. Replace the single value with
@@ -166,7 +172,7 @@ other of the two constants. Compare identifiers exactly, and use the bundle URL 
       agree, and the other identity's literal outside the allow-list fails. Test: `app/tests/identity.rs`.
 - [ ] `RELEASE-04-02` `app_info`, tray and window strings use the name from `package_info`, the listed
       fallbacks use `PRODUCT_NAME`, and `check:generated` passes. Test: `app/tests/bindings.rs`, tray
-      tests with an injected name, and the `Shell` and `TestWindow` tests.
+      tests with an injected name, and the Accessibility guide and Popover footer tests.
 - [ ] `RELEASE-04-03` Stage 1: a fake running instance with the sibling or the same identifier produces
       one warning, startup continues and nothing is signaled. Test: app test with the `stache-macos`
       fake backend.
@@ -189,7 +195,7 @@ other of the two constants. Compare identifiers exactly, and use the bundle URL 
 - [ ] `RELEASE-04-09` After Stage 3, a bundle at any `*.app/Contents/MacOS/stache` path still selects
       desktop. Test: `cli/src/mode.rs`, `app/src/lib.rs`.
 - [ ] `RELEASE-04-10` After Stage 3, the measure tool never classifies the new app as legacy. Test:
-      `scripts/measure/process.test.ts`, under Part 02's runner.
+      `scripts/measure/process.test.ts`, under `test:scripts`.
 - [ ] `RELEASE-04-11` With a detectable `.next` bundle active, launching the release bundle warns
       and both run. With an unbundled `tauri:dev` run active, both run with isolated lock, socket
       and cache paths; no sibling warning is required because that process is not detectable.
@@ -198,7 +204,8 @@ other of the two constants. Compare identifiers exactly, and use the bundle URL 
       Gated manual check, using temporary config roots and never the real legacy app.
 - [ ] `RELEASE-04-12` After Stage 3, the base identifier is the literal `com.marcosmoura.stache`; the
       overlay holds exactly the two stated keys and values; only `tauri:dev` references it, after the
-      base config; `tauri:build` has one `--config`; no `bundle.resources` entry exists; and neither
+      base config; `tauri:build` has one `--config`; `bundle.resources` holds only the
+      `media-control` entry and never the overlay; and neither
       `[profile.release]` nor a per-package release override enables debug assertions. Test:
       `app/tests/identity.rs`.
 - [ ] `RELEASE-04-13` After Stage 3, with the release installed and running, `bun run tauri:dev` starts
