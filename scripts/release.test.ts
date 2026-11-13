@@ -586,9 +586,11 @@ describe('RELEASE-03-11 --self-sign refusals', () => {
   });
 
   it('never hardcodes an identity name in the script', () => {
-    const source = readFileSync(join(import.meta.dirname, 'release/pipeline.ts'), 'utf8');
+    for (const file of ['release/pipeline.ts', 'release/publish.ts']) {
+      const source = readFileSync(join(import.meta.dirname, file), 'utf8');
 
-    expect(source).not.toMatch(/Stache App|Developer ID/);
+      expect(source).not.toMatch(/Stache App|Developer ID/);
+    }
   });
 });
 
@@ -659,9 +661,17 @@ describe('RELEASE-03-12 signing arguments and order', () => {
       (call) => call.command === 'codesign' && call.args[0] === '--verify',
     );
 
+    expect(verifies.every((call) => call.args.includes('--strict'))).toBe(true);
     expect(
-      verifies.every((call) => call.args.includes('--strict') && call.args.includes('--deep')),
+      verifies
+        .filter((call) => !call.args.at(-1)!.endsWith('.dmg'))
+        .every((call) => call.args.includes('--deep')),
     ).toBe(true);
+    expect(verifies.find((call) => call.args.at(-1)!.endsWith('.dmg'))?.args).toEqual([
+      '--verify',
+      '--strict',
+      expect.stringMatching(/Stache_0\.26\.0_aarch64\.dmg$/),
+    ]);
 
     expect(steps(fake.calls)).toEqual([
       'sign Adapter.framework/Adapter',
@@ -673,6 +683,8 @@ describe('RELEASE-03-12 signing arguments and order', () => {
       'requirement dmg-root/Stache.app',
       'dmg create',
       'sign Stache_0.26.0_aarch64.dmg',
+      'verify Stache_0.26.0_aarch64.dmg',
+      'details Stache_0.26.0_aarch64.dmg',
       'zip Stache_0.26.0_aarch64.zip',
       expect.stringMatching(/^verify mount-.*\/Stache\.app$/),
       expect.stringMatching(/^details mount-.*\/Stache\.app$/),
@@ -723,6 +735,14 @@ describe('RELEASE-03-13 fail closed while signing', () => {
     [
       'DMG sign',
       { fail: (c, a) => c === 'codesign' && a[0] === '--force' && a.at(-1)!.endsWith('.dmg') },
+    ],
+    [
+      'DMG strict verify',
+      { fail: (c, a) => c === 'codesign' && a[0] === '--verify' && a.at(-1)!.endsWith('.dmg') },
+    ],
+    [
+      'DMG signature details',
+      { fail: (c, a) => c === 'codesign' && a[0] === '-dvvv' && a.at(-1)!.endsWith('.dmg') },
     ],
     ['strict verify', { fail: (c, a) => c === 'codesign' && a[0] === '--verify' }],
     [

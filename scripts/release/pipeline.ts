@@ -714,6 +714,21 @@ export function runRelease({ root, run, env, log, mode = 'ad-hoc' }: ReleaseDeps
         run('codesign', ['--force', '--timestamp=none', '--sign', signer.identity, dmg]),
         'codesign DMG',
       );
+      const dmgVerified = run('codesign', ['--verify', '--strict', dmg]);
+
+      if (dmgVerified.status !== 0) {
+        throw new ReleaseError(`DMG fails codesign verification: ${dmgVerified.stderr.trim()}`);
+      }
+
+      const dmgShown = check(run('codesign', ['-dvvv', dmg]), 'codesign -dvvv DMG');
+
+      if (
+        !`${dmgShown.stdout}\n${dmgShown.stderr}`
+          .split('\n')
+          .includes(`Authority=${signer.identity}`)
+      ) {
+        throw new ReleaseError(`the DMG is not signed by "${signer.identity}"`);
+      }
     }
 
     check(run('ditto', ['-c', '-k', '--keepParent', app, zip]), 'ditto zip');

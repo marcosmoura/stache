@@ -71,7 +71,7 @@ afterwards; no public prerelease is made.
 ## Acceptance criteria
 
 - [x] `RELEASE-06-10` `release:publish` refuses each failed precondition above, runs no `gh release
-      create`, and names the reason. Test: `scripts/release.test.ts`, with fake runners.
+      create`, and names the reason. Test: `scripts/release/publish.test.ts`, with fake runners.
 - [x] `RELEASE-06-11` On success it runs exactly one `gh release create` with `--draft` and
       `--verify-tag`, uploads exactly the four files, adds `--prerelease` only for a candidate tag,
       and never runs a `git push`, a `git tag` or a command that publishes. Test: same.

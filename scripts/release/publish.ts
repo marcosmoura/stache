@@ -54,7 +54,8 @@ export function releaseNotes({ tag, dmg, zip, certificateSha256 }: NotesFacts): 
 ## Install
 
 Download \`${dmg}\`, open it and drag \`Stache.app\` onto \`Applications\`. The same app is also in
-\`${zip}\`. Check the downloads with \`shasum -a 256 -c SHA256SUMS\` in the download folder.
+\`${zip}\`. To check the download, also download \`SHA256SUMS\` and run
+\`shasum -a 256 -c SHA256SUMS --ignore-missing\` in the download folder.
 
 ## First open
 
@@ -171,6 +172,17 @@ export function runPublish({ root, run, log, tag: requested }: PublishDeps): Pub
     throw new ReleaseError(`missing artifacts in ${output}: ${missing.join(', ')}`);
   }
 
+  const listed = readFileSync(join(output, 'SHA256SUMS'), 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => /^[0-9a-f]{64} {2}(\S+)$/.exec(line)?.[1] ?? line);
+
+  if (listed.toSorted().join('\n') !== [names.dmg, names.zip].toSorted().join('\n')) {
+    throw new ReleaseError(
+      `SHA256SUMS must list exactly ${names.dmg} and ${names.zip}, got: ${listed.join(', ')}`,
+    );
+  }
+
   if (run('shasum', ['-a', '256', '-c', 'SHA256SUMS'], { cwd: output }).status !== 0) {
     throw new ReleaseError('shasum -a 256 -c SHA256SUMS failed; the artifacts do not match');
   }
@@ -215,7 +227,11 @@ export function runPublish({ root, run, log, tag: requested }: PublishDeps): Pub
 
   // The same tag on origin, at the same commit (an annotated tag's peeled line wins).
   const remote = check(
-    run('git', [...git, 'ls-remote', '--tags', 'origin', `refs/tags/${tag}`], { cwd: root }),
+    run(
+      'git',
+      [...git, 'ls-remote', '--tags', 'origin', `refs/tags/${tag}`, `refs/tags/${tag}^{}`],
+      { cwd: root },
+    ),
     'git ls-remote',
   )
     .stdout.split('\n')

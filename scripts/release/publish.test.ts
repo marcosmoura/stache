@@ -39,7 +39,7 @@ function makeRoot(record: Record<string, unknown> = {}, skip: string[] = []): st
   const files: Record<string, string> = {
     [dmg]: 'dmg',
     [zip]: 'zip',
-    SHA256SUMS: 'sums\n',
+    SHA256SUMS: `${'1'.repeat(64)}  ${dmg}\n${'2'.repeat(64)}  ${zip}\n`,
     'release.json': JSON.stringify({
       version: '0.26.0',
       commit: head,
@@ -105,9 +105,12 @@ function publish(root: string, fake: Fake = {}, tag?: string) {
     }
 
     if (command === 'git' && joined.includes('ls-remote')) {
-      const name = args.at(-1) ?? '';
+      // Like git: a line is returned only for a requested pattern.
+      const lines = (fake.remote ?? `${head}\trefs/tags/v0.26.0\n`)
+        .split('\n')
+        .filter((line) => line !== '' && args.includes(line.split('\t')[1]));
 
-      return ok(fake.remote ?? `${head}\t${name}\n`);
+      return ok(lines.map((line) => `${line}\n`).join(''));
     }
 
     if (command === 'gh' && args[0] === 'run') {
@@ -155,6 +158,21 @@ describe('RELEASE-06-10 publish refusals', () => {
     ['another commit', () => makeRoot({ commit: 'd'.repeat(40) }), {}, /but HEAD is/],
     ['a dirty tree now', () => makeRoot(), { status: ' M README.md\n' }, /not clean/],
     ['a missing artifact', () => makeRoot({}, [zip]), {}, /missing artifacts.*aarch64\.zip/],
+    [
+      'a SHA256SUMS that lists another file',
+      () => {
+        const root = makeRoot();
+
+        writeFileSync(
+          join(root, 'target/release-artifacts/SHA256SUMS'),
+          `${'1'.repeat(64)}  ${dmg}\n${'3'.repeat(64)}  release.json\n`,
+        );
+
+        return root;
+      },
+      {},
+      /SHA256SUMS must list exactly/,
+    ],
     ['failing checksums', () => makeRoot(), { shasum: 1 }, /shasum -a 256 -c SHA256SUMS failed/],
     ['no tag on HEAD', () => makeRoot(), { tags: '' }, /carries no tag v0\.26\.0/],
     ['a tag for another version', () => makeRoot(), { tags: 'v0.25.0\n' }, /carries no tag/],
@@ -272,6 +290,20 @@ describe('RELEASE-06-11 draft only', () => {
     expect(forbidden(calls)).toEqual([]);
   });
 
+  it('asks origin for the tag and its peeled commit', () => {
+    const { calls, result } = publish(makeRoot());
+
+    result();
+    const remote = calls.find((call) => call.command === 'git' && call.args.includes('ls-remote'));
+
+    expect(remote?.args.slice(-4)).toEqual([
+      '--tags',
+      'origin',
+      'refs/tags/v0.26.0',
+      'refs/tags/v0.26.0^{}',
+    ]);
+  });
+
   it('uses the tag named with --tag among several', () => {
     const { calls, result } = publish(makeRoot(), { tags: 'v0.26.0-rc.1\nv0.26.0\n' }, 'v0.26.0');
 
@@ -325,6 +357,8 @@ describe('RELEASE-06-12 notes', () => {
       expect(notes).toContain(`- ${limitation}`);
     }
 
+    expect(notes).toContain('`shasum -a 256 -c SHA256SUMS --ignore-missing`');
+    expect(notes).toMatch(/also download `SHA256SUMS`/);
     expect(notes).toContain(fingerprint);
     expect(notes).toMatch(/Every release should show the same fingerprint/);
     expect(notes).not.toMatch(/\bis notarized|verified by Apple|\bsafe\b/i);
