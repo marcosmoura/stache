@@ -5,10 +5,10 @@ branch: feat/release
 # Release and packaging
 
 Read when turning Stache Next from a development bundle into a distributable product.
-**IN PROGRESS ON `feat/release`, NOT SHIPPED.** Parts 01 and 02 are implemented on the branch and
-Part 04's rename has landed with two manual checks open. On 2026-11-13 the owner chose to release
-without a Developer ID (Decisions 22 to 25), which rewrote Parts 03, 05 and 06. Nothing below is
-merged, and no artifact has been signed, notarized or published. Written against `ad34b46`;
+**IMPLEMENTED; NO PUBLIC RELEASE YET.** All six parts are done. On 2026-11-13 the owner chose to
+release without a Developer ID (Decisions 22 to 25), which rewrote Parts 03, 05 and 06; a private
+candidate, `v0.26.0-rc.1`, was rehearsed end to end. Artifacts are
+self-signed and not notarized, and none has been published. Written against `ad34b46`;
 revised 2026-11-13 against `main` at `74bfd27` (see [Revision](#revision-2026-11-13)).
 
 ## Goal
@@ -195,25 +195,22 @@ Homebrew cask or a fallback CLI binary, and Decision 21's ad-hoc install:
 
 ## What still needs the owner
 
-No credential gate remains. These need the owner and are recorded as evidence, never claimed:
-
-- [Part 06](06-release-verification.md): the candidate rehearsal, which needs the owner's go-ahead
-  to push `feat/release` and a `v0.26.0-rc.1` tag.
-
-The [merge gate](../../workflow.md#merge-gate) refuses the branch while any part is not `done`.
-The final `v0.26.0` tag belongs on `main` after the merge and follows the
-[operational checklist](06-release-verification.md#operational-checklist).
+Nothing blocks the merge: every part is `done`, with `RELEASE-04-11` and `RELEASE-04-13` waived
+(Decision 26) and the limits listed in the [release record](06-release-verification.md#release-record).
+The first public release is the owner's to make, with the
+[operational checklist](06-release-verification.md#operational-checklist): the final `v0.26.0` tag
+on `main`, a self-signed build, `release:publish`, and promoting the draft by hand.
 
 ## Parts
 
-| Part                                  | Summary                                                               | Status      |
-| ------------------------------------- | --------------------------------------------------------------------- | ----------- |
-| [01](01-build-metadata.md)            | One version, `Info.plist`, icon rule, bundle-content check.           | done        |
-| [02](02-release-pipeline.md)          | Artifacts, ad-hoc dry run, exact-SHA candidate Quality trigger.       | done        |
-| [03](03-signing.md)                   | Self-signed signing; the paid path removed.                           | done        |
-| [04](04-identity-switch.md)           | Staged switch, dev isolation, detectable sibling warnings.            | done        |
-| [05](05-install-upgrade-uninstall.md) | Install guide with first-open approval, CLI link, legacy-config note. | done        |
-| [06](06-release-verification.md)      | Local publish command, limitations, candidate rehearsal.              | in-progress |
+| Part                                  | Summary                                                               | Status |
+| ------------------------------------- | --------------------------------------------------------------------- | ------ |
+| [01](01-build-metadata.md)            | One version, `Info.plist`, icon rule, bundle-content check.           | done   |
+| [02](02-release-pipeline.md)          | Artifacts, ad-hoc dry run, exact-SHA candidate Quality trigger.       | done   |
+| [03](03-signing.md)                   | Self-signed signing; the paid path removed.                           | done   |
+| [04](04-identity-switch.md)           | Staged switch, dev isolation, detectable sibling warnings.            | done   |
+| [05](05-install-upgrade-uninstall.md) | Install guide with first-open approval, CLI link, legacy-config note. | done   |
+| [06](06-release-verification.md)      | Local publish command, limitations, candidate rehearsal.              | done   |
 
 Parts 01, 02 and 04 were implemented before the no-Developer-ID revision, along with a first
 version of 03 and 05. The remaining order is 03 (remove the paid path, add self-signing) → 05

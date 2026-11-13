@@ -15,7 +15,7 @@ Read when navigating the shipped foundation, explicitly planned rewrites or the 
 | Build, checks, hooks, coverage                                                         | [guides/testing.md](guides/testing.md)                                                                      |
 | Measure release startup and idle                                                       | [guides/performance.md](guides/performance.md)                                                              |
 | Release artifacts, signing and draft publishing (`bun run release`, `release:publish`) | [guides/release.md](guides/release.md)                                                                      |
-| Install, upgrade, legacy removal (planned)                                             | [guides/install.md](guides/install.md)                                                                      |
+| Install, upgrade, legacy removal                                                       | [guides/install.md](guides/install.md)                                                                      |
 | Specs, worktrees and agents                                                            | [workflow.md](workflow.md), [specs/README.md](specs/README.md)                                              |
 | Foundation spec and acceptance                                                         | [spec](specs/2026-11-02-foundation/00-overview.md)                                                          |
 | Planned rewrite order                                                                  | [roadmap](roadmap.md)                                                                                       |
@@ -35,7 +35,7 @@ Read when navigating the shipped foundation, explicitly planned rewrites or the 
 | Tiling–Bar strip (data shipped, UI rebuilt)                                            | [feature](features/bar.md#tiling-strip-data), [spec](specs/2026-11-08-tiling-bar/00-overview.md)            |
 | Tiling inactive workspaces (shipped)                                                   | [feature](features/tiling.md), [spec](specs/2026-11-12-inactive-workspaces/00-overview.md)                  |
 | Coordinated teardown                                                                   | [spec](specs/2026-11-03-teardown/00-overview.md)                                                            |
-| Release/packaging (in progress)                                                        | [spec](specs/2026-11-03-release/00-overview.md)                                                             |
+| Release/packaging (no release published yet)                                           | [spec](specs/2026-11-03-release/00-overview.md)                                                             |
 | Old application/features                                                               | [legacy docs](../_legacy/docs/index.md), [legacy build](../_legacy/README.md)                               |
 | Security hardening (CI, adapter, trust)                                                | [spec](specs/2026-11-11-security-hardening/00-overview.md), [trust](architecture/config.md#trust-model)     |
 | Tray clicks and menu (shipped)                                                         | [features/tray.md](features/tray.md)                                                                        |
