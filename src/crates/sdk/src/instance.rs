@@ -1,7 +1,7 @@
-//! One running desktop per Stache Next identity.
+//! One running desktop per bundle identity.
 //!
-//! The lock lives in the new identity's runtime directory, so it can never
-//! collide with the legacy application. Opening it is the first desktop step:
+//! The lock lives in the build identity's runtime directory, so a release and a
+//! development build never share it. Opening it is the first desktop step:
 //! a second launch exits before the tray, registry, configuration watcher or
 //! socket server exists.
 //!
@@ -146,13 +146,12 @@ mod tests {
     }
 
     #[test]
-    fn the_lock_lives_in_the_next_runtime_identity() {
+    fn the_lock_lives_in_the_build_identity_runtime() {
         let root = tempfile::tempdir().expect("root");
         let paths = paths(root.path());
         let lock = InstanceLock::acquire(&paths).expect("first");
         assert_eq!(lock.path(), paths.runtime_directory().join(INSTANCE_FILE_NAME));
         assert!(lock.path().to_string_lossy().contains(IDENTITY));
-        assert!(!lock.path().to_string_lossy().contains("com.marcosmoura.stache/"));
     }
 
     #[test]

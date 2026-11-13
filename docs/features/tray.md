@@ -16,8 +16,9 @@ object and its Quit key equivalent exist, which is why Cmd-Q reaches AppKit.
 ## Creation
 
 - `tray::create` runs during Tauri setup, after `set_activation_policy(Accessory)` and
-  before the host starts its slow services. The tray id is `stache-next`; the tooltip is
-  `Stache Next` (static); the icon is the app's `default_window_icon()`;
+  before the host starts its slow services. The tray id is `stache-next` (internal, the same in
+  every build); the tooltip is the product name from the package information (`Stache`, or
+  `Stache Next` in a development build); the icon is the app's `default_window_icon()`;
   `show_menu_on_left_click(false)`.
 - The menu is built once. Nothing rebuilds it on a status change: there is no
   `tray::update`.
@@ -29,15 +30,16 @@ object and its Quit key equivalent exist, which is why Cmd-Q reaches AppKit.
 `click_action(&TrayIconEvent)` and `menu_action(id)` are pure, so the mapping is testable
 without AppKit:
 
-| Input                            | Action                                                                   |
-| -------------------------------- | ------------------------------------------------------------------------ |
-| Left button release              | `TogglePopover(rect)`: show the popover under the icon, or hide it       |
-| Right button press               | `NoteAnchor(rect)`: remember the icon rectangle; AppKit shows the menu   |
-| Menu `Open Stache` (`open`)      | `OpenPopover`: show the popover under the last remembered icon rectangle |
-| Menu `Quit Stache Next` (`quit`) | `Quit`: `HostHandle::request_shutdown`                                   |
-| Anything else                    | ignored                                                                  |
+| Input                       | Action                                                                   |
+| --------------------------- | ------------------------------------------------------------------------ |
+| Left button release         | `TogglePopover(rect)`: show the popover under the icon, or hide it       |
+| Right button press          | `NoteAnchor(rect)`: remember the icon rectangle; AppKit shows the menu   |
+| Menu `Open Stache` (`open`) | `OpenPopover`: show the popover under the last remembered icon rectangle |
+| Menu `Quit <name>` (`quit`) | `Quit`: `HostHandle::request_shutdown`                                   |
+| Anything else               | ignored                                                                  |
 
-The menu is exactly `Open Stache`, a separator, `Quit Stache Next` (`tray::rows(name)`). The
+The menu is exactly `Open Stache`, a separator, `Quit <name>` (`tray::rows(name)`), where the
+name is the product name above. The
 rectangle is the click event's icon rectangle, in physical pixels of the icon's display.
 
 Quit calls the one idempotent teardown coordinator. Cmd-Q and other AppKit-initiated quits

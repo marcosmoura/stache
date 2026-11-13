@@ -14,7 +14,7 @@ use stache_sdk::{CatalogError, ConfigCatalog, GlobalConfig};
 use stache_tiling::TilingConfig;
 use stache_wallpapers::WallpapersConfig;
 
-/// Registers every configuration type owned by Stache Next.
+/// Registers every configuration type owned by Stache.
 ///
 /// # Errors
 /// Returns a catalog error if an identifier is duplicated or a default cannot

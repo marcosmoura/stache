@@ -7,7 +7,7 @@ import { render } from '../../../../../../../tests/render';
 
 import { Footer } from './Footer';
 
-const APP = { name: 'Stache Next', version: '0.0.0', identifier: 'com.example.stache' };
+const APP = { name: 'Stache', version: '0.0.0', identifier: 'com.example.stache' };
 
 describe('Footer', () => {
   it('quits from its action', async () => {
@@ -31,7 +31,7 @@ describe('Footer', () => {
     const screen = await render(<Footer />);
 
     await vi.waitFor(() => expect(host.callsOf('app_info')).toHaveLength(1));
-    await expect.element(screen.getByRole('button', { name: 'Quit Stache Next' })).toBeVisible();
-    expect(PRODUCT_NAME).toBe('Stache Next');
+    await expect.element(screen.getByRole('button', { name: 'Quit Stache' })).toBeVisible();
+    expect(PRODUCT_NAME).toBe('Stache');
   });
 });

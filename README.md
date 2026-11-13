@@ -2,7 +2,7 @@
   <img src="src/crates/app/icons/icon.png" alt="Stache Logo" width="320" height="320">
 </p>
 
-<h1 align="center">Stache Next</h1>
+<h1 align="center">Stache</h1>
 
 <p align="center">
   <strong>A macOS enhancement suite rebuilt on Tauri 2 with a typed module SDK: audio automation, an Apple Music blocker and Keep Awake today, the rest of Stache on the way.</strong>
@@ -52,8 +52,9 @@ node_modules/.bin/playwright install webkit
 bun run tauri:build
 ```
 
-The bundle is `target/release/bundle/macos/Stache Next.app`, ad-hoc signed by default. It uses
-`com.marcosmoura.stache.next`, so it does not install over or terminate Stache. It needs no
+The bundle is `target/release/bundle/macos/Stache.app` (`com.marcosmoura.stache`), ad-hoc signed by
+default. `bun run tauri:dev` runs a development build named `Stache Next` (`com.marcosmoura.stache.next`)
+with its own lock, socket and cache, so it can run beside the release app. It needs no
 media-control resources or device permissions; distribution signing and notarization are not
 configured.
 
@@ -101,7 +102,7 @@ target_app = "com.spotify.client"
 
 `target_app` is optional: leave it out to block without launching anything.
 
-3. Launch Stache Next from the bundle, or run `bun run tauri:dev`. It lives in the menu bar; the tray
+3. Launch Stache from the bundle, or run `bun run tauri:dev`. It lives in the menu bar; the tray
    exposes Enable/Disable, Pause/Resume and Retry for each module, plus Quit.
 
 ### Upgrading

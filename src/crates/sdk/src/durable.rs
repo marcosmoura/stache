@@ -11,7 +11,7 @@
 //! directory. The file is never unlinked; the kernel releases the lock when the
 //! holder exits. The identity and the directory are checked against the held
 //! inode after locking and again by [`DurableLease::verify`], so a replaced or
-//! removed path fails closed. This coordinates cooperating Stache Next
+//! removed path fails closed. This coordinates cooperating Stache
 //! processes. It is not a compare-and-swap against other programs and not
 //! protection against a same-user process that rewrites the files.
 //!

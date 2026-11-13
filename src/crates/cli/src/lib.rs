@@ -1,4 +1,4 @@
-//! Stache Next command line.
+//! Stache command line.
 //!
 //! The crate knows the SDK catalog and the composition contract but never
 //! imports the application or a module crate: the composition root supplies

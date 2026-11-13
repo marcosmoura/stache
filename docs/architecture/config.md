@@ -408,7 +408,7 @@ legacy quoting rules, stopping at the first failure; shutdown cancels it, kills
 only the child it spawned directly and does not start later commands. A child not
 confirmed gone within 2 s is retained by the runner with a `stache: startup:`
 stderr diagnostic instead of being waited for indefinitely. The exact bare name
-`stache` runs the running Stache Next executable (re-entered with the hidden
+`stache` runs the running Stache executable (re-entered with the hidden
 `--stache-internal-cli` flag), never a `stache` found on `PATH` or the legacy app.
 Readiness, tray actions and Quit never wait for a long-lived command. A second
 instance, CLI invocation and every reload skip it.

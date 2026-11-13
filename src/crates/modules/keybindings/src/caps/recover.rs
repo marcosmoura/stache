@@ -31,7 +31,7 @@ impl CapsRecovery {
             RestoreOutcome::NoJournal | RestoreOutcome::Restored => None,
             RestoreOutcome::OwnershipLost { observed_destination } => Some(format!(
                 "Caps Lock recovery refused: Caps Lock is mapped to {observed_destination:#x}, \
-                 which Stache Next did not put there, so it was left untouched"
+                 which Stache did not put there, so it was left untouched"
             )),
             RestoreOutcome::CleanupPending(reason) => Some(format!(
                 "Caps Lock recovery did not complete and was not retried; physical Caps Lock may \

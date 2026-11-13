@@ -1,8 +1,10 @@
 //! Identity-isolated cache and runtime directories.
 //!
-//! Stache Next never shares its sibling application's state: cache files live
-//! under `~/Library/Caches/com.marcosmoura.stache.next` and the control socket
-//! lives in a per-user macOS temporary directory of the same name. Nothing here
+//! A build's state lives under its own bundle identity: cache files live under
+//! `~/Library/Caches/<identity>` and the control socket lives in a per-user
+//! macOS temporary directory of the same name. A release build uses
+//! [`RELEASE_IDENTITY`], a debug build [`DEVELOPMENT_IDENTITY`], so the two
+//! never share a lock, socket, cache or durable state. Nothing here
 //! reads the process environment implicitly; callers pass an
 //! [`AppEnvironment`], which keeps tests away from the real home and cache.
 
@@ -11,15 +13,22 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::{fmt, fs};
 
-/// The release bundle identity, shared with the legacy application until the
-/// staged rename makes it this application's own.
+/// The release bundle identity.
 pub const RELEASE_IDENTITY: &str = "com.marcosmoura.stache";
 
 /// The development bundle identity.
 pub const DEVELOPMENT_IDENTITY: &str = "com.marcosmoura.stache.next";
 
 /// Bundle identity used for cache and runtime directories.
-pub const IDENTITY: &str = DEVELOPMENT_IDENTITY;
+///
+/// The development identity in debug builds, the release identity otherwise.
+/// Selected only at compile time; no environment variable, config key or flag
+/// reaches it.
+pub const IDENTITY: &str = if cfg!(debug_assertions) {
+    DEVELOPMENT_IDENTITY
+} else {
+    RELEASE_IDENTITY
+};
 
 /// The other of [`RELEASE_IDENTITY`] and [`DEVELOPMENT_IDENTITY`].
 pub const SIBLING_IDENTITY: &str = if same_str(IDENTITY, RELEASE_IDENTITY) {
@@ -45,7 +54,7 @@ const fn same_str(left: &str, right: &str) -> bool {
 
 /// The product name shown where no Tauri package information exists, such as
 /// the command line. The desktop reads its name from the package information.
-pub const PRODUCT_NAME: &str = "Stache Next";
+pub const PRODUCT_NAME: &str = "Stache";
 
 /// Socket file name inside the runtime directory.
 pub const SOCKET_FILE_NAME: &str = "ipc";
@@ -104,6 +113,15 @@ impl AppPaths {
     /// non-overlapping pair of absolute directories, or the resolved temporary
     /// root is not a directory owned by the effective user.
     pub fn resolve(environment: &AppEnvironment) -> Result<Self, AppPathError> {
+        Self::resolve_for(environment, IDENTITY)
+    }
+
+    /// Resolves the paths for an explicit `identity`. A test seam: every
+    /// production caller uses [`AppPaths::resolve`], which passes [`IDENTITY`].
+    ///
+    /// # Errors
+    /// The same as [`AppPaths::resolve`].
+    pub fn resolve_for(environment: &AppEnvironment, identity: &str) -> Result<Self, AppPathError> {
         let home = environment.home.as_ref().ok_or(AppPathError::NoHome)?;
         let temporary = environment.temporary.as_ref().ok_or(AppPathError::NoTemporaryDirectory)?;
         let home = resolve_anchor(home)?;
@@ -114,13 +132,13 @@ impl AppPaths {
         if !metadata.is_dir() || metadata.uid() != owner {
             return Err(AppPathError::UntrustedRoot { path: temporary });
         }
-        let cache = resolve_anchor(&home.join("Library").join("Caches"))?.join(IDENTITY);
-        let runtime = temporary.join(IDENTITY);
+        let cache = resolve_anchor(&home.join("Library").join("Caches"))?.join(identity);
+        let runtime = temporary.join(identity);
         if runtime.starts_with(&cache) || cache.starts_with(&runtime) {
             return Err(AppPathError::OverlappingDirectories { cache, runtime });
         }
         let support =
-            resolve_anchor(&home.join("Library").join("Application Support"))?.join(IDENTITY);
+            resolve_anchor(&home.join("Library").join("Application Support"))?.join(identity);
         if support.starts_with(&cache)
             || cache.starts_with(&support)
             || support.starts_with(&runtime)
@@ -272,23 +290,67 @@ mod tests {
     }
 
     #[test]
-    fn identity_paths_are_isolated_from_the_legacy_application() {
+    fn a_debug_build_selects_the_development_identity() {
+        assert_eq!(IDENTITY, DEVELOPMENT_IDENTITY);
+        assert_eq!(SIBLING_IDENTITY, RELEASE_IDENTITY);
+        assert_eq!(RELEASE_IDENTITY, "com.marcosmoura.stache");
+        assert_eq!(DEVELOPMENT_IDENTITY, "com.marcosmoura.stache.next");
+    }
+
+    #[test]
+    fn identity_paths_are_exact_for_both_identities_and_never_shared() {
         let root = tempfile::tempdir().expect("temp dir");
-        let paths = AppPaths::resolve(&environment(root.path(), root.path())).expect("resolve");
-        let root = fs::canonicalize(root.path()).expect("canonical root");
-        assert_eq!(
-            paths.cache_directory(),
-            root.join("Library").join("Caches").join("com.marcosmoura.stache.next")
-        );
-        assert_eq!(
-            paths.runtime_directory(),
-            root.join("com.marcosmoura.stache.next")
-        );
-        assert!(!paths.cache_directory().to_string_lossy().contains("com.marcosmoura.stache/"));
-        assert_eq!(
-            paths.socket_path().expect("socket"),
-            root.join("com.marcosmoura.stache.next").join("ipc")
-        );
+        let environment = environment(root.path(), root.path());
+        let canonical = fs::canonicalize(root.path()).expect("canonical root");
+        let mut seen = Vec::new();
+        for identity in [RELEASE_IDENTITY, DEVELOPMENT_IDENTITY] {
+            let paths = AppPaths::resolve_for(&environment, identity).expect("resolve");
+            assert_eq!(
+                paths.cache_directory(),
+                canonical.join("Library").join("Caches").join(identity)
+            );
+            assert_eq!(paths.runtime_directory(), canonical.join(identity));
+            assert_eq!(
+                paths.socket_path().expect("socket"),
+                canonical.join(identity).join("ipc")
+            );
+            assert_eq!(
+                paths.application_support_directory(),
+                canonical.join("Library").join("Application Support").join(identity)
+            );
+            seen.push(paths);
+        }
+        let (release, development) = (&seen[0], &seen[1]);
+        for (a, b) in [
+            (release.cache_directory(), development.cache_directory()),
+            (release.runtime_directory(), development.runtime_directory()),
+            (
+                release.application_support_directory(),
+                development.application_support_directory(),
+            ),
+        ] {
+            assert!(
+                !a.starts_with(b) && !b.starts_with(a),
+                "{} {}",
+                a.display(),
+                b.display()
+            );
+        }
+        assert_eq!(AppPaths::resolve(&environment).expect("resolve"), *development);
+    }
+
+    #[test]
+    fn the_socket_fits_the_limit_under_both_identities() {
+        // A real macOS `TMPDIR` is `/var/folders/xx/<28 characters>/T/`.
+        let temporary = Path::new("/private/var/folders/zz/zyxvpxvq6csfxvn_n0000000000000/T");
+        for identity in [RELEASE_IDENTITY, DEVELOPMENT_IDENTITY] {
+            let socket = temporary.join(identity).join(SOCKET_FILE_NAME);
+            assert!(
+                socket_path_within_limit(socket.clone()).is_ok(),
+                "{}",
+                socket.display()
+            );
+        }
     }
 
     #[test]

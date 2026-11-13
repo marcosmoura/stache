@@ -1,4 +1,4 @@
-# Stache Next docs
+# Stache docs
 
 Read when navigating the shipped foundation, explicitly planned rewrites or the archived predecessor.
 

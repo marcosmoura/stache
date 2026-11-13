@@ -3,14 +3,18 @@ import { fileURLToPath } from 'node:url';
 /** Repository root, resolved from this file's location (`scripts/measure/`). */
 export const REPOSITORY_ROOT = fileURLToPath(new URL('../..', import.meta.url)).replace(/\/+$/, '');
 
-/** Bundle identifier of the new host. */
-export const NEXT_BUNDLE_IDENTIFIER = 'com.marcosmoura.stache.next';
+/** Bundle identifier of the measured release build. */
+export const NEXT_BUNDLE_IDENTIFIER = 'com.marcosmoura.stache';
 
-/** Bundle identifier of the archived legacy application. */
-export const LEGACY_BUNDLE_IDENTIFIER = 'com.marcosmoura.stache';
+/**
+ * Bundle identifier of the archived legacy application. It equals the release
+ * identifier, so a legacy process is classified only from an explicit
+ * `--legacy-app` path, never from its identifier or bundle name.
+ */
+export const LEGACY_BUNDLE_IDENTIFIER = NEXT_BUNDLE_IDENTIFIER;
 
 /** Default release bundle built by `bun run tauri:build`. */
-export const DEFAULT_NEXT_APP = 'target/release/bundle/macos/Stache Next.app';
+export const DEFAULT_NEXT_APP = 'target/release/bundle/macos/Stache.app';
 
 /** Directory that receives timestamped reports and raw samples. */
 export const MEASUREMENTS_DIRECTORY = 'docs/specs/2026-11-02-foundation/measurements';

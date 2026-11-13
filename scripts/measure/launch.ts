@@ -6,7 +6,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 import type { ScenarioConfig } from './config';
 import { throwIfInterrupted } from './interrupt';
-import { READY_TIMEOUT_MS } from './paths';
+import { NEXT_BUNDLE_IDENTIFIER, READY_TIMEOUT_MS } from './paths';
 import type { Target } from './types';
 
 const STDERR_TAIL_LINES = 80;
@@ -116,7 +116,7 @@ export interface ReadyResult {
 /**
  * Waits for the documented readiness acknowledgement.
  *
- * Stache Next: the control socket answers `core.status` (the socket starts after
+ * Stache: the control socket answers `core.status` (the socket starts after
  * the tray exists). Legacy: its own `setup complete (background tasks spawned)`
  * stderr line, emitted after tray, bar and widget creation.
  *
@@ -171,7 +171,7 @@ export async function waitForReady(
 
 /** Path of the new host's control socket under one isolated temporary root. */
 export function controlSocketPath(root: string): string {
-  return path.join(root, 'com.marcosmoura.stache.next', 'ipc');
+  return path.join(root, NEXT_BUNDLE_IDENTIFIER, 'ipc');
 }
 
 async function coreStatusAnswers(socketPath: string): Promise<boolean> {

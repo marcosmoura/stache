@@ -193,9 +193,13 @@ mod tests {
 
     #[test]
     fn bundle_detection_preserves_legacy_executable_precedence() {
-        assert!(is_app_bundle(Path::new(
-            "/Applications/Stache Next.app/Contents/MacOS/stache"
-        )));
+        for bundle in [
+            "/Applications/Stache.app/Contents/MacOS/stache",
+            "/Applications/Stache Next.app/Contents/MacOS/stache",
+            "/Users/me/Builds/Anything.app/Contents/MacOS/stache",
+        ] {
+            assert!(is_app_bundle(Path::new(bundle)), "{bundle}");
+        }
         assert!(!is_app_bundle(Path::new("/usr/local/bin/stache")));
     }
 }

@@ -2,7 +2,7 @@ import type { ConfigFileView_Serialize } from '../../src/ipc/bindings.gen';
 import { expect, test } from '../fixtures';
 
 /** The Overview footer names the app from `app_info`. */
-const APP = { name: 'Stache Next', version: '0.1.0', identifier: 'com.marcosmoura.stache.next' };
+const APP = { name: 'Stache', version: '0.1.0', identifier: 'com.marcosmoura.stache' };
 
 /*
  * The tray popover shell (`?surface=popover`) through the fake host: the

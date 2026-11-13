@@ -10,7 +10,7 @@ import { expect, test } from '../fixtures';
 import { pinSystemColours } from './systemColours';
 
 /** The Overview footer names the app from `app_info`. */
-const APP = { name: 'Stache Next', version: '0.1.0', identifier: 'com.marcosmoura.stache.next' };
+const APP = { name: 'Stache', version: '0.1.0', identifier: 'com.marcosmoura.stache' };
 
 /*
  * Baselines of the tray popover, dark and light, from production

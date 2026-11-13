@@ -197,7 +197,7 @@ other of the two constants. Compare identifiers exactly, and use the bundle URL 
 - [x] `RELEASE-04-03` Stage 1: a fake running instance with the sibling or the same identifier produces
       one warning, startup continues and nothing is signaled. Test: app test with the `stache-macos`
       fake backend.
-- [ ] `RELEASE-04-04` Stage 3 rule: a foreign process with exactly this process's identifier refuses
+- [x] `RELEASE-04-04` Stage 3 rule: a foreign process with exactly this process's identifier refuses
       before tray, modules or socket, with the stated diagnostic and a non-zero exit; this process's own
       PID is excluded; and no signal path exists. Test: same harness, plus the absence of a terminate
       call on the fake.
@@ -209,13 +209,13 @@ other of the two constants. Compare identifiers exactly, and use the bundle URL 
 - [x] `RELEASE-04-07` Before Stage 3, this file records the owner's migration and removal approval
       with its date, and an `mdfind` for `com.marcosmoura.stache` on the release machine shows no
       remaining legacy bundle. Gated manual check.
-- [ ] `RELEASE-04-08` After Stage 3, resolved cache, runtime and socket paths are exact for both
+- [x] `RELEASE-04-08` After Stage 3, resolved cache, runtime and socket paths are exact for both
       identities, the socket fits the 103-byte limit under each, and `cache clear` under one leaves the
       other's directory intact. Test: `sdk/src/paths.rs`, `cli/src/cache.rs`, with the path resolver
       parameterized so a debug test run covers the release identity.
-- [ ] `RELEASE-04-09` After Stage 3, a bundle at any `*.app/Contents/MacOS/stache` path still selects
+- [x] `RELEASE-04-09` After Stage 3, a bundle at any `*.app/Contents/MacOS/stache` path still selects
       desktop. Test: `cli/src/mode.rs`, `app/src/lib.rs`.
-- [ ] `RELEASE-04-10` After Stage 3, the measure tool never classifies the new app as legacy. Test:
+- [x] `RELEASE-04-10` After Stage 3, the measure tool never classifies the new app as legacy. Test:
       `scripts/measure/process.test.ts`, under `test:scripts`.
 - [ ] `RELEASE-04-11` With a detectable `.next` bundle active, launching the release bundle warns
       and both run. With an unbundled `tauri:dev` run active, both run with isolated lock, socket
@@ -223,7 +223,7 @@ other of the two constants. Compare identifiers exactly, and use the bundle URL 
       With a harmless placeholder bundle using `com.marcosmoura.stache` running, the
       release bundle refuses and leaves the placeholder running; quitting it and relaunching succeeds.
       Gated manual check, using temporary config roots and never the real legacy app.
-- [ ] `RELEASE-04-12` After Stage 3, the base identifier is the literal `com.marcosmoura.stache`; the
+- [x] `RELEASE-04-12` After Stage 3, the base identifier is the literal `com.marcosmoura.stache`; the
       overlay holds exactly the two stated keys and values; only `tauri:dev` references it, after the
       base config; `tauri:build` has one `--config`; `bundle.resources` holds only the
       `media-control` entry and never the overlay; and neither
@@ -235,12 +235,16 @@ other of the two constants. Compare identifiers exactly, and use the bundle URL 
 - [ ] `RELEASE-04-14` On a packaged build, the verifier's `CFBundleIdentifier` is
       `com.marcosmoura.stache` (`RELEASE-01-06`), and `stache cache path` through the shipped CLI route
       prints the final path. Gated manual check, recorded with `RELEASE-05-07` or `RELEASE-05-10`.
-- [ ] `RELEASE-04-15` After Stage 3, `IDENTITY` is a constant selected only by `cfg!(debug_assertions)`,
+- [x] `RELEASE-04-15` After Stage 3, `IDENTITY` is a constant selected only by `cfg!(debug_assertions)`,
       `AppEnvironment` carries no identity, and no `env!`, `option_env!`, config key or CLI flag reaches
       the selection. A debug test run sees the development constant. Test: `sdk/src/paths.rs` and a
       source check in `app/tests/identity.rs`.
 
-Status 2026-11-13: Stage 1 is implemented and Stage 2 is recorded above. Stage 3 is next.
+Status 2026-11-13: Stages 1 to 3 are implemented: release builds are `Stache` /
+`com.marcosmoura.stache`, debug builds and `tauri:dev` stay `.next`, and a foreign process with
+this identifier refuses startup. The manual checks `RELEASE-04-11`, `04-13` and `04-14` are open.
+Decided in the Stage 3 commit: persistent ownership state (Caps remap journal, durable leases)
+follows `IDENTITY`; a release build never reads, adopts or deletes `.next` state.
 
 ## Tests
 

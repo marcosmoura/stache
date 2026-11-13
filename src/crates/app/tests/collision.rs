@@ -1,5 +1,5 @@
 //! Startup collision detection over the fake running-application query
-//! (`RELEASE-04-03`, `RELEASE-04-05`). Nothing here queries or signals a real
+//! (`RELEASE-04-03`, `RELEASE-04-04`, `RELEASE-04-05`). Nothing here queries or signals a real
 //! application: the fake has no signal capability at all.
 
 use std::path::PathBuf;
@@ -36,16 +36,25 @@ fn instance(identifier: &str, pid: i32, path: &str) -> RunningInstance {
     }
 }
 
-/// Drives the host's startup seam with the shipped policy.
-fn startup(fake: &FakeRunningInstances) -> (Vec<Collision>, Vec<String>) {
+/// Drives the host's startup step with the shipped policy, as `run_with` does
+/// between the instance lock and the tray: `guard(..)?` and then the rest.
+/// Returns the step's result, whether the rest ran, and the warnings.
+fn startup(fake: &FakeRunningInstances) -> (Result<(), String>, bool, Vec<String>) {
     let logs = Captured::default();
-    let refusals = collision::check(fake, OWN_PID, collision::POLICY, &logs);
-    (refusals, logs.warnings())
+    let mut rest_ran = false;
+    let result = (|| -> Result<(), String> {
+        collision::guard(fake, OWN_PID, &logs)?;
+        rest_ran = true;
+        Ok(())
+    })();
+    // The only interaction with the running application is the two queries.
+    assert_eq!(fake.queries(), [IDENTITY, SIBLING_IDENTITY]);
+    (result, rest_ran, logs.warnings())
 }
 
 #[test]
-fn the_shipped_policy_only_warns() {
-    assert_eq!(collision::POLICY, CollisionPolicy::WarnOnly);
+fn the_shipped_policy_refuses_the_same_identifier() {
+    assert_eq!(collision::POLICY, CollisionPolicy::RefuseSameIdentity);
 }
 
 #[test]
@@ -55,32 +64,37 @@ fn a_running_sibling_warns_once_and_startup_continues() {
         77,
         "/Applications/Sibling.app",
     )]);
-    let (refusals, warnings) = startup(&fake);
-    assert!(refusals.is_empty());
+    let (result, rest_ran, warnings) = startup(&fake);
+    assert_eq!(result, Ok(()));
+    assert!(rest_ran);
     assert_eq!(warnings, [format!(
         "another {SIBLING_IDENTITY} is running at /Applications/Sibling.app (pid 77)"
     )]);
-    assert_eq!(fake.queries(), [IDENTITY, SIBLING_IDENTITY]);
 }
 
 #[test]
-fn a_foreign_process_with_this_identifier_warns_once_and_startup_continues() {
+fn a_foreign_process_with_this_identifier_refuses_before_anything_else_runs() {
     let fake = FakeRunningInstances::with(vec![
         instance(IDENTITY, OWN_PID, "/Applications/Own.app"),
         instance(IDENTITY, 78, "/Applications/Other.app"),
     ]);
-    let (refusals, warnings) = startup(&fake);
-    assert!(refusals.is_empty());
-    assert_eq!(warnings, [format!(
-        "another {IDENTITY} is running at /Applications/Other.app (pid 78)"
-    )]);
+    let (result, rest_ran, warnings) = startup(&fake);
+    assert_eq!(
+        result,
+        Err(format!(
+            "cannot start: another {IDENTITY} is running at /Applications/Other.app (pid 78). \
+             Quit that app from its menu bar icon, then start this one again"
+        ))
+    );
+    assert!(!rest_ran, "nothing after the check runs on refusal");
+    assert!(warnings.is_empty());
 }
 
 #[test]
 fn only_this_process_running_is_silent() {
     let fake =
         FakeRunningInstances::with(vec![instance(IDENTITY, OWN_PID, "/Applications/Own.app")]);
-    assert_eq!(startup(&fake), (Vec::new(), Vec::new()));
+    assert_eq!(startup(&fake), (Ok(()), true, Vec::new()));
 }
 
 #[test]
@@ -90,14 +104,15 @@ fn prefix_matches_are_ignored() {
         instance("com.marcosmoura.stache.helper", 79, "/Applications/Helper.app"),
         instance(&format!("{IDENTITY}.helper"), 80, "/Applications/Helper2.app"),
     ]);
-    assert_eq!(startup(&fake), (Vec::new(), Vec::new()));
+    assert_eq!(startup(&fake), (Ok(()), true, Vec::new()));
 }
 
 #[test]
 fn a_failed_query_warns_for_each_identifier_and_startup_continues() {
     let fake = FakeRunningInstances::failing("unavailable");
-    let (refusals, warnings) = startup(&fake);
-    assert!(refusals.is_empty());
+    let (result, rest_ran, warnings) = startup(&fake);
+    assert_eq!(result, Ok(()));
+    assert!(rest_ran);
     assert_eq!(warnings, [
         format!("could not check for a running {IDENTITY}: unavailable"),
         format!("could not check for a running {SIBLING_IDENTITY}: unavailable"),

@@ -434,15 +434,13 @@ fn run_with(
     let catalog = catalog::catalog().map_err(|error| error.to_string())?;
     let filter = Arc::new(LogFilter::default());
     let logger: Arc<dyn Logger> = Arc::new(StderrLogger::new(Arc::clone(&filter)));
-    // Advisory and warn-only in this stage: the lock above stays authoritative.
-    let refusals = collision::check(
+    // A foreign process with this identifier refuses before the tray,
+    // modules or socket exist; the sibling only warns. Nothing is signaled.
+    collision::guard(
         &stache_macos::SystemRunningInstances,
         i32::try_from(std::process::id()).unwrap_or(i32::MAX),
-        collision::POLICY,
         logger.as_ref(),
-    );
-    // Stage 3 replaces this assert with the refusal exit path.
-    debug_assert!(refusals.is_empty(), "the warn-only policy never refuses");
+    )?;
     log_legacy_config_hint(
         &config_paths,
         &stache_sdk::config::ConfigEnvironment::from_env(),
@@ -993,8 +991,11 @@ mod tests {
 
     #[test]
     fn desktop_identity_and_window_policy_are_isolated() {
+        // The base config holds the release identity; tests compile as debug,
+        // so the runtime paths use the development identity.
         let config = super::context();
-        assert_eq!(config.config().identifier, "com.marcosmoura.stache.next");
+        assert_eq!(config.config().identifier, stache_sdk::RELEASE_IDENTITY);
+        assert_eq!(stache_sdk::IDENTITY, stache_sdk::DEVELOPMENT_IDENTITY);
         assert!(config.config().app.windows.is_empty());
     }
 

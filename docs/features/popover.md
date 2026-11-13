@@ -120,7 +120,7 @@ rendered from `host_status` plus every `status-changed`:
   A module whose file has a tab shows its name as a button that selects that tab.
 
 - **Configuration**: each catalog file with a diagnostic or warnings, with the full texts.
-- **Footer**: `Quit <name>` (power icon, `quit_app`), the name from `app_info`, `Stache Next` until it answers.
+- **Footer**: `Quit <name>` (power icon, `quit_app`), the name from `app_info`, `PRODUCT_NAME` (`Stache`) until it answers.
 
 Commands (`popover_actions.rs`) map to exactly the host command the former tray row used:
 `set_module_enabled` to the runner's configuration-backed enable edit (the tray's

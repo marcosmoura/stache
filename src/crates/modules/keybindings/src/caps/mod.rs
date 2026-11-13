@@ -19,7 +19,7 @@
 //!   may send F18 to applications until recovery. Module dispatch is never
 //!   revived to hide that.
 //! * `hidutil` has no compare-and-swap; the lease coordinates only cooperating
-//!   Stache Next processes and external writers can race (see
+//!   Stache processes and external writers can race (see
 //!   `stache_macos::caps_remap`).
 //! * Recovery after a crash requires a relaunch.
 

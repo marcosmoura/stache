@@ -6,7 +6,7 @@ import type {
 import { expect, test } from '../fixtures';
 
 /** The Overview footer names the app from `app_info`. */
-const APP = { name: 'Stache Next', version: '0.1.0', identifier: 'com.marcosmoura.stache.next' };
+const APP = { name: 'Stache', version: '0.1.0', identifier: 'com.marcosmoura.stache' };
 
 /*
  * The popover Overview end to end through the fake host, on a setup like the
@@ -167,7 +167,7 @@ test.describe('Popover Overview', () => {
     await host.emitStatusChanged(statusOf(modules));
     await expect(banner).toHaveCount(0);
 
-    await page.getByRole('button', { name: 'Quit Stache Next' }).click();
+    await page.getByRole('button', { name: 'Quit Stache' }).click();
     await expect.poll(() => host.commands().filter((c) => c === 'quit_app')).toHaveLength(1);
 
     expect(host.unanswered).toEqual([]);

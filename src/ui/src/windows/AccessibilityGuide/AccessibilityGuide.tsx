@@ -27,7 +27,7 @@ import { errorMessage } from '@/utils';
 import {
   alertMessage,
   guideSection,
-  HEROES,
+  heroes,
   isCentered,
   type GuideSection,
 } from './AccessibilityGuide.state';
@@ -72,7 +72,8 @@ export function AccessibilityGuide() {
   const quit = useQuitApp();
   const section: GuideSection = access?.section ?? 'checking';
   const centered = isCentered(section);
-  const hero = HEROES[section];
+  const name = app?.name ?? PRODUCT_NAME;
+  const hero = heroes(name)[section];
   const message = alertMessage(
     access?.error,
     [request, settings, quit].flatMap((mutation) =>
@@ -99,9 +100,7 @@ export function AccessibilityGuide() {
           <span {...stylex.props(styles.glyph, styles.passThrough)}>
             <Icon icon={CommandIcon} size={14} strokeWidth={1.75} />
           </span>
-          <span {...stylex.props(styles.appName, styles.passThrough)}>
-            {app?.name ?? PRODUCT_NAME}
-          </span>
+          <span {...stylex.props(styles.appName, styles.passThrough)}>{name}</span>
         </div>
         <button
           type="button"
@@ -142,13 +141,13 @@ export function AccessibilityGuide() {
           </div>
           {section === 'blocked' || section === 'revoked' ? (
             <>
-              <GuideSteps />
+              <GuideSteps name={name} />
               <IdentityCard
-                name={app?.name ?? PRODUCT_NAME}
+                name={name}
                 identifier={app?.identifier ?? null}
                 appPath={access?.appPath ?? null}
               />
-              <Troubleshooting bundled={access?.appPath != null} />
+              <Troubleshooting bundled={access?.appPath != null} name={name} />
             </>
           ) : null}
         </div>
@@ -180,7 +179,7 @@ export function AccessibilityGuide() {
             },
             {
               id: 'quit',
-              label: `Quit ${app?.name ?? PRODUCT_NAME}`,
+              label: `Quit ${name}`,
               pending: quit.isPending,
               onRun: () => quit.mutate(),
             },

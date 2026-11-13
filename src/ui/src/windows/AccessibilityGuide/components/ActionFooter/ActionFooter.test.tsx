@@ -12,12 +12,12 @@ describe('ActionFooter', () => {
       <ActionFooter
         actions={[
           { id: 'request', label: 'Request Access', pending: false, onRun: request },
-          { id: 'quit', label: 'Quit Stache Next', pending: true, onRun: quit },
+          { id: 'quit', label: 'Quit Stache', pending: true, onRun: quit },
         ]}
       />,
     );
     const primary = screen.getByRole('button', { name: 'Request Access' });
-    const pending = screen.getByRole('button', { name: 'Quit Stache Next' });
+    const pending = screen.getByRole('button', { name: 'Quit Stache' });
 
     await primary.click();
     expect(request).toHaveBeenCalledOnce();

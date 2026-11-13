@@ -35,10 +35,10 @@ import {
 
 const machO = Buffer.from('cffaedfe00000000', 'hex');
 
-const nextConf = {
-  productName: 'Stache Next',
+const releaseConf = {
+  productName: 'Stache',
   version: '0.26.0',
-  identifier: 'com.marcosmoura.stache.next',
+  identifier: 'com.marcosmoura.stache',
 };
 
 const goodPlist = {
@@ -47,8 +47,8 @@ const goodPlist = {
   LSApplicationCategoryType: 'public.app-category.utilities',
   LSMinimumSystemVersion: '26.0',
   CFBundleShortVersionString: '0.26.0',
-  CFBundleIdentifier: 'com.marcosmoura.stache.next',
-  CFBundleName: 'Stache Next',
+  CFBundleIdentifier: 'com.marcosmoura.stache',
+  CFBundleName: 'Stache',
 };
 
 const roots: string[] = [];
@@ -71,7 +71,7 @@ function makeRoot(): string {
   symlinkSync('A', join(framework, 'Versions/Current'));
   symlinkSync('Versions/Current/Adapter', join(framework, 'Adapter'));
   writeFileSync(join(media, 'adapter.pl'), '#!/usr/bin/perl\n');
-  writeFileSync(join(root, 'src/crates/app/tauri.conf.json'), JSON.stringify(nextConf));
+  writeFileSync(join(root, 'src/crates/app/tauri.conf.json'), JSON.stringify(releaseConf));
   writeFileSync(join(root, 'src/crates/app/Entitlements.plist'), '<plist/>');
   writeFileSync(
     join(root, 'Cargo.toml'),
@@ -112,7 +112,7 @@ function fakeRunner(root: string, options: FakeOptions = {}) {
 
         return ok(options.dirty ? ' M Cargo.toml\n' : '');
       case 'bun': {
-        const app = join(root, 'target/release/bundle/macos/Stache Next.app/Contents');
+        const app = join(root, 'target/release/bundle/macos/Stache.app/Contents');
 
         mkdirSync(join(app, 'MacOS'), { recursive: true });
         writeFileSync(join(app, 'MacOS/stache'), machO);
@@ -159,7 +159,7 @@ function fakeRunner(root: string, options: FakeOptions = {}) {
         if (args[0] === '-c') {
           writeFileSync(args.at(-1) as string, 'zip');
         } else if (args[0] === '-x') {
-          mkdirSync(join(args[3], 'Stache Next.app/Contents'), { recursive: true });
+          mkdirSync(join(args[3], 'Stache.app/Contents'), { recursive: true });
         } else {
           cpSync(args[0], args[1], { recursive: true });
         }
@@ -171,8 +171,8 @@ function fakeRunner(root: string, options: FakeOptions = {}) {
         } else if (args[0] === 'attach') {
           const mount = args[args.indexOf('-mountpoint') + 1];
 
-          mkdirSync(join(mount, 'Stache Next.app/Contents'), { recursive: true });
-          writeFileSync(join(mount, 'Stache Next.app/Contents/Info.plist'), '');
+          mkdirSync(join(mount, 'Stache.app/Contents'), { recursive: true });
+          writeFileSync(join(mount, 'Stache.app/Contents/Info.plist'), '');
 
           if (!options.noApplicationsLink) {
             symlinkSync('/Applications', join(mount, 'Applications'));
@@ -229,9 +229,13 @@ const output = (root: string) => join(root, 'target/release-artifacts');
 
 describe('RELEASE-02-01 names', () => {
   it('derives names from either config shape without a hardcoded product', () => {
-    const next = readReleaseConfig(JSON.stringify(nextConf));
-    const final = readReleaseConfig(
-      JSON.stringify({ ...nextConf, productName: 'Stache', identifier: 'com.marcosmoura.stache' }),
+    const final = readReleaseConfig(JSON.stringify(releaseConf));
+    const next = readReleaseConfig(
+      JSON.stringify({
+        ...releaseConf,
+        productName: 'Stache Next',
+        identifier: 'com.marcosmoura.stache.next',
+      }),
     );
 
     expect(artifactNames(next.productName, next.configVersion)).toEqual({
@@ -327,8 +331,8 @@ describe('RELEASE-02-03 bundle verifier', () => {
   const expected: VerifierExpectations = {
     executable: 'stache',
     version: '0.26.0',
-    identifier: 'com.marcosmoura.stache.next',
-    productName: 'Stache Next',
+    identifier: 'com.marcosmoura.stache',
+    productName: 'Stache',
     mediaControl: ['adapter.pl', 'Adapter.framework/Adapter'],
   };
   const nested = 'Contents/Resources/media-control/Adapter.framework/Adapter';
@@ -366,9 +370,9 @@ describe('RELEASE-02-03 bundle verifier', () => {
     ['a missing LSUIElement', { infoPlist: { ...goodPlist, LSUIElement: undefined } }],
     [
       'a different CFBundleIdentifier',
-      { infoPlist: { ...goodPlist, CFBundleIdentifier: 'com.marcosmoura.stache' } },
+      { infoPlist: { ...goodPlist, CFBundleIdentifier: 'com.marcosmoura.stache.next' } },
     ],
-    ['a different CFBundleName', { infoPlist: { ...goodPlist, CFBundleName: 'Stache' } }],
+    ['a different CFBundleName', { infoPlist: { ...goodPlist, CFBundleName: 'Stache Next' } }],
     [
       'a framework outside media-control',
       { files: [...good.files, 'Contents/Frameworks/X.framework/X'] },
@@ -417,8 +421,8 @@ describe('RELEASE-02-04 replacement', () => {
     expect(readdirSync(output(root)).toSorted()).toEqual([
       'Casks',
       'SHA256SUMS',
-      'Stache_Next_0.26.0_aarch64.dmg',
-      'Stache_Next_0.26.0_aarch64.zip',
+      'Stache_0.26.0_aarch64.dmg',
+      'Stache_0.26.0_aarch64.zip',
       'release.json',
     ]);
     const sums = readFileSync(join(output(root), 'SHA256SUMS'), 'utf8')
@@ -427,8 +431,8 @@ describe('RELEASE-02-04 replacement', () => {
 
     expect(sums).toHaveLength(2);
     expect(sums.map((line) => line.split('  ')[1])).toEqual([
-      'Stache_Next_0.26.0_aarch64.dmg',
-      'Stache_Next_0.26.0_aarch64.zip',
+      'Stache_0.26.0_aarch64.dmg',
+      'Stache_0.26.0_aarch64.zip',
     ]);
   });
 });
@@ -490,7 +494,7 @@ describe('RELEASE-02-07 honest modes', () => {
       signing: 'ad-hoc',
       notarized: false,
       adHocResigned: false,
-      artifacts: ['Stache_Next_0.26.0_aarch64.dmg', 'Stache_Next_0.26.0_aarch64.zip'],
+      artifacts: ['Stache_0.26.0_aarch64.dmg', 'Stache_0.26.0_aarch64.zip'],
     });
 
     for (const line of lines) {
@@ -516,7 +520,7 @@ describe('RELEASE-02-07 honest modes', () => {
     expect(signs.every((call) => !call.args.includes('--deep'))).toBe(true);
     const targets = signs.map((call) => call.args.at(-1) as string);
 
-    expect(targets.at(-1)).toMatch(/Stache Next\.app$/);
+    expect(targets.at(-1)).toMatch(/Stache\.app$/);
     expect(targets.at(-2)).toMatch(/MacOS\/stache$/);
     expect(signs.at(-1)?.args).toContain('--entitlements');
     expect(signs.slice(0, -2).every((call) => !call.args.includes('--entitlements'))).toBe(true);
@@ -689,29 +693,29 @@ describe('RELEASE-03-03 signing arguments and order', () => {
       'sign Adapter.framework/Adapter',
       'sign A/Adapter',
       'sign MacOS/stache',
-      'sign dmg-root/Stache Next.app',
-      'verify dmg-root/Stache Next.app',
-      'details dmg-root/Stache Next.app',
-      'zip .work/submit-Stache_Next_0.26.0_aarch64.zip',
-      'notarytool submit .work/submit-Stache_Next_0.26.0_aarch64.zip',
-      'stapler staple dmg-root/Stache Next.app',
-      'stapler validate dmg-root/Stache Next.app',
+      'sign dmg-root/Stache.app',
+      'verify dmg-root/Stache.app',
+      'details dmg-root/Stache.app',
+      'zip .work/submit-Stache_0.26.0_aarch64.zip',
+      'notarytool submit .work/submit-Stache_0.26.0_aarch64.zip',
+      'stapler staple dmg-root/Stache.app',
+      'stapler validate dmg-root/Stache.app',
       'dmg create',
-      'sign Stache_Next_0.26.0_aarch64.dmg',
-      'notarytool submit Stache_Next_0.26.0_aarch64.dmg',
-      'stapler staple Stache_Next_0.26.0_aarch64.dmg',
-      'stapler validate Stache_Next_0.26.0_aarch64.dmg',
-      'zip Stache_Next_0.26.0_aarch64.zip',
-      'verify dmg-root/Stache Next.app',
-      'details dmg-root/Stache Next.app',
-      'spctl execute dmg-root/Stache Next.app',
-      'spctl open Stache_Next_0.26.0_aarch64.dmg',
-      'stapler validate Stache_Next_0.26.0_aarch64.dmg',
-      expect.stringMatching(/^details mount-.*\/Stache Next\.app$/),
-      expect.stringMatching(/^stapler validate mount-.*\/Stache Next\.app$/),
-      expect.stringMatching(/^verify unzip-.*\/Stache Next\.app$/),
-      expect.stringMatching(/^details unzip-.*\/Stache Next\.app$/),
-      expect.stringMatching(/^stapler validate unzip-.*\/Stache Next\.app$/),
+      'sign Stache_0.26.0_aarch64.dmg',
+      'notarytool submit Stache_0.26.0_aarch64.dmg',
+      'stapler staple Stache_0.26.0_aarch64.dmg',
+      'stapler validate Stache_0.26.0_aarch64.dmg',
+      'zip Stache_0.26.0_aarch64.zip',
+      'verify dmg-root/Stache.app',
+      'details dmg-root/Stache.app',
+      'spctl execute dmg-root/Stache.app',
+      'spctl open Stache_0.26.0_aarch64.dmg',
+      'stapler validate Stache_0.26.0_aarch64.dmg',
+      expect.stringMatching(/^details mount-.*\/Stache\.app$/),
+      expect.stringMatching(/^stapler validate mount-.*\/Stache\.app$/),
+      expect.stringMatching(/^verify unzip-.*\/Stache\.app$/),
+      expect.stringMatching(/^details unzip-.*\/Stache\.app$/),
+      expect.stringMatching(/^stapler validate unzip-.*\/Stache\.app$/),
       'shasum',
     ]);
     expect(record).toMatchObject({
@@ -961,25 +965,25 @@ describe('RELEASE-05-01 cask', () => {
     release(root).result();
     const cask = readFileSync(caskPath(root), 'utf8');
     const dmgSum = createHash('sha256')
-      .update(readFileSync(join(output(root), 'Stache_Next_0.26.0_aarch64.dmg')))
+      .update(readFileSync(join(output(root), 'Stache_0.26.0_aarch64.dmg')))
       .digest('hex');
 
     expect(cask).toContain('cask "stache" do\n');
     expect(cask).toContain('  version "0.26.0"\n');
     expect(cask).toContain(`  sha256 "${dmgSum}"\n`);
     expect(cask).toContain(
-      '  url "https://github.com/marcosmoura/stache/releases/download/v#{version}/Stache_Next_#{version}_aarch64.dmg"\n',
+      '  url "https://github.com/marcosmoura/stache/releases/download/v#{version}/Stache_#{version}_aarch64.dmg"\n',
     );
     expect(cask).toContain('  depends_on arch: :arm64\n');
     expect(cask).toContain('  depends_on macos: ">= :tahoe"\n');
-    expect(cask).toContain('  app "Stache Next.app"\n');
+    expect(cask).toContain('  app "Stache.app"\n');
     expect(cask).toContain(
-      '  binary "#{appdir}/Stache Next.app/Contents/MacOS/stache", target: "stache"\n',
+      '  binary "#{appdir}/Stache.app/Contents/MacOS/stache", target: "stache"\n',
     );
     expect(cask).toMatch(
-      /uninstall signal: +\[\["TERM", "com\.marcosmoura\.stache\.next"\]\],\s+on_upgrade: :signal\n/,
+      /uninstall signal: +\[\["TERM", "com\.marcosmoura\.stache"\]\],\s+on_upgrade: :signal\n/,
     );
-    expect(cask).toContain('  zap trash: "~/Library/Caches/com.marcosmoura.stache.next"\n');
+    expect(cask).toContain('  zap trash: "~/Library/Caches/com.marcosmoura.stache"\n');
   });
 
   it('keeps SHA256SUMS and release.json to the DMG and zip', () => {
@@ -992,13 +996,10 @@ describe('RELEASE-05-01 cask', () => {
     const record = JSON.parse(readFileSync(join(output(root), 'release.json'), 'utf8'));
 
     expect(sums.map((line) => line.split('  ')[1])).toEqual([
-      'Stache_Next_0.26.0_aarch64.dmg',
-      'Stache_Next_0.26.0_aarch64.zip',
+      'Stache_0.26.0_aarch64.dmg',
+      'Stache_0.26.0_aarch64.zip',
     ]);
-    expect(record.artifacts).toEqual([
-      'Stache_Next_0.26.0_aarch64.dmg',
-      'Stache_Next_0.26.0_aarch64.zip',
-    ]);
+    expect(record.artifacts).toEqual(['Stache_0.26.0_aarch64.dmg', 'Stache_0.26.0_aarch64.zip']);
   });
 
   it('derives the names from the config, so the rename changes the output alone', () => {
@@ -1017,8 +1018,8 @@ describe('RELEASE-05-01 cask', () => {
 
   it('isolates the test-only overrides from the production rendering', () => {
     const inputs = {
-      productName: 'Stache Next',
-      identifier: 'com.marcosmoura.stache.next',
+      productName: 'Stache',
+      identifier: 'com.marcosmoura.stache',
       sha256: 'b'.repeat(64),
     };
     const test = renderTestCask(inputs, '0.26.0-test.1', 'http://127.0.0.1:8123/candidate.dmg');
@@ -1085,7 +1086,7 @@ describe('RELEASE-05-02 cask safety', () => {
 
     const zap = cask.split('\n').filter((line) => line.includes('zap'));
 
-    expect(zap).toEqual(['  zap trash: "~/Library/Caches/com.marcosmoura.stache.next"']);
+    expect(zap).toEqual(['  zap trash: "~/Library/Caches/com.marcosmoura.stache"']);
   });
 });
 

@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Stache Next",
+  "productName": "Stache",
   "version": "0.26.0",
-  "identifier": "com.marcosmoura.stache.next",
+  "identifier": "com.marcosmoura.stache",
   "build": {
     "beforeDevCommand": "bun run dev",
     "beforeBuildCommand": "bun run build",

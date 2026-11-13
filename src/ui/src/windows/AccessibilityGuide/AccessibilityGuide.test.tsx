@@ -9,8 +9,8 @@ import { render } from '../../../tests/render';
 
 import { AccessibilityGuide } from './AccessibilityGuide';
 
-const APP = { name: 'Stache Next', version: '0.1.0', identifier: 'com.marcosmoura.stache.next' };
-const APP_PATH = '/Applications/Stache Next.app';
+const APP = { name: 'Stache', version: '0.1.0', identifier: 'com.marcosmoura.stache' };
+const APP_PATH = '/Applications/Stache.app';
 
 function status(
   access: Partial<AccessView_Serialize>,
@@ -74,10 +74,10 @@ describe('AccessibilityGuide', () => {
     const screen = await render(<AccessibilityGuide />);
 
     await expect
-      .element(screen.getByRole('heading', { name: 'Stache Next needs Accessibility access' }))
+      .element(screen.getByRole('heading', { name: 'Stache needs Accessibility access' }))
       .toBeVisible();
     await expect
-      .element(screen.getByText(/Until you allow it, Stache Next waits and does nothing\./))
+      .element(screen.getByText(/Until you allow it, Stache waits and does nothing\./))
       .toBeVisible();
     expect(screen.getByRole('listitem').elements()).toHaveLength(3);
     await expect.element(screen.getByText(APP.identifier)).toBeVisible();
@@ -96,7 +96,7 @@ describe('AccessibilityGuide', () => {
     expect(getComputedStyle(dot).width).toBe('7px');
     await expect
       .element(screen.getByRole('heading'))
-      .toHaveTextContent('Stache Next needs Accessibility access');
+      .toHaveTextContent('Stache needs Accessibility access');
   });
 
   it('shows the unbundled variant without an app path', async () => {
@@ -116,7 +116,7 @@ describe('AccessibilityGuide', () => {
       .element(screen.getByRole('heading', { name: 'Accessibility access was turned off' }))
       .toBeVisible();
     await expect
-      .element(screen.getByText('Stache Next stopped all features until it is turned on again.'))
+      .element(screen.getByText('Stache stopped all features until it is turned on again.'))
       .toBeVisible();
     expect(screen.container.querySelector('[data-tone="attention"]')).not.toBeNull();
     await expect.element(screen.getByRole('main')).toHaveAttribute('data-state', 'revoked');
@@ -138,7 +138,7 @@ describe('AccessibilityGuide', () => {
     host.emit('status-changed', { status: status({ state: 'open' }) });
     await expect
       .element(screen.getByRole('status'))
-      .toHaveTextContent('Access granted. Starting Stache Next…');
+      .toHaveTextContent('Access granted. Starting Stache…');
     await vi.waitFor(() => expect(closes(host)).toBe(1));
     expect(screen.container.querySelector('footer')).toBeNull();
     expect(screen.container.querySelector('[data-tone="success"]')).not.toBeNull();
@@ -147,7 +147,7 @@ describe('AccessibilityGuide', () => {
   for (const [label, command] of [
     ['Request Access', 'request_accessibility'],
     ['Open System Settings', 'open_accessibility_settings'],
-    ['Quit Stache Next', 'quit_app'],
+    ['Quit Stache', 'quit_app'],
   ] as const) {
     it(`${label} sends ${command} once and disables while pending`, async () => {
       const host = setup();
@@ -203,15 +203,26 @@ describe('AccessibilityGuide', () => {
 
     expect(region).not.toBeNull();
     expect(region?.contains(screen.getByRole('button', { name: 'Close' }).element())).toBe(false);
-    expect(region?.textContent).toBe('Stache Next');
+    expect(region?.textContent).toBe('Stache');
   });
 
-  it('names the app from app_info in the header and the Quit action', async () => {
+  it('names the app from app_info in the header, the copy and the Quit action', async () => {
     setup().answer('app_info', { ...APP, name: 'Injected Name' });
     const screen = await render(<AccessibilityGuide />);
     const region = screen.container.querySelector('[data-tauri-drag-region]');
 
     await expect.element(screen.getByRole('button', { name: 'Quit Injected Name' })).toBeVisible();
+    await expect
+      .element(screen.getByRole('heading', { name: 'Injected Name needs Accessibility access' }))
+      .toBeVisible();
+    await expect
+      .element(screen.getByText(/Come back here; Injected Name starts by itself\./))
+      .toBeVisible();
+    await expect
+      .element(
+        screen.getByText('Make sure you turn on Injected Name, not another copy of the app.'),
+      )
+      .toBeVisible();
     expect(region?.textContent).toBe('Injected Name');
   });
 

@@ -73,7 +73,7 @@ isolated temporary config/identity with any legacy noTunes disabled; see
 
 Keep Awake validation is fake-backed. No automated check creates a real power
 assertion, locks or unlocks the screen, wakes the machine, installs a real
-distributed observer or launches Stache Next. Module tests drive fake assertion
+distributed observer or launches Stache. Module tests drive fake assertion
 and observation backends, in-memory lock results, barriers and races, and a fake
 clock; app host tests write malformed TOML, a wrong boolean and a deleted file,
 run the normal watcher/reload path, query the actual `keepAwake.status` socket,
@@ -504,7 +504,7 @@ socket path before launching:
 ```sh
 bun run build   # embeds the production React bundle
 SMOKE_ROOT=$(mktemp -d "${TMPDIR%/}/opencode/s.XXX")
-SOCKET="$SMOKE_ROOT/com.marcosmoura.stache.next/ipc"
+SOCKET="$SMOKE_ROOT/com.marcosmoura.stache/ipc"
 test "${#SOCKET}" -le 103 || { echo "temporary root too long"; exit 1; }
 HOME="$SMOKE_ROOT" TMPDIR="$SMOKE_ROOT" XDG_CONFIG_HOME="$SMOKE_ROOT/config" \
   cargo run -q --release -p stache-app --features smoke --bin stache-smoke
@@ -542,7 +542,7 @@ never run the `stache-smoke` binary built below without that approval.
 
 ```sh
 SMOKE_ROOT=$(mktemp -d "${TMPDIR%/}/opencode/s.XXX")
-SOCKET="$SMOKE_ROOT/com.marcosmoura.stache.next/ipc"
+SOCKET="$SMOKE_ROOT/com.marcosmoura.stache/ipc"
 test "${#SOCKET}" -le 103 || { echo "temporary root too long"; exit 1; }
 HOME="$SMOKE_ROOT" TMPDIR="$SMOKE_ROOT" XDG_CONFIG_HOME="$SMOKE_ROOT/config" \
   STACHE_SMOKE_TERMINATE=1 \
@@ -633,7 +633,7 @@ Use a per-user temporary root and check the socket path first:
 
 ```sh
 SMOKE_ROOT=$(mktemp -d "${TMPDIR%/}/opencode/s.XXX")
-SOCKET="$SMOKE_ROOT/com.marcosmoura.stache.next/ipc"
+SOCKET="$SMOKE_ROOT/com.marcosmoura.stache/ipc"
 test "${#SOCKET}" -le 103 || { echo "temporary root too long"; exit 1; }
 HOME="$SMOKE_ROOT" TMPDIR="$SMOKE_ROOT" XDG_CONFIG_HOME="$SMOKE_ROOT/config" \
   cargo run -q --release -p stache-app --features smoke --bin stache-smoke
@@ -699,7 +699,7 @@ cargo build --release -p stache-app --features smoke --bin stache-smoke
 ### Manual gates
 
 One gate at a time, approved for that individual run. Never unattended, never
-bundled with another gate. Target only `com.marcosmoura.stache.next`. The
+bundled with another gate. Target only `com.marcosmoura.stache` (these are release builds). The
 env-selected scenarios live in the feature-gated `stache-smoke` binary; the
 `bun run tauri:build` bundle is the shipped binary and is used where a gate calls
 for the bundle itself. Both run with a temp-root environment and every module
@@ -708,9 +708,9 @@ reads the isolated `HOME`/`XDG_CONFIG_HOME`):
 
 ```sh
 ROOT=$(mktemp -d "${TMPDIR%/}/opencode/g.XXX")
-SOCKET="$ROOT/com.marcosmoura.stache.next/ipc"
+SOCKET="$ROOT/com.marcosmoura.stache/ipc"
 test "${#SOCKET}" -le 103 || { echo "temporary root too long"; exit 1; }
-BUNDLE="$PWD/target/release/bundle/macos/Stache Next.app"
+BUNDLE="$PWD/target/release/bundle/macos/Stache.app"
 HOME="$ROOT" TMPDIR="$ROOT" XDG_CONFIG_HOME="$ROOT/config" \
   "$BUNDLE/Contents/MacOS/stache" 2>"$ROOT/stderr.log" &
 PID=$!
@@ -734,7 +734,7 @@ bun scripts/check-next-instance.ts "$PID"
 
 It prints the `query:` snapshot and the `result:` verdict, exits non-zero on a
 foreign instance, an unknown identity or a failed query, and never sends
-anything. A running legacy `com.marcosmoura.stache` process is a distinct
+anything. A running development build (`com.marcosmoura.stache.next`) is a distinct
 identity: it is not a collision and it is not treated as the owned instance.
 Recheck immediately before the event and prevent concurrent launches for the
 run.
@@ -744,7 +744,7 @@ record delivery availability, late reply and extended bound), socket absence, an
 the `wait "$PID"` OS status. Keep `recorded_code` separate: `exit(7)` records 7
 in the teardown outcome, while an unchanged `dispatch` may still return OS status
 1; the AppKit status is a fact, not the outcome. The owned socket is absent when
-`test ! -S "$ROOT/com.marcosmoura.stache.next/ipc"` holds.
+`test ! -S "$ROOT/com.marcosmoura.stache/ipc"` holds.
 
 - `TEARDOWN-04-02` — owned terminate with a temporary hanging owner:
 
@@ -754,7 +754,7 @@ in the teardown outcome, while an unchanged `dispatch` may still return OS statu
   PID=$!
   wait "$PID"; echo "status=$?"
   grep 'teardown:' "$ROOT/stderr.log"
-  test ! -S "$ROOT/com.marcosmoura.stache.next/ipc"
+  test ! -S "$ROOT/com.marcosmoura.stache/ipc"
   ```
 
   Pass: one `Uncertain` record naming `smoke-hang`, one reply with its terminal
@@ -801,7 +801,7 @@ in the teardown outcome, while an unchanged `dispatch` may still return OS statu
   ```
 
   Pass: one coordinated `Clean`, one reply, no owned socket. Optional
-  `osascript -e 'tell application id "com.marcosmoura.stache.next" to quit'` is
+  `osascript -e 'tell application id "com.marcosmoura.stache" to quit'` is
   allowed only after the collision guard passes; it proves only that
   supplementary external route.
 
@@ -876,7 +876,7 @@ checklist item. Use a height of 300: 40 points only shows the test page header.
 bun run build
 cargo build --release -p stache-app --features panel-native-check --bin panel-native-check
 SMOKE_ROOT=$(mktemp -d "${TMPDIR%/}/opencode/s.XXX")
-SOCKET="$SMOKE_ROOT/com.marcosmoura.stache.next/ipc"
+SOCKET="$SMOKE_ROOT/com.marcosmoura.stache/ipc"
 test "${#SOCKET}" -le 103 || { echo "temporary root too long"; exit 1; }
 HOME="$SMOKE_ROOT" TMPDIR="$SMOKE_ROOT" XDG_CONFIG_HOME="$SMOKE_ROOT/config" \
   ./target/release/panel-native-check --x 0 --y 0 --width 900 --height 300 \
@@ -944,8 +944,8 @@ tested happy-dom/minimatch/tinypool overrides.
 because Tauri would otherwise ship a dev-mode window. Generate/schema binaries are feature-gated and
 not bundled.
 
-Launch only `target/release/bundle/macos/Stache Next.app`, verify tray/Quit and zero windows, then quit.
-The bundle needs Accessibility for Stache Next before any module runs (the launch gate; grant it for the Stache Next entry only, never the legacy one); it needs no audio permission. Local bundles use ad-hoc signing; distribution
+Launch only `target/release/bundle/macos/Stache.app`, verify tray/Quit and zero windows, then quit.
+The bundle needs Accessibility for Stache before any module runs (the launch gate; grant it for that bundle's entry, not a development build's `Stache Next` entry); it needs no audio permission. Local bundles use ad-hoc signing; distribution
 signing/notarization needs separate credentials. CI audits new locks, not the archive. Legacy build
 verification is opt-in via [_legacy/README.md](../../_legacy/README.md), including resource/signing gaps.
 Never run legacy and new device-changing automation together.
@@ -979,9 +979,9 @@ never executed. Expected: `true` directly, `false` with the link path through th
 
 `bun scripts/measure-foundation.ts` (also `bun run measure -- --help`) measures
 release startup, 60-second idle CPU/RSS and process trees with isolated config
-roots. It refuses to start while any Stache Next or legacy Stache process is
+roots. It refuses to start while any Stache process (or the explicit `--legacy-app`) is
 running and never signals another instance. Build the bundles and follow
 [performance.md](performance.md) before running it; do not run a manual
 audio-device test at the same time.
 
-Identity preparation (release part 04, Stage 1): `app/tests/identity.rs` checks that `tauri.conf.json` matches `IDENTITY` and `PRODUCT_NAME`, that the other identity's literal stays inside a short allow-list of tracked sources, and that no tracked script or source uses `killall`, `pkill`, `pgrep` or compares a process name to `stache` (a text check with its limits stated in the test). `app/tests/collision.rs` drives the startup `collision::check` over `FakeRunningInstances` (sibling and foreign same-identifier warn once, own PID and prefix matches ignored, a failed query warns and continues); no test queries real applications.
+Identity (release part 04): `app/tests/identity.rs` checks that the base `tauri.conf.json` holds the release identity and `PRODUCT_NAME`, that `tauri.dev.conf.json` holds exactly the development `productName` and `identifier` and only `tauri:dev` passes it (after the base config), that `tauri:build` has one `--config`, `bundle.resources` only `media-control` and no release profile enables debug assertions, that `IDENTITY` is selected only by `cfg!(debug_assertions)`, that the development literals stay in the allow-list, and that no tracked script or source uses `killall`, `pkill`, `pgrep` or compares a process name to `stache` (a text check with its limits stated in the test). Tests compile as debug, so they run under the development identity; `AppPaths::resolve_for` lets `sdk/src/paths.rs` and `cli/src/cache.rs` cover both identities' exact paths, the socket limit and that `cache clear` under one leaves the other intact. `app/tests/collision.rs` drives the startup `collision::guard` over `FakeRunningInstances`: a foreign same-identifier process refuses with the diagnostic and nothing after the check runs, a sibling and a failed query warn and continue, own PID and prefix matches are ignored, and the fake records only the two queries; no test queries real applications.

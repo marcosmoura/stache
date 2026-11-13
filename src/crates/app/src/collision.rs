@@ -13,14 +13,14 @@ use stache_sdk::{IDENTITY, LogLevel, LogRecord, Logger, ModuleId, Operation, SIB
 /// How a match on this process's own identifier is treated.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CollisionPolicy {
-    /// Stage 1: every match only warns.
+    /// Every match only warns.
     WarnOnly,
-    /// From the rename on: a foreign process with this identifier refuses.
+    /// A foreign process with this identifier refuses; the sibling warns.
     RefuseSameIdentity,
 }
 
 /// The policy this build ships with.
-pub const POLICY: CollisionPolicy = CollisionPolicy::WarnOnly;
+pub const POLICY: CollisionPolicy = CollisionPolicy::RefuseSameIdentity;
 
 /// What one running application means for startup.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -55,6 +55,15 @@ impl Collision {
         format!(
             "another {} is running at {path} (pid {})",
             self.identifier, self.pid
+        )
+    }
+
+    /// The refusal diagnostic: the same facts plus how to resolve it.
+    #[must_use]
+    pub fn refusal(&self) -> String {
+        format!(
+            "cannot start: {}. Quit that app from its menu bar icon, then start this one again",
+            self.message()
         )
     }
 }
@@ -128,6 +137,25 @@ pub fn check(
         }
     }
     refusals
+}
+
+/// The startup step between the instance lock and the tray.
+///
+/// It warns per [`check`], and returns the refusal diagnostic for the first foreign process
+/// with this identifier under [`POLICY`]. The caller returns it as the desktop
+/// error, which the entry point writes to standard error (the host log stream)
+/// before exiting non-zero; nothing after this step runs.
+///
+/// # Errors
+/// Returns the refusal diagnostic.
+pub fn guard(
+    query: &dyn RunningInstances,
+    own_pid: i32,
+    logger: &dyn Logger,
+) -> Result<(), String> {
+    check(query, own_pid, POLICY, logger)
+        .first()
+        .map_or(Ok(()), |collision| Err(collision.refusal()))
 }
 
 fn warn(logger: &dyn Logger, message: String) {

@@ -112,7 +112,9 @@ In `target/release-artifacts/` (ignored with `target/`), `<Product>` being `prod
 spaces as underscores and the version that of `tauri.conf.json`:
 
 - `<Product>_<version>_aarch64.dmg` and `<Product>_<version>_aarch64.zip`; the app inside is
-  always `<productName>.app`,
+  always `<productName>.app`. The base config gives `Stache_<version>_aarch64.dmg`,
+  `Stache_<version>_aarch64.zip` and `Stache.app` (`com.marcosmoura.stache`); the development
+  overlay `tauri.dev.conf.json` is used only by `tauri:dev` and never reaches a release,
 - `SHA256SUMS` with bare file names: `shasum -a 256 -c SHA256SUMS` from that directory,
 - `release.json`: `version`, `commit`, `treeClean`, `signing` (`"ad-hoc"` or
   `"developer-id"`), `notarized`, `adHocResigned`, `artifacts`; the signing modes add `mode`, and
@@ -121,9 +123,9 @@ spaces as underscores and the version that of `tauri.conf.json`:
   authoritative version and the DMG's SHA-256. It names the DMG on the `v<version>` GitHub
   release, `depends_on arch: :arm64` and macOS 26 (`">= :tahoe"`, one constant),
   `app "<productName>.app"`, a `binary` link to `Contents/MacOS/stache` (the CLI route, see
-  [install](install.md#cli-access)), `uninstall signal: [["TERM", "<identifier>"]],
-  on_upgrade: :signal` and `zap` of `~/Library/Caches/<identifier>` only. It is not an artifact:
-  `SHA256SUMS` and `release.json` list only the DMG and zip. Publishing it to the tap is manual
+  [install](install.md#cli-access)), `uninstall signal: [["TERM", "<identifier>"]]` (Homebrew's
+  quit request to that bundle identifier, never a process name),
+  on_upgrade: :signal`and`zap`of`~/Library/Caches/<identifier>`only. It is not an artifact:`SHA256SUMS`and`release.json` list only the DMG and zip. Publishing it to the tap is manual
   (release Part 06); nothing pushes it.
 
 ### Local test cask

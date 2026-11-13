@@ -1,5 +1,5 @@
 {
-  "name": "stache-next",
+  "name": "stache",
   "version": "0.26.0",
   "private": true,
   "type": "module",
@@ -7,7 +7,7 @@
     "prepare": "bun scripts/prepare.ts",
     "dev": "vite",
     "build": "bun run check:generated && tsc -b && vite build",
-    "tauri:dev": "tauri dev --config src/crates/app/tauri.conf.json",
+    "tauri:dev": "tauri dev --config src/crates/app/tauri.conf.json --config src/crates/app/tauri.dev.conf.json",
     "tauri:build": "tauri build --features custom-protocol --config src/crates/app/tauri.conf.json",
     "check:generated": "bun run generate-schema -- --check && bun run generate-bindings -- --check",
     "generate-bindings": "cargo run -q -p stache-app --features dev-tools --bin generate-bindings --",

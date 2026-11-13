@@ -1,21 +1,16 @@
 #!/usr/bin/env bun
 /**
- * Evidence-only collision guard for one owned `com.marcosmoura.stache.next` PID.
+ * Evidence-only collision guard for one owned PID of the measured identity
+ * (`NEXT_BUNDLE_IDENTIFIER`, the release `com.marcosmoura.stache`).
  *
  * Reads Launch Services and the process table through the same query the
  * measurement tooling uses, prints the query and its verdict, and exits non-zero
  * when the PID is not the only next instance. It never signals or launches a
  * process. Part of the Teardown manual gates (`TEARDOWN-04-09`).
  */
-import { existsSync } from 'node:fs';
 import path from 'node:path';
 
-import {
-  DEFAULT_NEXT_APP,
-  LEGACY_BUNDLE_IDENTIFIER,
-  NEXT_BUNDLE_IDENTIFIER,
-  REPOSITORY_ROOT,
-} from './measure/paths';
+import { DEFAULT_NEXT_APP, NEXT_BUNDLE_IDENTIFIER, REPOSITORY_ROOT } from './measure/paths';
 import {
   InstanceCollisionError,
   assertNoOtherNextInstance,
@@ -23,13 +18,13 @@ import {
 } from './measure/process';
 import type { Target } from './measure/types';
 
-function bundleTarget(kind: 'next' | 'legacy', bundlePath: string): Target {
+function bundleTarget(bundlePath: string): Target {
   const executablePath = path.join(bundlePath, 'Contents', 'MacOS', 'stache');
 
   return {
-    kind,
+    kind: 'next',
     bundlePath,
-    bundleIdentifier: kind === 'next' ? NEXT_BUNDLE_IDENTIFIER : LEGACY_BUNDLE_IDENTIFIER,
+    bundleIdentifier: NEXT_BUNDLE_IDENTIFIER,
     executablePath,
     build: {
       executablePath,
@@ -49,11 +44,11 @@ if (!Number.isInteger(ownedPid) || ownedPid <= 0) {
 }
 
 const nextBundle = path.resolve(REPOSITORY_ROOT, process.env.STACHE_NEXT_APP ?? DEFAULT_NEXT_APP);
-const legacyBundle = '/Applications/Stache.app';
-const next = bundleTarget('next', nextBundle);
-const legacy = existsSync(legacyBundle) ? bundleTarget('legacy', legacyBundle) : null;
+const next = bundleTarget(nextBundle);
+// The legacy app shared the release identifier and has been removed; nothing
+// is classified as legacy here.
 const query = (): ReturnType<typeof findRunningStacheProcesses> =>
-  findRunningStacheProcesses(next, legacy, []);
+  findRunningStacheProcesses(next, null, []);
 
 try {
   const evidence = assertNoOtherNextInstance(query, ownedPid);

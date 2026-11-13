@@ -2,10 +2,11 @@ import { mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { NEXT_BUNDLE_IDENTIFIER } from './paths';
 import { runCommand } from './process';
 import type { AudioDeviceInfo, AudioState, ConfigFile, DisplayInfo } from './types';
 
-const SOCKET_SUFFIX = '/com.marcosmoura.stache.next/ipc';
+const SOCKET_SUFFIX = `/${NEXT_BUNDLE_IDENTIFIER}/ipc`;
 const MAXIMUM_SOCKET_PATH_BYTES = 103;
 const TEMP_DIRECTORY_NAME_LENGTH = 4;
 
@@ -53,7 +54,7 @@ export function removeTempRoot(root: string): void {
   rmSync(root, { recursive: true, force: true });
 }
 
-/** Writes the two TOML configuration files used by a Stache Next scenario. */
+/** Writes the two TOML configuration files used by a Stache scenario. */
 export function writeNextConfigs(
   root: string,
   enabled: boolean,

@@ -104,7 +104,7 @@ export async function runMeasurement(
     options.legacyAppPath === null ? null : resolveTarget('legacy', options.legacyAppPath);
 
   if (legacyTarget !== null && legacyTarget.executablePath === nextTarget.executablePath) {
-    throw new Error('--legacy-app must not point at the Stache Next executable');
+    throw new Error('--legacy-app must not point at the measured Stache executable');
   }
 
   const environment = collectEnvironment();
@@ -253,13 +253,13 @@ function buildScenarioPlans(nextTarget: Target, legacyTarget: Target | null): Sc
   const plans: ScenarioPlan[] = [
     {
       id: 'next-disabled',
-      label: 'Stache Next - proxyAudio disabled',
+      label: 'Stache - proxyAudio disabled',
       target: nextTarget,
       enabled: false,
     },
     {
       id: 'next-enabled',
-      label: 'Stache Next - proxyAudio enabled with inert priorities',
+      label: 'Stache - proxyAudio enabled with inert priorities',
       target: nextTarget,
       enabled: true,
     },
@@ -495,10 +495,7 @@ function assertNoOtherStache(next: Target, legacy: Target | null, safety: Safety
     throw new Error(describeRunningProcesses(blocking));
   }
 
-  const scope =
-    legacy === null
-      ? 'Stache Next process (legacy Stache is not guarded without --legacy-app)'
-      : 'Stache Next or legacy Stache process';
+  const scope = legacy === null ? 'Stache process' : 'Stache or legacy Stache process';
 
   safety.guardChecks.push(`no other ${scope} at ${new Date().toISOString()}`);
 
@@ -731,7 +728,7 @@ function describeLimitations(legacyTarget: Target | null): string[] {
     'The measured machine is shared: unrelated system activity can add CPU noise.',
     'Two measurement tool instances are not mutually excluded; run one at a time.',
     'Process identity is matched by Launch Services bundle identifier, the measured executable ' +
-      'path, and the Stache Next/Stache .app paths. A bare release binary at a different path is ' +
+      'path, and any Stache.app path. A legacy process is identified only from --legacy-app. A bare release binary at a different path is ' +
       'not detected by the guard.',
   ];
 

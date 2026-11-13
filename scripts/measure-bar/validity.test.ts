@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { HostWindow } from './types';
 import { judgeTrial, parseCoreStatusAccess, parseHostWindows } from './validity';
 
-const APP = '/r/Stache Next.app';
+const APP = '/r/Stache.app';
 const panel: HostWindow = { layer: 0, x: 0, y: 0, width: 1440, height: 28, onScreen: true };
 
 function line(access: unknown): string {
