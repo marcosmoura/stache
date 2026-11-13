@@ -30,8 +30,13 @@ const IDENTIFIER_ALLOWED: &[&str] = &[
     "scripts/measure/paths.ts",
 ];
 
-/// Files allowed to hold the development product name as a literal.
-const PRODUCT_NAME_ALLOWED: &[&str] = &["src/crates/app/tauri.dev.conf.json"];
+/// Files allowed to hold the development product name as a literal: the dev
+/// overlay, and the published limitation that tells a release user what a
+/// development build is.
+const PRODUCT_NAME_ALLOWED: &[&str] = &[
+    "src/crates/app/tauri.dev.conf.json",
+    "scripts/release/publish.ts",
+];
 
 fn root() -> PathBuf { Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..") }
 
