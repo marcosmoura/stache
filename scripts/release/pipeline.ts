@@ -94,10 +94,25 @@ export function artifactNames(productName: string, version: string): ArtifactNam
   return { app: `${productName}.app`, dmg: `${base}.dmg`, zip: `${base}.zip`, volume: productName };
 }
 
+/** Signing, notary and repository-token inputs that the build child must never see. */
+export const scrubbedReleaseVariables = [
+  'DEVELOPER_ID_P12_BASE64',
+  'DEVELOPER_ID_P12_PASSWORD',
+  'NOTARY_API_KEY_P8',
+  'STACHE_SIGNING_IDENTITY',
+  'STACHE_TEAM_ID',
+  'STACHE_NOTARY_KEY_ID',
+  'STACHE_NOTARY_ISSUER',
+  'STACHE_NOTARY_KEY_PATH',
+  'STACHE_NOTARY_KEYCHAIN_PROFILE',
+  'GH_TOKEN',
+  'GITHUB_TOKEN',
+] as const;
+
 export function scrubbedEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const copy = { ...env };
 
-  for (const name of scrubbedAppleVariables) {
+  for (const name of [...scrubbedAppleVariables, ...scrubbedReleaseVariables]) {
     delete copy[name];
   }
 
@@ -199,6 +214,13 @@ export interface VerifierExpectations {
 
 const mediaControlPrefix = 'Contents/Resources/media-control/';
 
+/** The only files allowed outside media-control, besides `Contents/MacOS/<executable>`. */
+const fixedBundleFiles = [
+  'Contents/Info.plist',
+  'Contents/Resources/icon.icns',
+  'Contents/_CodeSignature/CodeResources',
+];
+
 export function linkedLibraries(otoolOutput: string): string[] {
   return otoolOutput
     .split('\n')
@@ -254,9 +276,19 @@ export function verifyBundle(
     }
   }
 
+  const allowed = new Set([...fixedBundleFiles, `Contents/MacOS/${expected.executable}`]);
+
+  if (!files.includes('Contents/Resources/icon.icns')) {
+    problems.push('missing Contents/Resources/icon.icns');
+  }
+
   for (const file of files) {
     if (file.startsWith(mediaControlPrefix)) {
       continue;
+    }
+
+    if (!allowed.has(file)) {
+      problems.push(`unexpected file in bundle: ${file}`);
     }
 
     if (file.includes('.framework/') || file.startsWith('Contents/Frameworks/')) {
@@ -636,6 +668,38 @@ function checkZip(
 }
 
 /**
+ * Removes `release-artifacts.staging-*` left by an interrupted run, detaching any image still
+ * mounted under one first. Best effort: never fails the run.
+ */
+function sweepStaleStaging(run: Runner, target: string, log: (line: string) => void) {
+  const stale = existsSync(target)
+    ? readdirSync(target).filter((name) => name.startsWith('release-artifacts.staging-'))
+    : [];
+
+  for (const name of stale) {
+    const work = join(target, name, '.work');
+    const mounts = existsSync(work)
+      ? readdirSync(work).filter((entry) => entry.startsWith('mount-'))
+      : [];
+
+    for (const mount of mounts) {
+      try {
+        run('hdiutil', ['detach', '-force', join(work, mount)]);
+      } catch {
+        // Best effort.
+      }
+    }
+
+    try {
+      rmSync(join(target, name), { recursive: true, force: true });
+      log(`Removed stale ${name} from an interrupted run.`);
+    } catch {
+      log(`Could not remove stale ${name}; continuing.`);
+    }
+  }
+}
+
+/**
  * Builds, verifies, signs (per mode), packages and checks one release. Throws `ReleaseError` on
  * any failure, leaving no `SHA256SUMS` and never a `notarized: true` record.
  */
@@ -653,6 +717,7 @@ export function runRelease({ root, run, env, log, mode = 'ad-hoc' }: ReleaseDeps
   const entitlements = join(root, 'src/crates/app/Entitlements.plist');
   const git = ['-c', 'core.fsmonitor=false'];
 
+  sweepStaleStaging(run, join(root, 'target'), log);
   // A failed run must never leave an earlier run's output looking current.
   rmSync(output, { recursive: true, force: true });
   rmSync(evidence, { recursive: true, force: true });

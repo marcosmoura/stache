@@ -195,6 +195,7 @@ fn the_popover_has_only_its_named_commands_and_the_event_listener() {
     assert_eq!(
         capability["permissions"],
         serde_json::json!([
+            "allow-app-info",
             "allow-host-status",
             "allow-hide-popover",
             "allow-set-module-enabled",

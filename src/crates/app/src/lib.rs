@@ -441,6 +441,7 @@ fn run_with(
         collision::POLICY,
         logger.as_ref(),
     );
+    // Stage 3 replaces this assert with the refusal exit path.
     debug_assert!(refusals.is_empty(), "the warn-only policy never refuses");
     log_legacy_config_hint(
         &config_paths,

@@ -4,7 +4,7 @@ status: done
 
 # 01 — Build metadata and one version
 
-Read when changing the version, `Info.plist`, icons or packaged contents. **PLANNED.**
+Read when changing the version, `Info.plist`, icons or packaged contents. **Implemented on `feat/release`, unmerged.**
 Depends on nothing else in this spec.
 
 ## Scope
@@ -49,27 +49,30 @@ statement below concerns the base `tauri.conf.json`, the only config a package i
 
 ## Acceptance criteria
 
-- [ ] `RELEASE-01-01` The three manifests declare `0.26.0`, and `release_metadata.rs` passes
+- [x] `RELEASE-01-01` The three manifests declare `0.26.0`, and `release_metadata.rs` passes
       on them. Test: `release_metadata.rs`.
-- [ ] `RELEASE-01-02` The version check fails on an injected mismatch in each of
+- [x] `RELEASE-01-02` The version check fails on an injected mismatch in each of
       `package.json` and `tauri.conf.json`, and the message names the file. Test: parser unit
       cases in `release_metadata.rs`, using in-memory or temporary manifests.
-- [ ] `RELEASE-01-03` The committed `Info.plist` holds exactly the three stated keys and
+- [x] `RELEASE-01-03` The committed `Info.plist` holds exactly the three stated keys and
       values plus the two existing location usage keys, and nothing else. Test:
       `release_metadata.rs`.
-- [ ] `RELEASE-01-04` Every icon in `bundle.icon` exists, every file in `icons/` is referenced
+- [x] `RELEASE-01-04` Every icon in `bundle.icon` exists, every file in `icons/` is referenced
       by `bundle.icon` or is `icon.png`, and `icon.png` exists. Test: `release_metadata.rs`.
-- [ ] `RELEASE-01-05` The capability list is exactly the three shipped windows,
+- [x] `RELEASE-01-05` The capability list is exactly the three shipped windows,
       `bundle.targets` is `["app"]`, `bundle.resources` is exactly the `media-control`
       entry, and `Entitlements.plist` holds exactly the location entitlement. Test:
       `release_metadata.rs`.
-- [ ] `RELEASE-01-06` A built bundle matches the stated contents and linkage, and its merged
+- [x] `RELEASE-01-06` A built bundle matches the stated contents and linkage, and its merged
       `Info.plist` holds the three keys, `LSMinimumSystemVersion` `26.0`, and a
       `CFBundleIdentifier` and `CFBundleName` equal to the base config's `identifier` and
       `productName`. Check: the bundle verifier added in Part 02, run by `bun run release`.
 - [ ] `RELEASE-01-07` A packaged app launched from Finder shows no Dock icon, creates its
       tray item, and opens the popover with its embedded document from the tray. Gated
       manual check, recorded in Part 06.
+
+Status 2026-11-13: `RELEASE-01-01` to `01-06` are met (`01-06` by a real `bun run release`).
+`RELEASE-01-07` is the manual check deferred to Part 06 and is not run.
 
 ## Tests
 

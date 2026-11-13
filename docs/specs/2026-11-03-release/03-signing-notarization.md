@@ -80,17 +80,17 @@ do not satisfy it, and the script must refuse them.
 
 - [ ] `RELEASE-03-01` Before the first real run, the gate is recorded in this file with the
       certificate's common name and team identifier. Gated manual check.
-- [ ] `RELEASE-03-02` `--sign` refuses missing inputs, a non-Developer-ID identity and a dirty
+- [x] `RELEASE-03-02` `--sign` refuses missing inputs, a non-Developer-ID identity and a dirty
       tree, with no fallback. Test: `scripts/release.test.ts`.
-- [ ] `RELEASE-03-03` Constructed arguments contain `--options runtime` and `--timestamp`, never
+- [x] `RELEASE-03-03` Constructed arguments contain `--options runtime` and `--timestamp`, never
       `--deep` when signing, and the step order is exactly as stated. Test:
       `scripts/release.test.ts`, with fake runners.
-- [ ] `RELEASE-03-04` A failure injected at each sign, notarize, staple and verify step stops the
+- [x] `RELEASE-03-04` A failure injected at each sign, notarize, staple and verify step stops the
       run, writes no `SHA256SUMS`, and never records `notarized: true`. Test:
       `scripts/release.test.ts`.
 - [ ] `RELEASE-03-05` `--dry-run-signing` completes locally through the real `codesign` with
       identity `-`, and the hardened-runtime flag shows in `codesign -dvvv`. Check: `quality.yml`.
-- [ ] `RELEASE-03-06` The workflow triggers only on `v*`, gates secrets behind the `release`
+- [x] `RELEASE-03-06` The workflow triggers only on `v*`, gates secrets behind the `release`
       environment, requires successful Quality gates for the exact tagged SHA, checks the tag
       against the version and creates drafts only. Test: a parse of `release.yml` in
       `scripts/release.test.ts`, plus missing/pending/failed/wrong-SHA gate cases.
@@ -108,6 +108,11 @@ do not satisfy it, and the script must refuse them.
       entitlement; `proxyAudio` and `notunes` still start when enabled; and with the Bar
       enabled, weather location and the media adapter still work. Gated manual check,
       with per-run approval for noTunes' real termination behavior.
+
+Status 2026-11-13: implemented up to the gate. `RELEASE-03-05` passed in a real local dry run
+(`flags=0x10002(adhoc,runtime)`, strict deep verification passes); its `quality.yml` step has not
+run because the branch is not pushed. `release.yml` has never run on GitHub. `RELEASE-03-01` and
+`03-07` to `03-10` wait for credentials.
 
 ## Tests
 

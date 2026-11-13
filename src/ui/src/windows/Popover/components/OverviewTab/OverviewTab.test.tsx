@@ -42,6 +42,7 @@ const STATUS = hostStatusFixture({ modules: MODULES });
 
 function setup(status: HostStatus_Serialize = STATUS) {
   return mockHost()
+    .answer('app_info', { name: 'Stache Next', version: '0.0.0', identifier: 'com.example.stache' })
     .answer('host_status', status)
     .answer('set_module_enabled', { kind: 'applied' })
     .answer('retry_module', null)
@@ -277,7 +278,10 @@ describe('OverviewTab', () => {
         expect(
           host.calls
             .map((call) => call.command)
-            .filter((command) => !command.startsWith('plugin:') && command !== 'host_status'),
+            .filter(
+              (command) =>
+                !command.startsWith('plugin:') && !['host_status', 'app_info'].includes(command),
+            ),
         ).toEqual([
           'open_accessibility_guide',
           'request_accessibility',

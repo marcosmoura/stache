@@ -32,7 +32,9 @@ Any other argument is an error.
    `Contents/Resources/media-control/`; the executable links only under `/System` or `/usr/lib`;
    `media-control` holds exactly the vendored files of `src/crates/app/resources/media-control/`
    as Tauri flattens them (file links become files, directory links such as
-   `Versions/Current` are dropped); no framework or generator/smoke binary elsewhere; the merged
+   `Versions/Current` are dropped); outside it, only `Contents/Info.plist`, the executable,
+   `Contents/Resources/icon.icns` (required) and `Contents/_CodeSignature/CodeResources`; no
+   framework or generator/smoke binary elsewhere; the merged
    `Info.plist` has `LSUIElement`, `NSHighResolutionCapable`, `LSApplicationCategoryType`,
    `LSMinimumSystemVersion` `26.0`, `CFBundleShortVersionString` equal to the root `Cargo.toml`
    `[workspace.package]` version and `CFBundleIdentifier`/`CFBundleName` equal to the base
@@ -49,7 +51,9 @@ Any other argument is an error.
    staging directory to `target/release-artifacts/`.
 
 The output directory is removed at the start of each run, so a failed run leaves no
-`SHA256SUMS`, and a successful run replaces everything.
+`SHA256SUMS`, and a successful run replaces everything. Stale `target/release-artifacts.staging-*`
+directories from an interrupted run are removed first, after a best-effort detach of any image
+still mounted under them.
 
 ## Signing modes (`--dry-run-signing`, `--sign`)
 

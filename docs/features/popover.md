@@ -84,7 +84,7 @@ palette ([tokens](../architecture/ui.md#popover-native-look)). It has the "Stach
 - Esc calls `hide_popover` unless a child already handled it (`preventDefault`).
 - Each file pane is the [settings editor](#settings-editor) for that file; the Overview pane is below.
 
-The `popover-window` capability grants `stache-popover` only `host_status`,
+The `popover-window` capability grants `stache-popover` only `app_info`, `host_status`,
 `allow-hide-popover`, the five Overview commands below, the settings editor's `config_files`,
 `config_document`, `config_edit` and `open_config_file`, `request_accessibility`,
 `open_accessibility_settings`, `quit_app` and the event listener. Every app command is in the
@@ -120,7 +120,7 @@ rendered from `host_status` plus every `status-changed`:
   A module whose file has a tab shows its name as a button that selects that tab.
 
 - **Configuration**: each catalog file with a diagnostic or warnings, with the full texts.
-- **Footer**: `Quit Stache Next` (power icon, `quit_app`).
+- **Footer**: `Quit <name>` (power icon, `quit_app`), the name from `app_info`, `Stache Next` until it answers.
 
 Commands (`popover_actions.rs`) map to exactly the host command the former tray row used:
 `set_module_enabled` to the runner's configuration-backed enable edit (the tray's

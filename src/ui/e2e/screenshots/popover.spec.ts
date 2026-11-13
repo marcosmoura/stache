@@ -9,6 +9,9 @@ import { expect, test } from '../fixtures';
 
 import { pinSystemColours } from './systemColours';
 
+/** The Overview footer names the app from `app_info`. */
+const APP = { name: 'Stache Next', version: '0.1.0', identifier: 'com.marcosmoura.stache.next' };
+
 /*
  * Baselines of the tray popover, dark and light, from production
  * `index.html` with the fake host: the shell (the sidebar with each badge
@@ -91,7 +94,7 @@ for (const scheme of ['dark', 'light'] as const) {
 
     test('popover shell', async ({ page, host }) => {
       await page.setViewportSize({ width: 480, height: 640 });
-      host.answer('config_files', FILES).answerHostStatus(status([]));
+      host.answer('app_info', APP).answer('config_files', FILES).answerHostStatus(status([]));
       await page.emulateMedia({ colorScheme: scheme, reducedMotion: 'reduce' });
       await page.goto('/index.html?surface=popover');
       await pinSystemColours(page, scheme);
@@ -103,7 +106,7 @@ for (const scheme of ['dark', 'light'] as const) {
 
     test('popover overview', async ({ page, host }) => {
       await page.setViewportSize({ width: 480, height: 640 });
-      host.answer('config_files', FILES).answerHostStatus(status(MODULES));
+      host.answer('app_info', APP).answer('config_files', FILES).answerHostStatus(status(MODULES));
       await page.emulateMedia({ colorScheme: scheme, reducedMotion: 'reduce' });
       await page.goto('/index.html?surface=popover');
       await pinSystemColours(page, scheme);
@@ -129,7 +132,7 @@ for (const scheme of ['dark', 'light'] as const) {
       test(`popover ${name} tab`, async ({ page, host }) => {
         await page.setViewportSize({ width: 480, height: 640 });
         new FakeConfig(host, texts);
-        host.answerHostStatus(status(MODULES));
+        host.answer('app_info', APP).answerHostStatus(status(MODULES));
         await page.emulateMedia({ colorScheme: scheme, reducedMotion: 'reduce' });
         await page.goto('/index.html?surface=popover');
         await pinSystemColours(page, scheme);
@@ -150,7 +153,7 @@ for (const scheme of ['dark', 'light'] as const) {
 
       expect(bar).not.toBe(BAR);
       new FakeConfig(host, { 'bar.toml': bar });
-      host.answerHostStatus(status(MODULES));
+      host.answer('app_info', APP).answerHostStatus(status(MODULES));
       await page.emulateMedia({ colorScheme: scheme, reducedMotion: 'reduce' });
       await page.goto('/index.html?surface=popover');
       await pinSystemColours(page, scheme);

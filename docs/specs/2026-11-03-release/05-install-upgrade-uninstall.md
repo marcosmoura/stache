@@ -167,20 +167,20 @@ it is a rehearsal tool, not the public migration route.
 
 ## Acceptance criteria
 
-- [ ] `RELEASE-05-01` The rendered cask holds the real version and DMG checksum, `signal:` with
+- [x] `RELEASE-05-01` The rendered cask holds the real version and DMG checksum, `signal:` with
       `on_upgrade: :signal`, `depends_on arch: :arm64`, `app` and `binary`. Local test-cask rendering
       alone permits successive test versions and local URLs; app and published cask stay `0.26.0`.
       Test: `scripts/release.test.ts`, including isolation of the test-only overrides.
-- [ ] `RELEASE-05-02` The rendered cask has no `quit:`, `KILL`, `terminate_process`, `auto_updates`,
+- [x] `RELEASE-05-02` The rendered cask has no `quit:`, `KILL`, `terminate_process`, `auto_updates`,
       flight block or config path in `zap`. Test: `scripts/release.test.ts`.
-- [ ] `RELEASE-05-03` The diagnostic appears when a legacy source exists and `global.toml` does not, is
+- [x] `RELEASE-05-03` The diagnostic appears when a legacy source exists and `global.toml` does not, is
       absent otherwise, and leaves the source and directory byte-identical. Test: `cli/tests/commands.rs`,
       with temporary roots.
-- [ ] `RELEASE-05-04` The desktop startup path emits that line without reading the source. Test: app test
+- [x] `RELEASE-05-04` The desktop startup path emits that line without reading the source. Test: app test
       with temporary roots.
-- [ ] `RELEASE-05-05` `config migrate` behavior is unchanged: source preserved, collisions refused without
+- [x] `RELEASE-05-05` `config migrate` behavior is unchanged: source preserved, collisions refused without
       `--force`. Test: existing `cli/src/migrate.rs` tests still pass, unedited.
-- [ ] `RELEASE-05-06` `docs/guides/install.md` contains the sections above, and no `killall`, `pkill`,
+- [x] `RELEASE-05-06` `docs/guides/install.md` contains the sections above, and no `killall`, `pkill`,
       `pgrep stache`, `xattr -d`, `xattr -cr`, `spctl --master-disable` or `--force` recommendation. It
       links from `README.md` and `docs/index.md`. Test: a doc check in `scripts/release.test.ts`.
 - [ ] `RELEASE-05-07` Record the real symlink probe result: a helper checks whether `current_exe`
@@ -213,6 +213,10 @@ the bundle, also when found by name on `PATH`. Mode selection reads `current_exe
 canonicalizing it. **The symlink route is selected**; `RELEASE-05-10` is not applicable unless the
 real-install half of `RELEASE-05-07` fails. Kept proven by `cli/tests/symlink_probe.rs`. The
 real-install half (`stache cache path` and socket access through the shipped link) is not run.
+
+Status 2026-11-13: the preparation is implemented. `RELEASE-05-07` has its probe half recorded
+above; its real-install half, `05-08` and `05-09` are not run. `05-10` is not applicable while the
+symlink route holds.
 
 ## Tests
 

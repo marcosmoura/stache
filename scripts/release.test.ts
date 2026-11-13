@@ -28,6 +28,7 @@ import {
   type RunOptions,
   runRelease,
   scrubbedAppleVariables,
+  scrubbedReleaseVariables,
   verifyBundle,
   type VerifierExpectations,
 } from './release/pipeline';
@@ -82,6 +83,8 @@ function makeRoot(): string {
 
 interface FakeOptions {
   fail?: (command: string, args: string[]) => boolean;
+  plist?: Record<string, unknown>;
+  noApplicationsLink?: boolean;
   codesignFailsUntilResigned?: boolean;
   notaryStatus?: string;
   dirty?: boolean;
@@ -114,6 +117,8 @@ function fakeRunner(root: string, options: FakeOptions = {}) {
         mkdirSync(join(app, 'MacOS'), { recursive: true });
         writeFileSync(join(app, 'MacOS/stache'), machO);
         writeFileSync(join(app, 'Info.plist'), '<plist/>');
+        mkdirSync(join(app, 'Resources'), { recursive: true });
+        writeFileSync(join(app, 'Resources/icon.icns'), 'icns');
         const source = join(root, 'src/crates/app/resources/media-control');
 
         for (const file of listFlattenedResources(source)) {
@@ -131,7 +136,7 @@ function fakeRunner(root: string, options: FakeOptions = {}) {
       case 'otool':
         return ok(`${args[1]}:\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0)\n`);
       case 'plutil':
-        return ok(JSON.stringify(goodPlist));
+        return ok(JSON.stringify(options.plist ?? goodPlist));
       case 'codesign':
         if (args[0] === '--force') {
           resigned = true;
@@ -168,7 +173,10 @@ function fakeRunner(root: string, options: FakeOptions = {}) {
 
           mkdirSync(join(mount, 'Stache Next.app/Contents'), { recursive: true });
           writeFileSync(join(mount, 'Stache Next.app/Contents/Info.plist'), '');
-          symlinkSync('/Applications', join(mount, 'Applications'));
+
+          if (!options.noApplicationsLink) {
+            symlinkSync('/Applications', join(mount, 'Applications'));
+          }
         }
 
         return ok();
@@ -271,14 +279,47 @@ describe('RELEASE-02-02 fail closed', () => {
 
   it('detaches the DMG even when the mounted check fails', () => {
     const root = makeRoot();
-    const { fake, result } = release(root, {
-      fail: (command, args) => command === 'ditto' && args[0] === '-x',
+    const { fake, result } = release(root, { noApplicationsLink: true });
+
+    expect(result).toThrow(/Applications link/);
+    const hdiutil = fake.calls
+      .filter((call) => call.command === 'hdiutil')
+      .map((call) => call.args[0]);
+
+    expect(hdiutil.slice(hdiutil.indexOf('attach'))).toEqual(['attach', 'detach']);
+  });
+
+  it('stops with no SHA256SUMS when the verifier itself refuses', () => {
+    const root = makeRoot();
+    const { fake, result } = release(root, { plist: { ...goodPlist, LSUIElement: false } });
+
+    expect(result).toThrow(/bundle verifier refused.*\n.*LSUIElement/);
+    expect(existsSync(join(output(root), 'SHA256SUMS'))).toBe(false);
+    expect(fake.calls.some((call) => call.command === 'hdiutil')).toBe(false);
+  });
+
+  it('sweeps stale staging directories, detaching a leftover mount first', () => {
+    const root = makeRoot();
+    const stale = join(root, 'target/release-artifacts.staging-1/.work/mount-abc');
+
+    mkdirSync(stale, { recursive: true });
+    const { fake, result } = release(root);
+
+    result();
+    expect(fake.calls[0]).toMatchObject({ command: 'hdiutil', args: ['detach', '-force', stale] });
+    expect(existsSync(join(root, 'target/release-artifacts.staging-1'))).toBe(false);
+  });
+
+  it('never fails the run when the stale sweep cannot detach', () => {
+    const root = makeRoot();
+
+    mkdirSync(join(root, 'target/release-artifacts.staging-2/.work/mount-x'), { recursive: true });
+    const { result } = release(root, {
+      fail: (command, args) => command === 'hdiutil' && args.includes('-force'),
     });
 
-    expect(result).toThrow(ReleaseError);
-    expect(fake.calls.some((call) => call.command === 'hdiutil' && call.args[0] === 'detach')).toBe(
-      true,
-    );
+    expect(result().version).toBe('0.26.0');
+    expect(existsSync(join(root, 'target/release-artifacts.staging-2'))).toBe(false);
   });
 });
 
@@ -295,7 +336,9 @@ describe('RELEASE-02-03 bundle verifier', () => {
     files: [
       'Contents/Info.plist',
       'Contents/MacOS/stache',
+      'Contents/Resources/icon.icns',
       'Contents/Resources/media-control/adapter.pl',
+      'Contents/_CodeSignature/CodeResources',
       nested,
     ],
     macosEntries: ['stache'],
@@ -329,6 +372,12 @@ describe('RELEASE-02-03 bundle verifier', () => {
     [
       'a framework outside media-control',
       { files: [...good.files, 'Contents/Frameworks/X.framework/X'] },
+    ],
+    ['an extra file in Contents/Resources', { files: [...good.files, 'Contents/Resources/x.js'] }],
+    ['a file in an unexpected directory', { files: [...good.files, 'Contents/Helpers/x'] }],
+    [
+      'a missing icon.icns',
+      { files: good.files.filter((file) => file !== 'Contents/Resources/icon.icns') },
     ],
   ];
 
@@ -385,10 +434,11 @@ describe('RELEASE-02-04 replacement', () => {
 });
 
 describe('RELEASE-02-05 environment', () => {
-  it('removes every APPLE_* credential variable from the build child', () => {
+  it('removes every APPLE_*, signing, notary and token variable from the build child', () => {
     const root = makeRoot();
     const env = Object.fromEntries([
       ...scrubbedAppleVariables.map((name) => [name, 'secret']),
+      ...scrubbedReleaseVariables.map((name) => [name, 'secret']),
       ['PATH', '/usr/bin'],
     ]);
     const { fake, result } = release(root, {}, env);
@@ -399,6 +449,29 @@ describe('RELEASE-02-05 environment', () => {
     expect(build?.args).toEqual(['run', 'tauri:build']);
     expect(build?.options.env).toEqual({ PATH: '/usr/bin' });
     expect(env.APPLE_ID).toBe('secret');
+    expect(scrubbedReleaseVariables).toEqual(
+      expect.arrayContaining([
+        'DEVELOPER_ID_P12_BASE64',
+        'DEVELOPER_ID_P12_PASSWORD',
+        'NOTARY_API_KEY_P8',
+        'STACHE_SIGNING_IDENTITY',
+        'STACHE_TEAM_ID',
+        'STACHE_NOTARY_KEY_ID',
+        'STACHE_NOTARY_ISSUER',
+        'STACHE_NOTARY_KEY_PATH',
+        'STACHE_NOTARY_KEYCHAIN_PROFILE',
+        'GH_TOKEN',
+        'GITHUB_TOKEN',
+      ]),
+    );
+  });
+
+  it('keeps signing inputs out of the build child in --sign mode', () => {
+    const root = makeRoot();
+    const { fake, result } = release(root, {}, { ...signEnv, GH_TOKEN: 't', PATH: '/x' }, 'sign');
+
+    result();
+    expect(fake.calls.find((call) => call.command === 'bun')?.options.env).toEqual({ PATH: '/x' });
   });
 });
 
@@ -767,13 +840,53 @@ describe('RELEASE-03-06 release workflow', () => {
     expect(cleanup).toMatch(/rm -f .*stache-notary-key\.p8/);
   });
 
+  it('keeps tokens and secrets away from the release script and its children', () => {
+    const sign = workflow.split(/\n {6}- /).find((step) => step.includes('bun run release --sign'));
+    const unset = sign?.indexOf(
+      'unset DEVELOPER_ID_P12_BASE64 DEVELOPER_ID_P12_PASSWORD NOTARY_API_KEY_P8',
+    );
+
+    expect(unset).toBeGreaterThan(0);
+    expect(unset).toBeLessThan(sign?.indexOf('bun run release --sign') ?? 0);
+    expect(sign).not.toMatch(/GH_TOKEN/);
+    const jobEnv = /^ {4}env:\n((?: {6}.*\n)*)/m.exec(workflow)?.[1] ?? '';
+
+    expect(jobEnv).not.toMatch(/GH_TOKEN/);
+    expect(workflow).toMatch(
+      /- uses: actions\/checkout@v5\n {8}with:\n {10}persist-credentials: false\n/,
+    );
+    expect(workflow).toMatch(/^ {4}permissions:\n {6}contents: write\n {6}actions: read\n/m);
+    expect(workflow).not.toMatch(/^permissions:/m);
+  });
+
+  it('removes only a draft this run created, and keeps rejection evidence', () => {
+    const stepsText = workflow.split(/\n {6}- /);
+    const create = stepsText.find((step) => step.includes('gh release create'));
+    const remove = stepsText.find((step) => step.includes('gh release delete'));
+
+    expect(create).toMatch(/id: draft/);
+    expect(create).toMatch(/echo "created=true" >> "\$GITHUB_OUTPUT"[\s\S]*gh release create/);
+    expect(remove).toMatch(/if: failure\(\) && steps\.draft\.outputs\.created == 'true'/);
+    const refuse = stepsText.find((step) => step.includes('already exists'));
+
+    expect(workflow.indexOf(refuse ?? '\0')).toBeLessThan(
+      workflow.indexOf('bun run release --sign'),
+    );
+    const evidence = stepsText.find((step) => step.includes('upload-artifact'));
+
+    expect(evidence).toMatch(/if: failure\(\)/);
+    expect(evidence).toMatch(/path: target\/release-evidence\//);
+    expect(evidence).toMatch(/if-no-files-found: ignore/);
+  });
+
   it('checks the tag and Quality for the exact SHA before signing, and creates drafts only', () => {
     const gate = workflow.indexOf('bun scripts/release/gate.ts "$TAG" "$GITHUB_SHA"');
     const sign = workflow.indexOf('bun run release --sign');
 
     expect(gate).toBeGreaterThan(0);
     expect(gate).toBeLessThan(sign);
-    expect(workflow).toMatch(/--workflow quality\.yml --commit "\$GITHUB_SHA"/);
+    expect(workflow).toMatch(/--workflow quality\.yml --commit "\$GITHUB_SHA" --event push/);
+    expect(workflow).toMatch(/--json databaseId,headSha,status,conclusion,createdAt,event/);
     const creates = workflow.match(/gh release create[^\n]*/g) ?? [];
 
     expect(creates).toHaveLength(1);
@@ -793,6 +906,7 @@ describe('RELEASE-03-06 release workflow', () => {
   const sha = 'a'.repeat(40);
   const run = (change: Partial<WorkflowRun>): WorkflowRun => ({
     headSha: sha,
+    event: 'push',
     status: 'completed',
     conclusion: 'success',
     createdAt: '2026-11-13T10:00:00Z',
@@ -805,6 +919,15 @@ describe('RELEASE-03-06 release workflow', () => {
     ['blocks a run for another SHA only', [run({ headSha: 'b'.repeat(40) })], 'blocked'],
     ['waits on a pending run', [run({ status: 'in_progress', conclusion: null })], 'pending'],
     ['blocks a failed run', [run({ conclusion: 'failure' })], 'blocked'],
+    ['ignores a pull_request run', [run({ event: 'pull_request' })], 'blocked'],
+    [
+      'ignores a newer pull_request run beside a push run',
+      [
+        run({}),
+        run({ event: 'pull_request', createdAt: '2026-11-13T11:00:00Z', conclusion: 'failure' }),
+      ],
+      'pass',
+    ],
     ['blocks a cancelled run', [run({ conclusion: 'cancelled' })], 'blocked'],
     [
       'decides on the newest run for the SHA',

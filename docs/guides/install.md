@@ -51,7 +51,8 @@ While the old Stache is still installed:
 - Do not turn on the same device automation in both. `proxyAudio` and `notunes` would fight.
 - After the rename, do not install the renamed release next to the old app: they share an
   identifier, and the new app refuses to start beside it.
-- A `bun run tauri:dev` session from a checkout runs beside a release without conflict; the same
+- After the rename, a `bun run tauri:dev` session from a checkout runs beside a release without
+  conflict; before it, the dev build and a release share the Stache Next identity. The same
   device-automation caution applies.
 
 ## Legacy removal

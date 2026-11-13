@@ -168,22 +168,22 @@ other of the two constants. Compare identifiers exactly, and use the bundle URL 
 
 ## Acceptance criteria
 
-- [ ] `RELEASE-04-01` The base `tauri.conf.json`, the release identity constant and `PRODUCT_NAME`
+- [x] `RELEASE-04-01` The base `tauri.conf.json`, the release identity constant and `PRODUCT_NAME`
       agree, and the other identity's literal outside the allow-list fails. Test: `app/tests/identity.rs`.
-- [ ] `RELEASE-04-02` `app_info`, tray and window strings use the name from `package_info`, the listed
+- [x] `RELEASE-04-02` `app_info`, tray and window strings use the name from `package_info`, the listed
       fallbacks use `PRODUCT_NAME`, and `check:generated` passes. Test: `app/tests/bindings.rs`, tray
       tests with an injected name, and the Accessibility guide and Popover footer tests.
-- [ ] `RELEASE-04-03` Stage 1: a fake running instance with the sibling or the same identifier produces
+- [x] `RELEASE-04-03` Stage 1: a fake running instance with the sibling or the same identifier produces
       one warning, startup continues and nothing is signaled. Test: app test with the `stache-macos`
       fake backend.
 - [ ] `RELEASE-04-04` Stage 3 rule: a foreign process with exactly this process's identifier refuses
       before tray, modules or socket, with the stated diagnostic and a non-zero exit; this process's own
       PID is excluded; and no signal path exists. Test: same harness, plus the absence of a terminate
       call on the fake.
-- [ ] `RELEASE-04-05` Exact-identifier matching: the sibling identifier warns and continues under both
+- [x] `RELEASE-04-05` Exact-identifier matching: the sibling identifier warns and continues under both
       build identities, a prefix match such as `com.marcosmoura.stache.helper` is ignored, and a query
       failure warns and continues. Test: same harness.
-- [ ] `RELEASE-04-06` No code path identifies or terminates a process by the name `stache`, and no
+- [x] `RELEASE-04-06` No code path identifies or terminates a process by the name `stache`, and no
       `killall` or `pkill` appears in `scripts/`, `package.json` or `.github/`. Test: `app/tests/identity.rs`.
 - [ ] `RELEASE-04-07` Before Stage 3, this file records the owner's migration and removal approval
       with its date, and an `mdfind` for `com.marcosmoura.stache` on the release machine shows no
@@ -218,6 +218,9 @@ other of the two constants. Compare identifiers exactly, and use the bundle URL 
       `AppEnvironment` carries no identity, and no `env!`, `option_env!`, config key or CLI flag reaches
       the selection. A debug test run sees the development constant. Test: `sdk/src/paths.rs` and a
       source check in `app/tests/identity.rs`.
+
+Status 2026-11-13: Stage 1 is implemented. `IDENTITY` is still the development identity and
+`collision::POLICY` is warn-only. Everything from `RELEASE-04-04` and `04-07` on waits for Stage 2.
 
 ## Tests
 

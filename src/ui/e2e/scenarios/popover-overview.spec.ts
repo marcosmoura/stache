@@ -5,6 +5,9 @@ import type {
 } from '../../src/ipc/bindings.gen';
 import { expect, test } from '../fixtures';
 
+/** The Overview footer names the app from `app_info`. */
+const APP = { name: 'Stache Next', version: '0.1.0', identifier: 'com.marcosmoura.stache.next' };
+
 /*
  * The popover Overview end to end through the fake host, on a setup like the
  * user's: Bar and Tiling running, Keep Awake disabled, Proxy Audio failed.
@@ -83,6 +86,7 @@ test.describe('Popover Overview', () => {
     const enableAnswered = new Promise((resolve) => (applyEnable = resolve));
 
     host
+      .answer('app_info', APP)
       .answer('config_files', ['global.toml', ...IDS.map((id) => `${id}.toml`)].map(file))
       .answerHostStatus(statusOf(modules))
       .answer('set_module_enabled', () => enableAnswered)

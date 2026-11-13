@@ -4,7 +4,7 @@ status: done
 
 # 02 — Release pipeline
 
-Read when building a distributable artifact or changing the release script. **PLANNED.**
+Read when building a distributable artifact or changing the release script. **Implemented on `feat/release`, unmerged.**
 Depends on [Part 01](01-build-metadata.md).
 
 ## Scope
@@ -67,33 +67,37 @@ exist. Signing is [Part 03](03-signing-notarization.md); publishing is Part 03's
 
 ## Acceptance criteria
 
-- [ ] `RELEASE-02-01` Name derivation yields `Stache_Next_0.26.0_aarch64.*` and
+- [x] `RELEASE-02-01` Name derivation yields `Stache_Next_0.26.0_aarch64.*` and
       `Stache_0.26.0_aarch64.*` from the two config shapes, with no hardcoded product. Test:
       `scripts/release.test.ts`.
-- [ ] `RELEASE-02-02` Injected failures in the build, verifier, `hdiutil`, `ditto` and checksum
+- [x] `RELEASE-02-02` Injected failures in the build, verifier, `hdiutil`, `ditto` and checksum
       steps each exit non-zero and leave no `SHA256SUMS` in the output directory. Test:
       `scripts/release.test.ts`, with fake command runners.
-- [ ] `RELEASE-02-03` The verifier refuses a non-`arm64` executable, an extra file in
+- [x] `RELEASE-02-03` The verifier refuses a non-`arm64` executable, an extra file in
       `Contents/MacOS`, an unexpected file or a non-`arm64` Mach-O under `media-control`, a
       non-system linked library, a version mismatch, a missing `LSUIElement`, and a
       `CFBundleIdentifier` or `CFBundleName` that differs from the base config. Test:
       `scripts/release.test.ts`, with fake inspection output.
-- [ ] `RELEASE-02-04` A second run replaces the output directory: `SHA256SUMS` has exactly two
+- [x] `RELEASE-02-04` A second run replaces the output directory: `SHA256SUMS` has exactly two
       entries and stale artifacts are gone. Test: `scripts/release.test.ts`.
-- [ ] `RELEASE-02-05` Stray `APPLE_*` values are absent from the build child's environment.
+- [x] `RELEASE-02-05` Stray `APPLE_*` values are absent from the build child's environment.
       The initial config-driven ad-hoc signature remains intentional. Test: `scripts/release.test.ts`.
 - [ ] `RELEASE-02-06` On a real checkout, `bun run release` produces all four outputs and
       `shasum -a 256 -c SHA256SUMS` passes. Check: the new `quality.yml` step; a workflow parse
       test proves candidate-tag triggering, and the candidate run records its exact SHA.
-- [ ] `RELEASE-02-07` An ad-hoc `release.json` records `ad-hoc` and `notarized: false`, and
+- [x] `RELEASE-02-07` An ad-hoc `release.json` records `ad-hoc` and `notarized: false`, and
       the run's output does not state signed-by-Developer-ID, notarized or stapled. Test:
       `scripts/release.test.ts`; confirmed on the CI run.
-- [ ] `RELEASE-02-08` The DMG mounts read-only with the app and `Applications` link, the app
+- [x] `RELEASE-02-08` The DMG mounts read-only with the app and `Applications` link, the app
       expanded from the zip passes `codesign --verify --strict --deep`, and its `Info.plist`
       matches the raw bundle. Check: scripted against a temporary mount and directory, in
       `bun run release`.
 - [ ] `RELEASE-02-09` A drag from the mounted DMG installs and launches. Gated manual check on
       an approved run, recorded in Part 06, because it touches `/Applications`.
+
+Status 2026-11-13: `RELEASE-02-06` passed in a real local run (four outputs, checksums verify);
+its `quality.yml` step has not run because the branch is not pushed. `RELEASE-02-09` is the manual
+check deferred to Part 06 and is not run.
 
 ## Tests
 

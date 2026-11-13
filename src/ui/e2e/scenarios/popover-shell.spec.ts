@@ -1,12 +1,15 @@
 import type { ConfigFileView_Serialize } from '../../src/ipc/bindings.gen';
 import { expect, test } from '../fixtures';
 
+/** The Overview footer names the app from `app_info`. */
+const APP = { name: 'Stache Next', version: '0.1.0', identifier: 'com.marcosmoura.stache.next' };
+
 /*
  * The tray popover shell (`?surface=popover`) through the fake host: the
  * sidebar with badges from `config_files`, keyboard navigation, the tab kept
  * across a `popover-shown`, a `config-changed` refetch and Escape calling
- * `hide_popover`. It may call only `config_files`, `host_status` (the
- * Overview), `config_document` (a file tab), `hide_popover` and the event listen.
+ * `hide_popover`. It may call only `app_info` and `host_status` (the
+ * Overview), `config_files`, `config_document` (a file tab), `hide_popover` and the event listen.
  */
 
 const file = (
@@ -36,6 +39,7 @@ const POPOVER_FILES: ConfigFileView_Serialize[] = [
 ];
 
 const ALLOWED = new Set([
+  'app_info',
   'config_files',
   'host_status',
   // A selected file tab reads its document (the settings editor).
@@ -52,6 +56,7 @@ test.describe('Popover shell', () => {
     consoleErrors,
   }) => {
     host
+      .answer('app_info', APP)
       .answer('config_files', POPOVER_FILES)
       .answer('config_document', (args: unknown) => ({
         status: 'unknownFile',

@@ -3,9 +3,11 @@ import { join } from 'node:path';
 
 import { readWorkspaceVersion } from './pipeline';
 
-/** One entry of `gh run list --json databaseId,headSha,status,conclusion,createdAt`. */
+/** One entry of `gh run list --json databaseId,headSha,status,conclusion,createdAt,event`. */
 export interface WorkflowRun {
   databaseId?: number;
+  /** Only `push` runs count: a `pull_request` run tests a merge commit, not the tagged SHA. */
+  event: string;
   headSha: string;
   status: string;
   conclusion: string | null;
@@ -29,11 +31,11 @@ export function tagVersionProblem(tag: string, version: string): string | null {
 
 /**
  * Decides from Quality runs whether the exact SHA may be signed: the newest Quality run for that
- * SHA must have completed successfully. Runs for other SHAs are ignored.
+ * SHA must have completed successfully. Runs for other SHAs or from non-`push` events are ignored.
  */
 export function qualityGate(runs: WorkflowRun[], sha: string): GateResult {
   const latest = runs
-    .filter((run) => run.headSha === sha)
+    .filter((run) => run.headSha === sha && run.event === 'push')
     .toSorted((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
 
   if (!latest) {

@@ -37,7 +37,7 @@ without AppKit:
 | Menu `Quit Stache Next` (`quit`) | `Quit`: `HostHandle::request_shutdown`                                   |
 | Anything else                    | ignored                                                                  |
 
-The menu is exactly `Open Stache`, a separator, `Quit Stache Next` (`tray::MENU`). The
+The menu is exactly `Open Stache`, a separator, `Quit Stache Next` (`tray::rows(name)`). The
 rectangle is the click event's icon rectangle, in physical pixels of the icon's display.
 
 Quit calls the one idempotent teardown coordinator. Cmd-Q and other AppKit-initiated quits

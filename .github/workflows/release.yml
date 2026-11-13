@@ -8,21 +8,21 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
-permissions:
-  contents: write
-  actions: read
-
 jobs:
   release:
     name: Signed draft release (macOS 26)
     runs-on: macos-26
     environment: release
+    permissions:
+      contents: write
+      actions: read
     env:
       HUSKY: '0'
-      GH_TOKEN: ${{ github.token }}
       TAG: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -35,10 +35,12 @@ jobs:
       - run: bun install --frozen-lockfile
       - name: Tag version and Quality gate for the exact SHA
         # Exit 0 pass, 2 pending (wait, up to 60 minutes), anything else blocks.
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           for attempt in $(seq 1 60); do
-            gh run list --repo "$GITHUB_REPOSITORY" --workflow quality.yml --commit "$GITHUB_SHA" \
-              --limit 50 --json databaseId,headSha,status,conclusion,createdAt > "$RUNNER_TEMP/quality-runs.json"
+            gh run list --repo "$GITHUB_REPOSITORY" --workflow quality.yml --commit "$GITHUB_SHA" --event push \
+              --limit 50 --json databaseId,headSha,status,conclusion,createdAt,event > "$RUNNER_TEMP/quality-runs.json"
             status=0
             bun scripts/release/gate.ts "$TAG" "$GITHUB_SHA" "$RUNNER_TEMP/quality-runs.json" || status=$?
             if [ "$status" -ne 2 ]; then exit "$status"; fi
@@ -46,6 +48,15 @@ jobs:
           done
           echo "Quality is still pending for $GITHUB_SHA" >&2
           exit 1
+      - name: Refuse an existing release for the tag
+        # A partial-draft cleanup must never touch an earlier release, draft or not.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "A release for $TAG already exists; delete it by hand before re-running." >&2
+            exit 1
+          fi
       - name: Sign, notarize and staple
         env:
           DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
@@ -69,24 +80,39 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$RUNNER_TEMP/stache-release.keychain-db" > /dev/null
           security list-keychains -d user -s "$RUNNER_TEMP/stache-release.keychain-db" $(security list-keychains -d user | tr -d '"')
           printf '%s' "$NOTARY_API_KEY_P8" > "$RUNNER_TEMP/stache-notary-key.p8"
+          unset DEVELOPER_ID_P12_BASE64 DEVELOPER_ID_P12_PASSWORD NOTARY_API_KEY_P8
           STACHE_NOTARY_KEY_PATH="$RUNNER_TEMP/stache-notary-key.p8" bun run release --sign
       - name: Remove temporary keychain and key file
         if: always()
         run: |
           security delete-keychain "$RUNNER_TEMP/stache-release.keychain-db" 2> /dev/null || true
           rm -f "$RUNNER_TEMP/stache-notary-key.p8" "$RUNNER_TEMP/developer-id.p12"
+      - name: Keep notarization rejection evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-evidence
+          path: target/release-evidence/
+          if-no-files-found: ignore
       - name: Verify release checksums
         working-directory: target/release-artifacts
         run: shasum -a 256 -c SHA256SUMS
       - name: Create draft release
+        id: draft
         working-directory: target/release-artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          # Set before creating: a create that fails midway may still leave this run's draft.
+          echo "created=true" >> "$GITHUB_OUTPUT"
           prerelease=()
           case "$TAG" in *-rc.*) prerelease=(--prerelease) ;; esac
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft "${prerelease[@]}" \
             --title "$TAG" --verify-tag *.dmg *.zip SHA256SUMS release.json
       - name: Remove a partial draft
-        if: failure()
+        if: failure() && steps.draft.outputs.created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2> /dev/null | grep -qx true; then
             gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes
