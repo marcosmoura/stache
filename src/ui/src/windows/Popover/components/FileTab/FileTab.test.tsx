@@ -72,6 +72,30 @@ const committed = (hash: string): ConfigEditOutcome_Serialize => ({
 const edits = (host: MockHost) =>
   host.callsOf('config_edit').map((call) => (call.args as { request: Edit }).request);
 
+describe('FileTab help text', () => {
+  it('shows only the first sentence and keeps the full description as the accessible one', async () => {
+    setup(doc('tiling', {}));
+    const screen = await render(<FileTab file="tiling.toml" />);
+    const full = (
+      (SCHEMAS['../../../../../../../schemas/tiling.schema.json'] as Record<string, unknown>)
+        .$defs as Record<string, { properties?: Record<string, { description?: string }> }>
+    ).BordersConfig?.properties?.enabled?.description;
+
+    expect(full?.split('. ').length).toBeGreaterThan(1);
+    const shown = full!.slice(0, full!.indexOf('.') + 1);
+
+    await expect.element(screen.getByText(shown, { exact: true })).toBeVisible();
+    const help = [...document.querySelectorAll('[id$="-help"]')].find(
+      (node) => node.textContent === full,
+    );
+
+    expect(help).toBeDefined();
+    expect(
+      document.querySelector(`[role="switch"][aria-describedby="${help!.id}"]`),
+    ).not.toBeNull();
+  });
+});
+
 describe('FileTab controls', () => {
   it('a switch writes `set` at once with the current hash', async () => {
     const { host } = setup(doc('keepAwake', {}));

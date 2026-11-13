@@ -154,13 +154,19 @@ export const styles = stylex.create({
     color: popover.tertiaryLabel,
   },
   help: {
-    WebkitBoxOrient: 'vertical',
-    WebkitLineClamp: 3,
     overflow: 'hidden',
-    display: '-webkit-box',
     fontSize: popover.smallSize,
     color: popover.secondaryLabel,
-    overflowWrap: 'anywhere',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  visuallyHidden: {
+    position: 'absolute',
+    overflow: 'hidden',
+    width: '1px',
+    height: '1px',
+    whiteSpace: 'nowrap',
+    clipPath: 'inset(50%)',
   },
   controls: {
     display: 'flex',
@@ -256,7 +262,14 @@ export const styles = stylex.create({
   },
   optionText: { display: 'flex', flexDirection: 'column', minWidth: 0 },
   optionTitle: { color: 'inherit' },
-  optionHelp: { fontSize: popover.smallSize, color: 'inherit', opacity: 0.75 },
+  optionHelp: {
+    overflow: 'hidden',
+    fontSize: popover.smallSize,
+    color: 'inherit',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    opacity: 0.75,
+  },
   check: { display: 'grid', placeItems: 'center', color: 'inherit' },
   /** A small NSStepper: two stacked arrow buttons beside the field. */
   stepper: {

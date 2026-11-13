@@ -166,7 +166,7 @@ runtime from the file's catalog schema (`config_document`); no module has its ow
   `name`/`id`/`widget`-like key (drag the handle, or **Move up/down**, **Remove**, **Add
   item**). All ten committed schemas map with no fallback; anything unrecognised shows its
   TOML text read-only with **Open in editor** for that field only. Labels are the
-  humanised key; help is the schema `description`.
+  humanised key. Help is the first sentence of the schema `description` on one line (ellipsis when it overflows), as are the descriptions in an enum menu; the full text is the tooltip and the field's accessible description (`summary` in `FileTab/summary.ts`).
 - **Defaults.** A key absent from the file shows the catalog default (array elements in
   the file use the schema default) with a `default` marker; editing it inserts the key.
   A set key of a table has **Reset to default** (`remove`). An array that exists only as a

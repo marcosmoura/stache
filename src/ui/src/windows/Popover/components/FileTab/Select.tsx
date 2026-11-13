@@ -6,6 +6,7 @@ import * as stylex from '@stylexjs/stylex';
 import { Icon } from '@/components/Icon';
 
 import { styles } from './FileTab.style';
+import { summary } from './summary';
 
 export type SelectOption = { value: string; title: string; description: string | null };
 
@@ -202,7 +203,9 @@ export function Select({ id, label, value, options, disabled, onSelect }: Select
                 <span {...stylex.props(styles.optionText)}>
                   <span {...stylex.props(styles.optionTitle)}>{option.title}</span>
                   {option.description ? (
-                    <span {...stylex.props(styles.optionHelp)}>{option.description}</span>
+                    <span {...stylex.props(styles.optionHelp)} title={option.description}>
+                      {summary(option.description)}
+                    </span>
                   ) : null}
                 </span>
               </li>

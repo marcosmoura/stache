@@ -21,6 +21,7 @@ import { styles } from './FileTab.style';
 import { effectiveAt, isSetAt, useDraft, useForm, useWrite, type Write } from './form';
 import { isScalar, seed, variantOf, type FieldNode, type Variant } from './schema';
 import { Select } from './Select';
+import { summary } from './summary';
 import {
   humanise,
   insertOp,
@@ -492,9 +493,14 @@ function Row({
           {marker ? <Marker>{marker}</Marker> : null}
         </span>
         {description ? (
-          <span id={helpId} {...stylex.props(styles.help)} title={description}>
-            {description}
-          </span>
+          <>
+            <span {...stylex.props(styles.help)} title={description} aria-hidden>
+              {summary(description)}
+            </span>
+            <span id={helpId} {...stylex.props(styles.visuallyHidden)}>
+              {description}
+            </span>
+          </>
         ) : null}
       </div>
       <div {...stylex.props(styles.controls)}>{controls}</div>
