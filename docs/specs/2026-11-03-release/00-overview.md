@@ -6,7 +6,8 @@ branch: feat/release
 
 Read when turning Stache Next from a development bundle into a distributable product.
 **IN PROGRESS ON `feat/release`, NOT SHIPPED.** Parts 01 and 02 are implemented on the branch;
-Parts 03, 04 and 05 are implemented up to their gates; Part 06 is not started. Nothing below is
+Part 03 is implemented up to its credentials gate; Part 04's rename has landed with two manual
+checks open; Part 05 is implemented with its real-install checks open; Part 06 is not started. Nothing below is
 merged, and no artifact has been signed, notarized or published. Written against `ad34b46`;
 revised 2026-11-13 against `main` at `74bfd27` (see [Revision](#revision-2026-11-13)).
 
