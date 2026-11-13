@@ -72,3 +72,7 @@ The changed tests are the tests. End-to-end scenario: the real Quality run on th
 - Changed at review (2026-11-13): the first wording asked for 4× between the actor delay and the
   budget. That cannot hold: to prove sharing, the budget must lie between one answer delay and
   two. The criterion now asks for absolute slack instead (400 ms delay, 600 ms budget, 4 s hop).
+- Run 43360653833 (2026-11-13): `test:ui` (857), `test:e2e` (62 passed, 26 font skips) and
+  `test:scripts` passed on the runner. `test:native` then failed
+  `shutdown::tests::a_blocked_record_sink_cannot_extend_the_terminal_deadline` (0.241 s against a
+  200 ms wall-clock bound). The sink stays blocked for the whole test, so the bound is now 2 s.
