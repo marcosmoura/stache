@@ -1,8 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-
-import { readWorkspaceVersion } from './pipeline';
-
 /** One entry of `gh run list --json databaseId,headSha,status,conclusion,createdAt,event`. */
 export interface WorkflowRun {
   databaseId?: number;
@@ -51,28 +46,4 @@ export function qualityGate(runs: WorkflowRun[], sha: string): GateResult {
   }
 
   return { state: 'pass', runId: latest.databaseId };
-}
-
-// CLI: bun scripts/release/gate.ts <tag> <sha> <runs.json>
-// Exit 0 pass, 2 pending, 1 blocked or tag/version mismatch.
-if (import.meta.main) {
-  const [tag, sha, runsPath] = process.argv.slice(2);
-  const version = readWorkspaceVersion(
-    readFileSync(join(import.meta.dirname, '../../Cargo.toml'), 'utf8'),
-  );
-  const tagProblem = tagVersionProblem(tag ?? '', version);
-
-  if (tagProblem) {
-    console.error(tagProblem);
-    process.exit(1);
-  }
-
-  const result = qualityGate(JSON.parse(readFileSync(runsPath, 'utf8')) as WorkflowRun[], sha);
-
-  if (result.state === 'pass') {
-    console.log(`Quality passed for ${sha} (run ${result.runId ?? 'unknown'}).`);
-  } else {
-    console.error(result.reason);
-    process.exit(result.state === 'pending' ? 2 : 1);
-  }
 }

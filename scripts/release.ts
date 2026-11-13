@@ -20,17 +20,14 @@ const run: Runner = (command, args, options = {}) => {
 };
 
 const modes: Record<string, ReleaseMode> = {
-  '--sign': 'sign',
-  '--dry-run-signing': 'dry-run-signing',
+  '--self-sign': 'self-sign',
 };
 
 try {
   const args = process.argv.slice(2);
 
   if (args.length > 1 || (args.length === 1 && !(args[0] in modes))) {
-    throw new ReleaseError(
-      `usage: bun run release [--sign | --dry-run-signing], got: ${args.join(' ')}`,
-    );
+    throw new ReleaseError(`usage: bun run release [--self-sign], got: ${args.join(' ')}`);
   }
 
   runRelease({

@@ -1,22 +1,20 @@
 # Release pipeline
 
-Read when building a distributable artifact, running `bun run release`, changing `scripts/release.ts` or `.github/workflows/release.yml`.
+Read when building a distributable artifact, running `bun run release`, or changing `scripts/release.ts`.
 
-The ad-hoc pipeline and the ad-hoc signing dry run ship. The Developer ID mode (`--sign`) and
-`release.yml` are written and unit-tested with fake runners but have **never produced a signed or
-notarized artifact**: no Developer ID certificate or notarytool credentials exist yet
-([Part 03](../specs/2026-11-03-release/03-signing-notarization.md) gate). An ad-hoc artifact is
-a pipeline proof only and is never published.
+**No release has been published yet.** Releases are signed with the owner's self-signed
+certificate and are **never notarized**: there is no Developer ID. An ad-hoc artifact is a
+pipeline proof only and is never published.
 
 ## Modes
 
-| Command                             | Signature                                                 | Notarization         | `release.json`                                 |
-| ----------------------------------- | --------------------------------------------------------- | -------------------- | ---------------------------------------------- |
-| `bun run release`                   | Tauri ad hoc, re-signed only if strict verification fails | none                 | `ad-hoc`, `notarized: false`                   |
-| `bun run release --dry-run-signing` | identity `-`, hardened runtime, `--timestamp=none`        | skipped (logged)     | `ad-hoc`, `notarized: false`, `mode`           |
-| `bun run release --sign`            | Developer ID, hardened runtime, secure timestamp          | `notarytool`, staple | `developer-id`, `notarized: true`, submissions |
+| Command                                                            | Signature                                                 | `release.json`                                         |
+| ------------------------------------------------------------------ | --------------------------------------------------------- | ------------------------------------------------------ |
+| `bun run release`                                                  | Tauri ad hoc, re-signed only if strict verification fails | `ad-hoc`, `notarized: false`                           |
+| `STACHE_SIGNING_IDENTITY="Stache App" bun run release --self-sign` | the named self-signed certificate, hardened runtime       | `self-signed`, `notarized: false`, `certificateSha256` |
 
-Any other argument is an error.
+`Stache App` is the owner's certificate name; the script never hardcodes one. Any other argument
+is an error. CI runs only the ad-hoc mode.
 
 ## Command
 
@@ -55,56 +53,54 @@ The output directory is removed at the start of each run, so a failed run leaves
 directories from an interrupted run are removed first, after a best-effort detach of any image
 still mounted under them.
 
-## Signing modes (`--dry-run-signing`, `--sign`)
+## Self-signed mode (`--self-sign`)
 
-After the bundle verifier and the copy into staging, both modes run the same order:
+### Why sign
 
-1. Sign inside out with `codesign --force --sign <identity> --options runtime <timestamp>`:
-   each nested Mach-O under `media-control` as a plain file, then `Contents/MacOS/stache`, then
-   the bundle. Only the executable and bundle get `--entitlements` (the committed
-   `Entitlements.plist`). `--deep` is never used to sign. Then `codesign --verify --strict --deep`
-   and `codesign -dvvv`.
-2. Zip the app with `ditto` and `xcrun notarytool submit --wait --output-format json`; anything
-   but `Accepted` fails.
-3. `xcrun stapler staple` and `validate` the app.
-4. Build the DMG from the stapled app, `codesign` it, notarize, staple and validate it.
-5. Build the distributable zip from the stapled app.
-6. Final checks on the artifacts, then `SHA256SUMS`, then `release.json`.
+macOS ties privacy grants such as Accessibility to the code signature. An ad-hoc signature
+differs on every build, so every update asks for the grant again. A signature from one certificate
+has a designated requirement anchored on that certificate (`certificate leaf`), so the grant
+survives updates signed with it.
 
-Final checks: strict deep verification and `codesign -dvvv` (hardened-runtime flag; in `--sign`
-also `Authority=<identity>`, `TeamIdentifier=<team>` and `Timestamp=`) on the app, the app in the
-mounted DMG and the app in the expanded zip; in `--sign` also `spctl --assess --type execute -vv`
-on the app, `spctl --assess --type open --context context:primary-signature -vv` on the DMG and
-`xcrun stapler validate` on the DMG and both contained apps.
+### What it does not do
 
-`--dry-run-signing` uses identity `-` and `--timestamp=none`; notarization, stapling, `spctl`
-and the authority/team/timestamp checks are logged as **skipped**, never as passed. It proves
-the inside-out order, that the bundle still verifies strictly under hardened runtime and that
-the runtime flag lands. It does not prove Developer ID acceptance, notarization, stapling or
-Gatekeeper.
+The build is not notarized and nothing contacts Apple (no secure timestamp, `notarytool`,
+`stapler` or `spctl`). Gatekeeper still blocks the first open of a downloaded copy until the
+person allows it; the [install guide](install.md) covers that step.
 
-### `--sign` inputs
+### Steps
 
-Read from the environment; missing or wrong input is an error before any build, never a fall
-back to ad hoc:
+Before any build, the run refuses, with no fallback to ad hoc, when `STACHE_SIGNING_IDENTITY` is
+missing, empty or `-`, or when `security find-identity -p codesigning` does not list that exact
+name between quotes. It then reads the certificate's SHA-256 fingerprint from
+`security find-certificate -a -c <identity> -Z` and refuses unless exactly one certificate
+matches. After the build (whose child also loses `STACHE_SIGNING_IDENTITY`, `GH_TOKEN` and
+`GITHUB_TOKEN`) and the bundle verifier:
 
-- `STACHE_SIGNING_IDENTITY`: exactly `Developer ID Application: <name> (<team>)`. `Stache App`,
-  `Apple Development: …` and `-` are refused.
-- `STACHE_TEAM_ID`: the ten-character team identifier; it must match the identity's.
-- Exactly one notarytool credential: the App Store Connect API key (`STACHE_NOTARY_KEY_ID`,
-  `STACHE_NOTARY_ISSUER`, `STACHE_NOTARY_KEY_PATH` to the `.p8`; CI) or
-  `STACHE_NOTARY_KEYCHAIN_PROFILE`, a profile created locally with
-  `xcrun notarytool store-credentials` (Apple ID and app-specific password stay in the keychain).
+1. Sign the staged copy inside out with
+   `codesign --force --options runtime --timestamp=none --sign <identity>`: each nested Mach-O
+   under `media-control` as a plain file, then `Contents/MacOS/stache`, then the bundle. Only the
+   executable and bundle get `--entitlements` (the committed `Entitlements.plist`). `--deep` is
+   never used to sign. The ad-hoc re-sign fallback uses the same helper with identity `-` and no
+   hardened runtime.
+2. Build the DMG and the zip from the signed app; sign the DMG with
+   `codesign --force --timestamp=none --sign <identity>`.
+3. On the staged app, the app in the mounted DMG and the app expanded from the zip:
+   `codesign --verify --strict --deep`; `codesign -dvvv` shows `Authority=<identity>` and the
+   hardened-runtime flag; `codesign -d -r-` shows a designated requirement containing
+   `certificate leaf` and no `cdhash`.
 
-The tree must be clean. The names are deliberately not `APPLE_*`: those are what Tauri reads and
-what the build child has scrubbed, so the script's inputs never reach Tauri and the scrub keeps
-its single meaning. Credentials go only to `notarytool` and are never logged or written to
-`release.json`.
+Any failure exits non-zero and leaves no `SHA256SUMS` or `release.json`. macOS may ask once to let
+`codesign` use the key.
 
-On rejection the run fetches `xcrun notarytool log <id>` into
-`target/release-evidence/notary-<app|dmg>-<id>.json` (cleared at the start of each run, outside
-the artifact directory) and fails. A failure at any step leaves no `SHA256SUMS` and no
-`release.json`, so nothing records `notarized: true` unless every step succeeded.
+### Creating a certificate
+
+Someone without a certificate creates one in Keychain Access: Keychain Access → Certificate
+Assistant → Create a Certificate…, give it a name (for example `Stache App`), Identity Type
+**Self Signed Root**, Certificate Type **Code Signing**, then Create. Pass that name in
+`STACHE_SIGNING_IDENTITY`. The private key is the only thing that ties a release to its signer:
+it stays in the login keychain and never goes to CI. If it is lost, the next release has a new
+signature and every user grants Accessibility once more.
 
 ## Outputs
 
@@ -116,9 +112,10 @@ spaces as underscores and the version that of `tauri.conf.json`:
   `Stache_<version>_aarch64.zip` and `Stache.app` (`com.marcosmoura.stache`); the development
   overlay `tauri.dev.conf.json` is used only by `tauri:dev` and never reaches a release,
 - `SHA256SUMS` with bare file names: `shasum -a 256 -c SHA256SUMS` from that directory,
-- `release.json`: `version`, `commit`, `treeClean`, `signing` (`"ad-hoc"` or
-  `"developer-id"`), `notarized`, `adHocResigned`, `artifacts`; the signing modes add `mode`, and
-  `--sign` adds `notarySubmissions` (`app`, `dmg`).
+- `release.json`: `version`, `commit`, `treeClean`, `signing` (`"ad-hoc"` or `"self-signed"`),
+  `notarized` (always `false`), `adHocResigned`, `artifacts`; `--self-sign` adds
+  `certificateSha256`, the public SHA-256 fingerprint of the signing certificate, so a person can
+  compare releases.
 - `Casks/stache.rb`: the Homebrew cask (`scripts/release/cask.ts`, `renderCask`), from the
   authoritative version and the DMG's SHA-256. It names the DMG on the `v<version>` GitHub
   release, `depends_on arch: :arm64` and macOS 26 (`">= :tahoe"`, one constant),
@@ -141,24 +138,8 @@ reaches the app, `release.json`, the manifests or `Casks/stache.rb`. Never publi
 
 ## CI
 
-`quality.yml` also runs on `v*-rc.*` tags and, after `tauri:build`, runs `bun run release`, then
-`bun run release --dry-run-signing`, each followed by `shasum -a 256 -c SHA256SUMS`. Both
-release runs repeat `tauri:build`, which is incremental after the first build; the script does
-not reuse a prebuilt bundle, so the bundle it signs is always the one it just verified. It
-uploads nothing and uses no secret.
-
-`release.yml` runs only on `v*` tag pushes, on `macos-26`, in the protected `release` GitHub
-environment:
-
-1. `scripts/release/gate.ts` fails unless the tag is `v<version>` or `v<version>-rc.<n>` with
-   the `[workspace.package]` version, and unless the newest Quality run for the exact tagged SHA
-   (`gh run list --workflow quality.yml --commit`) completed with `success`. Missing, failed or
-   other-SHA runs block; a pending run is polled once a minute for up to 60 minutes.
-2. The signing step alone receives the secrets (`DEVELOPER_ID_P12_BASE64`,
-   `DEVELOPER_ID_P12_PASSWORD`, `NOTARY_API_KEY_P8`, `STACHE_SIGNING_IDENTITY`, `STACHE_TEAM_ID`,
-   `STACHE_NOTARY_KEY_ID`, `STACHE_NOTARY_ISSUER`), imports the certificate into a temporary
-   keychain, writes the API key to a file and runs `bun run release --sign`.
-3. An `if: always()` step deletes the keychain and key file.
-4. After `shasum -a 256 -c SHA256SUMS`, `gh release create --draft` uploads the DMG, zip,
-   `SHA256SUMS` and `release.json` (`-rc.` tags as prereleases). Any failure deletes a draft
-   that a partial upload left behind. Promotion is manual.
+`quality.yml` also runs on `v*-rc.*` tags and, after `tauri:build`, runs `bun run release`
+followed by `shasum -a 256 -c SHA256SUMS`. The release run repeats `tauri:build`, which is
+incremental after the first build; the script does not reuse a prebuilt bundle, so the bundle it
+packages is always the one it just verified. It uploads nothing, uses no secret and never signs
+with a certificate.

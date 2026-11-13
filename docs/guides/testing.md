@@ -949,8 +949,8 @@ because Tauri would otherwise ship a dev-mode window. Generate/schema binaries a
 not bundled.
 
 Launch only `target/release/bundle/macos/Stache.app`, verify tray/Quit and zero windows, then quit.
-The bundle needs Accessibility for Stache before any module runs (the launch gate; grant it for that bundle's entry, not a development build's `Stache Next` entry); it needs no audio permission. Local bundles use ad-hoc signing; distribution
-signing/notarization needs separate credentials. CI audits new locks, not the archive. Legacy build
+The bundle needs Accessibility for Stache before any module runs (the launch gate; grant it for that bundle's entry, not a development build's `Stache Next` entry); it needs no audio permission. Local bundles use ad-hoc signing; `bun run release --self-sign`
+signs with the owner's self-signed certificate, and nothing is notarized. CI audits new locks, not the archive. Legacy build
 verification is opt-in via [_legacy/README.md](../../_legacy/README.md), including resource/signing gaps.
 Never run legacy and new device-changing automation together.
 
@@ -959,10 +959,11 @@ Never run legacy and new device-changing automation together.
 `bun run release` builds the release bundle, verifies it (contents, `arm64`, system-only
 linkage, the vendored `media-control` set, merged `Info.plist`), packages an ad-hoc DMG and zip,
 mounts and expands them to check the app and its signature, and writes `SHA256SUMS` and
-`release.json` to `target/release-artifacts/`. `bun run release --dry-run-signing` runs the
-Part 03 signing order with identity `-` and hardened runtime, skipping notarization and stapling.
-`scripts/release.test.ts` covers both, the `--sign` refusals and fail-closed paths and the
-`release.yml` gates with fake runners; nothing signs with a real identity or contacts Apple.
+`release.json` to `target/release-artifacts/`. `bun run release --self-sign` signs inside out with
+the certificate named by `STACHE_SIGNING_IDENTITY` and verifies authority, hardened runtime and a
+certificate-anchored designated requirement (`RELEASE-03-11` to `03-15`). `scripts/release.test.ts`
+covers both modes, the refusals, the fail-closed paths and the removal of the paid path with fake
+runners; nothing touches a keychain, signs with a real identity or contacts Apple.
 See [release](release.md). The same file covers the cask (`RELEASE-05-01`/`02`: stanzas, the
 DMG checksum, two-entry `SHA256SUMS`, test-cask isolation and loopback refusal) and the
 [install guide](install.md)'s doc check (`RELEASE-05-06`: sections, links, no process-name or

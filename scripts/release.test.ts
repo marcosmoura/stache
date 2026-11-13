@@ -86,11 +86,15 @@ interface FakeOptions {
   plist?: Record<string, unknown>;
   noApplicationsLink?: boolean;
   codesignFailsUntilResigned?: boolean;
-  notaryStatus?: string;
   dirty?: boolean;
+  /** `security find-identity -p codesigning` output. */
+  identities?: string;
+  authority?: string;
+  requirement?: string;
 }
 
-const identity = 'Developer ID Application: Marcos Moura (ABCDE12345)';
+const identity = 'Stache Test Signer';
+const fingerprint = 'AB'.repeat(32);
 
 function fakeRunner(root: string, options: FakeOptions = {}) {
   const calls: { command: string; args: string[]; options: RunOptions }[] = [];
@@ -148,8 +152,15 @@ function fakeRunner(root: string, options: FakeOptions = {}) {
           return {
             status: 0,
             stdout: '',
-            stderr: `CodeDirectory v=20500 size=1 flags=0x10000(runtime) hashes=1\nAuthority=${identity}\nTeamIdentifier=ABCDE12345\nTimestamp=Nov 13, 2026\n`,
+            stderr: `CodeDirectory v=20500 size=1 flags=0x10000(runtime) hashes=1\nAuthority=${options.authority ?? identity}\n`,
           };
+        }
+
+        if (args[0] === '-d' && args[1] === '-r-') {
+          return ok(
+            options.requirement ??
+              `designated => identifier "com.marcosmoura.stache" and certificate leaf = H"${'ab'.repeat(20)}"\n`,
+          );
         }
 
         return options.codesignFailsUntilResigned && !resigned
@@ -191,18 +202,15 @@ function fakeRunner(root: string, options: FakeOptions = {}) {
 
         return ok(`${lines.join('\n')}\n`);
       }
-      case 'xcrun':
-        if (args[1] === 'submit') {
-          return ok(JSON.stringify({ id: 'sub-1', status: options.notaryStatus ?? 'Accepted' }));
+      case 'security':
+        if (args[0] === 'find-identity') {
+          return ok(
+            options.identities ??
+              `  1) ${'C'.repeat(40)} "${identity}" (CSSMERR_TP_NOT_TRUSTED)\n     1 identities found\n`,
+          );
         }
 
-        if (args[1] === 'log') {
-          writeFileSync(args.at(-1) as string, '{"issues":[]}');
-        }
-
-        return ok();
-      case 'spctl':
-        return ok();
+        return ok(`SHA-256 hash: ${fingerprint}\nSHA-1 hash: ${'D'.repeat(40)}\n`);
       default:
         throw new Error(`unexpected command ${command}`);
     }
@@ -438,7 +446,7 @@ describe('RELEASE-02-04 replacement', () => {
 });
 
 describe('RELEASE-02-05 environment', () => {
-  it('removes every APPLE_*, signing, notary and token variable from the build child', () => {
+  it('removes every APPLE_*, signing and token variable from the build child', () => {
     const root = makeRoot();
     const env = Object.fromEntries([
       ...scrubbedAppleVariables.map((name) => [name, 'secret']),
@@ -454,28 +462,8 @@ describe('RELEASE-02-05 environment', () => {
     expect(build?.options.env).toEqual({ PATH: '/usr/bin' });
     expect(env.APPLE_ID).toBe('secret');
     expect(scrubbedReleaseVariables).toEqual(
-      expect.arrayContaining([
-        'DEVELOPER_ID_P12_BASE64',
-        'DEVELOPER_ID_P12_PASSWORD',
-        'NOTARY_API_KEY_P8',
-        'STACHE_SIGNING_IDENTITY',
-        'STACHE_TEAM_ID',
-        'STACHE_NOTARY_KEY_ID',
-        'STACHE_NOTARY_ISSUER',
-        'STACHE_NOTARY_KEY_PATH',
-        'STACHE_NOTARY_KEYCHAIN_PROFILE',
-        'GH_TOKEN',
-        'GITHUB_TOKEN',
-      ]),
+      expect.arrayContaining(['STACHE_SIGNING_IDENTITY', 'GH_TOKEN', 'GITHUB_TOKEN']),
     );
-  });
-
-  it('keeps signing inputs out of the build child in --sign mode', () => {
-    const root = makeRoot();
-    const { fake, result } = release(root, {}, { ...signEnv, GH_TOKEN: 't', PATH: '/x' }, 'sign');
-
-    result();
-    expect(fake.calls.find((call) => call.command === 'bun')?.options.env).toEqual({ PATH: '/x' });
   });
 });
 
@@ -544,106 +532,84 @@ describe('RELEASE-02-06 workflow trigger', () => {
   });
 });
 
-const signEnv: NodeJS.ProcessEnv = {
-  STACHE_SIGNING_IDENTITY: identity,
-  STACHE_TEAM_ID: 'ABCDE12345',
-  STACHE_NOTARY_KEY_ID: 'KEY123',
-  STACHE_NOTARY_ISSUER: 'issuer-uuid',
-  STACHE_NOTARY_KEY_PATH: '/tmp/key.p8',
-};
+const signEnv: NodeJS.ProcessEnv = { STACHE_SIGNING_IDENTITY: identity };
 
 const readRecord = (root: string) =>
   JSON.parse(readFileSync(join(output(root), 'release.json'), 'utf8'));
 
-describe('RELEASE-03-02 --sign refusals', () => {
-  const refusals: [string, NodeJS.ProcessEnv][] = [
-    ['no input at all', {}],
-    ['a missing identity', { ...signEnv, STACHE_SIGNING_IDENTITY: undefined }],
-    ['a missing team', { ...signEnv, STACHE_TEAM_ID: undefined }],
+const signCalls = (calls: { command: string; args: string[] }[]) =>
+  calls.filter((call) => call.command === 'codesign' && call.args[0] === '--force');
+
+describe('RELEASE-03-11 --self-sign refusals', () => {
+  const refusals: [string, NodeJS.ProcessEnv, FakeOptions?][] = [
+    ['a missing identity', {}],
+    ['an empty identity', { STACHE_SIGNING_IDENTITY: '' }],
+    ['a blank identity', { STACHE_SIGNING_IDENTITY: '   ' }],
+    ['the ad-hoc identity "-"', { STACHE_SIGNING_IDENTITY: '-' }],
+    ['an APPLE_* name instead of the script input', { APPLE_SIGNING_IDENTITY: identity }],
     [
-      'no notary credential',
-      {
-        ...signEnv,
-        STACHE_NOTARY_KEY_ID: '',
-        STACHE_NOTARY_ISSUER: '',
-        STACHE_NOTARY_KEY_PATH: '',
-      },
-    ],
-    ['a partial API key', { ...signEnv, STACHE_NOTARY_ISSUER: undefined }],
-    ['two notary credentials', { ...signEnv, STACHE_NOTARY_KEYCHAIN_PROFILE: 'stache' }],
-    ['the Stache App identity', { ...signEnv, STACHE_SIGNING_IDENTITY: 'Stache App' }],
-    [
-      'an Apple Development identity',
-      { ...signEnv, STACHE_SIGNING_IDENTITY: 'Apple Development: Marcos Moura (ABCDE12345)' },
-    ],
-    ['the ad-hoc identity', { ...signEnv, STACHE_SIGNING_IDENTITY: '-' }],
-    [
-      "another team's Developer ID",
-      { ...signEnv, STACHE_SIGNING_IDENTITY: 'Developer ID Application: X (ZZZZZ99999)' },
+      'a name absent from the keychain listing',
+      signEnv,
+      { identities: '  1) AAAA "Another Signer"\n     1 identities found\n' },
     ],
     [
-      'APPLE_* names instead of the script inputs',
-      { APPLE_SIGNING_IDENTITY: identity, APPLE_TEAM_ID: 'ABCDE12345' },
+      'a listed name that only contains the identity',
+      signEnv,
+      { identities: `  1) AAAA "${identity} 2"\n     1 identities found\n` },
+    ],
+    ['an empty keychain listing', signEnv, { identities: '     0 identities found\n' }],
+    [
+      'a failing keychain listing',
+      signEnv,
+      { fail: (command, args) => command === 'security' && args[0] === 'find-identity' },
     ],
   ];
 
-  it.each(refusals)('refuses %s before building, with no fallback', (_case, env) => {
+  it.each(refusals)('refuses %s, runs no build and never falls back', (_case, env, options) => {
     const root = makeRoot();
-    const { fake, result } = release(root, {}, env, 'sign');
+    const { fake, result } = release(root, options, env, 'self-sign');
 
     expect(result).toThrow(ReleaseError);
-    expect(fake.calls).toEqual([]);
+    expect(fake.calls.every((call) => call.command === 'security')).toBe(true);
+    expect(fake.calls.some((call) => call.command === 'bun')).toBe(false);
+    expect(signCalls(fake.calls)).toEqual([]);
     expect(existsSync(output(root))).toBe(false);
   });
 
-  it('refuses a dirty tree before building', () => {
+  it('asks the keychain for code-signing identities through the runner', () => {
     const root = makeRoot();
-    const { fake, result } = release(root, { dirty: true }, signEnv, 'sign');
-
-    expect(result).toThrow(/clean git tree/);
-    expect(fake.calls.map((call) => call.command)).toEqual(['git', 'git']);
-  });
-
-  it('accepts a keychain profile instead of the API key', () => {
-    const root = makeRoot();
-    const env = {
-      STACHE_SIGNING_IDENTITY: identity,
-      STACHE_TEAM_ID: 'ABCDE12345',
-      STACHE_NOTARY_KEYCHAIN_PROFILE: 'stache-notary',
-    };
-    const { fake, result } = release(root, {}, env, 'sign');
+    const { fake, result } = release(root, {}, signEnv, 'self-sign');
 
     result();
-    const submit = fake.calls.find((call) => call.args[1] === 'submit');
+    expect(fake.calls[0]).toMatchObject({
+      command: 'security',
+      args: ['find-identity', '-p', 'codesigning'],
+    });
+  });
 
-    expect(submit?.args.slice(-2)).toEqual(['--keychain-profile', 'stache-notary']);
+  it('never hardcodes an identity name in the script', () => {
+    const source = readFileSync(join(import.meta.dirname, 'release/pipeline.ts'), 'utf8');
+
+    expect(source).not.toMatch(/Stache App|Developer ID/);
   });
 });
 
 /** A short label per external step, in call order. */
 function steps(calls: { command: string; args: string[] }[]): string[] {
   return calls.flatMap(({ command, args }) => {
-    const path = (command === 'xcrun' && args[1] === 'submit' ? args[2] : args.at(-1)) ?? '';
-    const target = path
+    const target = (args.at(-1) ?? '')
       .split('/')
       .slice(-2)
       .join('/')
       .replace(/^release-artifacts\.staging-\d+\//, '');
 
-    if (command === 'codesign' && args[0] === '--force') {
-      return [`sign ${target}`];
-    }
-
     if (command === 'codesign') {
-      return [`${args[0] === '-dvvv' ? 'details' : 'verify'} ${target}`];
-    }
+      const kind =
+        { '--force': 'sign', '--verify': 'verify', '-dvvv': 'details', '-d': 'requirement' }[
+          args[0]
+        ] ?? args[0];
 
-    if (command === 'xcrun') {
-      return [`${args[0]} ${args[1]} ${args[1] === 'log' ? '' : target}`.trim()];
-    }
-
-    if (command === 'spctl') {
-      return [`spctl ${args[2]} ${target}`];
+      return [`${kind} ${target}`];
     }
 
     if (command === 'ditto' && args[0] === '-c') {
@@ -658,28 +624,38 @@ function steps(calls: { command: string; args: string[] }[]): string[] {
   });
 }
 
-describe('RELEASE-03-03 signing arguments and order', () => {
-  it('signs with runtime and timestamp, never --deep, in the stated order', () => {
+describe('RELEASE-03-12 signing arguments and order', () => {
+  it('signs inside out with runtime and no timestamp, never --deep, then the DMG', () => {
     const root = makeRoot();
-    const { fake, result } = release(root, {}, signEnv, 'sign');
+    const { fake, result } = release(root, {}, signEnv, 'self-sign');
 
-    const record = result();
-    const signs = fake.calls.filter(
-      (call) => call.command === 'codesign' && call.args[0] === '--force',
-    );
+    result();
+    const signs = signCalls(fake.calls);
+
+    expect(signs).toHaveLength(5);
 
     for (const call of signs) {
       expect(call.args).not.toContain('--deep');
-      expect(call.args).toContain('--timestamp');
-      expect(call.args).toContain(identity);
+      expect(call.args).toContain('--timestamp=none');
+      expect(call.args).not.toContain('--timestamp');
+      expect(call.args.join(' ')).toContain(`--sign ${identity}`);
     }
 
-    // App signatures carry the hardened runtime; entitlements only on executable and bundle.
     expect(
       signs.slice(0, 4).every((call) => call.args.join(' ').includes('--options runtime')),
     ).toBe(true);
     expect(signs.slice(0, 2).every((call) => !call.args.includes('--entitlements'))).toBe(true);
     expect(signs.slice(2, 4).every((call) => call.args.includes('--entitlements'))).toBe(true);
+    expect(signs[2].args[signs[2].args.indexOf('--entitlements') + 1]).toBe(
+      join(root, 'src/crates/app/Entitlements.plist'),
+    );
+    expect(signs[4].args).toEqual([
+      '--force',
+      '--timestamp=none',
+      '--sign',
+      identity,
+      expect.stringMatching(/Stache_0\.26\.0_aarch64\.dmg$/),
+    ]);
 
     const verifies = fake.calls.filter(
       (call) => call.command === 'codesign' && call.args[0] === '--verify',
@@ -696,209 +672,196 @@ describe('RELEASE-03-03 signing arguments and order', () => {
       'sign dmg-root/Stache.app',
       'verify dmg-root/Stache.app',
       'details dmg-root/Stache.app',
-      'zip .work/submit-Stache_0.26.0_aarch64.zip',
-      'notarytool submit .work/submit-Stache_0.26.0_aarch64.zip',
-      'stapler staple dmg-root/Stache.app',
-      'stapler validate dmg-root/Stache.app',
+      'requirement dmg-root/Stache.app',
       'dmg create',
       'sign Stache_0.26.0_aarch64.dmg',
-      'notarytool submit Stache_0.26.0_aarch64.dmg',
-      'stapler staple Stache_0.26.0_aarch64.dmg',
-      'stapler validate Stache_0.26.0_aarch64.dmg',
       'zip Stache_0.26.0_aarch64.zip',
-      'verify dmg-root/Stache.app',
-      'details dmg-root/Stache.app',
-      'spctl execute dmg-root/Stache.app',
-      'spctl open Stache_0.26.0_aarch64.dmg',
-      'stapler validate Stache_0.26.0_aarch64.dmg',
+      expect.stringMatching(/^verify mount-.*\/Stache\.app$/),
       expect.stringMatching(/^details mount-.*\/Stache\.app$/),
-      expect.stringMatching(/^stapler validate mount-.*\/Stache\.app$/),
+      expect.stringMatching(/^requirement mount-.*\/Stache\.app$/),
       expect.stringMatching(/^verify unzip-.*\/Stache\.app$/),
       expect.stringMatching(/^details unzip-.*\/Stache\.app$/),
-      expect.stringMatching(/^stapler validate unzip-.*\/Stache\.app$/),
+      expect.stringMatching(/^requirement unzip-.*\/Stache\.app$/),
       'shasum',
     ]);
-    expect(record).toMatchObject({
-      signing: 'developer-id',
-      notarized: true,
-      mode: 'sign',
-      notarySubmissions: { app: 'sub-1', dmg: 'sub-1' },
-    });
-    expect(JSON.stringify(readRecord(root))).not.toMatch(/KEY123|issuer-uuid|key\.p8/);
+
+    for (const call of fake.calls) {
+      expect(['xcrun', 'spctl', 'notarytool', 'stapler']).not.toContain(call.command);
+      expect(call.args.join(' ')).not.toMatch(/notarytool|stapler|spctl/);
+    }
   });
 
-  it('dry run uses identity "-", --timestamp=none and skips Apple steps honestly', () => {
+  it('shares the inside-out helper with the ad-hoc re-sign fallback', () => {
     const root = makeRoot();
-    const { fake, lines, result } = release(root, {}, signEnv, 'dry-run-signing');
+    const { fake, result } = release(root, { codesignFailsUntilResigned: true });
 
     result();
-    const signs = fake.calls.filter(
-      (call) => call.command === 'codesign' && call.args[0] === '--force',
+    expect(signCalls(fake.calls).map((call) => call.args.slice(0, 4))).toEqual(
+      Array.from({ length: 4 }, () => ['--force', '--timestamp=none', '--sign', '-']),
     );
-
-    expect(signs).toHaveLength(5);
-    expect(
-      signs.every((call) => call.args.includes('-') && call.args.includes('--timestamp=none')),
-    ).toBe(true);
-    expect(
-      signs.slice(0, 4).every((call) => call.args.join(' ').includes('--options runtime')),
-    ).toBe(true);
-    expect(signs.every((call) => !call.args.includes('--deep'))).toBe(true);
-    expect(fake.calls.some((call) => ['xcrun', 'spctl'].includes(call.command))).toBe(false);
-    expect(fake.calls.filter((call) => call.args[0] === '-dvvv')).toHaveLength(4);
-    expect(readRecord(root)).toMatchObject({
-      signing: 'ad-hoc',
-      notarized: false,
-      mode: 'dry-run-signing',
-    });
-    expect(lines.filter((line) => /skipped/.test(line)).length).toBeGreaterThanOrEqual(5);
-    expect(lines.some((line) => /Accepted|passed.*(spctl|stapler)/.test(line))).toBe(false);
   });
 });
 
-describe('RELEASE-03-04 fail closed while signing', () => {
-  const failures: [string, (command: string, args: string[]) => boolean][] = [
+describe('RELEASE-03-13 fail closed while signing', () => {
+  const failures: [string, FakeOptions][] = [
     [
       'nested sign',
-      (c, a) => c === 'codesign' && a[0] === '--force' && a.at(-1)!.includes('media-control'),
+      {
+        fail: (c, a) =>
+          c === 'codesign' && a[0] === '--force' && a.at(-1)!.includes('media-control'),
+      },
     ],
     [
       'main executable sign',
-      (c, a) => c === 'codesign' && a[0] === '--force' && a.at(-1)!.endsWith('MacOS/stache'),
+      {
+        fail: (c, a) =>
+          c === 'codesign' && a[0] === '--force' && a.at(-1)!.endsWith('MacOS/stache'),
+      },
     ],
-    ['bundle sign', (c, a) => c === 'codesign' && a[0] === '--force' && a.at(-1)!.endsWith('.app')],
-    ['DMG sign', (c, a) => c === 'codesign' && a[0] === '--force' && a.at(-1)!.endsWith('.dmg')],
-    ['strict verify', (c, a) => c === 'codesign' && a[0] === '--verify'],
-    ['signature details', (c, a) => c === 'codesign' && a[0] === '-dvvv'],
-    ['app notarization', (c, a) => c === 'xcrun' && a[1] === 'submit' && a[2].endsWith('.zip')],
-    ['DMG notarization', (c, a) => c === 'xcrun' && a[1] === 'submit' && a[2].endsWith('.dmg')],
-    ['staple', (c, a) => c === 'xcrun' && a[1] === 'staple'],
-    ['staple validation', (c, a) => c === 'xcrun' && a[1] === 'validate'],
-    ['spctl', (c) => c === 'spctl'],
+    [
+      'bundle sign',
+      { fail: (c, a) => c === 'codesign' && a[0] === '--force' && a.at(-1)!.endsWith('.app') },
+    ],
+    [
+      'DMG sign',
+      { fail: (c, a) => c === 'codesign' && a[0] === '--force' && a.at(-1)!.endsWith('.dmg') },
+    ],
+    ['strict verify', { fail: (c, a) => c === 'codesign' && a[0] === '--verify' }],
+    [
+      'strict verify in the DMG',
+      { fail: (c, a) => c === 'codesign' && a[0] === '--verify' && a.at(-1)!.includes('/mount-') },
+    ],
+    [
+      'strict verify in the zip',
+      { fail: (c, a) => c === 'codesign' && a[0] === '--verify' && a.at(-1)!.includes('/unzip-') },
+    ],
+    ['signature details', { fail: (c, a) => c === 'codesign' && a[0] === '-dvvv' }],
+    ['requirement display', { fail: (c, a) => c === 'codesign' && a[0] === '-d' }],
+    ['certificate lookup', { fail: (c, a) => c === 'security' && a[0] === 'find-certificate' }],
+    ['an authority that is not the identity', { authority: 'Someone Else' }],
+    [
+      'a cdhash-based designated requirement',
+      { requirement: `designated => cdhash H"${'ab'.repeat(20)}"\n` },
+    ],
+    ['a requirement without a certificate', { requirement: 'designated => identifier "x"\n' }],
   ];
 
-  it.each(failures)(
-    'a %s failure stops the run without SHA256SUMS or notarized: true',
-    (_step, fail) => {
-      const root = makeRoot();
-      const { fake, result } = release(root, { fail }, signEnv, 'sign');
-
-      expect(result).toThrow(ReleaseError);
-      expect(existsSync(join(output(root), 'SHA256SUMS'))).toBe(false);
-      expect(existsSync(join(output(root), 'release.json'))).toBe(false);
-      expect(fake.calls.some((call) => call.command === 'shasum')).toBe(false);
-      // The injected step was reached.
-      expect(fake.calls.some((call) => fail(call.command, call.args))).toBe(true);
-    },
-  );
-
-  it.each(failures.filter(([step]) => !/notariz|staple|spctl/.test(step)))(
-    'a dry-run %s failure also stops the run',
-    (_step, fail) => {
-      const root = makeRoot();
-
-      expect(release(root, { fail }, {}, 'dry-run-signing').result).toThrow(ReleaseError);
-      expect(existsSync(join(output(root), 'SHA256SUMS'))).toBe(false);
-    },
-  );
-
-  it('fetches the notarytool log on rejection and keeps it as evidence', () => {
+  it.each(failures)('a %s failure stops the run without SHA256SUMS', (_step, options) => {
     const root = makeRoot();
-    const { fake, result } = release(root, { notaryStatus: 'Invalid' }, signEnv, 'sign');
 
-    expect(result).toThrow(/Invalid.*sub-1.*log saved/);
-    const log = fake.calls.find((call) => call.args[1] === 'log');
+    release(root).result();
+    const { fake, result } = release(root, options, signEnv, 'self-sign');
 
-    expect(log?.args.slice(0, 3)).toEqual(['notarytool', 'log', 'sub-1']);
-    expect(readdirSync(join(root, 'target/release-evidence'))).toEqual(['notary-app-sub-1.json']);
-    expect(existsSync(output(root))).toBe(false);
-    expect(fake.calls.some((call) => call.args[1] === 'staple')).toBe(false);
+    expect(result).toThrow(ReleaseError);
+    expect(existsSync(join(output(root), 'SHA256SUMS'))).toBe(false);
+    expect(existsSync(join(output(root), 'release.json'))).toBe(false);
+    expect(fake.calls.some((call) => call.command === 'shasum')).toBe(false);
+    expect(readdirSync(join(root, 'target')).filter((name) => name.includes('staging'))).toEqual(
+      [],
+    );
+  });
+
+  it('refuses a missing hardened-runtime flag', () => {
+    const root = makeRoot();
+    const fake = fakeRunner(root);
+    const run = (command: string, args: string[], options?: RunOptions) =>
+      command === 'codesign' && args[0] === '-dvvv'
+        ? { status: 0, stdout: '', stderr: `flags=0x2(adhoc)\nAuthority=${identity}\n` }
+        : fake.run(command, args, options);
+
+    expect(() => runRelease({ root, run, env: signEnv, mode: 'self-sign', log: () => {} })).toThrow(
+      /hardened-runtime/,
+    );
+    expect(existsSync(join(output(root), 'SHA256SUMS'))).toBe(false);
   });
 });
 
-describe('RELEASE-03-06 release workflow', () => {
-  // Narrow textual checks: no YAML parser is a declared dependency.
-  const workflow = readFileSync(
-    join(import.meta.dirname, '../.github/workflows/release.yml'),
-    'utf8',
-  );
+describe('RELEASE-03-14 self-signed record and environment', () => {
+  it('records self-signed, not notarized and the certificate fingerprint', () => {
+    const root = makeRoot();
+    const { fake, lines, result } = release(root, {}, signEnv, 'self-sign');
 
-  it('triggers only on v* tags', () => {
-    const on = /^on:\n((?: {2}.*\n|\n)*)/m.exec(workflow)?.[1] ?? '';
+    result();
+    expect(readRecord(root)).toEqual({
+      version: '0.26.0',
+      commit: 'abc123',
+      treeClean: true,
+      signing: 'self-signed',
+      notarized: false,
+      adHocResigned: false,
+      certificateSha256: fingerprint,
+      artifacts: ['Stache_0.26.0_aarch64.dmg', 'Stache_0.26.0_aarch64.zip'],
+    });
+    expect(fake.calls[1]).toMatchObject({
+      command: 'security',
+      args: ['find-certificate', '-a', '-c', identity, '-Z'],
+    });
 
-    expect(on.trim()).toBe("push:\n    tags: ['v*']");
-    expect(workflow).not.toMatch(/pull_request|workflow_dispatch|branches:/);
-    expect(workflow).toMatch(/runs-on: macos-26/);
+    for (const line of lines) {
+      expect(line).not.toMatch(/developer id|stapl/i);
+
+      if (/notariz/i.test(line)) {
+        expect(line).toMatch(/not notarized|notarized: false/);
+      }
+    }
   });
 
-  it('gates secrets behind the release environment and the signing step', () => {
-    expect(workflow).toMatch(/^ {4}environment: release$/m);
-    const stepsText = workflow.split(/\n {6}- /);
-    const withSecrets = stepsText.filter((step) => step.includes('secrets.'));
+  it('refuses an ambiguous certificate name', () => {
+    const root = makeRoot();
+    const fake = fakeRunner(root);
+    const run = (command: string, args: string[], options?: RunOptions) =>
+      command === 'security' && args[0] === 'find-certificate'
+        ? {
+            status: 0,
+            stdout: `SHA-256 hash: ${'A'.repeat(64)}\nSHA-256 hash: ${'B'.repeat(64)}\n`,
+            stderr: '',
+          }
+        : fake.run(command, args, options);
 
-    expect(withSecrets).toHaveLength(1);
-    expect(withSecrets[0]).toMatch(/bun run release --sign/);
-    const cleanup = stepsText.find((step) => step.includes('delete-keychain'));
-
-    expect(cleanup).toMatch(/if: always\(\)/);
-    expect(cleanup).toMatch(/rm -f .*stache-notary-key\.p8/);
-  });
-
-  it('keeps tokens and secrets away from the release script and its children', () => {
-    const sign = workflow.split(/\n {6}- /).find((step) => step.includes('bun run release --sign'));
-    const unset = sign?.indexOf(
-      'unset DEVELOPER_ID_P12_BASE64 DEVELOPER_ID_P12_PASSWORD NOTARY_API_KEY_P8',
+    expect(() => runRelease({ root, run, env: signEnv, mode: 'self-sign', log: () => {} })).toThrow(
+      /found 2/,
     );
+    expect(fake.calls.some((call) => call.command === 'bun')).toBe(false);
+  });
 
-    expect(unset).toBeGreaterThan(0);
-    expect(unset).toBeLessThan(sign?.indexOf('bun run release --sign') ?? 0);
-    expect(sign).not.toMatch(/GH_TOKEN/);
-    const jobEnv = /^ {4}env:\n((?: {6}.*\n)*)/m.exec(workflow)?.[1] ?? '';
+  it('keeps the signing input and tokens out of the build child', () => {
+    const root = makeRoot();
+    const env = { ...signEnv, GH_TOKEN: 't', GITHUB_TOKEN: 't', APPLE_ID: 'a', PATH: '/x' };
+    const { fake, result } = release(root, {}, env, 'self-sign');
 
-    expect(jobEnv).not.toMatch(/GH_TOKEN/);
+    result();
+    expect(fake.calls.find((call) => call.command === 'bun')?.options.env).toEqual({ PATH: '/x' });
+  });
+});
+
+describe('RELEASE-03-15 paid path removed', () => {
+  const read = (path: string) => readFileSync(join(import.meta.dirname, '..', path), 'utf8');
+
+  it('has no release workflow and no paid signing mode', () => {
+    expect(existsSync(join(import.meta.dirname, '../.github/workflows/release.yml'))).toBe(false);
+
+    for (const file of ['scripts/release.ts', 'scripts/release/pipeline.ts', 'package.json']) {
+      const source = read(file);
+
+      expect(source).not.toMatch(
+        /['"]--sign['"]\s*:|run release --sign|--dry-run-signing|notarytool|stapler|spctl/,
+      );
+      expect(source).not.toMatch(/STACHE_TEAM_ID|STACHE_NOTARY_|release-evidence/);
+    }
+  });
+
+  it('keeps the ad-hoc step, its checksum check and the candidate trigger, with no secret', () => {
+    const workflow = read('.github/workflows/quality.yml');
+
     expect(workflow).toMatch(
-      /- uses: actions\/checkout@v5\n {8}with:\n {10}persist-credentials: false\n/,
+      /- run: bun run release\n\s+- name: [^\n]*\n\s+working-directory: target\/release-artifacts\n\s+run: shasum -a 256 -c SHA256SUMS\n$/,
     );
-    expect(workflow).toMatch(/^ {4}permissions:\n {6}contents: write\n {6}actions: read\n/m);
-    expect(workflow).not.toMatch(/^permissions:/m);
+    expect(workflow).toContain("tags: ['v*-rc.*']");
+    expect(workflow).not.toMatch(/secrets\.|--self-sign|--dry-run-signing|release --sign/);
   });
+});
 
-  it('removes only a draft this run created, and keeps rejection evidence', () => {
-    const stepsText = workflow.split(/\n {6}- /);
-    const create = stepsText.find((step) => step.includes('gh release create'));
-    const remove = stepsText.find((step) => step.includes('gh release delete'));
-
-    expect(create).toMatch(/id: draft/);
-    expect(create).toMatch(/echo "created=true" >> "\$GITHUB_OUTPUT"[\s\S]*gh release create/);
-    expect(remove).toMatch(/if: failure\(\) && steps\.draft\.outputs\.created == 'true'/);
-    const refuse = stepsText.find((step) => step.includes('already exists'));
-
-    expect(workflow.indexOf(refuse ?? '\0')).toBeLessThan(
-      workflow.indexOf('bun run release --sign'),
-    );
-    const evidence = stepsText.find((step) => step.includes('upload-artifact'));
-
-    expect(evidence).toMatch(/if: failure\(\)/);
-    expect(evidence).toMatch(/path: target\/release-evidence\//);
-    expect(evidence).toMatch(/if-no-files-found: ignore/);
-  });
-
-  it('checks the tag and Quality for the exact SHA before signing, and creates drafts only', () => {
-    const gate = workflow.indexOf('bun scripts/release/gate.ts "$TAG" "$GITHUB_SHA"');
-    const sign = workflow.indexOf('bun run release --sign');
-
-    expect(gate).toBeGreaterThan(0);
-    expect(gate).toBeLessThan(sign);
-    expect(workflow).toMatch(/--workflow quality\.yml --commit "\$GITHUB_SHA" --event push/);
-    expect(workflow).toMatch(/--json databaseId,headSha,status,conclusion,createdAt,event/);
-    const creates = workflow.match(/gh release create[^\n]*/g) ?? [];
-
-    expect(creates).toHaveLength(1);
-    expect(creates[0]).toMatch(/--draft/);
-    expect(workflow).not.toMatch(/gh release edit|--draft=false/);
-    expect(workflow).toMatch(/if: failure\(\)[\s\S]*gh release delete/);
-  });
-
+describe('release gate (kept for Part 06)', () => {
   it('matches the tag against the authoritative version', () => {
     expect(tagVersionProblem('v0.26.0', '0.26.0')).toBeNull();
     expect(tagVersionProblem('v0.26.0-rc.2', '0.26.0')).toBeNull();
@@ -940,19 +903,6 @@ describe('RELEASE-03-06 release workflow', () => {
     ],
   ])('%s', (_case, runs, state) => {
     expect(qualityGate(runs, sha).state).toBe(state);
-  });
-});
-
-describe('RELEASE-03-05 quality runs the signing dry run', () => {
-  it('runs --dry-run-signing and verifies its checksums', () => {
-    const workflow = readFileSync(
-      join(import.meta.dirname, '../.github/workflows/quality.yml'),
-      'utf8',
-    );
-
-    expect(workflow).toMatch(
-      /run: bun run release --dry-run-signing\n\s+- name: [^\n]*\n\s+working-directory: target\/release-artifacts\n\s+run: shasum -a 256 -c SHA256SUMS/,
-    );
   });
 });
 

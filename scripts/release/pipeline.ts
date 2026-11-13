@@ -18,7 +18,7 @@ import { join, relative } from 'node:path';
 
 import { caskToken, renderCask } from './cask';
 
-/** Variables that could drive credentialed signing or notarization in the build child. */
+/** Variables Tauri reads to sign or notarize; the build child never sees them. */
 export const scrubbedAppleVariables = [
   'APPLE_SIGNING_IDENTITY',
   'APPLE_CERTIFICATE',
@@ -94,17 +94,9 @@ export function artifactNames(productName: string, version: string): ArtifactNam
   return { app: `${productName}.app`, dmg: `${base}.dmg`, zip: `${base}.zip`, volume: productName };
 }
 
-/** Signing, notary and repository-token inputs that the build child must never see. */
+/** The signing input and repository tokens, which the build child must never see. */
 export const scrubbedReleaseVariables = [
-  'DEVELOPER_ID_P12_BASE64',
-  'DEVELOPER_ID_P12_PASSWORD',
-  'NOTARY_API_KEY_P8',
   'STACHE_SIGNING_IDENTITY',
-  'STACHE_TEAM_ID',
-  'STACHE_NOTARY_KEY_ID',
-  'STACHE_NOTARY_ISSUER',
-  'STACHE_NOTARY_KEY_PATH',
-  'STACHE_NOTARY_KEYCHAIN_PROFILE',
   'GH_TOKEN',
   'GITHUB_TOKEN',
 ] as const;
@@ -364,24 +356,20 @@ export function inspectBundle(run: Runner, app: string, executable: string): Bun
   };
 }
 
-/**
- * `ad-hoc`: Part 02 pipeline. `dry-run-signing`: the Part 03 step order with identity `-`,
- * hardened runtime and notarization/stapling skipped. `sign`: Developer ID and notarization.
- */
-export type ReleaseMode = 'ad-hoc' | 'dry-run-signing' | 'sign';
+/** `ad-hoc`: Part 02 pipeline. `self-sign`: the identity named by `STACHE_SIGNING_IDENTITY`. */
+export type ReleaseMode = 'ad-hoc' | 'self-sign';
 
 export interface ReleaseRecord {
   version: string;
   commit: string;
   treeClean: boolean;
-  signing: 'ad-hoc' | 'developer-id';
-  notarized: boolean;
+  signing: 'ad-hoc' | 'self-signed';
+  /** Always false: no release is notarized. */
+  notarized: false;
   /** True when the Tauri ad-hoc signature failed strict deep verification and was redone. */
   adHocResigned: boolean;
-  /** Present only for the Part 03 modes. */
-  mode?: Exclude<ReleaseMode, 'ad-hoc'>;
-  /** notarytool submission identifiers by artifact, `sign` mode only. */
-  notarySubmissions?: Record<string, string>;
+  /** SHA-256 fingerprint of the signing certificate, `self-sign` mode only. */
+  certificateSha256?: string;
   artifacts: string[];
 }
 
@@ -395,97 +383,81 @@ export interface ReleaseDeps {
 
 const executableName = 'stache';
 
+/** The `--self-sign` input. Not an `APPLE_*` name, so Tauri never reads it. */
+export const signingIdentityVariable = 'STACHE_SIGNING_IDENTITY';
+
+export interface SigningIdentity {
+  identity: string;
+  /** Upper-case hex SHA-256 of the certificate. */
+  certificateSha256: string;
+}
+
 /**
- * The script's own `--sign` inputs. They are deliberately not `APPLE_*`: those names are what
- * Tauri reads and what the build child has scrubbed, so these never reach Tauri.
+ * Validates the `--self-sign` identity against the keychain and reads its certificate
+ * fingerprint. Throws on anything missing or wrong; never falls back to ad hoc.
  */
-export const signingVariables = {
-  identity: 'STACHE_SIGNING_IDENTITY',
-  teamId: 'STACHE_TEAM_ID',
-  keyId: 'STACHE_NOTARY_KEY_ID',
-  issuer: 'STACHE_NOTARY_ISSUER',
-  keyPath: 'STACHE_NOTARY_KEY_PATH',
-  profile: 'STACHE_NOTARY_KEYCHAIN_PROFILE',
-} as const;
+export function readSigningIdentity(env: NodeJS.ProcessEnv, run: Runner): SigningIdentity {
+  const identity = env[signingIdentityVariable]?.trim() ?? '';
 
-export interface SigningInputs {
-  identity: string;
-  teamId: string;
-  /** notarytool credential arguments; never logged or recorded. */
-  notary: string[];
+  if (!identity) {
+    throw new ReleaseError(`--self-sign requires ${signingIdentityVariable}`);
+  }
+
+  if (identity === '-') {
+    throw new ReleaseError(`${signingIdentityVariable} "-" is ad hoc, not a certificate`);
+  }
+
+  const listed = check(
+    run('security', ['find-identity', '-p', 'codesigning']),
+    'security find-identity',
+  );
+
+  if (!listed.stdout.includes(`"${identity}"`)) {
+    throw new ReleaseError(`no code-signing identity named "${identity}" in the keychain`);
+  }
+
+  const found = check(
+    run('security', ['find-certificate', '-a', '-c', identity, '-Z']),
+    'security find-certificate',
+  );
+  const hashes = new Set(
+    [...found.stdout.matchAll(/^SHA-256 hash: ([0-9A-Fa-f]{64})$/gm)].map((match) =>
+      match[1].toUpperCase(),
+    ),
+  );
+
+  if (hashes.size !== 1) {
+    throw new ReleaseError(`expected one certificate matching "${identity}", found ${hashes.size}`);
+  }
+
+  return { identity, certificateSha256: [...hashes][0] };
 }
 
-/** Validates the `--sign` inputs. Throws on anything missing or wrong; never falls back. */
-export function readSigningInputs(env: NodeJS.ProcessEnv): SigningInputs {
-  const value = (name: string) => env[name]?.trim() ?? '';
-  const v = signingVariables;
-  const identity = value(v.identity);
-  const teamId = value(v.teamId);
-
-  if (!identity || !teamId) {
-    throw new ReleaseError(`--sign requires ${v.identity} and ${v.teamId}`);
-  }
-
-  if (!/^[A-Z0-9]{10}$/.test(teamId)) {
-    throw new ReleaseError(`${v.teamId} is not a ten-character team identifier`);
-  }
-
-  const match = /^Developer ID Application: .+ \(([A-Z0-9]{10})\)$/.exec(identity);
-
-  if (!match) {
-    throw new ReleaseError(
-      `${v.identity} must be a "Developer ID Application: <name> (<team>)" identity`,
-    );
-  }
-
-  if (match[1] !== teamId) {
-    throw new ReleaseError(`${v.identity} belongs to team ${match[1]}, not ${v.teamId}`);
-  }
-
-  const api = [value(v.keyId), value(v.issuer), value(v.keyPath)];
-  const profile = value(v.profile);
-  const apiSet = api.filter(Boolean).length;
-
-  if (apiSet > 0 && apiSet < 3) {
-    throw new ReleaseError(`set all of ${v.keyId}, ${v.issuer} and ${v.keyPath}`);
-  }
-
-  if ((apiSet === 3) === Boolean(profile)) {
-    throw new ReleaseError(
-      `--sign requires exactly one notarytool credential: the API key (${v.keyId}, ${v.issuer}, ${v.keyPath}) or ${v.profile}`,
-    );
-  }
-
-  const notary =
-    apiSet === 3
-      ? ['--key', api[2], '--key-id', api[0], '--issuer', api[1]]
-      : ['--keychain-profile', profile];
-
-  return { identity, teamId, notary };
-}
-
-interface SignOptions {
-  identity: string;
-  /** `--timestamp` or `--timestamp=none`. */
-  timestamp: string;
-  runtime: boolean;
-}
-
-/** Signs inside out (each nested Mach-O, main executable, bundle), never with `--deep`. */
+/**
+ * Signs inside out (each nested Mach-O, main executable, bundle), never with `--deep`.
+ * Entitlements go only on the main executable and the bundle.
+ */
 function signApp(
   run: Runner,
   app: string,
   nested: string[],
   entitlements: string,
-  { identity, timestamp, runtime }: SignOptions,
+  identity: string,
+  runtime: boolean,
 ) {
-  const base = ['--force', '--sign', identity, ...(runtime ? ['--options', 'runtime'] : [])];
+  const base = [
+    '--force',
+    ...(runtime ? ['--options', 'runtime'] : []),
+    '--timestamp=none',
+    '--sign',
+    identity,
+  ];
 
   for (const file of nested) {
-    check(run('codesign', [...base, timestamp, join(app, file)]), `codesign ${file}`);
+    check(run('codesign', [...base, join(app, file)]), `codesign ${file}`);
   }
 
-  const withEntitlements = [...base, timestamp, '--entitlements', entitlements];
+  const withEntitlements = [...base, '--entitlements', entitlements];
 
   check(
     run('codesign', [...withEntitlements, join(app, 'Contents/MacOS', executableName)]),
@@ -494,13 +466,8 @@ function signApp(
   check(run('codesign', [...withEntitlements, app]), 'codesign bundle');
 }
 
-/** Checks `codesign -dvvv`; Developer ID details only when `inputs` is given. */
-function checkSignatureDetails(
-  run: Runner,
-  path: string,
-  inputs: SigningInputs | null,
-  log: (line: string) => void,
-) {
+/** Checks the authority, the hardened-runtime flag and a certificate-anchored requirement. */
+function checkSelfSignature(run: Runner, path: string, identity: string) {
   const shown = check(run('codesign', ['-dvvv', path]), `codesign -dvvv ${path}`);
   const text = `${shown.stdout}\n${shown.stderr}`;
 
@@ -508,94 +475,18 @@ function checkSignatureDetails(
     throw new ReleaseError(`${path} lacks the hardened-runtime flag`);
   }
 
-  if (!inputs) {
-    log(`${path}: hardened runtime present; authority, team and timestamp skipped (dry run).`);
-
-    return;
+  if (!text.split('\n').includes(`Authority=${identity}`)) {
+    throw new ReleaseError(`${path} is not signed by "${identity}"`);
   }
 
-  const expected = [
-    `Authority=${inputs.identity}`,
-    `TeamIdentifier=${inputs.teamId}`,
-    'Timestamp=',
-  ];
+  const requirement = check(run('codesign', ['-d', '-r-', path]), `codesign -d -r- ${path}`);
+  const designated = `${requirement.stdout}\n${requirement.stderr}`;
 
-  for (const line of expected) {
-    if (!text.split('\n').some((shownLine) => shownLine.startsWith(line))) {
-      throw new ReleaseError(`${path} signature lacks ${line}`);
-    }
+  if (!designated.includes('certificate leaf') || designated.includes('cdhash')) {
+    throw new ReleaseError(
+      `${path} designated requirement is not anchored on the certificate: ${designated.trim()}`,
+    );
   }
-}
-
-function staple(
-  run: Runner,
-  path: string,
-  label: string,
-  inputs: SigningInputs | null,
-  log: (line: string) => void,
-) {
-  if (!inputs) {
-    log(`Stapling the ${label}: skipped (dry run).`);
-
-    return;
-  }
-
-  check(run('xcrun', ['stapler', 'staple', path]), `stapler staple ${label}`);
-  check(run('xcrun', ['stapler', 'validate', path]), `stapler validate ${label}`);
-}
-
-/** Submits and waits; on anything but `Accepted`, saves the notarytool log as evidence and fails. */
-function notarize(
-  run: Runner,
-  path: string,
-  label: string,
-  inputs: SigningInputs | null,
-  evidence: string,
-  log: (line: string) => void,
-): string | undefined {
-  if (!inputs) {
-    log(`Notarization of the ${label}: skipped (dry run, not notarized).`);
-
-    return undefined;
-  }
-
-  const submitted = run('xcrun', [
-    'notarytool',
-    'submit',
-    path,
-    '--wait',
-    '--output-format',
-    'json',
-    ...inputs.notary,
-  ]);
-  let id: string | undefined;
-  let status: string | undefined;
-
-  try {
-    ({ id, status } = JSON.parse(submitted.stdout) as { id?: string; status?: string });
-  } catch {
-    // Leave both unset: treated as a failed submission below.
-  }
-
-  if (submitted.status === 0 && status === 'Accepted' && id) {
-    log(`Notarization of the ${label}: Accepted (submission ${id}).`);
-
-    return id;
-  }
-
-  let saved = '';
-
-  if (id) {
-    mkdirSync(evidence, { recursive: true });
-    const logPath = join(evidence, `notary-${label}-${id}.json`);
-    const fetched = run('xcrun', ['notarytool', 'log', id, ...inputs.notary, logPath]);
-
-    saved = fetched.status === 0 ? `; log saved to ${logPath}` : '; fetching its log also failed';
-  }
-
-  throw new ReleaseError(
-    `notarization of the ${label} returned ${status ?? `exit ${submitted.status}`}${id ? ` (submission ${id})` : ''}${saved}`,
-  );
 }
 
 function verifySignature(run: Runner, app: string): RunResult {
@@ -701,18 +592,15 @@ function sweepStaleStaging(run: Runner, target: string, log: (line: string) => v
 
 /**
  * Builds, verifies, signs (per mode), packages and checks one release. Throws `ReleaseError` on
- * any failure, leaving no `SHA256SUMS` and never a `notarized: true` record.
+ * any failure, leaving no `SHA256SUMS`.
  */
 export function runRelease({ root, run, env, log, mode = 'ad-hoc' }: ReleaseDeps): ReleaseRecord {
-  // Refuse missing or wrong `--sign` inputs before touching anything; never fall back.
-  const inputs = mode === 'sign' ? readSigningInputs(env) : null;
   const config = readReleaseConfig(
     readFileSync(join(root, 'src/crates/app/tauri.conf.json'), 'utf8'),
   );
   const version = readWorkspaceVersion(readFileSync(join(root, 'Cargo.toml'), 'utf8'));
   const names = artifactNames(config.productName, config.configVersion);
   const output = join(root, 'target/release-artifacts');
-  const evidence = join(root, 'target/release-evidence');
   const staging = join(root, 'target', `release-artifacts.staging-${process.pid}`);
   const entitlements = join(root, 'src/crates/app/Entitlements.plist');
   const git = ['-c', 'core.fsmonitor=false'];
@@ -720,8 +608,10 @@ export function runRelease({ root, run, env, log, mode = 'ad-hoc' }: ReleaseDeps
   sweepStaleStaging(run, join(root, 'target'), log);
   // A failed run must never leave an earlier run's output looking current.
   rmSync(output, { recursive: true, force: true });
-  rmSync(evidence, { recursive: true, force: true });
   rmSync(staging, { recursive: true, force: true });
+
+  // Refuse a missing or unknown `--self-sign` identity before building; never fall back.
+  const signer = mode === 'self-sign' ? readSigningIdentity(env, run) : null;
 
   try {
     const commit = check(
@@ -734,17 +624,10 @@ export function runRelease({ root, run, env, log, mode = 'ad-hoc' }: ReleaseDeps
         'git status',
       ).stdout.trim() === '';
 
-    if (inputs && !treeClean) {
-      throw new ReleaseError('--sign requires a clean git tree');
-    }
-
     log(
-      {
-        'ad-hoc': 'Signing mode: ad-hoc (not notarized). No credential is read.',
-        'dry-run-signing':
-          'Signing mode: dry run (identity "-", hardened runtime, not notarized). No credential is read.',
-        sign: `Signing mode: Developer ID (team ${inputs?.teamId}).`,
-      }[mode],
+      signer
+        ? `Signing mode: self-signed with "${signer.identity}" (certificate SHA-256 ${signer.certificateSha256}, not notarized).`
+        : 'Signing mode: ad-hoc (not notarized). No credential is read.',
     );
     check(
       run('bun', ['run', 'tauri:build'], { cwd: root, env: scrubbedEnv(env), inherit: true }),
@@ -776,13 +659,6 @@ export function runRelease({ root, run, env, log, mode = 'ad-hoc' }: ReleaseDeps
     check(run('ditto', [rawApp, app]), 'ditto copy');
 
     let adHocResigned = false;
-    const notarySubmissions: Record<string, string> = {};
-    const signing = mode !== 'ad-hoc';
-    const options: SignOptions = {
-      identity: inputs?.identity ?? '-',
-      timestamp: inputs ? '--timestamp' : '--timestamp=none',
-      runtime: signing,
-    };
     const verifyStrict = (path: string, label: string) => {
       const verified = verifySignature(run, path);
 
@@ -791,31 +667,18 @@ export function runRelease({ root, run, env, log, mode = 'ad-hoc' }: ReleaseDeps
       }
     };
 
-    if (signing) {
-      // Step 1: sign inside out and verify.
-      signApp(run, app, nested, entitlements, options);
+    if (signer) {
+      signApp(run, app, nested, entitlements, signer.identity, true);
       verifyStrict(app, 'signed app');
-      checkSignatureDetails(run, app, inputs, log);
-
-      // Step 2: notarize a ditto zip of the app.
-      const submission = join(scratch, `submit-${names.zip}`);
-
-      check(run('ditto', ['-c', '-k', '--keepParent', app, submission]), 'ditto submission zip');
-      const appId = notarize(run, submission, 'app', inputs, evidence, log);
-
-      if (appId) {
-        notarySubmissions.app = appId;
-      }
-
-      // Step 3: staple the app and validate.
-      staple(run, app, 'app', inputs, log);
+      checkSelfSignature(run, app, signer.identity);
+      log(`Signed and verified the app with "${signer.identity}".`);
     } else {
       const initial = verifySignature(run, app);
 
       if (initial.status !== 0) {
         log(`Tauri's ad-hoc signature fails strict deep verification:\n${initial.stderr.trim()}`);
         log('Re-signing ad hoc inside out.');
-        signApp(run, app, nested, entitlements, options);
+        signApp(run, app, nested, entitlements, '-', false);
         adHocResigned = true;
         const again = verifySignature(run, app);
 
@@ -827,7 +690,7 @@ export function runRelease({ root, run, env, log, mode = 'ad-hoc' }: ReleaseDeps
       }
     }
 
-    // Step 4: DMG from the (stapled) app.
+    // DMG and zip from the signed app.
     symlinkSync('/Applications', join(dmgRoot, 'Applications'));
     const dmg = join(staging, names.dmg);
     const zip = join(staging, names.zip);
@@ -847,60 +710,32 @@ export function runRelease({ root, run, env, log, mode = 'ad-hoc' }: ReleaseDeps
       'hdiutil create',
     );
 
-    if (signing) {
+    if (signer) {
       check(
-        run('codesign', ['--force', '--sign', options.identity, options.timestamp, dmg]),
+        run('codesign', ['--force', '--timestamp=none', '--sign', signer.identity, dmg]),
         'codesign DMG',
       );
-      const dmgId = notarize(run, dmg, 'dmg', inputs, evidence, log);
-
-      if (dmgId) {
-        notarySubmissions.dmg = dmgId;
-      }
-
-      staple(run, dmg, 'dmg', inputs, log);
     }
 
-    // Step 5: distributable zip from the stapled app.
     check(run('ditto', ['-c', '-k', '--keepParent', app, zip]), 'ditto zip');
 
     // Final verification on the artifacts.
-    const checkPackagedApp = signing
-      ? (packaged: string) => {
-          checkSignatureDetails(run, packaged, inputs, log);
-
-          if (inputs) {
-            check(run('xcrun', ['stapler', 'validate', packaged]), 'stapler validate packaged app');
-          }
-        }
+    const checkSigned = signer
+      ? (packaged: string) => checkSelfSignature(run, packaged, signer.identity)
       : undefined;
 
-    if (signing) {
-      verifyStrict(app, 'packaged app');
-      checkSignatureDetails(run, app, inputs, log);
-
-      if (inputs) {
-        check(run('spctl', ['--assess', '--type', 'execute', '-vv', app]), 'spctl assess app');
-        check(
-          run('spctl', [
-            '--assess',
-            '--type',
-            'open',
-            '--context',
-            'context:primary-signature',
-            '-vv',
-            dmg,
-          ]),
-          'spctl assess DMG',
-        );
-        check(run('xcrun', ['stapler', 'validate', dmg]), 'stapler validate DMG');
-      } else {
-        log('spctl assessment and stapler validation: skipped (dry run).');
-      }
-    }
-
-    checkDmg(run, dmg, names, scratch, checkPackagedApp);
-    checkZip(run, zip, names, inspection.infoPlist, scratch, checkPackagedApp);
+    checkDmg(
+      run,
+      dmg,
+      names,
+      scratch,
+      checkSigned &&
+        ((mounted) => {
+          verifyStrict(mounted, 'app in the DMG');
+          checkSigned(mounted);
+        }),
+    );
+    checkZip(run, zip, names, inspection.infoPlist, scratch, checkSigned);
     log(
       'Post-package checks passed: DMG mounts read-only with the app and Applications link; zip app verifies.',
     );
@@ -937,11 +772,10 @@ export function runRelease({ root, run, env, log, mode = 'ad-hoc' }: ReleaseDeps
       version,
       commit,
       treeClean,
-      signing: inputs ? 'developer-id' : 'ad-hoc',
-      notarized: inputs !== null,
+      signing: signer ? 'self-signed' : 'ad-hoc',
+      notarized: false,
       adHocResigned,
-      ...(mode === 'ad-hoc' ? {} : { mode }),
-      ...(inputs ? { notarySubmissions } : {}),
+      ...(signer ? { certificateSha256: signer.certificateSha256 } : {}),
       artifacts: [names.dmg, names.zip],
     };
 
