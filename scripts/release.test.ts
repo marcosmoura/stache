@@ -956,6 +956,7 @@ describe('RELEASE-05-06 install guide', () => {
 
     expect(headings).toEqual([
       '## Requirements',
+      '## Limitations',
       '## Install',
       '## First open',
       '## Upgrade',

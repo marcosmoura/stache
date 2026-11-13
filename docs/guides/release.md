@@ -1,6 +1,7 @@
 # Release pipeline
 
-Read when building a distributable artifact, running `bun run release`, or changing `scripts/release.ts`.
+Read when building or publishing a distributable artifact, running `bun run release` or
+`bun run release:publish`, or changing `scripts/release.ts` or `scripts/release/`.
 
 **No release has been published yet.** Releases are signed with the owner's self-signed
 certificate and are **never notarized**: there is no Developer ID. An ad-hoc artifact is a
@@ -118,6 +119,44 @@ spaces as underscores and the version that of `tauri.conf.json`:
   compare releases.
 
 There is no Homebrew cask; the release is the DMG and zip on GitHub Releases.
+
+## Publish (`bun run release:publish`)
+
+`bun run release:publish [--tag <tag>]` runs `scripts/release/publish.ts`. It publishes what
+`bun run release --self-sign` already built as a **draft** GitHub release, in the repository `gh`
+resolves from the checkout's `origin`. It never builds, signs, tags, pushes or promotes.
+
+It refuses, naming the reason and creating nothing, when:
+
+- `target/release-artifacts/release.json` is missing, does not record `self-signed` with a
+  `certificateSha256`, records a dirty tree, or records a commit other than `HEAD`;
+- the working tree is not clean now;
+- the DMG, zip, `SHA256SUMS` or `release.json` is missing, or `shasum -a 256 -c SHA256SUMS` fails;
+- `HEAD` carries no tag `v<version>` or `v<version>-rc.<n>` matching `[workspace.package] version`,
+  or carries several (name one with `--tag`);
+- that tag is not on `origin` at the same commit (`git ls-remote`, peeled for annotated tags);
+- Quality has no successful `push` run for that exact commit (`scripts/release/gate.ts`): missing,
+  failed and pull-request-only runs refuse; a pending run refuses and asks you to wait and run
+  again (it does not poll);
+- a release for the tag already exists, or `gh release view` fails for another reason.
+
+Then it runs exactly one `gh release create <tag> --draft --verify-tag --title <tag> --notes-file
+<notes> <dmg> <zip> SHA256SUMS release.json`, adding `--prerelease` for a `-rc.` tag, and prints
+the draft's URL. The notes are generated: requirements, install and first-open steps, the published
+limitations (one list in `publish.ts`, shared with the doc checks) and the certificate fingerprint.
+
+### Operational checklist
+
+After the merge, in order:
+
+1. On `main`, with a clean tree, tag `v<version>` and push the tag, with the owner's approval.
+2. Wait for Quality to pass on that exact commit.
+3. `STACHE_SIGNING_IDENTITY="Stache App" bun run release --self-sign`.
+4. `bun run release:publish`, which creates the draft.
+5. Download the DMG from the draft in a browser, verify the checksums, and go through the first
+   open and a launch.
+6. Promote the draft by hand. A failure at any step stops the release; nothing is retried by
+   skipping a check.
 
 ## CI
 

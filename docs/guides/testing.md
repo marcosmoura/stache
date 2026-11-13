@@ -969,6 +969,10 @@ module, exactly the DMG, zip, `SHA256SUMS` and `release.json`, two-entry `SHA256
 [install guide](install.md)'s doc check (`RELEASE-05-06`: sections, the not-notarized statement and
 Open Anyway route, no Homebrew route, links, no process-name, quarantine-bypass or `brew install`
 commands, `--force` only on `stache config migrate`).
+`scripts/release/publish.test.ts` drives `release:publish` with a fake runner (`RELEASE-06-10` to
+`06-12`: each refusal, the single draft `gh release create`, the notes) and checks the published
+limitations in `README.md` and the install guide and the checklist order in the release guide
+(`06-13`, `06-14`); it contacts no GitHub, creates no tag and publishes nothing.
 
 Legacy-config note (`RELEASE-05-03`/`04`): `cli/tests/commands.rs` runs `config path` over
 temporary roots (present, absent, `global.toml` present, `<id>.jsonc` also present) and checks

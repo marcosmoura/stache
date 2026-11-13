@@ -41,8 +41,30 @@ the [roadmap](docs/roadmap.md), not shipped behavior.
 
 ## Installation
 
-There is no packaged release yet; the [install guide](docs/guides/install.md) describes the
-planned DMG and zip install. Build from source:
+**No release has been published yet.** Once one is, download `Stache_<version>_aarch64.dmg` from
+[GitHub Releases](https://github.com/marcosmoura/stache/releases), open it and drag `Stache.app` onto
+`Applications`. Stache is not notarized by Apple: it is signed with the author's own certificate, so
+macOS blocks the first open until you choose **Open Anyway** in System Settings → Privacy &
+Security. The [install guide](docs/guides/install.md) covers the first open, upgrades, the
+`stache` command line and uninstalling.
+
+Limitations:
+
+- Apple silicon (arm64) only; no Intel or universal build. macOS 26 or later.
+- Not notarized by Apple. The app is self-signed, so macOS blocks the first open until you allow
+  it in System Settings.
+- No Homebrew cask or formula.
+- No auto-updater: upgrades are manual.
+- No launch-at-login item.
+- No automatic configuration migration: run `stache config migrate`.
+- A development build (`Stache Next`) is separate from the release and can run beside it.
+- An old Stache from before 0.26 must be removed first; the new app refuses to start beside it,
+  with no visible dialog when opened from Finder.
+- Tray Quit, Cmd-Q and SIGTERM run the coordinated teardown. Logout, restart and shutdown are not
+  verified to.
+- The app's own path is not a command line; link `stache` as the install guide describes.
+
+Build from source:
 
 ```bash
 git clone https://github.com/marcosmoura/stache.git
@@ -55,8 +77,7 @@ bun run tauri:build
 The bundle is `target/release/bundle/macos/Stache.app` (`com.marcosmoura.stache`), ad-hoc signed by
 default. `bun run tauri:dev` runs a development build named `Stache Next` (`com.marcosmoura.stache.next`)
 with its own lock, socket and cache, so it can run beside the release app. It needs no
-media-control resources or device permissions; distribution signing and notarization are not
-configured.
+media-control resources or device permissions.
 
 ## Quick Start
 

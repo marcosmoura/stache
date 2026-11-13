@@ -70,16 +70,16 @@ afterwards; no public prerelease is made.
 
 ## Acceptance criteria
 
-- [ ] `RELEASE-06-10` `release:publish` refuses each failed precondition above, runs no `gh release
+- [x] `RELEASE-06-10` `release:publish` refuses each failed precondition above, runs no `gh release
       create`, and names the reason. Test: `scripts/release.test.ts`, with fake runners.
-- [ ] `RELEASE-06-11` On success it runs exactly one `gh release create` with `--draft` and
+- [x] `RELEASE-06-11` On success it runs exactly one `gh release create` with `--draft` and
       `--verify-tag`, uploads exactly the four files, adds `--prerelease` only for a candidate tag,
       and never runs a `git push`, a `git tag` or a command that publishes. Test: same.
-- [ ] `RELEASE-06-12` The generated notes hold the requirements, the first-open steps, every
+- [x] `RELEASE-06-12` The generated notes hold the requirements, the first-open steps, every
       limitation above and the certificate fingerprint. Test: same.
-- [ ] `RELEASE-06-13` `README.md` and `docs/guides/install.md` contain every limitation above. Test:
+- [x] `RELEASE-06-13` `README.md` and `docs/guides/install.md` contain every limitation above. Test:
       a doc check keyed to the exact phrases.
-- [ ] `RELEASE-06-14` `docs/guides/release.md` contains the operational checklist below, in order.
+- [x] `RELEASE-06-14` `docs/guides/release.md` contains the operational checklist below, in order.
       Test: a doc check.
 - [ ] `RELEASE-06-15` Candidate rehearsal: Quality passes on the exact candidate commit; the draft
       holds the four files; a browser download passes `shasum -a 256 -c SHA256SUMS`; the

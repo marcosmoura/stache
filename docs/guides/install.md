@@ -12,6 +12,22 @@ will be on the project's GitHub Releases page as `Stache_<version>_aarch64.dmg` 
 - A Mac with Apple silicon (arm64). Intel Macs are not supported.
 - macOS 26 or later.
 
+## Limitations
+
+- Apple silicon (arm64) only; no Intel or universal build. macOS 26 or later.
+- Not notarized by Apple. The app is self-signed, so macOS blocks the first open until you allow
+  it in System Settings.
+- No Homebrew cask or formula.
+- No auto-updater: upgrades are manual.
+- No launch-at-login item.
+- No automatic configuration migration: run `stache config migrate`.
+- A development build (`Stache Next`) is separate from the release and can run beside it.
+- An old Stache from before 0.26 must be removed first; the new app refuses to start beside it,
+  with no visible dialog when opened from Finder.
+- Tray Quit, Cmd-Q and SIGTERM run the coordinated teardown. Logout, restart and shutdown are not
+  verified to.
+- The app's own path is not a command line; link `stache` as the install guide describes.
+
 ## Install
 
 Download either file; both hold the same app.
