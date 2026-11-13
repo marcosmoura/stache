@@ -54,26 +54,41 @@ updates signed with it, on the owner's Mac and on any Mac that installed an earl
 
 ## Acceptance criteria
 
-- [ ] `RELEASE-03-11` `--self-sign` refuses a missing or empty identity, `-`, and a name absent
+- [x] `RELEASE-03-11` `--self-sign` refuses a missing or empty identity, `-`, and a name absent
       from the keychain listing, runs no build and never falls back. Test: `scripts/release.test.ts`.
-- [ ] `RELEASE-03-12` Signing arguments hold `--options runtime`, `--timestamp=none` and the
+- [x] `RELEASE-03-12` Signing arguments hold `--options runtime`, `--timestamp=none` and the
       identity, never `--deep`; the order is nested files, executable, bundle, then DMG; entitlements
       go only on the executable and the bundle; and no command is `notarytool`, `stapler` or
       `spctl`. Test: `scripts/release.test.ts`, with fake runners.
-- [ ] `RELEASE-03-13` A failure injected at each signing and verification step, including a
+- [x] `RELEASE-03-13` A failure injected at each signing and verification step, including a
       designated requirement that is `cdhash`-based and an authority that is not the identity,
       stops the run with no `SHA256SUMS`. Test: `scripts/release.test.ts`.
-- [ ] `RELEASE-03-14` A self-signed `release.json` records `self-signed`, `notarized: false` and
+- [x] `RELEASE-03-14` A self-signed `release.json` records `self-signed`, `notarized: false` and
       the certificate fingerprint; the build child's environment has no signing input or token; and
       no output line claims Developer ID, notarization or stapling. Test: `scripts/release.test.ts`.
-- [ ] `RELEASE-03-15` The paid path is gone: no `release.yml`, no `--sign` or `--dry-run-signing`,
+- [x] `RELEASE-03-15` The paid path is gone: no `release.yml`, no `--sign` or `--dry-run-signing`,
       and `quality.yml` has the ad-hoc step, the candidate-tag trigger and no secret. Test:
       `scripts/release.test.ts`.
-- [ ] `RELEASE-03-16` On the owner's Mac, `STACHE_SIGNING_IDENTITY="Stache App" bun run release
+- [x] `RELEASE-03-16` On the owner's Mac, `STACHE_SIGNING_IDENTITY="Stache App" bun run release
       --self-sign` completes, the checksums verify, and the three verifications above pass on the
       real artifacts. Check: run by the orchestrator and recorded in this file.
 - [ ] `RELEASE-03-17` After a second self-signed build replaces the installed app, it starts
       without asking for Accessibility again. Owner's manual check, recorded in this file.
+
+## Run record
+
+2026-11-13, owner's Mac, macOS 27.3, commit `1119a34`, clean tree:
+`STACHE_SIGNING_IDENTITY="Stache App" bun run release --self-sign` exited 0. `SHA256SUMS` verifies
+for the DMG and the zip. `release.json` records `self-signed`, `notarized: false` and certificate
+SHA-256 `7DD83C5C98F74149043DF084685037C86F5F1ABBB0789D4B090B3C02A500B779`. Checked again by hand on
+the app expanded from the zip: strict deep verification passes, `Authority=Stache App`,
+`flags=0x10000(runtime)`, and the designated requirement is
+`identifier "com.marcosmoura.stache" and certificate root = H"cc3ad4a1…"`. The DMG is signed by the
+same authority. No DMG was left mounted.
+
+The first attempt, at `9a8c11b`, signed correctly but was refused by the script's own check, which
+accepted only `certificate leaf`. A self-signed certificate is its own root, so `codesign` writes
+`certificate root`; `1119a34` accepts either. `RELEASE-03-17` is not run yet.
 
 ## Withdrawn
 
