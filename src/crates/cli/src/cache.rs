@@ -342,7 +342,7 @@ mod tests {
                     .expect("canonical home")
                     .join("Library")
                     .join("Caches")
-                    .join("com.marcosmoura.stache.next")
+                    .join(stache_sdk::IDENTITY)
                     .display()
             )
         );
@@ -366,16 +366,37 @@ mod tests {
         let configuration = root.path().join(".config").join("stache");
         fs::create_dir_all(&configuration).expect("config");
         fs::write(configuration.join("global.toml"), "# defaults\n").expect("config file");
-        let legacy = root.path().join("Library").join("Caches").join("com.marcosmoura.stache");
-        fs::create_dir_all(&legacy).expect("legacy cache");
-        fs::write(legacy.join("keep.bin"), "keep").expect("legacy file");
 
         let (code, out, err) = execute(root.path(), CacheCommand::Clear);
         assert_eq!(code, ExitCode::SUCCESS, "{err}");
         assert_eq!(out, "Cache cleared successfully. Freed 8 bytes.\n");
         assert!(!cache.exists());
         assert!(configuration.join("global.toml").exists());
-        assert!(legacy.join("keep.bin").exists());
+    }
+
+    #[test]
+    fn clearing_under_one_identity_leaves_the_other_intact() {
+        use stache_sdk::{DEVELOPMENT_IDENTITY, RELEASE_IDENTITY};
+        for (own, other) in [
+            (RELEASE_IDENTITY, DEVELOPMENT_IDENTITY),
+            (DEVELOPMENT_IDENTITY, RELEASE_IDENTITY),
+        ] {
+            let root = tempfile::tempdir().expect("temp dir");
+            let environment = AppEnvironment {
+                home: Some(root.path().to_path_buf()),
+                temporary: Some(root.path().to_path_buf()),
+            };
+            let own_paths = AppPaths::resolve_for(&environment, own).expect("own paths");
+            let other_paths = AppPaths::resolve_for(&environment, other).expect("other paths");
+            for paths in [&own_paths, &other_paths] {
+                fs::create_dir_all(paths.cache_directory()).expect("cache");
+                fs::write(paths.cache_directory().join("keep.bin"), "keep").expect("file");
+            }
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            assert_eq!(clear(&own_paths, &mut out, &mut err), ExitCode::SUCCESS, "{own}");
+            assert!(!own_paths.cache_directory().exists(), "{own}");
+            assert!(other_paths.cache_directory().join("keep.bin").exists(), "{own}");
+        }
     }
 
     #[test]

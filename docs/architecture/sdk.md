@@ -454,7 +454,7 @@ A module that sets `ModuleDescriptor::reserves_screen` (default `false`, like
 
 ## Cache leases
 
-`CacheLease` coordinates cooperating Stache Next processes that touch the
+`CacheLease` coordinates cooperating Stache processes of one identity that touch the
 identity cache. It locks `runtime/cache.lock` (see [ipc.md](ipc.md)), a private
 `0600` owned regular file outside the cache root, so deleting and recreating the
 cache keeps one lock identity. `shared` covers processing, publication, reads
@@ -478,8 +478,8 @@ against OS or temporary-directory cleaners, or malicious same-UID mutation.
 
 `stache_sdk::durable` is the identity's durable counterpart of the runtime lock, added for the
 Keybindings Caps journal. `AppPaths::application_support_directory()` resolves
-`~/Library/Application Support/com.marcosmoura.stache.next` (a different root from the cache,
-the runtime directory, the user-selected configuration directory and the legacy identity;
+`~/Library/Application Support/<identity>` (a different root from the cache, the runtime
+directory, the user-selected configuration directory and the other build identity's directory;
 resolving it creates nothing, and tests inject `HOME`). `prepare_directory` creates a named `0700`
 subdirectory (`keybindings`); `existing_directory` inspects without creating. `DurableLease` is an
 exclusive advisory lock on a private lock file there, built on the same `lockfile` open/verify and

@@ -52,8 +52,8 @@ function makeRun(trials: TrialRecord[]): BarRun {
       maxBusyCpuPercent: 30,
       preflightSeconds: 10,
     },
-    appPath: '/r/Stache Next.app',
-    executablePath: '/r/Stache Next.app/Contents/MacOS/stache',
+    appPath: '/r/Stache.app',
+    executablePath: '/r/Stache.app/Contents/MacOS/stache',
     series: 'default (SSID path on)',
     environment: null,
     preflight: {

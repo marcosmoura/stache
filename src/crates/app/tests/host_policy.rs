@@ -4,7 +4,14 @@
 fn the_desktop_manifest_has_no_fixed_window_and_an_explicit_capability() {
     let config: serde_json::Value =
         serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri config");
-    assert_eq!(config["identifier"], stache_sdk::IDENTITY);
+    // The base manifest holds the release identity; tests compile as debug, so
+    // the runtime paths use the development identity, which the dev overlay
+    // gives the bundle.
+    assert_eq!(config["identifier"], stache_sdk::RELEASE_IDENTITY);
+    assert_eq!(stache_sdk::IDENTITY, stache_sdk::DEVELOPMENT_IDENTITY);
+    let overlay: serde_json::Value =
+        serde_json::from_str(include_str!("../tauri.dev.conf.json")).expect("dev overlay");
+    assert_eq!(overlay["identifier"], stache_sdk::IDENTITY);
     assert_eq!(config["app"]["windows"], serde_json::json!([]));
     assert_eq!(
         config["app"]["security"]["capabilities"],
@@ -195,6 +202,7 @@ fn the_popover_has_only_its_named_commands_and_the_event_listener() {
     assert_eq!(
         capability["permissions"],
         serde_json::json!([
+            "allow-app-info",
             "allow-host-status",
             "allow-hide-popover",
             "allow-set-module-enabled",
@@ -265,7 +273,7 @@ fn the_bundle_declares_location_usage_and_only_the_location_entitlement() {
         info.contains("<key>NSLocationWhenInUseUsageDescription</key>"),
         "{info}"
     );
-    assert!(!info.contains("LSUIElement"), "{info}");
+    assert!(info.contains("<key>LSUIElement</key>"), "{info}");
 }
 
 // ---------------------------------------------------------------------------

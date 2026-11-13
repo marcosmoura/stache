@@ -3504,10 +3504,11 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "stache-app"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "base64 0.23.1",
  "image",
+ "plist",
  "schemars 1.2.3",
  "serde",
  "serde_json",
@@ -3530,11 +3531,12 @@ dependencies = [
  "tauri-build",
  "tauri-specta",
  "tempfile",
+ "toml 1.2.1+spec-1.1.0",
 ]
 
 [[package]]
 name = "stache-bar"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "base64 0.23.1",
  "dotenvy",
@@ -3552,7 +3554,7 @@ dependencies = [
 
 [[package]]
 name = "stache-cli"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "clap",
  "clap_complete",
@@ -3566,7 +3568,7 @@ dependencies = [
 
 [[package]]
 name = "stache-hold-to-quit"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "schemars 1.2.3",
  "serde",
@@ -3578,7 +3580,7 @@ dependencies = [
 
 [[package]]
 name = "stache-keep-awake"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "schemars 1.2.3",
  "serde",
@@ -3590,7 +3592,7 @@ dependencies = [
 
 [[package]]
 name = "stache-keybindings"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "global-hotkey",
  "schemars 1.2.3",
@@ -3604,7 +3606,7 @@ dependencies = [
 
 [[package]]
 name = "stache-macos"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "block2",
  "core-foundation",
@@ -3630,7 +3632,7 @@ dependencies = [
 
 [[package]]
 name = "stache-menu-anywhere"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "schemars 1.2.3",
  "serde",
@@ -3642,7 +3644,7 @@ dependencies = [
 
 [[package]]
 name = "stache-notunes"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "schemars 1.2.3",
  "serde",
@@ -3654,7 +3656,7 @@ dependencies = [
 
 [[package]]
 name = "stache-proxy-audio"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "clap",
  "regex",
@@ -3668,7 +3670,7 @@ dependencies = [
 
 [[package]]
 name = "stache-sdk"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "clap",
  "notify-debouncer-full",
@@ -3686,7 +3688,7 @@ dependencies = [
 
 [[package]]
 name = "stache-tiling"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "clap",
  "schemars 1.2.3",
@@ -3702,7 +3704,7 @@ dependencies = [
 
 [[package]]
 name = "stache-wallpapers"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "clap",
  "image",

@@ -1,6 +1,6 @@
 # Keybindings
 
-Read when configuring, running or debugging global shortcuts, Caps Lock chords or `§` shortcuts in Stache Next.
+Read when configuring, running or debugging global shortcuts, Caps Lock chords or `§` shortcuts in Stache.
 
 **Behavior.** With `keybindings.toml` `enabled = true`, each valid binding becomes a global shortcut
 that runs its commands. Nothing is registered, subscribed or spawned until the module starts:
@@ -60,8 +60,8 @@ never blocks unrelated shutdown and is retried by the next stop. Caps restoratio
 host's startup recovery below.
 
 **Caps recovery.** On every desktop start the host runs one bounded
-step that restores a Caps Lock to F18 mapping a crashed Stache Next left behind, if and only if
-Next's own journal under `~/Library/Application Support/com.marcosmoura.stache.next/keybindings/`
+step that restores a Caps Lock to F18 mapping a crashed Stache of the same build identity left behind, if and only if
+its own journal under `~/Library/Application Support/<identity>/keybindings/`
 exists. It runs whether or not the module is enabled or its file is valid, never touches a
 foreign or legacy mapping, never retries, and a failure is shown once as a host condition
 without delaying startup. The module's first Caps apply waits (bounded by 20 s, cancellable) for

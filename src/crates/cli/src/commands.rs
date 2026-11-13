@@ -27,7 +27,7 @@ struct GlobalArgs {
 #[command(
     name = "stache",
     version,
-    about = "Stache Next command line",
+    about = format!("{} command line", stache_sdk::PRODUCT_NAME),
     disable_help_subcommand = true
 )]
 struct Cli {

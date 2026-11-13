@@ -12,12 +12,12 @@ import { pinSystemColours } from './systemColours';
  * `bunx playwright test src/ui/e2e/screenshots/windows.spec.ts --update-snapshots`.
  */
 
-const APP = { name: 'Stache Next', version: '0.1.0', identifier: 'com.marcosmoura.stache.next' };
+const APP = { name: 'Stache', version: '0.1.0', identifier: 'com.marcosmoura.stache' };
 
 const guide = (revoked: boolean): HostStatus_Serialize => ({
   ready: true,
   error: null,
-  access: { state: 'blocked', revoked, appPath: '/Applications/Stache Next.app' },
+  access: { state: 'blocked', revoked, appPath: '/Applications/Stache.app' },
   modules: [],
   config: [],
 });

@@ -353,7 +353,7 @@ impl WindowHost for TauriWindowHost {
             &spec.label,
             WebviewUrl::App(format!("index.html?surface={}", spec.surface.as_str()).into()),
         )
-        .title("Stache Next")
+        .title(&self.app.package_info().name)
         .visible(!panel)
         .inner_size(f64::from(spec.width), f64::from(spec.height))
         .decorations(spec.chrome.decorations)

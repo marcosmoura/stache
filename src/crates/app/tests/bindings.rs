@@ -140,8 +140,9 @@ fn status_revision_preserves_values_above_u32() {
 
 #[test]
 fn app_info_is_static_identity_data() {
-    let info = stache_app::bindings::app_info();
-    assert_eq!(info.name, "Stache Next");
+    // The command passes the package information's name; inject another one.
+    let info = stache_app::bindings::app_info_for("Injected Name");
+    assert_eq!(info.name, "Injected Name");
     assert_eq!(info.identifier, "com.marcosmoura.stache.next");
     assert_eq!(info.version, env!("CARGO_PKG_VERSION"));
 }

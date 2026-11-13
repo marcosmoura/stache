@@ -1,6 +1,6 @@
 # AGENTS.md
 
-**Stache Next** is a macOS 26+ Tauri 2 tray-only skeleton. Typed configuration,
+**Stache** is a macOS 26+ Tauri 2 tray-only skeleton. Typed configuration,
 the standalone CLI and the control-socket foundation ship; runtime modules do not.
 New sources live in `src/crates/` and `src/ui/`; root configs/scripts/docs remain at repository root.
 The independent old application lives in `_legacy/`; do not port its behavior without an approved part.
@@ -13,11 +13,13 @@ The independent old application lives in `_legacy/`; do not port its behavior wi
 - UI tests: Vitest browser mode + Playwright Test e2e, both WebKit, not Bun's test runner.
 
 ```sh
-bun run tauri:dev
+bun run tauri:dev   # development identity: Stache Next, com.marcosmoura.stache.next
 bun run lint
 bun run format:check
 bun run test        # test:ui + test:e2e + test:scripts + test:native
 bun run test:ui:coverage
+bun run release     # ad-hoc DMG/zip/SHA256SUMS in target/release-artifacts
+bun run release:publish   # draft GitHub release of a --self-sign build; never publishes
 bun run generate-schema
 cargo run -q -p stache-app --bin stache -- schema   # one binary, CLI mode
 bun run format # explicit mutation
@@ -40,4 +42,5 @@ see [docs/workflow.md](docs/workflow.md). Its only subagents are `worker` and `r
 - Ask approval of the spec before implementing it; planned APIs are not shipped APIs.
 - Update behavior docs in the same change. Preserve archived historical instructions.
 - Never set git identity. Linked-worktree prepare must not change shared hook configuration.
-- Keep legacy/new identities distinct; never terminate a process by shared executable name.
+- Release builds are `Stache` / `com.marcosmoura.stache`; debug builds and `tauri:dev` are `Stache Next` /
+  `com.marcosmoura.stache.next` with their own lock, socket and cache. Never terminate a process by shared executable name.

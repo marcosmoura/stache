@@ -1,7 +1,11 @@
 import { type ChildProcess, spawnSync } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 
-import { LEGACY_BUNDLE_IDENTIFIER, NEXT_BUNDLE_IDENTIFIER, SHUTDOWN_TIMEOUT_MS } from './paths';
+import {
+  DEVELOPMENT_BUNDLE_IDENTIFIER,
+  NEXT_BUNDLE_IDENTIFIER,
+  SHUTDOWN_TIMEOUT_MS,
+} from './paths';
 import type { ProcessRow, Target, TargetKind } from './types';
 
 export class CommandExecutionError extends Error {
@@ -241,12 +245,7 @@ export function findRunningStacheProcesses(
       continue;
     }
 
-    const kind =
-      application.bundleIdentifier === NEXT_BUNDLE_IDENTIFIER
-        ? 'next'
-        : application.bundleIdentifier === LEGACY_BUNDLE_IDENTIFIER
-          ? 'legacy'
-          : null;
+    const kind = classifyApplication(application, legacy);
 
     if (kind === null) {
       continue;
@@ -289,7 +288,41 @@ export function findRunningStacheProcesses(
   return [...found.values()];
 }
 
-function classifyExecutable(
+/**
+ * Classifies one Launch Services entry. The release and legacy identifiers are
+ * equal, so an entry with that identifier is `legacy` only when its executable
+ * is the explicit `--legacy-app` target; otherwise it is the measured identity.
+ * A bundled development app ({@link DEVELOPMENT_BUNDLE_IDENTIFIER}) is classified with
+ * it so it blocks too; nothing here signals it.
+ */
+export function classifyApplication(
+  application: RunningApplication,
+  legacy: Target | null,
+): TargetKind | null {
+  if (application.bundleIdentifier === DEVELOPMENT_BUNDLE_IDENTIFIER) {
+    return 'next';
+  }
+
+  if (application.bundleIdentifier !== NEXT_BUNDLE_IDENTIFIER) {
+    return null;
+  }
+
+  if (
+    legacy !== null &&
+    application.executablePath !== null &&
+    matchesTargetExecutable(application.executablePath, legacy)
+  ) {
+    return 'legacy';
+  }
+
+  return 'next';
+}
+
+/**
+ * Classifies one process-table executable. Legacy comes only from the explicit
+ * `--legacy-app` target; any `Stache.app` bundle is the measured identity.
+ */
+export function classifyExecutable(
   executablePath: string,
   next: Target,
   legacy: Target | null,
@@ -302,12 +335,8 @@ function classifyExecutable(
     return 'legacy';
   }
 
-  if (/\/Stache Next\.app\/Contents\/MacOS\//.test(executablePath)) {
+  if (/\/Stache( Next)?\.app\/Contents\/MacOS\//.test(executablePath)) {
     return 'next';
-  }
-
-  if (/\/Stache\.app\/Contents\/MacOS\//.test(executablePath)) {
-    return 'legacy';
   }
 
   return null;
@@ -330,12 +359,12 @@ export class InstanceCollisionError extends Error {
 }
 
 /**
- * Requires the only running `com.marcosmoura.stache.next` instance to be the
- * owned PID.
+ * Requires the only running instance of the measured identity
+ * ({@link NEXT_BUNDLE_IDENTIFIER}) to be the owned PID.
  *
- * The query is injected so tests never touch a real process table. Legacy
- * `com.marcosmoura.stache` entries are a distinct identity: they never count as
- * a collision, but they also never satisfy ownership. A foreign or unidentified
+ * The query is injected so tests never touch a real process table. Entries
+ * classified `legacy` (only from an explicit `--legacy-app` path) never count
+ * as a collision, but they also never satisfy ownership. A foreign or unidentified
  * next instance, a missing owned instance, and a failed query all refuse by
  * throwing {@link InstanceCollisionError}; nothing here signals or launches a
  * process.

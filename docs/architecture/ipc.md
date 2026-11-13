@@ -50,7 +50,7 @@ shared command runner can re-enter the running executable for the bare command n
 `stache`. It conflicts with `--desktop`, requires a subcommand (otherwise usage exit 2)
 and, after the parser validates the invocation, selects CLI mode before the
 application-bundle precedence, so the same argv works for a standalone binary and
-`Stache Next.app/Contents/MacOS/stache`. Help and version keep parser precedence.
+`Stache.app/Contents/MacOS/stache`. Help and version keep parser precedence.
 Without the flag the direct, Finder and `--desktop` rules are unchanged. It is not a
 public command and not an environment switch.
 
@@ -269,7 +269,7 @@ lock, so a refusal never waits on a busy worker or a stuck module start.
 
 `build_router` wraps every factory-contributed handler before registration.
 While the cell is not `open` (including `checking`) the wrapper answers the
-typed error `unavailable` with `Stache Next is waiting for Accessibility
+typed error `unavailable` with `Waiting for Accessibility
 permission. Grant it in System Settings > Privacy & Security > Accessibility.`
 and never calls the module; read-only methods such as `keepAwake.status` and
 `proxyAudio.list` are refused too. While `open` it delegates unchanged. The
@@ -432,10 +432,16 @@ process could edit the configuration, which is code, anyway. See the
 ## Identity paths
 
 `AppPaths` is shared by client and server and derived from an injected
-`AppEnvironment`:
+`AppEnvironment` and the build's compile-time `IDENTITY` (`com.marcosmoura.stache` in release
+builds, `com.marcosmoura.stache.next` in debug builds; see
+[overview.md](overview.md#identity)). `AppPaths::resolve_for` takes an explicit identity only as a
+test seam; every production caller uses `resolve`:
 
-- cache: `~/Library/Caches/com.marcosmoura.stache.next`;
-- runtime: `$TMPDIR/com.marcosmoura.stache.next`, never beneath the cache;
+- cache: `~/Library/Caches/<identity>`. For a release build this is the path the removed legacy app
+  used, which may still hold its files (`stache.sock`, `wallpapers`, `media_artwork`); they are never
+  read, and `stache cache clear` would remove them with the rest of the tree. A development build's
+  cache is `~/Library/Caches/com.marcosmoura.stache.next`;
+- runtime: `$TMPDIR/<identity>`, never beneath the cache;
 - socket: `runtime/ipc`, rejected above 103 bytes because that is the
   macOS `sun_path` limit;
 - instance: `runtime/instance.lock`, a private `0600` regular file locked
@@ -448,7 +454,7 @@ a shared directory. Relative anchors are refused; existing directory anchors
 are canonicalized before overlap checks (including parent symlinks and `..`).
 Expected ownership is the process effective UID via safe rustix, never HOME
 metadata. The resolved temporary root must be owned by that UID. Tests pass temp
-roots and never touch the real home, cache, runtime or legacy identity.
+roots and never touch the real home, cache or runtime of either identity.
 
 ## Cache command
 
@@ -467,8 +473,8 @@ Clear may create the runtime directory `0700` for the lease but never creates a
 socket, and it never removes the lock. The legacy success and empty messages
 are preserved byte-for-byte; byte formatting matches
 `0 bytes`, `1.00 KB`, `1.50 MB`, `1.00 GB`. Clearing can never reach the
-runtime directory, the configuration directory or the legacy
-`com.marcosmoura.stache` cache. The lease is coordination among cooperating
+runtime directory, the configuration directory or the other identity's cache: a release CLI
+clears only `com.marcosmoura.stache` and a development CLI only `com.marcosmoura.stache.next`. The lease is coordination among cooperating
 processes, not protection against OS or temporary-directory cleaners or
 malicious same-UID mutation.
 

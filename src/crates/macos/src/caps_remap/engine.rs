@@ -18,7 +18,7 @@
 //!
 //! `hidutil` offers no compare-and-swap. Another program can change the global
 //! mapping between our read and write; the lease coordinates only cooperating
-//! Stache Next processes. The reread narrows that window and reports a changed
+//! Stache processes. The reread narrows that window and reports a changed
 //! Caps entry as ownership lost, but it cannot close it. A journal that matches
 //! the mapping proves only that this application intended to own it.
 
@@ -107,7 +107,7 @@ impl fmt::Display for ApplyError {
             Self::Blocked(reason) => write!(f, "Caps ownership is blocked: {reason}"),
             Self::Unowned { destination } => write!(
                 f,
-                "Caps Lock is already mapped to {destination:#x} and is not owned by Stache Next"
+                "Caps Lock is already mapped to {destination:#x} and is not owned by Stache"
             ),
             Self::Recovery(reason) | Self::Read(reason) | Self::Journal(reason) => {
                 f.write_str(reason)

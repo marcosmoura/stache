@@ -407,7 +407,7 @@ function requirePid(child: ChildProcess): number {
   return child.pid;
 }
 
-/** Any Stache Next or legacy instance blocks the run; nothing is ever terminated. */
+/** Any Stache instance blocks the run; nothing is ever terminated. */
 function assertNoStache(target: Target, run: BarRun): void {
   let running: ReturnType<typeof findRunningStacheProcesses>;
 
@@ -423,16 +423,14 @@ function assertNoStache(target: Target, run: BarRun): void {
   if (running.length > 0) {
     throw new Error(
       [
-        'Refusing to start: another Stache Next or legacy Stache process is running.',
+        'Refusing to start: another Stache process is running.',
         ...running.map((entry) => `  ${entry.kind} pid ${entry.pid ?? '?'}: ${entry.description}`),
         'Quit it from its own tray or menu. This tool never signals another instance.',
       ].join('\n'),
     );
   }
 
-  run.safety.guardChecks.push(
-    `no Stache Next or legacy Stache process at ${new Date().toISOString()}`,
-  );
+  run.safety.guardChecks.push(`no Stache process at ${new Date().toISOString()}`);
 }
 
 async function waitForAccess(

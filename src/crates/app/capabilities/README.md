@@ -11,10 +11,10 @@ launch gate blocks) is governed by `access-window.json`: listen/unlisten, close 
 app-wide `macos-private-api` setting), `app_info`, `host_status` and the `request_accessibility`,
 `open_accessibility_settings` and `quit_app` commands. The Bar (`stache-bar-*`, `bar.json`) gets only
 its `bar_*` commands. The tray popover (`stache-popover`) is governed by `popover-window.json`:
-listen/unlisten, `host_status`, `hide_popover`, the Overview's `set_module_enabled`,
+listen/unlisten, `app_info`, `host_status`, `hide_popover`, the Overview's `set_module_enabled`,
 `module_session_action`, `retry_module` and `open_accessibility_guide`, the settings
 editor's `config_files`, `config_document`, `config_edit` and `open_config_file` (all of these except
-`host_status` granted to no other window), plus the three Accessibility commands. There is no
+`app_info` and `host_status` granted to no other window), plus the three Accessibility commands. There is no
 filesystem, shell, dialog, HTTP, media, weather, system or tray permission.
 `tests/host_policy.rs` reads each surface's UI sources and fails when a capability misses a command
 its UI calls.

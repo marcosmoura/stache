@@ -6,7 +6,7 @@ import { Icon } from '@/components/Icon';
 import { styles } from './IdentityCard.style';
 
 export type IdentityCardProps = {
-  /** Product name; `Stache Next` until `app_info` answers. */
+  /** Product name; `PRODUCT_NAME` until `app_info` answers. */
   name: string;
   /** Bundle identifier; the row is omitted until `app_info` answers. */
   identifier: string | null;
@@ -36,7 +36,7 @@ export function IdentityCard({ name, identifier, appPath }: IdentityCardProps) {
         <span {...stylex.props(styles.hintIcon)}>
           <Icon icon={InformationCircleIcon} size={13} strokeWidth={1.75} />
         </span>
-        <span>Make sure you turn on Stache Next, not Stache.</span>
+        <span>Make sure you turn on {name}, not another copy of the app.</span>
       </p>
     </div>
   );

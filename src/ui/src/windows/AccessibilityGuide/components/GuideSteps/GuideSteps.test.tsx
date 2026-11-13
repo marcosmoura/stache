@@ -11,8 +11,8 @@ describe('GuideSteps', () => {
 
     expect(items.map((item) => item.textContent)).toEqual([
       '1Click Request Access, or Open System Settings.',
-      '2In Privacy & Security > Accessibility, turn on Stache Next.',
-      '3Come back here; Stache Next starts by itself.',
+      '2In Privacy & Security > Accessibility, turn on Stache.',
+      '3Come back here; Stache starts by itself.',
     ]);
     await expect.poll(() => getComputedStyle(items[0]!).display).toBe('flex');
   });

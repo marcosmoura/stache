@@ -1,17 +1,17 @@
 ---
-status: draft
+status: done
 ---
 
 # 02 — Release pipeline
 
-Read when building a distributable artifact or changing the release script. **PLANNED.**
+Read when building a distributable artifact or changing the release script. **Implemented on `feat/release`, unmerged.**
 Depends on [Part 01](01-build-metadata.md).
 
 ## Scope
 
 One command produces a DMG, a zip, checksums and a truthful record, with predictable names
 and no secrets. This part is ad-hoc only, so the pipeline can be proven before credentials
-exist. Signing is [Part 03](03-signing-notarization.md); publishing is Part 03's workflow.
+exist. Signing is [Part 03](03-signing.md); publishing is Part 03's workflow.
 
 ## Requirements
 
@@ -33,7 +33,7 @@ exist. Signing is [Part 03](03-signing-notarization.md); publishing is Part 03's
   output from `Stache_Next_…` to `Stache_…` without touching the script. `Stache_Next_…` names
   exist only for ad-hoc dry runs; nothing under that name is ever published.
 - **The app keeps its name.** The `.app` inside each artifact stays `<productName>.app` and
-  is never versioned: Finder, `/Applications`, the cask's `app` stanza and
+  is never versioned: Finder, `/Applications`, the install guide and
   `scripts/measure/process.ts` all rely on that name. The raw bundle is not a distributable.
 - **DMG.** Built with `hdiutil` as a compressed read-only image with a fixed volume name,
   holding the app and an `Applications` symlink. No background, Finder scripting or anything
@@ -56,7 +56,7 @@ exist. Signing is [Part 03](03-signing-notarization.md); publishing is Part 03's
   `APPLE_API_ISSUER`, `APPLE_API_KEY` and `APPLE_API_KEY_PATH` from the child environment.
   This prevents credential-driven signing and notarization from stray exported values; it
   does not disable signing. The base config's `signingIdentity: "-"` intentionally lets
-  Tauri apply the initial ad-hoc signature. Part 03 replaces it with the final Developer ID signature.
+  Tauri apply the initial ad-hoc signature. Part 03's `--self-sign` mode replaces it with the owner's self-signed signature.
 - **CI.** `quality.yml` gains an ad-hoc `bun run release` step after `tauri:build`. It uploads
   nothing and gains no secret. Add a `push.tags` trigger for `v*-rc.*` alongside the existing
   `main` push and pull-request triggers, so candidate tags on `feat/release` run every source
@@ -67,33 +67,38 @@ exist. Signing is [Part 03](03-signing-notarization.md); publishing is Part 03's
 
 ## Acceptance criteria
 
-- [ ] `RELEASE-02-01` Name derivation yields `Stache_Next_0.26.0_aarch64.*` and
+- [x] `RELEASE-02-01` Name derivation yields `Stache_Next_0.26.0_aarch64.*` and
       `Stache_0.26.0_aarch64.*` from the two config shapes, with no hardcoded product. Test:
       `scripts/release.test.ts`.
-- [ ] `RELEASE-02-02` Injected failures in the build, verifier, `hdiutil`, `ditto` and checksum
+- [x] `RELEASE-02-02` Injected failures in the build, verifier, `hdiutil`, `ditto` and checksum
       steps each exit non-zero and leave no `SHA256SUMS` in the output directory. Test:
       `scripts/release.test.ts`, with fake command runners.
-- [ ] `RELEASE-02-03` The verifier refuses a non-`arm64` executable, an extra file in
+- [x] `RELEASE-02-03` The verifier refuses a non-`arm64` executable, an extra file in
       `Contents/MacOS`, an unexpected file or a non-`arm64` Mach-O under `media-control`, a
       non-system linked library, a version mismatch, a missing `LSUIElement`, and a
       `CFBundleIdentifier` or `CFBundleName` that differs from the base config. Test:
       `scripts/release.test.ts`, with fake inspection output.
-- [ ] `RELEASE-02-04` A second run replaces the output directory: `SHA256SUMS` has exactly two
+- [x] `RELEASE-02-04` A second run replaces the output directory: `SHA256SUMS` has exactly two
       entries and stale artifacts are gone. Test: `scripts/release.test.ts`.
-- [ ] `RELEASE-02-05` Stray `APPLE_*` values are absent from the build child's environment.
+- [x] `RELEASE-02-05` Stray `APPLE_*` values are absent from the build child's environment.
       The initial config-driven ad-hoc signature remains intentional. Test: `scripts/release.test.ts`.
 - [ ] `RELEASE-02-06` On a real checkout, `bun run release` produces all four outputs and
       `shasum -a 256 -c SHA256SUMS` passes. Check: the new `quality.yml` step; a workflow parse
       test proves candidate-tag triggering, and the candidate run records its exact SHA.
-- [ ] `RELEASE-02-07` An ad-hoc `release.json` records `ad-hoc` and `notarized: false`, and
+- [x] `RELEASE-02-07` An ad-hoc `release.json` records `ad-hoc` and `notarized: false`, and
       the run's output does not state signed-by-Developer-ID, notarized or stapled. Test:
       `scripts/release.test.ts`; confirmed on the CI run.
-- [ ] `RELEASE-02-08` The DMG mounts read-only with the app and `Applications` link, the app
+- [x] `RELEASE-02-08` The DMG mounts read-only with the app and `Applications` link, the app
       expanded from the zip passes `codesign --verify --strict --deep`, and its `Info.plist`
       matches the raw bundle. Check: scripted against a temporary mount and directory, in
       `bun run release`.
 - [ ] `RELEASE-02-09` A drag from the mounted DMG installs and launches. Gated manual check on
       an approved run, recorded in Part 06, because it touches `/Applications`.
+
+Status 2026-11-13: `RELEASE-02-06` passed in a real local run (four outputs, checksums verify);
+its `quality.yml` step has not run because the branch is not pushed. For the same reason
+`RELEASE-02-07` is proven by its test and the local run only, not yet confirmed on a CI run. `RELEASE-02-09` is the manual
+check deferred to Part 06 and is not run.
 
 ## Tests
 

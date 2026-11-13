@@ -767,7 +767,7 @@ fn a_handler_wire_error_is_uncertain_and_other_wire_errors_are_pre_native() {
 
 #[test]
 fn a_gated_host_refusal_prints_the_gate_message_and_applies_nothing_locally() {
-    let message = "Stache Next is waiting for Accessibility permission. Grant it in System Settings > Privacy & Security > Accessibility.";
+    let message = "Waiting for Accessibility permission. Grant it in System Settings > Privacy & Security > Accessibility.";
     let rig = Rig::new(FakeTransport::replying(Ok(Response::failure(
         WireErrorKind::Unavailable,
         message,

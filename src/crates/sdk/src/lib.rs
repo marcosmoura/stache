@@ -75,8 +75,8 @@ pub use instance::{INSTANCE_FILE_NAME, InstanceError, InstanceLock};
 pub use logging::{DiscardLogger, LogFilter, LogLevel, LogRecord, Logger, ScopedLogger};
 pub use module::{Module, ModuleConfig, ModuleDescriptor, ModuleId, ServiceId};
 pub use paths::{
-    AppEnvironment, AppPathError, AppPaths, CACHE_LEASE_FILE_NAME, IDENTITY, MAX_SOCKET_PATH,
-    SOCKET_FILE_NAME,
+    AppEnvironment, AppPathError, AppPaths, CACHE_LEASE_FILE_NAME, DEVELOPMENT_IDENTITY, IDENTITY,
+    MAX_SOCKET_PATH, PRODUCT_NAME, RELEASE_IDENTITY, SIBLING_IDENTITY, SOCKET_FILE_NAME,
 };
 pub use permissions::{
     Permission, PermissionError, PermissionProvider, PermissionRequirement, PermissionStatus,

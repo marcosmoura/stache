@@ -5,6 +5,9 @@ import { FakeConfig } from '../fakeConfig';
 import type { FakeHost } from '../fakeHost';
 import { expect, test } from '../fixtures';
 
+/** The Overview footer names the app from `app_info`. */
+const APP = { name: 'Stache', version: '0.1.0', identifier: 'com.marcosmoura.stache' };
+
 /*
  * The settings editor end to end against an in-memory store of real TOML
  * text (`fakeConfig.ts`): realistic `tiling.toml`, `bar.toml` and
@@ -45,7 +48,10 @@ async function open(page: Page, host: FakeHost, tab: string) {
     'tiling.toml': TILING,
   });
 
-  host.answerHostStatus(STATUS as never).answer('hide_popover', null);
+  host
+    .answer('app_info', APP)
+    .answerHostStatus(STATUS as never)
+    .answer('hide_popover', null);
   await page.setViewportSize({ width: 480, height: 640 });
   await page.goto('/index.html?surface=popover');
   await page.getByRole('tab', { name: tab }).click();

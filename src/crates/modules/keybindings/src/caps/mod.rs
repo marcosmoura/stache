@@ -2,7 +2,7 @@
 //!
 //! The Keybindings runtime drives these pieces; the only part the host starts
 //! itself is [`recover_stale_caps_remap`], which it runs once per desktop launch
-//! and which does nothing without Next's own journal.
+//! and which does nothing without this build identity's own journal.
 //!
 //! * [`parser`] re-exports the single `CapsLock+<key>` grammar and key table.
 //! * [`state`] is the pure, lock-free chord state.
@@ -19,7 +19,7 @@
 //!   may send F18 to applications until recovery. Module dispatch is never
 //!   revived to hide that.
 //! * `hidutil` has no compare-and-swap; the lease coordinates only cooperating
-//!   Stache Next processes and external writers can race (see
+//!   Stache processes and external writers can race (see
 //!   `stache_macos::caps_remap`).
 //! * Recovery after a crash requires a relaunch.
 

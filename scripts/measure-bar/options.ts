@@ -127,13 +127,13 @@ function parseInteger(value: string, flag: string, minimum: number): number {
 
 export function helpText(): string {
   return [
-    'Measure the Stache Next Bar cost: Bar off versus Bar on, release .app only.',
+    'Measure the Stache Bar cost: Bar off versus Bar on, release .app only.',
     '',
     'Usage:',
     '  bun run measure:bar -- [options]',
     '',
     'Options:',
-    '  --app <path>            Release Stache Next .app bundle (a debug build is refused).',
+    '  --app <path>            Release Stache .app bundle (a debug build is refused).',
     `                          Default: ${DEFAULT_NEXT_APP}`,
     `  --launches <count>      Valid launches per arm (default and minimum: ${MINIMUM_LAUNCHES}).`,
     `  --warmup-seconds <sec>  Wait after readiness before sampling (default and minimum: ${MINIMUM_WARMUP_SECONDS}).`,
@@ -154,7 +154,7 @@ export function helpText(): string {
     '    path in System Settings > Privacy & Security > Accessibility before running.',
     '    Without it the "on" arm would measure a gated host; the tool reports that',
     '    trial as invalid (never a sample) and stops.',
-    '  - No Stache Next and no legacy Stache process running. The tool refuses and',
+    '  - No Stache process running. The tool refuses and',
     '    never terminates another instance.',
     '  - An otherwise idle machine on stable power; a busy-machine pre-flight refuses.',
     '  - One measurement at a time; do not run another measurement tool alongside.',
@@ -162,7 +162,7 @@ export function helpText(): string {
     'Output: docs/specs/2026-11-03-bar/measurements/<UTC timestamp>/report.md and samples.json',
     '',
     'Exact command:',
-    '  bun run measure:bar -- --app "target/release/bundle/macos/Stache Next.app"',
+    '  bun run measure:bar -- --app "target/release/bundle/macos/Stache.app"',
     '',
   ].join('\n');
 }

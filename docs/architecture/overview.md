@@ -296,7 +296,7 @@ the remap only after a confirmed tap, and its first apply waits (bounded) for th
 recovery of a crash-left remap; real native behavior remains unverified. An apply runs under an identity-wide durable lease
 (`Application Support/<identity>/keybindings/caps-remap.lock`, five-second wait): strictly parse
 the whole current `UserKeyMapping` (unknown, truncated, quoted, null, hexadecimal or duplicate-Caps
-output is refused, and any Caps mapping without Next's journal is foreign, even Caps to F18), write
+output is refused, and any Caps mapping without this build identity's journal is foreign, even Caps to F18), write
 the versioned journal atomically (`caps-remap.journal`, phases `apply_pending`, `applied`,
 `restore_pending`, `ownership_lost`), run `hidutil` through the bounded shared executor (5 s child
 lifetime, 1 MiB stdout, 64 KiB stderr, 2 s cleanup then the bounded reaper), reread and verify.
@@ -305,13 +305,13 @@ after verified absence with no unconfirmed earlier child. Outcomes are `Restored
 `OwnershipLost` (a foreign Caps mapping is never overwritten and the record stays),
 `CleanupPending` (known pending, nothing provably changed), `Uncertain` (a native write may have
 happened) or `Blocked` (corrupt journal or unsafe path). `hidutil` has no compare-and-swap; the
-lease serializes only cooperating Stache Next processes and the journal proves only intent.
+lease serializes only cooperating Stache processes of one identity and the journal proves only intent.
 
 The host runs one startup step per desktop start, `HostDriver::with_startup_recovery` with
 `KeybindingsCapsRecovery` (module crate `stache_keybindings::caps::recover_stale_caps_remap`),
 before the factories register and regardless of module enabled state, configuration validity or
 the tray. It runs on its own cancellable `stache-caps-recovery` thread held in a monitor cell,
-so a slow step never blocks readiness and teardown cancels and reaps it. It acts only when Next's
+so a slow step never blocks readiness and teardown cancels and reaps it. It acts only when this build identity's
 own journal exists (with none it reads one directory entry: no lease, no `hidutil`, no created
 path), is never retried, and surfaces a returned diagnostic once as a persistent host condition.
 Recovering a crash needs a relaunch; until then physical Caps Lock may still send F18.
@@ -388,13 +388,40 @@ trust already exists, otherwise after the first grant) and never reruns on a lat
 
 ## Identity
 
-New bundle: **Stache Next**, `com.marcosmoura.stache.next`, macOS 26 minimum. Old bundle remains
-**Stache**, `com.marcosmoura.stache`. Both executables are called `stache`; build/dev never use
-`killall`. Root build output and legacy build output live in separate `target/` directories.
-The CLI resolves cache and runtime directories for the new identity only; the desktop host uses
-them for the single-instance lock, socket server and published status. The runtime lock is
-`runtime/instance.lock`, a private `0600` regular file held for the process lifetime. See
+Release builds are **Stache**, `com.marcosmoura.stache`, macOS 26 minimum. Debug builds and
+`bun run tauri:dev` are **Stache Next**, `com.marcosmoura.stache.next`: `tauri:dev` merges
+`src/crates/app/tauri.dev.conf.json` (only `productName` and `identifier`) over the base config, and
+`stache_sdk::paths::IDENTITY` selects `DEVELOPMENT_IDENTITY` when `cfg!(debug_assertions)` is on and
+`RELEASE_IDENTITY` otherwise, at compile time only. A release and a development build are siblings:
+separate lock, socket, cache and Application Support state, so either can run beside the other. The
+removed legacy app shared the release identifier; a release build's cache path is the former legacy
+path, a development build's is not. The executable is `stache` in both; build and dev never use
+`killall` and never terminate a process by name. The CLI resolves only its own build's identity; the
+desktop host uses it for the single-instance lock, socket server and published status. The runtime
+lock is `runtime/instance.lock`, a private `0600` regular file held for the process lifetime. See
 [ipc.md](ipc.md#identity-paths).
+
+State Stache owns across runs (the Caps remap journal and durable leases under
+`Application Support/<identity>`) follows `IDENTITY`. A release build never reads, adopts, migrates
+or deletes `.next` state, and a development build never touches release state; there is no migration.
+
+`stache_sdk::paths` also holds `SIBLING_IDENTITY` and `PRODUCT_NAME` (`Stache`), re-exported as
+`stache_app::PRODUCT_NAME` for places with no Tauri context, such as the CLI `about` text. The tray
+tooltip and Quit label, window titles and `app_info` read the name from `AppHandle::package_info()`,
+compiled from the merged `productName`; the UI falls back to one constant, `src/ui/src/identity.ts`,
+where copy renders before or without `app_info`.
+
+After claiming the instance lock and before the tray, modules or socket, the desktop host
+(`collision::guard`) asks `NSRunningApplication` for running applications with exactly `IDENTITY`
+or the sibling identifier. Another PID with exactly this build's identifier refuses: the host writes
+one diagnostic naming identifier, bundle path and PID, with the instruction to quit that app from its
+menu bar icon, to standard error (the host log stream) and exits non-zero. A sibling logs one warning
+and startup continues; a failed query logs one warning and continues. This PID and prefix matches
+are ignored, and an unbundled development binary has no bundle identifier, so it is not detected (the
+instance lock covers a shared identity). Nothing is ever signaled, terminated or opened. The CLI
+never checks. A refused launch from Finder shows no UI. A bundled `TerminalAction::Restart` would
+relaunch while the old PID still holds the identifier, so the successor would likely refuse; nothing
+requests a restart today, and a future "Reload Stache" must account for it.
 
 ## Planned work
 

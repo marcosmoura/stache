@@ -2,7 +2,8 @@
 //!
 //! The tray is created on the `AppKit` main thread before the host starts its
 //! slow services. A left click toggles the popover under the icon; a right
-//! click shows the native menu `Open Stache`, separator, `Quit Stache Next`.
+//! click shows the native menu `Open Stache`, separator, `Quit <name>`, where
+//! the name and the tooltip come from the package information.
 //! Callbacks only queue work; they never join a module, wait for the socket
 //! or block on configuration I/O. Clicks and menu rows are mapped by pure
 //! functions so they are testable without `AppKit`.
@@ -16,9 +17,6 @@ use crate::host::HostHandle;
 
 /// The tray icon identity.
 pub const TRAY_ID: &str = "stache-next";
-
-/// The tray tooltip.
-pub const TOOLTIP: &str = "Stache Next";
 
 /// One menu or click action.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -41,33 +39,37 @@ pub enum TrayRow {
         /// Stable callback identifier.
         id: &'static str,
         /// Visible text.
-        label: &'static str,
+        label: String,
     },
     /// A separator.
     Separator,
 }
 
-/// The right-click menu, in order.
-pub const MENU: [TrayRow; 3] = [
-    TrayRow::Item {
-        id: "open",
-        label: "Open Stache",
-    },
-    TrayRow::Separator,
-    TrayRow::Item {
-        id: "quit",
-        label: "Quit Stache Next",
-    },
-];
+/// The right-click menu for the product `name`, in order.
+#[must_use]
+pub fn rows(name: &str) -> [TrayRow; 3] {
+    [
+        TrayRow::Item {
+            id: "open",
+            label: "Open Stache".to_owned(),
+        },
+        TrayRow::Separator,
+        TrayRow::Item {
+            id: "quit",
+            label: format!("Quit {name}"),
+        },
+    ]
+}
 
 /// Creates the tray, its menu and its click handling.
 ///
 /// # Errors
 /// Returns a Tauri menu or tray construction error.
 pub fn create(app: &AppHandle, host: HostHandle) -> tauri::Result<()> {
-    let menu = menu(app)?;
+    let name = app.package_info().name.clone();
+    let menu = menu(app, &name)?;
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
-        .tooltip(TOOLTIP)
+        .tooltip(&name)
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, event| {
@@ -88,19 +90,13 @@ pub fn create(app: &AppHandle, host: HostHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+fn menu(app: &AppHandle, name: &str) -> tauri::Result<Menu<tauri::Wry>> {
     let mut items: Vec<Box<dyn IsMenuItem<tauri::Wry>>> = Vec::new();
-    for row in &MENU {
+    for row in &rows(name) {
         match row {
             TrayRow::Separator => items.push(Box::new(PredefinedMenuItem::separator(app)?)),
             TrayRow::Item { id, label } => {
-                items.push(Box::new(MenuItem::with_id(
-                    app,
-                    *id,
-                    *label,
-                    true,
-                    None::<&str>,
-                )?));
+                items.push(Box::new(MenuItem::with_id(app, *id, label, true, None::<&str>)?));
             }
         }
     }
@@ -236,15 +232,16 @@ mod tests {
 
     #[test]
     fn the_menu_has_exactly_open_a_separator_and_quit() {
-        assert_eq!(MENU, [
+        // The name is injected, as `create` passes the package information.
+        assert_eq!(rows("Injected Name"), [
             TrayRow::Item {
                 id: "open",
-                label: "Open Stache",
+                label: "Open Stache".to_owned(),
             },
             TrayRow::Separator,
             TrayRow::Item {
                 id: "quit",
-                label: "Quit Stache Next",
+                label: "Quit Injected Name".to_owned(),
             },
         ]);
         assert_eq!(menu_action("open"), Some(TrayAction::OpenPopover));
@@ -258,6 +255,5 @@ mod tests {
         ] {
             assert_eq!(menu_action(gone), None, "{gone}");
         }
-        assert_eq!(TOOLTIP, "Stache Next");
     }
 }

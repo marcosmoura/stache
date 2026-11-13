@@ -5,14 +5,16 @@ branch: feat/release
 # Release and packaging
 
 Read when turning Stache Next from a development bundle into a distributable product.
-**PLANNED, NOT SHIPPED.** Every part is `draft`, nothing below is a shipped capability,
-and no artifact has been signed, notarized or published. Written against `ad34b46`;
+**IMPLEMENTED; NO PUBLIC RELEASE YET.** All six parts are done. On 2026-11-13 the owner chose to
+release without a Developer ID (Decisions 22 to 25), which rewrote Parts 03, 05 and 06; a private
+candidate, `v0.26.0-rc.1`, was rehearsed end to end. Artifacts are
+self-signed and not notarized, and none has been published. Written against `ad34b46`;
 revised 2026-11-13 against `main` at `74bfd27` (see [Revision](#revision-2026-11-13)).
 
 ## Goal
 
 Finish the app as an installable macOS product: one authoritative version and honest
-bundle metadata, a repeatable release pipeline, Developer ID signing and notarization,
+bundle metadata, a repeatable release pipeline, a stable self-signed signature (Decision 22),
 the final `Stache` identity, install/upgrade/removal rules that never fight the legacy
 app, and release gates that state only what was proven.
 
@@ -158,52 +160,61 @@ Decisions from the 2026-11-13 revision:
     `feat/release` unmerged. Parts 03, 04 and 05 stay `in-progress` and Part 06 `draft`.
 19. **`feat/release` starts from `main`, independent of `fix/security-hardening`.**
     Whichever merges second resolves the overlap in `quality.yml` and this spec.
+20. **Legacy removal was approved and performed on 2026-11-13**, superseding the Part 04 half of
+    Decision 18; see the [Stage 2 record](04-identity-switch.md#stage-2-record). Stage 3 follows.
+    Part 03 stays blocked on credentials.
+21. **The owner installs an ad-hoc build of the renamed app in `/Applications` for their own use**
+    before credentials exist. This is a local owner install from `bun run release`, done by hand
+    at the owner's request; it is not a release, is not distributable, and proves none of the
+    signed-artifact criteria. Ad-hoc signatures change with every build, so macOS privacy grants
+    such as Accessibility must be given again after each reinstall.
 
-## Blocked gates and merge consequence
+Decisions from the owner's choice on 2026-11-13 to release without a Developer ID. They
+supersede Decisions 3, 4, 9, 11 and 13 where those assume Developer ID signing, notarization, a
+Homebrew cask or a fallback CLI binary, and Decision 21's ad-hoc install:
 
-Two parts cannot finish on the strength of code alone:
+22. **No Apple Developer Program.** Releases are signed with the owner's self-signed certificate
+    (`Stache App`), with the hardened runtime, and are **not notarized and not stapled**. The
+    stable signature keeps privacy grants such as Accessibility across updates.
+23. **Releases are built and published from the owner's Mac.** `bun run release --self-sign` builds
+    and signs; `bun run release:publish` creates a **draft** GitHub release with the `gh` CLI after
+    Quality has passed for that exact commit. The signing key never leaves the keychain, CI holds
+    no secret and never signs with a certificate, and promotion stays manual.
+24. **The paid path is removed, not kept dormant:** the `--sign` Developer ID mode, notarization
+    and stapling, `--dry-run-signing`, `release.yml` and the Homebrew cask rendering, with their
+    tests and docs. The published artifacts are the DMG, the zip, `SHA256SUMS` and `release.json`.
+    There is no Homebrew route.
+25. **Gatekeeper is described honestly.** A downloaded copy is blocked on first open; the install
+    guide gives the System Settings **Open Anyway** route and nothing else. It never recommends
+    `xattr -d`, `xattr -cr` or `spctl --master-disable`. Gatekeeper on a Mac that did not build the
+    artifact is not proven by this spec.
 
-- **[Part 03](03-signing-notarization.md) is blocked on credentials.** Its pipeline and
-  verification may be written and dry-run ad-hoc, but it cannot become `done` until a
-  Developer ID Application certificate and notarytool credentials exist.
-- **[Part 04](04-identity-switch.md) is gated on legacy removal.** Its preparation may
-  land, but the rename waits for recorded approval and the removal itself. The owner's checkout-based
-  migration rehearsal and removal precede the rename; the public removal/install/released-CLI
-  migration sequence is separate and is rehearsed with private candidate bytes before merge.
+26. **The owner waived `RELEASE-04-11` and `RELEASE-04-13` on 2026-11-13.** They are recorded as
+    not run in [Part 04](04-identity-switch.md), which is `done` on that basis. The candidate
+    rehearsal and the second-build Accessibility check are not waived.
 
-**Part 06 completion covers private candidate evidence only.** Exact-SHA source gates require
-the added candidate-tag CI trigger. Authenticated draft downloads support artifact checks and
-local test-cask rehearsals with distinct test-only versions, not online audit or public tap checks.
-Those public URL checks remain explicitly not run until final promotion, in a separate
-[post-merge operational checklist](06-release-verification.md#post-merge-operational-checklist),
-not in any part's completion criteria. No public prerelease is introduced. Part 05 completes only
-after the selected CLI route passes; its mutually exclusive alternative is recorded not applicable,
-never passed. These stage and applicability boundaries do not waive any required private check.
+## What still needs the owner
 
-The [merge gate](../../workflow.md#merge-gate) refuses a branch while any part is not
-`done`. **`feat/release` therefore cannot merge until both gates clear and Part 06 has
-verified the result.** Keeping the branch stays allowed, and rewrite branches continue
-from `main` in the meantime. A credential or approval is recorded evidence of a gate, never
-a claim made by this spec.
+Nothing blocks the merge: every part is `done`, with `RELEASE-04-11` and `RELEASE-04-13` waived
+(Decision 26) and the limits listed in the [release record](06-release-verification.md#release-record).
+The first public release is the owner's to make, with the
+[operational checklist](06-release-verification.md#operational-checklist): the final `v0.26.0` tag
+on `main`, a self-signed build, `release:publish`, and promoting the draft by hand.
 
 ## Parts
 
-| Part                                  | Summary                                                                   | Status |
-| ------------------------------------- | ------------------------------------------------------------------------- | ------ |
-| [01](01-build-metadata.md)            | One version, `Info.plist`, icon rule, bundle-content check.               | draft  |
-| [02](02-release-pipeline.md)          | Artifacts, ad-hoc dry run, exact-SHA candidate Quality trigger.           | draft  |
-| [03](03-signing-notarization.md)      | Final Developer ID re-sign, notarization, stapling, CI gate. **Blocked.** | draft  |
-| [04](04-identity-switch.md)           | Staged switch, dev isolation, detectable sibling warnings. **Gated.**     | draft  |
-| [05](05-install-upgrade-uninstall.md) | Executable migration/removal, exclusive CLI routes, local test casks.     | draft  |
-| [06](06-release-verification.md)      | Private candidate gates; separate public operational checklist.           | draft  |
+| Part                                  | Summary                                                               | Status |
+| ------------------------------------- | --------------------------------------------------------------------- | ------ |
+| [01](01-build-metadata.md)            | One version, `Info.plist`, icon rule, bundle-content check.           | done   |
+| [02](02-release-pipeline.md)          | Artifacts, ad-hoc dry run, exact-SHA candidate Quality trigger.       | done   |
+| [03](03-signing.md)                   | Self-signed signing; the paid path removed.                           | done   |
+| [04](04-identity-switch.md)           | Staged switch, dev isolation, detectable sibling warnings.            | done   |
+| [05](05-install-upgrade-uninstall.md) | Install guide with first-open approval, CLI link, legacy-config note. | done   |
+| [06](06-release-verification.md)      | Local publish command, limitations, candidate rehearsal.              | done   |
 
-Implementation order differs from numbering at one point, because the rename needs the
-removal steps to exist first: 01 → 02 → 03 (to its gate) → 04 preparation → 05 → 04 rename
-→ 03 credentials and 06. Part 02 depends on 01, Part 03 on 02 (including candidate source
-triggering), Part 05's preparation on 02 and 04 preparation, and its shipped-route proof on
-03 signing and 04 rename. Part 06 integrates all of them, including Part 05's full private
-migration and local-cask upgrade rehearsal; public URL operations follow merge and promotion,
-not part completion. Each commit must build and pass `bun run lint`,
+Parts 01, 02 and 04 were implemented before the no-Developer-ID revision, along with a first
+version of 03 and 05. The remaining order is 03 (remove the paid path, add self-signing) → 05
+(install guide, cask removal) → 06 (publish command, limitations, candidate rehearsal). Each commit must build and pass `bun run lint`,
 `bun run format:check` and `bun run test`.
 
 ## Resolved questions
@@ -233,6 +244,14 @@ windows; the Test Window is gone, so manual checks open the tray popover; script
 the existing `test:scripts` Vitest project instead of `bun test`; teardown shipped, so
 Cmd-Q is no longer a published gap; and the popover settings editor shipped, so "no
 Settings UI" is no longer a limitation. Decision 18 records how far this session goes.
+
+## Revision 2026-11-13, no Developer ID
+
+After the rename landed and the owner had installed and launched an ad-hoc build, the owner decided
+not to pay for the Apple Developer Program. Decisions 22 to 25 record the result: self-signed
+releases published as drafts from the owner's Mac. Part 03 was rewritten and renamed, Part 05 lost
+its cask and gained the first-open section, and Part 06 became the publish command plus one
+candidate rehearsal. Withdrawn criteria are listed in each part.
 
 ## Affected docs
 

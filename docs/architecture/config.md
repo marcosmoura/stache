@@ -408,7 +408,7 @@ legacy quoting rules, stopping at the first failure; shutdown cancels it, kills
 only the child it spawned directly and does not start later commands. A child not
 confirmed gone within 2 s is retained by the runner with a `stache: startup:`
 stderr diagnostic instead of being waited for indefinitely. The exact bare name
-`stache` runs the running Stache Next executable (re-entered with the hidden
+`stache` runs the running Stache executable (re-entered with the hidden
 `--stache-internal-cli` flag), never a `stache` found on `PATH` or the legacy app.
 Readiness, tray actions and Quit never wait for a long-lived command. A second
 instance, CLI invocation and every reload skip it.
@@ -504,7 +504,18 @@ Exit status and markers do not change. The desktop host logs the same hint once
 at startup, as a single `warn` record that lists every stale file; reloads and
 watcher batches do not repeat it. Once both files exist there is no hint.
 
-Trust warnings (see [Trust model](#trust-model)) follow the stale-JSONC notes,
+A separate legacy-config note appears when a legacy source exists (the first
+existing path of `ConfigPaths::legacy_sources`, as migrate discovers it) and
+`global.toml` does not: one line ``note: <source> is a legacy config and is not
+read; run `stache config migrate` `` after the entries and stale hints. When a
+registered `<id>.jsonc` also sits in the directory, plain migrate would pick
+those, so the line names `stache config migrate --from <source>` instead. The
+desktop host logs the same line once at startup as an `info` record
+(`log_legacy_config_hint`). Both use `ConfigPaths::legacy_config_hint`, which
+checks paths only: it never opens, parses, copies or rewrites the source and
+prompts nothing.
+
+Trust warnings (see [Trust model](#trust-model)) follow the stale-JSONC notes and the legacy-config note,
 one line per flagged path, in both the offline and the host-answered output.
 They change no marker and no exit status.
 

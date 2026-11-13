@@ -633,3 +633,94 @@ fn config_path_prints_the_notice_after_the_host_diagnostics() {
     );
     assert_eq!(err, format!("stache: global.toml: rejected by host\n{NOTICE}"));
 }
+
+/// Every file under a directory with its bytes, in path order.
+fn snapshot(directory: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(directory).expect("read dir") {
+        let path = entry.expect("entry").path();
+        if path.is_dir() {
+            files.extend(snapshot(&path));
+        } else {
+            files.push((path.clone(), std::fs::read(&path).expect("bytes")));
+        }
+    }
+    files.sort();
+    files
+}
+
+fn config_path(root: &Path) -> String {
+    let (code, out, err) = run(
+        &["stache", "config", "path"],
+        &config_catalog(),
+        &CommandCatalog::new(),
+        &environment(root),
+        false,
+    );
+    assert_eq!(code, ExitCode::SUCCESS, "{err}");
+    out
+}
+
+fn legacy_lines(out: &str) -> Vec<&str> {
+    out.lines().filter(|line| line.contains("is a legacy config")).collect()
+}
+
+#[test]
+fn config_path_names_a_legacy_source_without_touching_it() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let directory = root.path().join(".config").join("stache");
+    std::fs::create_dir_all(&directory).expect("config dir");
+    let source = directory.join("config.jsonc");
+    std::fs::write(&source, "{ \"bar\": { /* legacy */ } }\n").expect("legacy");
+    let before = snapshot(root.path());
+
+    let out = config_path(root.path());
+    assert_eq!(legacy_lines(&out), [format!(
+        "note: {} is a legacy config and is not read; run `stache config migrate`",
+        source.display()
+    )]);
+    assert_eq!(
+        snapshot(root.path()),
+        before,
+        "source and directory are byte-identical"
+    );
+}
+
+#[test]
+fn config_path_names_from_when_module_jsonc_files_are_also_present() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let directory = root.path().join(".config").join("stache");
+    std::fs::create_dir_all(&directory).expect("config dir");
+    let source = directory.join("config.jsonc");
+    std::fs::write(&source, "{}\n").expect("legacy");
+    std::fs::write(directory.join("global.jsonc"), "{}\n").expect("module jsonc");
+    let before = snapshot(root.path());
+
+    let out = config_path(root.path());
+    assert_eq!(legacy_lines(&out), [format!(
+        "note: {0} is a legacy config and is not read; run `stache config migrate --from {0}`",
+        source.display()
+    )]);
+    assert!(
+        out.contains("note: global.jsonc is ignored; run `stache config migrate`\n"),
+        "the stale hint stays as it is: {out}"
+    );
+    assert_eq!(snapshot(root.path()), before);
+}
+
+#[test]
+fn config_path_has_no_legacy_note_without_a_source_or_with_global_toml() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let directory = root.path().join(".config").join("stache");
+    std::fs::create_dir_all(&directory).expect("config dir");
+    assert!(legacy_lines(&config_path(root.path())).is_empty(), "no source");
+
+    std::fs::write(directory.join("config.jsonc"), "{}\n").expect("legacy");
+    std::fs::write(directory.join("global.toml"), "# defaults\n").expect("global");
+    let before = snapshot(root.path());
+    assert!(
+        legacy_lines(&config_path(root.path())).is_empty(),
+        "global.toml exists"
+    );
+    assert_eq!(snapshot(root.path()), before);
+}

@@ -128,17 +128,20 @@ fn path<W: Write, E: Write>(
 ) -> ExitCode {
     let report = inspect_paths(catalog, paths);
     let stale = paths.stale_jsonc_files(catalog.ids());
+    let legacy = paths.legacy_config_hint(&environment.config, catalog.ids());
     let trust = inspect_catalog_trust(catalog, paths);
     if let Some(status) = remote_status(environment)
         && status.directory == report.directory
     {
         render_core_status(&status, out, err);
         render_stale_hints(&stale, out);
+        render_legacy_hint(legacy.as_deref(), out);
         render_trust_warnings(&trust, out);
         return ExitCode::SUCCESS;
     }
     render_path_report(&report, out);
     render_stale_hints(&stale, out);
+    render_legacy_hint(legacy.as_deref(), out);
     render_trust_warnings(&trust, out);
     ExitCode::SUCCESS
 }
@@ -197,6 +200,13 @@ pub(crate) fn render_path_report<W: Write>(report: &PathReport, out: &mut W) {
 fn render_stale_hints<W: Write>(stale: &[String], out: &mut W) {
     for name in stale {
         let _ = writeln!(out, "{}", stale_jsonc_hint(name));
+    }
+}
+
+/// Prints the one legacy-config note, if any.
+fn render_legacy_hint<W: Write>(hint: Option<&str>, out: &mut W) {
+    if let Some(hint) = hint {
+        let _ = writeln!(out, "{hint}");
     }
 }
 

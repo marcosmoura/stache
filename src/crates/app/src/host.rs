@@ -4946,7 +4946,7 @@ mod tests {
 
         let key = Mapping { src: 100, dst: 200 };
         let rig = KbRig::with_mappings(vec![key]);
-        // A crash left Next's own mapping and journal behind.
+        // A crash left this build identity's own mapping and journal behind.
         rig.remap.apply(&CancellationToken::new()).expect("apply");
         rig.world.restart();
         assert_eq!(rig.world.mappings(), vec![key, OWNED]);

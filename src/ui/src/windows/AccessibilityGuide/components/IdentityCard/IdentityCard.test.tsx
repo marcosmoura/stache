@@ -14,29 +14,27 @@ describe('IdentityCard', () => {
   it('lists name, bundle identifier and path', async () => {
     const screen = await render(
       <IdentityCard
-        name="Stache Next"
-        identifier="com.marcosmoura.stache.next"
-        appPath="/Applications/Stache Next.app"
+        name="Stache"
+        identifier="com.marcosmoura.stache"
+        appPath="/Applications/Stache.app"
       />,
     );
 
     expect(rows(screen.container)).toEqual([
-      ['Name', 'Stache Next'],
-      ['Bundle ID', 'com.marcosmoura.stache.next'],
-      ['Path', '/Applications/Stache Next.app'],
+      ['Name', 'Stache'],
+      ['Bundle ID', 'com.marcosmoura.stache'],
+      ['Path', '/Applications/Stache.app'],
     ]);
     await expect
-      .element(screen.getByText('Make sure you turn on Stache Next, not Stache.'))
+      .element(screen.getByText('Make sure you turn on Stache, not another copy of the app.'))
       .toBeVisible();
   });
 
   it('omits the bundle identifier until known and names an unbundled binary', async () => {
-    const screen = await render(
-      <IdentityCard name="Stache Next" identifier={null} appPath={null} />,
-    );
+    const screen = await render(<IdentityCard name="Stache" identifier={null} appPath={null} />);
 
     expect(rows(screen.container)).toEqual([
-      ['Name', 'Stache Next'],
+      ['Name', 'Stache'],
       ['Path', 'not an app bundle'],
     ]);
   });

@@ -28,7 +28,7 @@ describe('parseBarCommandLine', () => {
     expect(
       run([
         '--app',
-        '/x/Stache Next.app',
+        '/x/Stache.app',
         '--launches',
         '7',
         '--warmup-seconds',
@@ -42,7 +42,7 @@ describe('parseBarCommandLine', () => {
         '--ssid-off',
       ]),
     ).toMatchObject({
-      appPath: '/x/Stache Next.app',
+      appPath: '/x/Stache.app',
       launchesPerArm: 7,
       warmupSeconds: 15,
       sampleSeconds: 90,

@@ -982,14 +982,14 @@ logical pixels (not resizable), labelled `stache-access-<n>`:
   app path and the error). Sections (`AccessibilityGuide.state.ts`): `checking`
   (no status yet, or `access.state = checking`: a large neutral badge that
   pulses with a spinning icon and "Checking Accessibility access…"), `blocked`
-  (accent badge, "Stache Next needs Accessibility access" and its line, the
+  (accent badge, "<name> needs Accessibility access" and its line, the
   three numbered steps, the identity card with name, bundle identifier (once
   `app_info` answers) and path ("not an app bundle" when `appPath` is `null`),
   and a collapsed **Troubleshooting** disclosure whose text names an older
   build's entry, or for an unbundled binary the launching app), `revoked`
-  (attention badge, "Accessibility access was turned off", "Stache Next stopped
+  (attention badge, "Accessibility access was turned off", "<name> stopped
   all features until it is turned on again.") and `open` (success badge,
-  "Access granted. Starting Stache Next…", no footer; the window then calls
+  "Access granted. Starting <name>…", no footer; the window then calls
   `closeCurrentWindow()`). `HostStatus.error` and any rejected command show in
   one alert line (`role="alert"`, joined with `; `). The footer holds **Request
   Access** (primary, full width), **Open System Settings** and **Quit Stache

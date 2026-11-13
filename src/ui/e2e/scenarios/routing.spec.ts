@@ -9,12 +9,10 @@ const READY: HostStatus_Serialize = {
   modules: [],
   config: [],
 };
-const APP = { name: 'Stache Next', version: '0.1.0', identifier: 'com.marcosmoura.stache.next' };
+const APP = { name: 'Stache', version: '0.1.0', identifier: 'com.marcosmoura.stache' };
 
 test.describe('surface routing', () => {
-  for (const [surface, heading] of [
-    ['access', 'Stache Next needs Accessibility access'],
-  ] as const) {
+  for (const [surface, heading] of [['access', 'Stache needs Accessibility access']] as const) {
     test(`?surface=${surface} renders its window with only app_info, host_status and the event listen`, async ({
       page,
       host,

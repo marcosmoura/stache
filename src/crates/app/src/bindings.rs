@@ -62,9 +62,15 @@ pub struct AppInfo {
 #[tauri::command]
 #[specta::specta]
 #[must_use]
-pub fn app_info() -> AppInfo {
+#[allow(clippy::needless_pass_by_value)] // Tauri injects the handle by value.
+// The name is the package information's product name.
+pub fn app_info(app: tauri::AppHandle) -> AppInfo { app_info_for(&app.package_info().name) }
+
+/// The application identity for the product `name`.
+#[must_use]
+pub fn app_info_for(name: &str) -> AppInfo {
     AppInfo {
-        name: "Stache Next".to_owned(),
+        name: name.to_owned(),
         version: env!("CARGO_PKG_VERSION").to_owned(),
         identifier: IDENTITY.to_owned(),
     }

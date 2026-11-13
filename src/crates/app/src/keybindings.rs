@@ -7,7 +7,7 @@
 //! serves as both the Carbon and the Caps sink, the Carbon control, the Caps
 //! owner, and the host's crash-recovery step over the **same** `CapsRemap` the
 //! runtime uses. Every piece is inert: no tap, hotkey, remap, worker or process
-//! exists until the enabled module starts, and recovery acts only on Next's own
+//! exists until the enabled module starts, and recovery acts only on this build identity's own
 //! journal.
 
 use std::sync::Arc;

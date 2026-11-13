@@ -80,13 +80,13 @@ function parseInteger(value: string, flag: string, minimum: number): number {
 
 export function helpText(): string {
   return [
-    'Measure release startup, idle cost, and process trees for Stache Next.',
+    'Measure release startup, idle cost, and process trees for Stache.',
     '',
     'Usage:',
     '  bun run measure -- [options]',
     '',
     'Options:',
-    '  --new-app <path>       Stache Next release .app bundle or executable.',
+    '  --new-app <path>       Stache release .app bundle or executable.',
     `                         Default: ${DEFAULT_NEXT_APP}`,
     '  --legacy-app <path>    Optional legacy release .app bundle or executable.',
     '                         Requires no other legacy Stache process to be running.',
@@ -98,9 +98,9 @@ export function helpText(): string {
     '  - macOS 26 with Xcode command-line tools and the repository toolchain.',
     '  - New host built with: bun run tauri:build',
     '  - Legacy comparison, when requested, built from _legacy/ per _legacy/README.md.',
-    '  - No Stache Next process running. A running legacy Stache (for example',
-    '    /Applications/Stache.app) blocks only --legacy-app runs; otherwise keep its',
-    '    proxyAudio disabled. This tool refuses and never terminates another instance.',
+    '  - No Stache process running. A legacy Stache is identified only from the',
+    '    --legacy-app path and blocks only those runs; keep its proxyAudio disabled.',
+    '    This tool refuses and never terminates another instance.',
     '  - AC power recommended; the report records the actual power source.',
     '  - Do not run a manual audio-device test at the same time.',
     '  - Run one measurement at a time; two tool instances are not mutually excluded.',

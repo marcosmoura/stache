@@ -48,7 +48,7 @@ impl ProcessFactory for Recorder {
 fn identities(root: &Path) -> Vec<PathBuf> {
     let paths = [
         root.join("bin").join("stache"),
-        root.join("Stache Next.app").join("Contents").join("MacOS").join("stache"),
+        root.join("Stache.app").join("Contents").join("MacOS").join("stache"),
     ];
     for path in &paths {
         std::fs::create_dir_all(path.parent().expect("parent")).expect("directory");

@@ -42,6 +42,7 @@ const STATUS = hostStatusFixture({ modules: MODULES });
 
 function setup(status: HostStatus_Serialize = STATUS) {
   return mockHost()
+    .answer('app_info', { name: 'Stache', version: '0.0.0', identifier: 'com.example.stache' })
     .answer('host_status', status)
     .answer('set_module_enabled', { kind: 'applied' })
     .answer('retry_module', null)
@@ -277,7 +278,10 @@ describe('OverviewTab', () => {
         expect(
           host.calls
             .map((call) => call.command)
-            .filter((command) => !command.startsWith('plugin:') && command !== 'host_status'),
+            .filter(
+              (command) =>
+                !command.startsWith('plugin:') && !['host_status', 'app_info'].includes(command),
+            ),
         ).toEqual([
           'open_accessibility_guide',
           'request_accessibility',
@@ -292,7 +296,7 @@ describe('OverviewTab', () => {
       setup(hostStatusFixture({ access: { state, revoked: false, appPath: null } }));
       const screen = await render(<OverviewTab files={[]} onSelectTab={() => {}} />);
 
-      await expect.element(screen.getByRole('button', { name: 'Quit Stache Next' })).toBeVisible();
+      await expect.element(screen.getByRole('button', { name: 'Quit Stache' })).toBeVisible();
       expect(screen.getByRole('region', { name: /Accessibility/ }).query()).toBeNull();
     });
   }
@@ -334,7 +338,7 @@ describe('OverviewTab', () => {
     await expect.element(screen.getByText('unknown key `x`')).toBeVisible();
     expect(screen.container.querySelector('[data-file="global.toml"]')).toBeNull();
 
-    await screen.getByRole('button', { name: 'Quit Stache Next' }).click();
+    await screen.getByRole('button', { name: 'Quit Stache' }).click();
     await vi.waitFor(() => expect(host.callsOf('quit_app')).toHaveLength(1));
     expect(
       screen.getByRole('navigation', { name: 'Actions' }).getByRole('button').all(),

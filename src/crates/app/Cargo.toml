@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Stache Next tray-only desktop foundation"
+description = "Stache tray-only desktop foundation"
 readme = "../../../README.md"
 keywords = ["stache", "tauri", "macos"]
 categories = ["gui"]
@@ -74,12 +74,14 @@ tauri-build = { version = "=2.7.4", features = [] }
 [dev-dependencies]
 base64 = { version = "0.23.1", default-features = false, features = ["std"] }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
+plist = "1.10.3"
 schemars = "1.2.3"
 stache-hold-to-quit = { path = "../modules/hold-to-quit", features = ["testing"] }
 stache-keybindings = { path = "../modules/keybindings", features = ["testing"] }
 stache-macos = { path = "../macos", features = ["testing"] }
 stache-menu-anywhere = { path = "../modules/menu-anywhere", features = ["testing"] }
 stache-tiling = { path = "../modules/tiling", features = ["testing"] }
+toml = "1.2.0"
 
 [lints]
 workspace = true

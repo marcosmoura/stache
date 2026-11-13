@@ -156,11 +156,11 @@ impl MediaResources {
     }
 }
 
-/// The directory name of the Next media artwork cache.
+/// The directory name of the media artwork cache.
 ///
-/// It lives inside the app cache directory
-/// (`~/Library/Caches/com.marcosmoura.stache.next/media-artwork`). The legacy app used `media_artwork` under its own identifier; the two are
-/// never shared or read.
+/// It lives inside the build identity's cache directory
+/// (`~/Library/Caches/<identity>/media-artwork`). The removed legacy app used
+/// `media_artwork` in the same release cache directory; that entry is never read.
 pub const ARTWORK_CACHE_DIRECTORY: &str = "media-artwork";
 
 /// The Bar media provider's inputs: the resolver over the packaged/dev

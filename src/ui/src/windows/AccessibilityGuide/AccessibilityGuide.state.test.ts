@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { hostStatusFixture } from '../../../tests/fixtures';
 
-import { alertMessage, guideSection, HEROES, isCentered } from './AccessibilityGuide.state';
+import { alertMessage, guideSection, heroes, isCentered } from './AccessibilityGuide.state';
 
 const access = (state: 'checking' | 'blocked' | 'open', revoked = false) =>
   hostStatusFixture({ access: { state, revoked, appPath: null } });
@@ -26,14 +26,22 @@ describe('guide state', () => {
   });
 
   it('gives each section its tone and text', () => {
-    expect(HEROES.checking.tone).toBe('neutral');
-    expect(HEROES.blocked.tone).toBe('accent');
-    expect(HEROES.revoked.tone).toBe('attention');
-    expect(HEROES.open).toEqual({
+    expect(heroes('Stache').checking.tone).toBe('neutral');
+    expect(heroes('Stache').blocked.tone).toBe('accent');
+    expect(heroes('Stache').revoked.tone).toBe('attention');
+    expect(heroes('Stache').open).toEqual({
       tone: 'success',
-      title: 'Stache Next',
-      body: 'Access granted. Starting Stache Next…',
+      title: 'Stache',
+      body: 'Access granted. Starting Stache…',
     });
+  });
+
+  it('names the running build in every hero', () => {
+    const dev = heroes('Stache Next');
+
+    expect(dev.blocked.title).toBe('Stache Next needs Accessibility access');
+    expect(dev.revoked.body).toBe('Stache Next stopped all features until it is turned on again.');
+    expect(dev.open.body).toBe('Access granted. Starting Stache Next…');
   });
 
   it('joins the host error and command failures', () => {

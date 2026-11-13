@@ -74,7 +74,7 @@ isolated temporary config/identity with any legacy noTunes disabled; see
 
 Keep Awake validation is fake-backed. No automated check creates a real power
 assertion, locks or unlocks the screen, wakes the machine, installs a real
-distributed observer or launches Stache Next. Module tests drive fake assertion
+distributed observer or launches Stache. Module tests drive fake assertion
 and observation backends, in-memory lock results, barriers and races, and a fake
 clock; app host tests write malformed TOML, a wrong boolean and a deleted file,
 run the normal watcher/reload path, query the actual `keepAwake.status` socket,
@@ -97,7 +97,7 @@ Bar slice (c), the menu bar and the data bridge, is fake-backed as well. `stache
 
 Bar part 05 slice (b), the fixed click actions, is fake-backed. `app/src/bar_actions_tests.rs` runs the real `ApplicationControl` over `FakeApplicationBackend` (one thread per job) and a scripted settings opener: the fixed target per action, inline and deferred completion, completion failure, missing app (`notInstalled`), rejected URL and failed open (`refused`), an issued open with no completion (`uncertainAfterIssuance`, issued once, no retry), an acknowledgement timeout before issuance (the abandoned job never sends) and after issuance (`block_next_open_after_issue`), a stop during preflight and before the native send (the permit refuses; no successor effects), a pane guard failing at the send, 100 rapid clicks while one is in flight all `busy`, and the exact serde wire forms with non-enum input rejected. `access.rs` tests the pane opener (guard at the send, rejected URL, never-started job `timedOutBeforeIssuance` and never sending late, send outliving the bound). `bar_tests.rs` adds end-to-end scenarios (bar.toml 28/14): a click on each component through the bridge reaches the fakes with the fixed target, typed `notInstalled`/`refused`, `unauthorized` for test/access/shell/forged/stale labels, `unavailable` while disabled, paused or failed, stopping mid-click sends nothing, and a hung adapter or stalled queue never blocks bridge reads (under 2 s for the adapter, under 200 ms for the queue) or shutdown. `host_policy.rs` asserts the capability is exactly `allow-bar-snapshot`, `allow-bar-action`, `allow-bar-weather`, `core:event:allow-listen`, `core:event:allow-unlisten`. The WebKit suites of the previous UI were deleted on `feat/ui-rebuild`. No test launches an application, opens a URL or touches `NSWorkspace`.
 
-Bar part 06 slice A, the weather location adapter, is fake-backed. `stache_macos::location` tests (`location/tests.rs`) cover the pure policy (authorization status to request/wait/proceed/fail with no re-request after a decided status, the temporary full accuracy conditions, `CLError` mapping, fix validation), coordinate redaction in `Debug`/`Display`, first-writer-wins completion, the generation gate dropping late events, `FakeLocationSource` recording the requested accuracy, and the real source stopping at `NoUsageDescription` in the test binary. The late-consent watcher is tested through the pure `ConsentWatch` state machine (timeout while awaiting keeps one watcher, a decision notifies once and ends it, cancel or a newer generation drops late decisions, never two managers) and `FakeLocationSource::{decide_consent, watcher_pending, watchers_created, watchers_cancelled, notifications}`; `stache-bar` weather tests assert the cache drop, a single `weatherEpoch` bump, a decision after stop bumping nothing, and the app `bar_tests.rs` scenarios assert the `BarChanged` with the bumped epoch, the located second `bar_weather`, and no event or manager after stop. The UI tests assert one refetch per epoch change, none for an unchanged epoch, and that an older in-flight answer cannot replace a newer one. No test constructs a `CLLocationManager`, prompts or reads the real location. Config tests cover `precise_location` decode, default, wrong type and migration, and `refresh_interval` default 20, the 5 and 1440 bounds, rejection of 4, 1441, 0, negatives, floats and strings at `weather.refresh_interval`, migration, schema minimum/maximum and the template line; service, bridge and UI (`Weather.query.test.ts`) tests assert `refreshIntervalMinutes` reaches the answer, a reconfigure changes it and polling follows the configured minutes. `src/crates/app/Info.plist` is embedded in debug builds by `tauri-codegen` (check with `otool -s __TEXT __info_plist target/debug/stache`); `host_policy.rs` asserts `bundle.macOS.entitlements` points at `Entitlements.plist` holding only the location entitlement and that `Info.plist` has the usage string. The consent prompt only appears for a bundled `.app` (`bun run tauri build --debug --bundles app`, launched with `open`); the dev binary never prompts. Live consent checks need approval per run.
+Bar part 06 slice A, the weather location adapter, is fake-backed. `stache_macos::location` tests (`location/tests.rs`) cover the pure policy (authorization status to request/wait/proceed/fail with no re-request after a decided status, the temporary full accuracy conditions, `CLError` mapping, fix validation), coordinate redaction in `Debug`/`Display`, first-writer-wins completion, the generation gate dropping late events, `FakeLocationSource` recording the requested accuracy, and the real source stopping at `NoUsageDescription` in the test binary. The late-consent watcher is tested through the pure `ConsentWatch` state machine (timeout while awaiting keeps one watcher, a decision notifies once and ends it, cancel or a newer generation drops late decisions, never two managers) and `FakeLocationSource::{decide_consent, watcher_pending, watchers_created, watchers_cancelled, notifications}`; `stache-bar` weather tests assert the cache drop, a single `weatherEpoch` bump, a decision after stop bumping nothing, and the app `bar_tests.rs` scenarios assert the `BarChanged` with the bumped epoch, the located second `bar_weather`, and no event or manager after stop. The UI tests assert one refetch per epoch change, none for an unchanged epoch, and that an older in-flight answer cannot replace a newer one. No test constructs a `CLLocationManager`, prompts or reads the real location. Config tests cover `precise_location` decode, default, wrong type and migration, and `refresh_interval` default 20, the 5 and 1440 bounds, rejection of 4, 1441, 0, negatives, floats and strings at `weather.refresh_interval`, migration, schema minimum/maximum and the template line; service, bridge and UI (`Weather.query.test.ts`) tests assert `refreshIntervalMinutes` reaches the answer, a reconfigure changes it and polling follows the configured minutes. `src/crates/app/Info.plist` is embedded in debug builds by `tauri-codegen` (check with `otool -s __TEXT __info_plist target/debug/stache`); `host_policy.rs` asserts `bundle.macOS.entitlements` points at `Entitlements.plist` holding only the location entitlement and that `Info.plist` has the usage string. `release_metadata.rs` checks that root `Cargo.toml`, `package.json` and `tauri.conf.json` declare one version, that `Info.plist` holds exactly `LSUIElement`, `NSHighResolutionCapable`, `LSApplicationCategoryType` and the two location keys, that every file in `icons/` is in `bundle.icon` (or is `icon.png`), and that capabilities, `bundle.targets`, `bundle.resources` and entitlements stay unchanged. The consent prompt only appears for a bundled `.app` (`bun run tauri build --debug --bundles app`, launched with `open`); the dev binary never prompts. Live consent checks need approval per run.
 
 Bar part 06 slice B, the weather data path (`bar_weather`), is fake-backed and reads no real location, home or environment. `stache-bar` `weather/tests.rs` (child of the crate `tests` module, so it reuses the real-registry harness): env parser fixtures (quoted, single-quoted, comments, `export`, whitespace, CRLF, `=` in values, missing/empty/blank key, malformed lines, last duplicate wins, unterminated quote, substitution from earlier entries only, BOM, invalid UTF-8), the file reader over temp directories with an injected home and config directory (empty `api_keys` reads nothing, relative against the config directory and never the working directory, absolute, `~` with and without a home, missing, directory, oversized and exactly-at-cap, unreadable, symlink, key absent, redacted `Debug`), the exact serde wire forms, and the resolver over `FakeLocationSource` and a gated source: a fix, a reduced fix, every `LocationUnavailable` variant falling back with its typed diagnostic, an empty default location giving `none`, `precise_location` reaching the recorded request and a reconfigure applying at the next read, 60 s reuse on a fake clock (59 s reuses, 60 s reads), a new revision or restart reading again, no read while disabled, zero-size, paused or failed, four concurrent calls sharing one read, a hung read timing joiners out without a second read, stale after a revision change or a stop during the read with nothing recorded, and a weather note changing no sequence. `stache-app` `bar_tests.rs` adds end-to-end scenarios (28/14, two displays, `[weather]` with an env file and a default location, Tiling top 42): `bar_weather` through the real bridge returns the key and coordinates without touching the view, denied/undetermined/no-usage-description fall back, `precise_location` applies without a restart, `unavailable` with zero recorded reads for disabled, paused, gated, failed and zero-size, `unauthorized` for test/access/shell/forged/stale labels, stop during a blocked read is `stale` with no later effect, a hung read never blocks `bar_snapshot` (under 2 s) or shutdown, a missing key file is a redacted diagnostic and Open Meteo reads no key, and a sentinel key and sentinel coordinates never appear in the serialized `BarView`, `BarChanged`, `BarRuntimeStatus`, `ModuleStatusView`, `StatusChanged`, any `Debug` output or captured logs (with the response as the positive control). The weather click is covered like the other actions in `bar_actions_tests.rs` and the click scenarios. UI code, providers and CSP tests are slice C (next paragraph).
 
@@ -405,6 +405,8 @@ CI rules (`.github/workflows/`):
   on the vendored media adapter and its manifest, and covers `--verify-upstream` with an injected
   fetch and a synthetic bottle built in the test; it never touches the network. The real
   `bun run vendor:media-control -- --verify-upstream` (ghcr.io and raw GitHub) runs in CI only.
+  `scripts/release.test.ts` drives the release pipeline with an injected fake command runner
+  over temporary directories: it spawns no build and touches no real bundle.
 - `test:native`: cargo-nextest across only the root workspace with
   `--features stache-app/dev-tools`; checks desktop identity/window policy, the SDK lifecycle, config
   and window suites, app host races/permissions/shutdown, the proxyAudio policy and fake-backend
@@ -538,7 +540,7 @@ socket path before launching:
 ```sh
 bun run build   # embeds the production React bundle
 SMOKE_ROOT=$(mktemp -d "${TMPDIR%/}/opencode/s.XXX")
-SOCKET="$SMOKE_ROOT/com.marcosmoura.stache.next/ipc"
+SOCKET="$SMOKE_ROOT/com.marcosmoura.stache/ipc"
 test "${#SOCKET}" -le 103 || { echo "temporary root too long"; exit 1; }
 HOME="$SMOKE_ROOT" TMPDIR="$SMOKE_ROOT" XDG_CONFIG_HOME="$SMOKE_ROOT/config" \
   cargo run -q --release -p stache-app --features smoke --bin stache-smoke
@@ -576,7 +578,7 @@ never run the `stache-smoke` binary built below without that approval.
 
 ```sh
 SMOKE_ROOT=$(mktemp -d "${TMPDIR%/}/opencode/s.XXX")
-SOCKET="$SMOKE_ROOT/com.marcosmoura.stache.next/ipc"
+SOCKET="$SMOKE_ROOT/com.marcosmoura.stache/ipc"
 test "${#SOCKET}" -le 103 || { echo "temporary root too long"; exit 1; }
 HOME="$SMOKE_ROOT" TMPDIR="$SMOKE_ROOT" XDG_CONFIG_HOME="$SMOKE_ROOT/config" \
   STACHE_SMOKE_TERMINATE=1 \
@@ -667,7 +669,7 @@ Use a per-user temporary root and check the socket path first:
 
 ```sh
 SMOKE_ROOT=$(mktemp -d "${TMPDIR%/}/opencode/s.XXX")
-SOCKET="$SMOKE_ROOT/com.marcosmoura.stache.next/ipc"
+SOCKET="$SMOKE_ROOT/com.marcosmoura.stache/ipc"
 test "${#SOCKET}" -le 103 || { echo "temporary root too long"; exit 1; }
 HOME="$SMOKE_ROOT" TMPDIR="$SMOKE_ROOT" XDG_CONFIG_HOME="$SMOKE_ROOT/config" \
   cargo run -q --release -p stache-app --features smoke --bin stache-smoke
@@ -733,7 +735,11 @@ cargo build --release -p stache-app --features smoke --bin stache-smoke
 ### Manual gates
 
 One gate at a time, approved for that individual run. Never unattended, never
-bundled with another gate. Target only `com.marcosmoura.stache.next`. The
+bundled with another gate. Target only `com.marcosmoura.stache` (these are release builds).
+Granting Accessibility to a test `Stache.app` built in `target/` will likely invalidate the grant of
+an installed `/Applications/Stache.app`, and the reverse: macOS keeps one Accessibility entry per
+bundle identifier, tied to the code signature, and ad-hoc signatures differ per build (not yet
+observed). The
 env-selected scenarios live in the feature-gated `stache-smoke` binary; the
 `bun run tauri:build` bundle is the shipped binary and is used where a gate calls
 for the bundle itself. Both run with a temp-root environment and every module
@@ -742,9 +748,9 @@ reads the isolated `HOME`/`XDG_CONFIG_HOME`):
 
 ```sh
 ROOT=$(mktemp -d "${TMPDIR%/}/opencode/g.XXX")
-SOCKET="$ROOT/com.marcosmoura.stache.next/ipc"
+SOCKET="$ROOT/com.marcosmoura.stache/ipc"
 test "${#SOCKET}" -le 103 || { echo "temporary root too long"; exit 1; }
-BUNDLE="$PWD/target/release/bundle/macos/Stache Next.app"
+BUNDLE="$PWD/target/release/bundle/macos/Stache.app"
 HOME="$ROOT" TMPDIR="$ROOT" XDG_CONFIG_HOME="$ROOT/config" \
   "$BUNDLE/Contents/MacOS/stache" 2>"$ROOT/stderr.log" &
 PID=$!
@@ -768,7 +774,7 @@ bun scripts/check-next-instance.ts "$PID"
 
 It prints the `query:` snapshot and the `result:` verdict, exits non-zero on a
 foreign instance, an unknown identity or a failed query, and never sends
-anything. A running legacy `com.marcosmoura.stache` process is a distinct
+anything. A running development build (`com.marcosmoura.stache.next`) is a distinct
 identity: it is not a collision and it is not treated as the owned instance.
 Recheck immediately before the event and prevent concurrent launches for the
 run.
@@ -778,7 +784,7 @@ record delivery availability, late reply and extended bound), socket absence, an
 the `wait "$PID"` OS status. Keep `recorded_code` separate: `exit(7)` records 7
 in the teardown outcome, while an unchanged `dispatch` may still return OS status
 1; the AppKit status is a fact, not the outcome. The owned socket is absent when
-`test ! -S "$ROOT/com.marcosmoura.stache.next/ipc"` holds.
+`test ! -S "$ROOT/com.marcosmoura.stache/ipc"` holds.
 
 - `TEARDOWN-04-02` — owned terminate with a temporary hanging owner:
 
@@ -788,7 +794,7 @@ in the teardown outcome, while an unchanged `dispatch` may still return OS statu
   PID=$!
   wait "$PID"; echo "status=$?"
   grep 'teardown:' "$ROOT/stderr.log"
-  test ! -S "$ROOT/com.marcosmoura.stache.next/ipc"
+  test ! -S "$ROOT/com.marcosmoura.stache/ipc"
   ```
 
   Pass: one `Uncertain` record naming `smoke-hang`, one reply with its terminal
@@ -835,7 +841,7 @@ in the teardown outcome, while an unchanged `dispatch` may still return OS statu
   ```
 
   Pass: one coordinated `Clean`, one reply, no owned socket. Optional
-  `osascript -e 'tell application id "com.marcosmoura.stache.next" to quit'` is
+  `osascript -e 'tell application id "com.marcosmoura.stache" to quit'` is
   allowed only after the collision guard passes; it proves only that
   supplementary external route.
 
@@ -910,7 +916,7 @@ checklist item. Use a height of 300: 40 points only shows the test page header.
 bun run build
 cargo build --release -p stache-app --features panel-native-check --bin panel-native-check
 SMOKE_ROOT=$(mktemp -d "${TMPDIR%/}/opencode/s.XXX")
-SOCKET="$SMOKE_ROOT/com.marcosmoura.stache.next/ipc"
+SOCKET="$SMOKE_ROOT/com.marcosmoura.stache/ipc"
 test "${#SOCKET}" -le 103 || { echo "temporary root too long"; exit 1; }
 HOME="$SMOKE_ROOT" TMPDIR="$SMOKE_ROOT" XDG_CONFIG_HOME="$SMOKE_ROOT/config" \
   ./target/release/panel-native-check --x 0 --y 0 --width 900 --height 300 \
@@ -978,17 +984,50 @@ tested happy-dom/minimatch/tinypool overrides.
 because Tauri would otherwise ship a dev-mode window. Generate/schema binaries are feature-gated and
 not bundled.
 
-Launch only `target/release/bundle/macos/Stache Next.app`, verify tray/Quit and zero windows, then quit.
-The bundle needs Accessibility for Stache Next before any module runs (the launch gate; grant it for the Stache Next entry only, never the legacy one); it needs no audio permission. Local bundles use ad-hoc signing; distribution
-signing/notarization needs separate credentials. CI audits new locks, not the archive. Legacy build
+Launch only `target/release/bundle/macos/Stache.app`, verify tray/Quit and zero windows, then quit.
+The bundle needs Accessibility for Stache before any module runs (the launch gate; grant it for that bundle's entry, not a development build's `Stache Next` entry); it needs no audio permission. Local bundles use ad-hoc signing; `bun run release --self-sign`
+signs with the owner's self-signed certificate, and nothing is notarized. CI audits new locks, not the archive. Legacy build
 verification is opt-in via [_legacy/README.md](../../_legacy/README.md), including resource/signing gaps.
 Never run legacy and new device-changing automation together.
+
+## Release artifacts
+
+`bun run release` builds the release bundle, verifies it (contents, `arm64`, system-only
+linkage, the vendored `media-control` set, merged `Info.plist`), packages an ad-hoc DMG and zip,
+mounts and expands them to check the app and its signature, and writes `SHA256SUMS` and
+`release.json` to `target/release-artifacts/`. `bun run release --self-sign` signs inside out with
+the certificate named by `STACHE_SIGNING_IDENTITY` and verifies authority, hardened runtime and a
+certificate-anchored designated requirement (`RELEASE-03-11` to `03-15`). `scripts/release.test.ts`
+covers both modes, the refusals, the fail-closed paths and the removal of the paid path with fake
+runners; nothing touches a keychain, signs with a real identity or contacts Apple.
+See [release](release.md). The same file checks that no cask remains (`RELEASE-05-11`: no cask
+module, exactly the DMG, zip, `SHA256SUMS` and `release.json`, two-entry `SHA256SUMS`) and the
+[install guide](install.md)'s doc check (`RELEASE-05-06`: sections, the not-notarized statement and
+Open Anyway route, no Homebrew route, links, no process-name, quarantine-bypass or `brew install`
+commands, `--force` only on `stache config migrate`).
+`scripts/release/publish.test.ts` drives `release:publish` with a fake runner (`RELEASE-06-10` to
+`06-12`: each refusal, the single draft `gh release create`, the notes) and checks the published
+limitations in `README.md` and the install guide and the checklist order in the release guide
+(`06-13`, `06-14`); it contacts no GitHub, creates no tag and publishes nothing.
+
+Legacy-config note (`RELEASE-05-03`/`04`): `cli/tests/commands.rs` runs `config path` over
+temporary roots (present, absent, `global.toml` present, `<id>.jsonc` also present) and checks
+the directory stays byte-identical; `app/tests/legacy_config_hint.rs` drives the host's startup
+`log_legacy_config_hint` with an unreadable and a directory-shaped source.
+
+Symlink CLI probe (`RELEASE-05-07`, probe half): `cli/tests/symlink_probe.rs` copies its own test
+executable to `<tmp>/Probe.app/Contents/MacOS/stache`, links it from `<tmp>/bin/stache`, and runs
+it directly, through the link and by name on `PATH`. In child mode the copy only prints
+`current_exe` and `stache_cli::mode::is_app_bundle`'s verdict, so the real `stache` binary is
+never executed. Expected: `true` directly, `false` with the link path through the link.
 
 ## Release performance comparison
 
 `bun scripts/measure-foundation.ts` (also `bun run measure -- --help`) measures
 release startup, 60-second idle CPU/RSS and process trees with isolated config
-roots. It refuses to start while any Stache Next or legacy Stache process is
+roots. It refuses to start while any Stache process (or the explicit `--legacy-app`) is
 running and never signals another instance. Build the bundles and follow
 [performance.md](performance.md) before running it; do not run a manual
 audio-device test at the same time.
+
+Identity (release part 04): `app/tests/identity.rs` checks that the base `tauri.conf.json` holds the release identity and `PRODUCT_NAME`, that `tauri.dev.conf.json` holds exactly the development `productName` and `identifier` and only `tauri:dev` passes it (after the base config), that `tauri:build` has one `--config`, `bundle.resources` only `media-control` and no release profile enables debug assertions, that `IDENTITY` is selected only by `cfg!(debug_assertions)`, that the development literals stay in the allow-list, and that no tracked script or source uses `killall`, `pkill`, `pgrep` or compares a process name to `stache` (a text check with its limits stated in the test). Tests compile as debug, so they run under the development identity; `AppPaths::resolve_for` lets `sdk/src/paths.rs` and `cli/src/cache.rs` cover both identities' exact paths, the socket limit and that `cache clear` under one leaves the other intact. `app/tests/collision.rs` drives the startup `collision::guard` over `FakeRunningInstances`: a foreign same-identifier process refuses with the diagnostic and nothing after the check runs, a sibling and a failed query warn and continue, own PID and prefix matches are ignored, and the fake records only the two queries; no test queries real applications.

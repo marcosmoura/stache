@@ -3,6 +3,7 @@ name: Quality
 on:
   push:
     branches: [main]
+    tags: ['v*-rc.*']
   pull_request:
 
 concurrency:
@@ -55,5 +56,9 @@ jobs:
           cargo audit --target-os macos
       - run: bun run build
       - run: bun run tauri:build
+      - run: bun run release
+      - name: Verify release checksums
+        working-directory: target/release-artifacts
+        run: shasum -a 256 -c SHA256SUMS
       - name: Lockfiles unchanged
         run: git diff --exit-code -- Cargo.lock bun.lock

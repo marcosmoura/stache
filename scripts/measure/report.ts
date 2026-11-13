@@ -172,7 +172,7 @@ function treeRssCheck(
     return {
       target: 'Lower idle tree RSS than legacy',
       status: 'unverified',
-      detail: 'no Stache Next scenario produced an idle sample',
+      detail: 'no Stache scenario produced an idle sample',
     };
   }
 
@@ -256,7 +256,7 @@ export function renderReport(run: MeasurementRun, checks: TargetCheck[]): string
   lines.push(`# Foundation measurement — ${run.startedAt}`);
   lines.push('');
   lines.push(
-    'Read when comparing Stache Next release startup, idle cost and process trees ' +
+    'Read when comparing Stache release startup, idle cost and process trees ' +
       'against the legacy application.',
   );
   lines.push('');
@@ -299,7 +299,7 @@ export function renderReport(run: MeasurementRun, checks: TargetCheck[]): string
   );
   lines.push(`| Rust | ${run.environment.toolchain.rustc} |`);
   lines.push(`| Cargo | ${run.environment.toolchain.cargo} |`);
-  lines.push(`| Stache Next build | ${describeBuild(run.targets.next.build)} |`);
+  lines.push(`| Stache build | ${describeBuild(run.targets.next.build)} |`);
 
   if (run.targets.legacy !== null) {
     lines.push(`| Legacy build | ${describeBuild(run.targets.legacy.build)} |`);

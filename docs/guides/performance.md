@@ -10,7 +10,7 @@ dev server.
 ```sh
 bun run measure -- --help
 bun run measure -- \
-  --new-app "target/release/bundle/macos/Stache Next.app" \
+  --new-app "target/release/bundle/macos/Stache.app" \
   --legacy-app "/path/to/legacy/Stache.app"
 ```
 
@@ -18,8 +18,8 @@ bun run measure -- \
 
 Scenarios run sequentially, with no two device-changing watchers alive at once:
 
-1. Stache Next with `proxyAudio` disabled.
-2. Stache Next with `proxyAudio` enabled and priorities that resolve to the
+1. Stache with `proxyAudio` disabled.
+2. Stache with `proxyAudio` enabled and priorities that resolve to the
    current default devices, so the pilot does not switch anything.
 3. Legacy Stache baseline, only when `--legacy-app` is passed.
 
@@ -46,14 +46,16 @@ build it with `bun run tauri:build`. Legacy builds follow `_legacy/README.md`.
 
 ## Prerequisites and safety
 
-- Quit every Stache Next instance. The tool refuses to start while one is
-  running. A running legacy Stache, such as the daily `/Applications/Stache.app`,
-  only blocks a run that passes `--legacy-app`; otherwise keep its proxyAudio
-  disabled so only one device-changing watcher runs. The tool never signals or
-  terminates another instance; quit it from its own tray or menu.
-- The report records the actual guard scope for every launch. Without
-  `--legacy-app`, a legacy Stache is detected and noted as observed but does not
-  block the run; with `--legacy-app`, both identities block.
+- Quit every Stache release instance (`com.marcosmoura.stache`, any `Stache.app`). The tool
+  refuses to start while one is running. The legacy app shared that identifier, so a process is
+  classified as legacy only when it runs the explicit `--legacy-app` path; with `--legacy-app`,
+  that process blocks too. A bundled development app (`com.marcosmoura.stache.next`, any
+  `Stache Next.app`) blocks as well; an unbundled `tauri:dev` run is not detected, so keep its
+  proxyAudio disabled so only one device-changing watcher runs. The tool never signals or terminates another instance; quit it from its own tray or menu.
+- The report records the actual guard scope for every launch.
+- Each measured launch uses an isolated `HOME`, `TMPDIR` and `XDG_CONFIG_HOME`, so it shares no
+  lock, socket, cache or config with an installed app; its socket is
+  `<root>/com.marcosmoura.stache/ipc`.
 - If Launch Services cannot be read, the guard fails closed: the tool refuses to
   start instead of assuming no other instance is running.
 - Do not run a manual audio-device test at the same time. Run one measurement at
@@ -110,7 +112,7 @@ a measurement directory needs no separate `bun run format` before committing.
 
 The two timing columns answer different questions:
 
-- External launch to ready: for Stache Next, the control socket answers
+- External launch to ready: for Stache, the control socket answers
   `core.status` (the socket is created after the tray). For legacy, its own
   `setup complete (background tasks spawned)` stderr line, which it emits after
   creating the tray, bar and widgets.
@@ -131,7 +133,7 @@ it prewarms the popover, so an idle launch then holds one hidden popover webview
 
 ## Webview evidence
 
-For Stache Next the instrumented count in the startup line is authoritative,
+For Stache the instrumented count in the startup line is authoritative,
 and the host aborts setup if any webview exists at that point. The process tree
 is still sampled, so an unexpected WebKit helper becomes an observed
 inconsistency. For legacy, only observed WebKit processes are reported; process
@@ -301,14 +303,17 @@ Until the run, the SMC read cost and the CoreWLAN read cost are **unverified**.
 
 ```sh
 bun run measure:bar -- --help        # reads no process state
-bun run measure:bar -- --app "target/release/bundle/macos/Stache Next.app"
-bun run measure:bar -- --app "target/release/bundle/macos/Stache Next.app" --ssid-off   # "SSID off" series
+bun run measure:bar -- --app "target/release/bundle/macos/Stache.app"
+bun run measure:bar -- --app "target/release/bundle/macos/Stache.app" --ssid-off   # "SSID off" series
 ```
 
 Preconditions the script checks or explains:
 
 - **Accessibility.** The launch gate holds every module, Bar included, unless the
-  exact release `.app` being measured is trusted for Accessibility. Grant it for
+  exact release `.app` being measured is trusted for Accessibility. Granting it to a `Stache.app`
+  built in `target/` will likely invalidate the grant of an installed `/Applications/Stache.app`,
+  and the reverse: macOS keeps one Accessibility entry per bundle identifier, tied to the code
+  signature, and ad-hoc signatures differ per build (not yet observed). Grant it for
   that path first (System Settings > Privacy & Security > Accessibility). The
   script reads `core.status` over the isolated control socket; `access.state`
   must be `open` in both arms. A gated launch is reported as an **invalid trial**
@@ -320,7 +325,7 @@ Preconditions the script checks or explains:
   `Loaded` are therefore **inferred**, not read. Either failure marks the trial
   invalid; three invalid trials stop the run.
 - A release `.app` only (a debug path or a bare executable is refused), and no
-  Stache Next or legacy Stache process running (refused, never terminated).
+  Stache process running (refused, never terminated).
 - An idle machine: a 10 s whole-machine CPU pre-flight (the foundation
   `sampleIdle` over the process table) refuses above `--max-busy-cpu`. CPU is
   summed over processes with 100% per core; the default is 15% of total capacity

@@ -8,8 +8,8 @@ import { expect, test } from '../fixtures';
  * window close.
  */
 
-const APP = { name: 'Stache Next', version: '0.1.0', identifier: 'com.marcosmoura.stache.next' };
-const APP_PATH = '/Applications/Stache Next.app';
+const APP = { name: 'Stache', version: '0.1.0', identifier: 'com.marcosmoura.stache' };
+const APP_PATH = '/Applications/Stache.app';
 
 const status = (
   access: Partial<AccessView_Serialize>,
@@ -57,7 +57,7 @@ test.describe('Accessibility guide', () => {
 
     // Blocked: steps, identity and collapsed troubleshooting.
     await expect(
-      page.getByRole('heading', { name: 'Stache Next needs Accessibility access' }),
+      page.getByRole('heading', { name: 'Stache needs Accessibility access' }),
     ).toBeVisible();
     await expect(page.getByRole('listitem')).toHaveCount(3);
     await expect(page.getByText(APP.identifier)).toBeVisible();
@@ -102,7 +102,7 @@ test.describe('Accessibility guide', () => {
     // Open: the success line, then the window closes itself.
     expect(host.commands()).not.toContain('plugin:window|close');
     await host.emitStatusChanged(status({ state: 'open' }));
-    await expect(page.getByRole('status')).toHaveText('Access granted. Starting Stache Next…');
+    await expect(page.getByRole('status')).toHaveText('Access granted. Starting Stache…');
     await expect
       .poll(() => host.calls.filter((call) => call.command === 'plugin:window|close'))
       .toEqual([{ command: 'plugin:window|close', args: { label: 'access' } }]);
@@ -131,7 +131,7 @@ test.describe('Accessibility guide', () => {
     await page.getByRole('button', { name: 'Close' }).click();
     await expect.poll(closes).toHaveLength(2);
     // The Close button is outside the drag region.
-    await expect(page.locator('[data-tauri-drag-region]')).toHaveText('Stache Next');
+    await expect(page.locator('[data-tauri-drag-region]')).toHaveText('Stache');
 
     expect(host.calls.filter((call) => !ALLOWED.has(call.command))).toEqual([]);
     expect(host.unanswered).toEqual([]);
@@ -142,7 +142,7 @@ test.describe('Accessibility guide', () => {
     host.answer('app_info', APP).answerHostStatus(status({})).answer('quit_app', null);
     await page.goto('/?surface=access');
 
-    await page.getByRole('button', { name: 'Quit Stache Next' }).click();
+    await page.getByRole('button', { name: 'Quit Stache' }).click();
     await expect
       .poll(() => host.commands().filter((command) => command === 'quit_app'))
       .toHaveLength(1);

@@ -2,7 +2,7 @@
   <img src="src/crates/app/icons/icon.png" alt="Stache Logo" width="320" height="320">
 </p>
 
-<h1 align="center">Stache Next</h1>
+<h1 align="center">Stache</h1>
 
 <p align="center">
   <strong>A macOS enhancement suite rebuilt on Tauri 2 with a typed module SDK: audio automation, an Apple Music blocker and Keep Awake today, the rest of Stache on the way.</strong>
@@ -41,7 +41,30 @@ the [roadmap](docs/roadmap.md), not shipped behavior.
 
 ## Installation
 
-There is no packaged release yet. Build from source:
+**No release has been published yet.** Once one is, download `Stache_<version>_aarch64.dmg` from
+[GitHub Releases](https://github.com/marcosmoura/stache/releases), open it and drag `Stache.app` onto
+`Applications`. Stache is not notarized by Apple: it is signed with the author's own certificate, so
+macOS blocks the first open until you choose **Open Anyway** in System Settings → Privacy &
+Security. The [install guide](docs/guides/install.md) covers the first open, upgrades, the
+`stache` command line and uninstalling.
+
+Limitations:
+
+- Apple silicon (arm64) only; no Intel or universal build. macOS 26 or later.
+- Not notarized by Apple. The app is self-signed, so macOS blocks the first open until you allow
+  it in System Settings.
+- No Homebrew cask or formula.
+- No auto-updater: upgrades are manual.
+- No launch-at-login item.
+- No automatic configuration migration: run `stache config migrate`.
+- A development build (`Stache Next`) is separate from the release and can run beside it.
+- An old Stache from before 0.26 must be removed first; the new app refuses to start beside it,
+  with no visible dialog when opened from Finder.
+- Tray Quit, Cmd-Q and SIGTERM run the coordinated teardown. Logout, restart and shutdown are not
+  verified to.
+- The app's own path is not a command line; link `stache` as the install guide describes.
+
+Build from source:
 
 ```bash
 git clone https://github.com/marcosmoura/stache.git
@@ -51,10 +74,10 @@ node_modules/.bin/playwright install webkit
 bun run tauri:build
 ```
 
-The bundle is `target/release/bundle/macos/Stache Next.app`, ad-hoc signed by default. It uses
-`com.marcosmoura.stache.next`, so it does not install over or terminate Stache. It needs no
-media-control resources or device permissions; distribution signing and notarization are not
-configured.
+The bundle is `target/release/bundle/macos/Stache.app` (`com.marcosmoura.stache`), ad-hoc signed by
+default. `bun run tauri:dev` runs a development build named `Stache Next` (`com.marcosmoura.stache.next`)
+with its own lock, socket and cache, so it can run beside the release app. It needs no
+media-control resources or device permissions.
 
 ## Quick Start
 
@@ -100,7 +123,7 @@ target_app = "com.spotify.client"
 
 `target_app` is optional: leave it out to block without launching anything.
 
-3. Launch Stache Next from the bundle, or run `bun run tauri:dev`. It lives in the menu bar; the tray
+3. Launch Stache from the bundle, or run `bun run tauri:dev`. It lives in the menu bar; the tray
    exposes Enable/Disable, Pause/Resume and Retry for each module, plus Quit.
 
 ### Upgrading

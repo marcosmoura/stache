@@ -28,21 +28,23 @@ export function isCentered(section: GuideSection): boolean {
 
 type Hero = { tone: GuideTone; title: string; body: string };
 
-/** The hero of each section. */
-export const HEROES: Readonly<Record<GuideSection, Hero>> = {
-  checking: { tone: 'neutral', title: 'Stache Next', body: 'Checking Accessibility access…' },
-  blocked: {
-    tone: 'accent',
-    title: 'Stache Next needs Accessibility access',
-    body: 'Stache Next reads keyboard shortcuts and controls windows and apps. macOS only allows that with Accessibility access. Until you allow it, Stache Next waits and does nothing.',
-  },
-  revoked: {
-    tone: 'attention',
-    title: 'Accessibility access was turned off',
-    body: 'Stache Next stopped all features until it is turned on again.',
-  },
-  open: { tone: 'success', title: 'Stache Next', body: 'Access granted. Starting Stache Next…' },
-};
+/** The hero of each section, naming the app `name`. */
+export function heroes(name: string): Readonly<Record<GuideSection, Hero>> {
+  return {
+    checking: { tone: 'neutral', title: name, body: 'Checking Accessibility access…' },
+    blocked: {
+      tone: 'accent',
+      title: `${name} needs Accessibility access`,
+      body: `${name} reads keyboard shortcuts and controls windows and apps. macOS only allows that with Accessibility access. Until you allow it, ${name} waits and does nothing.`,
+    },
+    revoked: {
+      tone: 'attention',
+      title: 'Accessibility access was turned off',
+      body: `${name} stopped all features until it is turned on again.`,
+    },
+    open: { tone: 'success', title: name, body: `Access granted. Starting ${name}…` },
+  };
+}
 
 /** The alert line: the host error, then any failed command, joined with `; `. */
 export function alertMessage(hostError: string | null | undefined, failures: string[]): string {
