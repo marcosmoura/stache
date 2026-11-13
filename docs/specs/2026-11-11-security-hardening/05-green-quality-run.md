@@ -40,6 +40,24 @@ Run 43358013407 (2026-11-13, this branch after merging `main`) and run 433133136
   instead of `AdmittedChanged`: a 150 ms actor delay against a 200 ms hop leaves 50 ms for a loaded
   runner. Give it margins that hold on a slow machine while it still proves that two hops share
   one budget.
+- **Wall-clock native tests (user decision, 2026-11-13).** Three Quality runs each failed a
+  different timing-dependent native test on the loaded runner: `hops_share_the_request_budget`,
+  `shutdown::tests::a_blocked_record_sink_cannot_extend_the_terminal_deadline` and
+  `module_tests::animation::an_animated_plan_writes_gated_frames_and_acknowledges_the_exact_plan`
+  (2 animation frames where at least 4 were expected). The user chose to make the timing tests
+  deterministic over CI retries or lower parallelism. Review every native test that asserts on
+  real elapsed time or on how much real-time work happened (about 110 `elapsed()` comparisons
+  in `src/crates`, plus frame or tick counts driven by real time) and make each hold on a
+  machine several times slower than the development machine:
+  - where the code under test takes an injected clock, pacer or gate, drive it from the test
+    instead of real time;
+  - where an upper bound only separates "returned promptly" from "blocked until a much longer
+    timeout", raise it to a generous value well under that timeout;
+  - where a lower bound or a count depends on real time, lengthen the real duration or loosen the
+    count only as far as the property still fails when the behavior is wrong.
+    A test whose property cannot be kept without a product change is reported, not weakened.
+    The workflow sets `NEXTEST_PROFILE=ci` (the existing no-fail-fast profile) so one run lists
+    every failing native test.
 - **Later steps.** `test:e2e`, `test:native`, `test:ui:coverage`, the audits, `build`, `tauri:build`
   and the closing lockfile check have not run in CI since the UI rebuild. Failures that appear
   there once the above is fixed belong to this part, under the same rule: fix the cause in tests
@@ -56,6 +74,8 @@ Run 43358013407 (2026-11-13, this branch after merging `main`) and run 433133136
 - [ ] `hops_share_the_request_budget` has at least 200 ms of slack on each timing edge (was
       50 ms) and a hop at least 4× the elapsed bound, and still fails if hops stop sharing the
       budget.
+- [ ] Every native wall-clock assertion was reviewed; the report lists each changed test with the
+      reason its property still holds, and the ones left unchanged by group with the reason.
 - [ ] No test was deleted, skipped, marked CI-only or had an assertion removed.
 - [ ] `bun run lint`, `bun run format:check` and `bun run test` pass locally.
 - [ ] A Quality run of the branch passes (the orchestrator pushes and checks). This also closes

@@ -2124,8 +2124,10 @@ mod animation {
         });
         let frames = host.backend.written_frames();
         let animated = &frames[before..];
+        // Frames are paced in real time and coalesce latest-wins, so a starved
+        // machine writes few of them; a direct (unanimated) write is exactly one.
         assert!(
-            animated.len() >= 4,
+            animated.len() >= 2,
             "intermediate frames, not one jump: {}",
             animated.len()
         );

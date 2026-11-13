@@ -1129,15 +1129,12 @@ fn e2e_a_stuck_click_is_busy_for_others_never_stalls_the_bar_and_ends_at_shutdow
         rig.bridge.tiling_action(&label, &request),
         BarTilingOutcome::Busy
     );
-    assert!(
-        started.elapsed() < Duration::from_millis(500),
-        "busy never waits"
-    );
+    assert!(started.elapsed() < Duration::from_secs(2), "busy never waits");
 
     // The Bar keeps serving while the click is stuck.
     let started = Instant::now();
     let _ = rig.available();
-    assert!(started.elapsed() < Duration::from_millis(500));
+    assert!(started.elapsed() < Duration::from_secs(2));
     let events = rig.sink.events().len();
     rig.toggle_menu(true);
     rig.wait_menu(MenuBarState::Visible);

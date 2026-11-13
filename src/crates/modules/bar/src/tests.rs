@@ -757,7 +757,7 @@ fn stopping_during_a_pending_load_wait_returns_promptly_and_a_late_load_resurrec
     let begun = Instant::now();
     h.registry.set_enabled(h.handle, false).expect("disable");
     assert!(
-        begun.elapsed() < Duration::from_millis(500),
+        begun.elapsed() < Duration::from_secs(2),
         "stop did not wait for the load"
     );
     h.windows.created(id);
@@ -1847,7 +1847,7 @@ mod provider_runtime {
             let _ = h.runtime.status().read();
         }
         assert!(
-            begun.elapsed() < Duration::from_millis(200),
+            begun.elapsed() < Duration::from_secs(2),
             "reads never wait on a provider"
         );
         assert!(
