@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 01 — CI hardening
@@ -58,22 +58,22 @@ true. No product code changes.
 
 ## Acceptance criteria
 
-- [ ] Every `uses:` in `.github/workflows/` is a 40-hex SHA with a matching `# vX.Y.Z` comment,
+- [x] Every `uses:` in `.github/workflows/` is a 40-hex SHA with a matching `# vX.Y.Z` comment,
       and each SHA was resolved from the action's repository (listed in the commit body).
-- [ ] `quality.yml` has top-level `permissions: contents: read` and checkout uses
+- [x] `quality.yml` has top-level `permissions: contents: read` and checkout uses
       `persist-credentials: false`.
-- [ ] `cargo fetch --locked` runs before the first cargo-running step, and the job ends with the
+- [x] `cargo fetch --locked` runs before the first cargo-running step, and the job ends with the
       lockfile diff check. Or, under the alternative, every cargo-running script is locked.
-- [ ] `cargo-sort`, `cargo-nextest` and `cargo-audit` are pinned to explicit versions in CI and
+- [x] `cargo-sort`, `cargo-nextest` and `cargo-audit` are pinned to explicit versions in CI and
       in `docs/guides/testing.md`.
-- [ ] `.github/dependabot.yml` exists as specified, or the manual-refresh paragraph exists,
+- [x] `.github/dependabot.yml` exists as specified, or the manual-refresh paragraph exists,
       per Decision 5.
-- [ ] `scripts/ci/workflows.test.ts` passes on the new workflow. Each negative fixture (tag
+- [x] `scripts/ci/workflows.test.ts` passes on the new workflow. Each negative fixture (tag
       pin, missing comment, missing permissions, extra permission, persisted credentials,
       unpinned tool, guard after the first cargo step) fails with file and line.
-- [ ] `bun run lint`, `bun run format:check` and `bun run test` pass locally.
-- [ ] After the user allows a push, the first Quality run of the branch passes. Until then this
-      criterion is recorded as not run and blocks `done`.
+- [x] `bun run lint`, `bun run format:check` and `bun run test` pass locally.
+- [x] After the user allows a push, a Quality run of the branch passes: run 43421412792 on
+      `2f6362b` (2026-11-13), after the test and CI-profile changes of Part 05.
 
 ## Tests
 
@@ -86,6 +86,24 @@ true. No product code changes.
   it.
 
 ## Notes
+
+- Decided by the user on 2026-11-11: CI no longer runs the Bar visual-parity gate. The first
+  Quality run of the branch failed at `bun run test` because `test:parity` needs the Maple Mono
+  NF font, which the GitHub runner lacks; `main` had failed the same way since 2026-11-10. The
+  workflow now runs `test:ui`, `test:scripts` and `test:native` as separate steps and the parity
+  gate stays a local check. The "first Quality run passes" criterion is judged on the run after
+  this change.
+
+- Changed when `main` was merged in (2026-11-13): `main` replaced `test:parity` with `test:e2e`,
+  whose font-dependent screenshot baselines skip themselves without Maple Mono NF. The reason for
+  the split is gone, so the workflow runs `bun run test` again, as on `main`.
+
+- Changed after review (2026-11-11): the pin test allows a job-level `permissions:` block, so a
+  later workflow can raise one job above the read-only default; the top-level rule is unchanged
+  and `quality.yml` has no job-level block. The lock guard is checked per job, block scalars with
+  chomping indicators (`|-`, `>-`) are read, `bunx`, `npx`, `node_modules/.bin/tauri` and
+  `bun <script>` count as cargo-running, flow-style steps are rejected and `.yaml` files are
+  covered.
 
 - `HUSKY: '0'` and `--frozen-lockfile` stay as they are.
 - `cargo fetch --locked` warms the same registry cache `rust-cache` restores, so the extra cost

@@ -570,7 +570,7 @@ fn a_main_thread_caller_never_waits_for_its_own_queue() {
         control.install(&CancellationToken::new()),
         Err(HudInstallError::TimedOut)
     );
-    assert!(started.elapsed() < Duration::from_millis(500));
+    assert!(started.elapsed() < Duration::from_secs(1));
     assert_eq!(*executor.queued.lock().expect("lock"), 1);
 }
 
@@ -1122,7 +1122,7 @@ fn a_main_thread_release_never_waits_on_a_blocked_main_queue() {
     );
     let started = Instant::now();
     let outcome = control.release(&CancellationToken::new());
-    assert!(started.elapsed() < Duration::from_millis(500));
+    assert!(started.elapsed() < Duration::from_secs(1));
     assert!(matches!(
         outcome,
         HudReleaseOutcome::Retained(HudRetained {

@@ -56,7 +56,8 @@
 //! - [`HudControl::release`] still enqueues physical cleanup when its token is
 //!   already cancelled; only the acknowledgement wait gives up.
 //!
-//! Panics inside backend calls are contained and become typed failures.
+//! Panics inside backend calls are contained and become typed failures
+//! (unwind-enabled builds only; release aborts).
 //! Completions only enqueue plain results.
 //!
 //! # Placement and visuals

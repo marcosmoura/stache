@@ -12,8 +12,9 @@
 //! manager is **not** released: it becomes the single consent watcher (see
 //! [`LocationSource`]), which only observes `locationManagerDidChangeAuthorization:`
 //! until the status is decided, then releases the manager and calls the
-//! notifier. Every callback body is wrapped in `catch_unwind` because the release
-//! profile aborts on panic.
+//! notifier. Every callback body is wrapped in `catch_unwind` so a panic cannot
+//! unwind into Objective-C; that containment holds only in unwind-enabled builds,
+//! and the release profile aborts on panic.
 
 use std::cell::RefCell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -285,8 +286,7 @@ fn pump(generation: u64, event: Event) {
         finish_or_keep(&mut state, generation, active, step);
         None
     });
-    // Outside the state borrow, and contained: the release profile aborts on
-    // panic.
+    // Outside the state borrow, and contained (unwind-enabled builds only; release aborts).
     if let Some(notify) = notify {
         let _ = catch_unwind(AssertUnwindSafe(|| notify()));
     }

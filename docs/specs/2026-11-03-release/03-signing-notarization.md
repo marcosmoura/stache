@@ -118,7 +118,8 @@ is `RELEASE-06-03`.
 ## Notes
 
 - Nested code: `Contents/Resources/media-control/` holds `MediaRemoteAdapterTestClient`, the
-  `MediaRemoteAdapter.framework` library and `mediaremote-adapter.pl`. Tauri flattens the
+  `MediaRemoteAdapter.framework` library and `mediaremote-adapter.pl` (listed in
+  `scripts/media-control/manifest.json`). Tauri flattens the
   framework's symlinks, so the library may appear more than once as a regular file, and the
   directory is no longer a valid framework bundle: sign each Mach-O as a plain file. Upstream's
   ad-hoc signatures are replaced. The adapter is loaded by `/usr/bin/perl`, not by Stache, so

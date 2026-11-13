@@ -1590,7 +1590,8 @@ impl<S: WindowSystem> Core<S> {
     }
 
     /// After a panic the shard will not run another command: restore its open
-    /// leases before it ends. A second panic here is contained.
+    /// leases before it ends. A second panic here is contained (unwind-enabled builds only; release
+    /// aborts).
     fn restore_after_panic(&mut self) {
         let _ = catch_unwind(AssertUnwindSafe(|| self.settle_leases(true)));
     }

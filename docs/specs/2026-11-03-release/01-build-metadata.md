@@ -37,8 +37,9 @@ statement below concerns the base `tauri.conf.json`, the only config a package i
   `Contents/MacOS`, `Contents/Info.plist`, `Contents/Resources/icon.icns` and
   `_CodeSignature`. Frontend assets are embedded in the binary by `custom-protocol`, so no
   separate frontend directory is expected. `Contents/Resources/media-control/` holds
-  exactly the files committed under `src/crates/app/resources/media-control/`, as Tauri
-  flattens them, and is the only place another Mach-O file may appear. Generator and smoke
+  exactly the files committed under `src/crates/app/resources/media-control/` (the adapter
+  files pinned by `scripts/media-control/manifest.json`, plus `PROVENANCE.md` and `LICENSE`), as
+  Tauri flattens them, and is the only place another Mach-O file may appear. Generator and smoke
   binaries and any other framework must be absent.
 - **Linkage.** `Contents/MacOS/stache` must be arm64 only and link only system libraries
   under `/System` or `/usr/lib`. This rule covers the main executable; the nested

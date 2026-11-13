@@ -7,11 +7,10 @@
 //! see `Send + Sync` handles and a coalesced refresh flag.
 //!
 //! Delivery is a hint at most: the installed Foundation header
-//! `NSDistributedNotificationCenter.h` states that distributed notifications use
-//! the main run loop and can be delayed or dropped. The callback ignores payload,
-//! contains panics and only signals. It never probes, acquires an assertion or
-//! runs lifecycle code.
-//!
+//! `NSDistributedNotificationCenter.h` states that distributed notifications
+//! use the main run loop and can be delayed or dropped. The callback ignores
+//! payload, contains panics (unwind-enabled builds only; release aborts) and
+//! only signals. It never probes, acquires an assertion or runs lifecycle code.
 //! # Dispatch
 //!
 //! Off-main installation and removal use the host `MainThreadExecutor` and wait
@@ -766,7 +765,8 @@ define_class!(
     struct ScreenLockObserverObject;
 
     impl ScreenLockObserverObject {
-        /// Ignores payload, contains panics and only signals.
+        /// Ignores payload, contains panics (unwind-enabled builds only; release aborts) and only
+        /// signals.
         #[unsafe(method(stacheKeepAwakeScreenLockChanged:))]
         fn screen_lock_changed(&self, _notification: &NSNotification) {
             let wake = Arc::clone(&self.ivars().wake);

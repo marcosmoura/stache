@@ -556,3 +556,24 @@ fn the_app_manifest_lists_every_exported_command() {
         .collect();
     assert_eq!(manifest, exported);
 }
+
+#[test]
+fn release_profile_aborts_on_panic() {
+    let manifest = include_str!("../../../../Cargo.toml");
+    let section = manifest
+        .split_once("\n[profile.release]\n")
+        .map(|(_, rest)| rest.split("\n[").next().unwrap_or(rest))
+        .expect("the workspace Cargo.toml has a [profile.release] section");
+    let panic = section
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .find(|(key, _)| key.trim() == "panic")
+        .map(|(_, value)| value.trim());
+    assert_eq!(
+        panic,
+        Some("\"abort\""),
+        "[profile.release] must keep panic = \"abort\". Switching to unwind changes what a \
+         release panic leaves behind: revisit the \"Release panics\" subsection of \
+         docs/architecture/sdk.md and every catch_unwind comment first"
+    );
+}

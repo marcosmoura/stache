@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 02 — Media adapter provenance
@@ -62,7 +62,8 @@ spec on `main` (Decision 3). Do not change how the adapter is run or resolved.
     `raw.githubusercontent.com/ungive/mediaremote-adapter/<revision>/...` at the pinned
     revision SHA, not the tag. Exit non-zero on any difference, naming the file.
   - `--refresh --bottle <tag> --version <v>` (network, writes): resolve the formula, bottle
-    digest and revisions from `formulae.brew.sh`, then rewrite the files and the manifest. The
+    digest and source revision from `formulae.brew.sh` and the `mediaremote-adapter` submodule
+    revision from the GitHub API, then rewrite the files and the manifest. The
     next refresh uses this mode. Its output still has to pass `--verify-upstream` and the live
     probe below before it is committed.
 
@@ -141,6 +142,20 @@ spec on `main` (Decision 3). Do not change how the adapter is run or resolved.
 
 ## Notes
 
+- Live probe, approved by the user and run on 2026-11-11 (macOS 27.0): `test` exited 0 and
+  `stream --no-diff` emitted two data lines from the repository copy and again from the release
+  bundle, whose adapter files matched the manifest. `codesign --verify --deep --strict` passes on
+  the ad-hoc, hardened-runtime app. The binaries are built for macOS 26 but were run on macOS 27
+  only.
+
+- Changed after review (2026-11-11): the tool calls `/usr/bin/tar`; `--refresh` writes nothing
+  unless every manifest path exists in the new bottle, checks the adapter tag against the
+  submodule revision and reports bottle files the manifest does not list; a test keeps
+  `PROVENANCE.md` and `bar.md` in step with the manifest. The framework and its binary fail
+  plain `codesign --verify` in place, not only `--strict`; only a copy of the binary outside the
+  framework verifies. Two more stale release-spec statements were corrected under Decision 3:
+  "the only executable" (now "in `Contents/MacOS`") and the signing order in Part 03.
+
 - Homebrew bottles carry build-provenance attestations. If `gh attestation verify <bottle>
   --repo Homebrew/homebrew-core` works without new credentials, record its result in
   `PROVENANCE.md`. It is optional evidence, not a criterion.
@@ -148,5 +163,6 @@ spec on `main` (Decision 3). Do not change how the adapter is run or resolved.
   nested code. Do not ad-hoc re-sign here: that would break byte identity with the bottle.
 - Some harness sandboxes leave an empty `.claude/` directory inside the resource directory.
   `--check` reports it as an extra entry. Delete it locally; it is untracked.
-- Network hosts the tool needs: `formulae.brew.sh` (refresh only), `ghcr.io` (token and blob;
-  it may redirect to `pkg-containers.githubusercontent.com`) and `raw.githubusercontent.com`.
+- Network hosts the tool needs: `formulae.brew.sh` and `api.github.com` (refresh only),
+  `ghcr.io` (token and blob; it may redirect to `pkg-containers.githubusercontent.com`) and
+  `raw.githubusercontent.com`.

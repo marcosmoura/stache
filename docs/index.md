@@ -34,6 +34,7 @@ Read when navigating the shipped foundation, explicitly planned rewrites or the 
 | Tiling inactive workspaces (shipped)        | [feature](features/tiling.md), [spec](specs/2026-11-12-inactive-workspaces/00-overview.md)                  |
 | Coordinated teardown                        | [spec](specs/2026-11-03-teardown/00-overview.md)                                                            |
 | Release/packaging (planned)                 | [spec](specs/2026-11-03-release/00-overview.md)                                                             |
+| Security hardening (CI, adapter, trust)     | [spec](specs/2026-11-11-security-hardening/00-overview.md), [trust](architecture/config.md#trust-model)     |
 | Old application/features                    | [legacy docs](../_legacy/docs/index.md), [legacy build](../_legacy/README.md)                               |
 | Tray clicks and menu (shipped)              | [features/tray.md](features/tray.md)                                                                        |
 | Tray popover (shell, Overview, settings)    | [feature](features/popover.md), [spec](specs/2026-11-13-tray-popover/00-overview.md)                        |

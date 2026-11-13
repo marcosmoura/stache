@@ -1347,14 +1347,17 @@ fn an_unacknowledged_send_is_uncertain_never_retried_and_later_actions_are_not_a
 
 #[test]
 fn hops_share_the_request_budget() {
+    // Each answer takes 400 ms: the first lands 200 ms inside the 600 ms
+    // budget, the second needs 200 ms more than is left. A hop of its own
+    // (4000 ms) would let the second land too, so only a shared budget times out.
     let timing = IpcTiming {
-        budget: Duration::from_millis(260),
-        hop: Duration::from_millis(200),
+        budget: Duration::from_millis(600),
+        hop: Duration::from_secs(4),
         poll: Duration::from_millis(1),
     };
     let (built, ..) = standard();
     let rig = Rig::timed(built.state, timing);
-    rig.actor.set_mode(Mode::Delay(Duration::from_millis(150)));
+    rig.actor.set_mode(Mode::Delay(Duration::from_millis(400)));
     let started = Instant::now();
     let value = rig.ok("window", json!({"toggleFloating": true, "preset": "x"}));
     let elapsed = started.elapsed();
@@ -1367,8 +1370,8 @@ fn hops_share_the_request_budget() {
     );
     assert_eq!(evidence.unknown[0].subject, "action:preset");
     assert!(
-        elapsed < Duration::from_millis(260 + 150),
-        "two hops of 200 ms were not spent: {elapsed:?}"
+        elapsed < Duration::from_secs(1), // the 600 ms budget plus one 400 ms answer
+        "two hops of 4000 ms were not spent: {elapsed:?}"
     );
 }
 

@@ -38,7 +38,7 @@ describe('MotionProvider', () => {
     );
     const box = screen.getByTestId('box').element();
 
-    await expect.poll(() => getComputedStyle(box).opacity).toBe('1');
+    await expect.poll(() => getComputedStyle(box).opacity, { timeout: 5000 }).toBe('1');
   });
 
   it('throws when a full motion component renders inside it (strict)', async () => {

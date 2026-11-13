@@ -504,6 +504,10 @@ Exit status and markers do not change. The desktop host logs the same hint once
 at startup, as a single `warn` record that lists every stale file; reloads and
 watcher batches do not repeat it. Once both files exist there is no hint.
 
+Trust warnings (see [Trust model](#trust-model)) follow the stale-JSONC notes,
+one line per flagged path, in both the offline and the host-answered output.
+They change no marker and no exit status.
+
 `config path` and the `schema` output never write ANSI when piped. `schema`
 styles keys, strings, numbers and literals only when stdout is a terminal; see
 [ipc.md](ipc.md#output).
@@ -512,6 +516,45 @@ styles keys, strings, numbers and literals only when stdout is a terminal; see
 `schema proxyAudio`,
 `schema notunes`, `schema tiling` and `schema wallpapers` print those registered module schemas.
 Unknown IDs fail.
+
+## Trust model
+
+Configuration files are code. `global.toml` `exec_on_startup` and
+`keybindings.toml` bindings run commands as children of the
+Accessibility-trusted app, and keybindings hot-reload, so anyone who can write
+these files runs commands as the user. Every process of the same user is
+trusted; the boundary is other accounts.
+
+The loader follows symlinks and never refuses a file because of its owner or
+mode. [`inspect_trust`](../../src/crates/sdk/src/config/trust.rs) only warns. It
+examines, following symlinks:
+
+- the configuration directory;
+- every registered file that exists (`global.toml` included);
+- for a file that is itself a symlink, the directory holding its target.
+
+A path is flagged when its owner is neither the effective user nor root, or its
+mode is group-writable (`0o020`) or world-writable (`0o002`). Group write is
+flagged even though macOS users share `staff`. A symlink target's directory with
+the sticky bit (`0o1000`, as in a Nix store or `/Users/Shared`) is not flagged
+for group or world write, since others cannot replace or remove the file there;
+its owner is still checked, and the configuration directory is flagged even when
+sticky because someone else could create a missing file in it. ACLs are not
+inspected: only owner and mode bits are. Missing files and metadata errors
+are skipped; the loader reports I/O problems. Ancestors are not walked. Each
+path is reported once, by its canonical spelling, so a symlinked
+`~/.config/stache` names the real dotfiles directory. A dotfiles layout with
+ordinary modes (`0755` directories, `0644` files) produces no warning.
+
+```text
+warning: <path> is group-writable (mode 0775, owner uid 501); Stache runs commands from its configuration, see docs/architecture/config.md#trust-model
+```
+
+`config path` prints these lines after its entries and notes. The desktop host
+logs one `warn` record listing all of them at startup, none when clean; reloads
+and watcher batches do not repeat it. No warning changes a file's acceptance,
+the registry, the watcher or the tray. The control socket's same-user reach is
+described in [ipc.md](ipc.md#endpoint-safety).
 
 ## Migration
 
