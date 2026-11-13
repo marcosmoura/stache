@@ -631,12 +631,12 @@ fn a_load_timeout_clears_the_reservation_closes_the_exact_window_and_stays_runni
         Native::Manual,
         config(28, 14),
         vec![builtin()],
-        timing(120, NEVER),
+        timing(1120, NEVER),
     );
     let begun = Instant::now();
     h.start();
     assert!(
-        begun.elapsed() < Duration::from_millis(100),
+        begun.elapsed() < Duration::from_millis(600),
         "start returned promptly"
     );
     assert_eq!(h.status(), ModuleStatus::Running);

@@ -96,3 +96,18 @@ The changed tests are the tests. End-to-end scenario: the real Quality run on th
   `test:scripts` passed on the runner. `test:native` then failed
   `shutdown::tests::a_blocked_record_sink_cannot_extend_the_terminal_deadline` (0.241 s against a
   200 ms wall-clock bound). The sink stays blocked for the whole test, so the bound is now 2 s.
+- Wall-clock review outcome (2026-11-13). Changed: 21 sub-second "returned promptly" bounds
+  raised to 1–2 s; three tests whose bound sat next to the rig timeout had timeout and bound
+  scaled together (`SHORT_LOAD` 1300 ms, a 1120 ms load timeout, a 1300 ms actor delay); one
+  positive wait raised to 5 s; two real-time animation counts lowered to the minimum that still
+  proves an intermediate frame. Left as they are, because a robust form needs a product change or
+  a rig redesign, and still timing-sensitive on a starved machine:
+  - `app/src/bar_tests.rs`, two 200 ms bounds against the shared 250 ms rig `BUDGET` (a separate
+    budget for those two tests is needed; raising the shared one slows every stalled-hop test);
+  - `tiling/src/visibility_tests.rs` `the_settle_never_outlasts_the_restore_hop`, bounded by the
+    product constant `RESTORE_SETTLE` (250 ms);
+  - `tiling/src/borders/engine_tests.rs` `nothing_to_hide_waits_for_nothing`, bounded by the
+    product constant `BORDER_HIDE_WAIT` (32 ms);
+  - the real-time animation tests, which have no injectable pacer: a machine starved enough to
+    coalesce every intermediate frame would still fail them;
+  - `app/src/popover_actions_tests.rs` `drain()`, whose 200 ms idle receive is its idle detector.

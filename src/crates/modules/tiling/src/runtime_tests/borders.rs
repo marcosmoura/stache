@@ -1106,7 +1106,7 @@ fn stop_releases_every_overlay_and_nothing_shows_afterwards() {
     assert_eq!(desk.live(), 2);
     desk.overlay.route.close();
     let ticket = desk.overlay.control.release_all();
-    assert!(ticket.wait(Duration::from_millis(500)).is_ok());
+    assert!(ticket.wait(Duration::from_secs(5)).is_ok());
     assert_eq!(desk.live(), 0);
     assert_eq!(desk.overlay.fake.ordered_in(), 0);
     desk.mark("stopped");

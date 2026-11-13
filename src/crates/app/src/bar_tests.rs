@@ -284,7 +284,7 @@ const BAR: &str = "enabled = true\nheight = 28\npadding = 14\n";
 
 /// A tight load deadline so failure scenarios do not wait for the production
 /// ten seconds.
-const SHORT_LOAD: Duration = Duration::from_millis(300);
+const SHORT_LOAD: Duration = Duration::from_millis(1300);
 /// Automatic panel retries that never fire within a test.
 const NEVER_RETRY: [Duration; 3] = [Duration::from_secs(3600); 3];
 /// The display control's per-hop budget in these tests.
@@ -1210,7 +1210,7 @@ fn a_page_that_never_loads_fails_typed_without_stopping_bar_and_clears_the_inset
     let begun = Instant::now();
     rig.start();
     assert!(
-        begun.elapsed() < Duration::from_millis(200),
+        begun.elapsed() < Duration::from_millis(800),
         "start does not wait for the page"
     );
     assert_eq!(rig.status(), ModuleStatus::Running);
