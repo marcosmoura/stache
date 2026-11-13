@@ -301,14 +301,14 @@ mod tests {
             observed.store(ansi, Ordering::SeqCst);
             json.to_owned()
         });
-        run(
+        let _ = run(
             two_devices(),
             Arc::clone(&highlight),
             &["audio", "list", "-j"],
             true,
         );
         assert!(seen.load(Ordering::SeqCst));
-        run(two_devices(), highlight, &["audio", "list", "-j"], false);
+        let _ = run(two_devices(), highlight, &["audio", "list", "-j"], false);
         assert!(!seen.load(Ordering::SeqCst));
     }
 

@@ -20,7 +20,8 @@ pub trait CpuUsageBackend: Send + Sync {
 
 /// The production CPU usage source.
 pub struct SystemCpuUsage {
-    system: Mutex<System>,
+    /// The measurement, or why `sysinfo` could not start one; `usage` reports it.
+    system: Result<Mutex<System>, SystemReadError>,
 }
 
 impl SystemCpuUsage {
@@ -28,7 +29,9 @@ impl SystemCpuUsage {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            system: Mutex::new(System::new()),
+            system: System::new()
+                .map(Mutex::new)
+                .map_err(|error| SystemReadError::new(format!("cpu usage source failed: {error}"))),
         }
     }
 }
@@ -39,7 +42,8 @@ impl Default for SystemCpuUsage {
 
 impl CpuUsageBackend for SystemCpuUsage {
     fn usage(&self) -> Result<f32, SystemReadError> {
-        let mut system = self.system.lock().unwrap_or_else(PoisonError::into_inner);
+        let system = self.system.as_ref().map_err(Clone::clone)?;
+        let mut system = system.lock().unwrap_or_else(PoisonError::into_inner);
         system.refresh_cpu_usage();
         Ok(system.global_cpu_usage())
     }

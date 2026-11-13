@@ -248,7 +248,7 @@ impl<H: OverlayHost> OverlayOwners<H> {
 
     /// Overlays currently owned by a handle.
     #[must_use]
-    pub fn live_len(&self) -> usize { self.live.len() }
+    pub const fn live_len(&self) -> usize { self.live.len() }
 
     /// Overlays currently ordered in.
     #[must_use]

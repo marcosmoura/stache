@@ -157,8 +157,9 @@ fn the_session_action_command_is_generated_with_closed_actions_and_concrete_outc
     let bindings = std::fs::read_to_string(&path).expect("read bindings");
     assert!(
         bindings.contains(
-            "barSessionAction: (module: string, action: SessionAction) => \
-             __TAURI_INVOKE<SessionActionOutcome>(\"bar_session_action\", { module, action })"
+            "barSessionAction: (module: string, action: SessionAction, options?: InvokeOptions) => \
+             __TAURI_INVOKE<SessionActionOutcome>(\"bar_session_action\", { module, action }, \
+             options)"
         ),
         "the generated command carries exactly a module id and a closed action"
     );
@@ -195,8 +196,8 @@ fn the_tiling_action_command_is_generated_with_a_closed_target_and_concrete_outc
     let bindings = std::fs::read_to_string(&path).expect("read bindings");
     assert!(
         bindings.contains(
-            "barTilingAction: (request: BarTilingRequest) => \
-             __TAURI_INVOKE<BarTilingOutcome>(\"bar_tiling_action\", { request })"
+            "barTilingAction: (request: BarTilingRequest, options?: InvokeOptions) => \
+             __TAURI_INVOKE<BarTilingOutcome>(\"bar_tiling_action\", { request }, options)"
         ),
         "the generated command carries exactly one strict request"
     );

@@ -89,7 +89,7 @@ impl Scopes {
         }
     }
 
-    fn is_empty(&self) -> bool { self.apps.is_empty() && self.all.is_none() }
+    const fn is_empty(&self) -> bool { self.apps.is_empty() && self.all.is_none() }
 
     fn take(&mut self) -> Vec<Input> {
         let mut out: Vec<Input> = std::mem::take(&mut self.apps)
@@ -224,7 +224,7 @@ impl Pipeline {
 
     /// Whether anything is waiting for the actor.
     #[must_use]
-    pub fn has_work(&self) -> bool {
+    pub const fn has_work(&self) -> bool {
         !self.control.is_empty()
             || !self.scopes.is_empty()
             || !self.completions.is_empty()

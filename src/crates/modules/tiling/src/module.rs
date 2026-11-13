@@ -259,7 +259,7 @@ impl Inner {
     /// (deduplicated by exact application id or live process id), prunes the
     /// proven-terminal ones and republishes them.
     fn merge_ambiguous(&self, runtime: Option<&Arc<TrackingRuntime>>, fresh: Vec<OwnedApp>) {
-        let live = runtime.map(|rt| rt.running_applications()).unwrap_or_default();
+        let live = runtime.map_or_default(|rt| rt.running_applications());
         let mut kept = lock(&self.ambiguous);
         Self::prune_retained(&mut kept, &live);
         for app in fresh {
@@ -273,7 +273,7 @@ impl Inner {
             kept.retain(|record| {
                 record.app.application != app.application && (pid.is_none() || record.pid != pid)
             });
-            let label = found.map(AppLabel::from_running).unwrap_or_default();
+            let label = found.map_or_default(AppLabel::from_running);
             kept.push(Retained { app, pid, label });
         }
         let apps: Vec<(OwnedApp, AppLabel)> =
@@ -1238,20 +1238,17 @@ impl Module for TilingModule {
         inner.status.set_features(feature_diagnostics(&runtime, &pair.config));
         let animation = Arc::downgrade(runtime.animation());
         inner.status.set_pacing_source(Some(Box::new(move || {
-            animation
-                .upgrade()
-                .map(|control| control.pacing_diagnostics())
-                .unwrap_or_default()
+            animation.upgrade().map_or_default(|control| control.pacing_diagnostics())
         })));
         {
             let weak = Arc::downgrade(&runtime);
             inner.status.set_native_borders_source(Some(Box::new(move || {
-                weak.upgrade().map(|runtime| runtime.border_diagnostics()).unwrap_or_default()
+                weak.upgrade().map_or_default(|runtime| runtime.border_diagnostics())
             })));
         }
         let animation = Arc::downgrade(runtime.animation());
         inner.status.set_animation_source(Some(Box::new(move || {
-            animation.upgrade().map(|control| control.report()).unwrap_or_default()
+            animation.upgrade().map_or_default(|control| control.report())
         })));
 
         // Stage 9: the passive drag observer. Optional: it cannot fail the

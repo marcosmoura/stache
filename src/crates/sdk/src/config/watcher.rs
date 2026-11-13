@@ -40,7 +40,7 @@ pub struct ChangeSet {
 impl ChangeSet {
     /// Whether the batch carries no information.
     #[must_use]
-    pub fn is_empty(&self) -> bool { !self.rescan && self.files.is_empty() }
+    pub const fn is_empty(&self) -> bool { !self.rescan && self.files.is_empty() }
 }
 
 /// A failure to establish or keep the directory watch.

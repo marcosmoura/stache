@@ -728,7 +728,7 @@ fn swap_and_focus_by_direction_at_the_edges_follow_legacy() {
             assert_eq!(world.order("w"), order, "{layout} {count} previous wraps back");
             world.focus(first);
             world.intent(Intent::SwapWindow(SwapDirection::Previous));
-            let mut wrapped = order.clone();
+            let mut wrapped = order;
             wrapped.swap(0, count - 1);
             assert_eq!(world.order("w"), wrapped, "{layout} {count} previous wraps");
         }

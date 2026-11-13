@@ -400,7 +400,7 @@ impl AnimationControl {
     /// (creation failed, or the display is unknown), for status diagnostics.
     #[must_use]
     pub fn pacing_diagnostics(&self) -> Vec<String> {
-        self.slot().worker.as_ref().map(|w| w.pacing_notes()).unwrap_or_default()
+        self.slot().worker.as_ref().map_or_default(|w| w.pacing_notes())
     }
 
     /// The applications and kinds that move without animation. The actor

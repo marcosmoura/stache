@@ -1497,8 +1497,8 @@ fn windows(snapshot: &TilingSnapshot, params: &QueryParams) -> Vec<WindowDto> {
             Some(WindowDto {
                 id,
                 pid: app.map_or(0, |app| app.info.pid),
-                app_id: app.map(|app| app.info.bundle_id.clone()).unwrap_or_default(),
-                app_name: app.map(|app| app.info.name.clone()).unwrap_or_default(),
+                app_id: app.map_or_default(|app| app.info.bundle_id.clone()),
+                app_name: app.map_or_default(|app| app.info.name.clone()),
                 title: window.observed.title.clone(),
                 workspace: workspace.name.clone(),
                 frame,
@@ -1539,8 +1539,8 @@ pub(crate) fn status(snapshot: &TilingSnapshot) -> StatusDto {
         let app = catalog(failed.application);
         StatusAppDto {
             pid: app.map_or(0, |app| app.info.pid),
-            name: app.map(|app| app.info.name.clone()).unwrap_or_default(),
-            bundle_id: app.map(|app| app.info.bundle_id.clone()).unwrap_or_default(),
+            name: app.map_or_default(|app| app.info.name.clone()),
+            bundle_id: app.map_or_default(|app| app.info.bundle_id.clone()),
             reason: failed.reason.clone(),
             retries: failed.retries,
         }
@@ -1578,8 +1578,8 @@ pub(crate) fn status(snapshot: &TilingSnapshot) -> StatusDto {
             .map(|owned| {
                 let app = catalog(owned.application);
                 StatusHiddenDto {
-                    name: app.map(|app| app.info.name.clone()).unwrap_or_default(),
-                    bundle_id: app.map(|app| app.info.bundle_id.clone()).unwrap_or_default(),
+                    name: app.map_or_default(|app| app.info.name.clone()),
+                    bundle_id: app.map_or_default(|app| app.info.bundle_id.clone()),
                     ownership: match owned.ownership {
                         Ownership::PendingIssued => "pending",
                         Ownership::PendingPossible => "pending-possible",
@@ -1597,8 +1597,8 @@ pub(crate) fn status(snapshot: &TilingSnapshot) -> StatusDto {
             .map(|(entry, retry_in)| {
                 let app = catalog(entry.application);
                 StatusAnimationFallbackDto {
-                    name: app.map(|app| app.info.name.clone()).unwrap_or_default(),
-                    bundle_id: app.map(|app| app.info.bundle_id.clone()).unwrap_or_default(),
+                    name: app.map_or_default(|app| app.info.name.clone()),
+                    bundle_id: app.map_or_default(|app| app.info.bundle_id.clone()),
                     kind: entry.kind.as_str().to_owned(),
                     reason: entry.reason.to_string(),
                     retry_in_ms: retry_in
@@ -1619,8 +1619,8 @@ pub(crate) fn status(snapshot: &TilingSnapshot) -> StatusDto {
                 let app = catalog(window.application);
                 StatusWindowDto {
                     id: window.cg_window_id,
-                    app_name: app.map(|app| app.info.name.clone()).unwrap_or_default(),
-                    bundle_id: app.map(|app| app.info.bundle_id.clone()).unwrap_or_default(),
+                    app_name: app.map_or_default(|app| app.info.name.clone()),
+                    bundle_id: app.map_or_default(|app| app.info.bundle_id.clone()),
                     title: window.observed.title.clone(),
                     subrole: window.observed.subrole.clone(),
                     frame: window.observed.frame.map(|frame| {
@@ -1641,8 +1641,8 @@ pub(crate) fn status(snapshot: &TilingSnapshot) -> StatusDto {
             .map(|(token, why)| {
                 let app = catalog(token.application());
                 StatusExcludedDto {
-                    app_name: app.map(|app| app.info.name.clone()).unwrap_or_default(),
-                    bundle_id: app.map(|app| app.info.bundle_id.clone()).unwrap_or_default(),
+                    app_name: app.map_or_default(|app| app.info.name.clone()),
+                    bundle_id: app.map_or_default(|app| app.info.bundle_id.clone()),
                     reason: why.label().to_owned(),
                 }
             })

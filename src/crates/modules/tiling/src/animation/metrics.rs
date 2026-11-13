@@ -242,11 +242,11 @@ impl MetricsBook {
 
     /// Applications held.
     #[must_use]
-    pub fn len(&self) -> usize { self.apps.len() }
+    pub const fn len(&self) -> usize { self.apps.len() }
 
     /// Whether nothing is held.
     #[must_use]
-    pub fn is_empty(&self) -> bool { self.apps.is_empty() }
+    pub const fn is_empty(&self) -> bool { self.apps.is_empty() }
 
     /// The records of one application, oldest first.
     #[must_use]

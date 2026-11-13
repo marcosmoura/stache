@@ -852,7 +852,6 @@ fn context() -> tauri::Context<tauri::Wry> { tauri::generate_context!() }
 ///
 /// A desktop failure is reported as `stache: {error}` with exit code 1, so the
 /// single binary has one error convention.
-#[must_use]
 pub fn run_main(args: Vec<OsString>, current_exe: &Path) -> ExitCode {
     let started = Instant::now();
     run_main_with(args, current_exe, move |paths| run_with(paths, None, started))

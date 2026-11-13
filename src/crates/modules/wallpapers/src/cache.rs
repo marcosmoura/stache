@@ -297,7 +297,16 @@ pub fn cache_key(
     push_field(&mut fields, &pixels.height.to_le_bytes());
     push_field(&mut fields, &effects.radius.to_le_bytes());
     push_field(&mut fields, &effects.blur.to_le_bytes());
-    format!("{:x}", Sha256::digest(&fields))
+    hex(&Sha256::digest(&fields))
+}
+
+/// Lowercase hex of `bytes`.
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes.iter().fold(String::with_capacity(bytes.len() * 2), |mut out, byte| {
+        let _ = write!(out, "{byte:02x}");
+        out
+    })
 }
 
 fn push_field(output: &mut Vec<u8>, value: &[u8]) {
@@ -518,7 +527,7 @@ mod tests {
         push_field(&mut fields, &1_u32.to_le_bytes());
         push_field(&mut fields, &0_u32.to_le_bytes());
         push_field(&mut fields, &0_u32.to_le_bytes());
-        assert_ne!(key, format!("{:x}", Sha256::digest(&fields)));
+        assert_ne!(key, hex(&Sha256::digest(&fields)));
     }
 
     struct CancelAtPublish<'a> {

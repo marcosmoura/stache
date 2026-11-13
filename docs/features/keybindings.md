@@ -75,8 +75,10 @@ and crash recovery are **unverified** against a live system.
 **Planning.** `Plan::from_config` normalizes aliases per `+` component (`Ctrl`,
 `Cmd`/`Super`/`Meta`, `Alt`/`Opt`, backtick) and routes each raw key: `CapsLock+<key>`
 first, then `§` (last component, only Command/Shift/Option/Control; `CapsLock+§` is the
-physical ISO key `0x0A`), then the ordinary grammar of `global-hotkey` 0.8.0, the parser
-the archived application used (parsing only, no native manager). Raw keys are planned in
+physical ISO key `0x0A`), then the ordinary grammar of `global-hotkey` 0.10.0, the parser
+the archived application used at 0.8.0 (parsing only, no native manager). 0.10.0 also parses
+key names 0.8.0 rejected (`F25` to `F35`, international, launch and media keys); none has a
+Carbon virtual key, so registration reports them unsupported. Raw keys are planned in
 lexical order; the last semantic duplicate wins and the diagnostic names both spellings.
 Invalid entries are skipped with a per-binding diagnostic. Commands are trimmed and blank
 ones dropped; an empty list captures without spawning. Section entries carry the

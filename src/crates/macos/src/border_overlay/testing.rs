@@ -378,8 +378,7 @@ impl FakeOverlayBackend {
         lock(&self.records)
             .layers
             .get(&panel)
-            .map(|spec| spec.shown_layers().to_vec())
-            .unwrap_or_default()
+            .map_or_default(|spec| spec.shown_layers().to_vec())
     }
 
     /// The glow bitmaps a panel rendered, in order (one entry per re-render).

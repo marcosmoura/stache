@@ -97,8 +97,7 @@ impl FakeObservers {
         lock(&self.state)
             .pids
             .get(&pid)
-            .map(|script| script.registrations.clone())
-            .unwrap_or_default()
+            .map_or_default(|script| script.registrations.clone())
     }
 
     pub fn is_attached(&self, pid: i32) -> bool {

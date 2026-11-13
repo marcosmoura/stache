@@ -232,7 +232,5 @@ pub fn cpu_brand() -> String {
     if status != 0 {
         return String::new();
     }
-    CStr::from_bytes_until_nul(&buffer)
-        .map(|text| text.to_string_lossy().into_owned())
-        .unwrap_or_default()
+    CStr::from_bytes_until_nul(&buffer).map_or_default(|text| text.to_string_lossy().into_owned())
 }

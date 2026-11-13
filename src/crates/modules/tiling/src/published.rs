@@ -206,7 +206,7 @@ pub fn project(snapshot: &TilingSnapshot) -> TilingPublishedState {
             let app = snapshot.apps.iter().find(|app| app.info.application == window.application);
             PublishedWindow {
                 key: window_key(window.token),
-                app_name: app.map(|app| app.info.name.clone()).unwrap_or_default(),
+                app_name: app.map_or_default(|app| app.info.name.clone()),
                 title: window.observed.title.clone(),
                 workspace: window.desired.workspace.and_then(|id| workspace_name(snapshot, id)),
                 minimized: window.observed.minimized,

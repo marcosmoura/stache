@@ -176,7 +176,7 @@ pub fn plan_overlay(
         width: finite(target.width).max(0.0),
         height: finite(target.height).max(0.0),
     };
-    let primary = screens.first().map(|screen| screen.frame).unwrap_or_default();
+    let primary = screens.first().map_or_default(|screen| screen.frame);
     let glow = match appearance.paint {
         BorderPaint::Glow(_) if width > 0.0 => glow_radius(width),
         _ => 0.0,
