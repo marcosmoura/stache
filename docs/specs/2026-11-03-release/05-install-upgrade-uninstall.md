@@ -4,205 +4,123 @@ status: in-progress
 
 # 05 — Install, upgrade, legacy removal and uninstall
 
-Read when changing what a person does to install, upgrade or remove the app. **PLANNED.** Depends
-on [Part 02](02-release-pipeline.md) and [Part 04](04-identity-switch.md)'s preparation. Its
-legacy-removal steps must exist before Part 04's rename. Final shipped-route proof also needs
-[Part 03](03-signing-notarization.md)'s signed artifacts and Part 04's rename; Part 06 records
-the full private candidate migration and cask rehearsal before completion.
+Read when changing what a person does to install, upgrade or remove the app. Revised 2026-11-13
+(Decisions 22 to 25): the release is a self-signed DMG on GitHub Releases, with no Homebrew route.
+Depends on [Part 02](02-release-pipeline.md), [Part 03](03-signing.md) and
+[Part 04](04-identity-switch.md).
 
 ## Scope
 
-Write `docs/guides/install.md`, define the cask, make CLI access real for a released install, and add
-the allowed legacy-config diagnostic. Nothing here removes, quits or rewrites anything automatically.
-The guide uses `.next` names until the Part 04 rename updates them, and nothing is published before then.
+`docs/guides/install.md`, command-line access for an installed app, and the legacy-config note.
+Nothing here removes, quits or rewrites anything automatically.
 
 ## Requirements
 
 ### Install
 
-- **DMG:** open, drag to `Applications`, launch. Gatekeeper's normal first-open prompt for a quarantined
-  download is expected. Quarantine is left in place; the guide never recommends `xattr -d`, `xattr -cr`
-  or `spctl --master-disable`, and an ad-hoc artifact is described as not installable by the public.
-- **Zip:** expand and move to `Applications`.
-- **Cask:** `brew install --cask marcosmoura/tap/stache`. If an app already sits at the target,
-  Homebrew's refusal is the correct result: remove legacy first, and **never pass `--force`**.
-- **Requirements** stated up front: arm64 and macOS 26 or later.
-
-### Cask
-
-`scripts/release.ts` renders `Casks/stache.rb` into `target/release-artifacts/` from the real version and
-DMG checksum. Publishing it to the tap is a manual step in [Part 06](06-release-verification.md); this
-part pushes nothing. The cask declares:
-
-- `depends_on arch: :arm64` and the macOS 26 requirement, confirmed after promotion by
-  `brew audit --cask --online`, which reads `LSMinimumSystemVersion`; draft checks inspect the plist directly;
-- `app "Stache.app"` and a `binary` for the CLI, following the route [below](#cli-access);
-- `uninstall signal: [["TERM", "com.marcosmoura.stache"]], on_upgrade: :signal`, with **no** `quit:`
-  and no `KILL` escalation;
-- `zap trash:` for the cache directory only; **`~/.config/stache` is never in `zap`**;
-- no `auto_updates`, since there is no updater, and no `preflight`, `postflight` or
-  `terminate_process`, which matches by process name.
-
-For private candidate rehearsals only, render a separate local test cask using successive test-cask
-versions such as `0.26.0-test.1` and `0.26.0-test.2` and URLs served from authenticated downloads
-on loopback. These versions exist only in that local test cask, never in the app, manifests,
-release metadata or published cask; the app remains `0.26.0`. Each test cask uses its candidate's
-actual DMG checksum. Never publish this test cask or expose a public prerelease.
+- **Requirements** stated up front: Apple silicon (arm64) and macOS 26 or later.
+- **DMG:** open it and drag `Stache.app` to `Applications`. **Zip:** expand and move it there.
+- **First open.** The app is not notarized, so macOS blocks the first open of a downloaded copy.
+  The guide gives the supported route only: try to open the app, then System Settings → Privacy &
+  Security → **Open Anyway**, and confirm. It says plainly why this happens. It never recommends
+  `xattr -d`, `xattr -cr` or `spctl --master-disable`.
+- **Accessibility.** The app asks for Accessibility on first launch. Because every release is
+  signed with the same certificate, an update keeps the grant.
+- **No Homebrew.** The guide says there is no cask or formula.
 
 ### Upgrade
 
-- The running app must stop through the coordinated teardown, never a kill. **Manual:** quit from
-  the tray, then replace the app. **Cask:** the `signal:` stanza sends SIGTERM by bundle identifier, which
-  converges on the same teardown.
-- Tray Quit, Cmd-Q and SIGTERM are verified to run the teardown. Do not rely on logout, restart
-  or shutdown, which are not verified ([roadmap](../../roadmap.md)).
-- Nothing relaunches automatically; the guide says to launch again. Config and cache survive, and the
-  runtime directory is recreated at launch.
+- Quit from the tray, replace the app with the new one, open it again. Nothing relaunches by itself.
+  The first open of each downloaded update needs the same approval.
+- Tray Quit, Cmd-Q and SIGTERM are verified to run the teardown. Do not rely on logout, restart or
+  shutdown, which are not verified ([roadmap](../../roadmap.md)).
+- Config and cache survive; the runtime directory is recreated at launch.
 
-### Coexistence, while legacy remains
+### Coexistence
 
-- `Stache Next` and legacy `Stache` may both be installed and running, since their identifiers, cache and
-  runtime directories differ. Their configuration directory is shared, and their files differ:
-  legacy reads `config.jsonc`, Stache Next reads `global.toml` and per-module `<id>.toml` files
-  (see [config](../../architecture/config.md)); neither reads the other's files.
-- Do not enable the same device-changing automation in both: `proxyAudio` and `notunes` would fight.
-- **Do not install the renamed release alongside legacy.** They share an identifier, which is the
-  state Part 04 refuses.
-- A release and a `bun run tauri:dev` session are expected siblings: separate identifiers, cache and
-  runtime directories. A warning is required only for a detectable `.next` bundle, not an
-  unbundled dev run with no bundle identifier. The same device-automation caution applies.
-- A local `--release` build is not a sibling. It is the release identity, so its host exits as a second
-  launch while the release runs. Debug builds, `tauri:dev` and a checkout's CLI use `.next`.
+- A release (`com.marcosmoura.stache`) and a development build (`com.marcosmoura.stache.next`) are
+  siblings with separate locks, sockets and caches. They read the same configuration directory, so
+  do not enable the same device-changing automation in both: `proxyAudio` and `notunes` would fight.
+- A release warns in its log when a bundled `Stache Next.app` is running. An unbundled
+  `bun run tauri:dev` run has no bundle identifier and is not detected.
+- A local `--release` build is not a sibling. It is the release identity, so its host exits as a
+  second launch while the release runs.
+- An old Stache from before 0.26 shares the release identifier. The new app refuses to start beside
+  it; remove it first.
 
 ### Legacy removal, explicit and user-run
 
-Public sequence, once migration is approved and the final release is available. Never automated,
-never by process name; no public `.next` release is needed. In order:
+For anyone who still has the pre-0.26 Stache. Never automated, never by process name. In order:
 
-1. Quit legacy from its own tray with **Quit Stache**.
-2. Confirm it stopped by bundle identifier, not name. `lsappinfo` or Activity Monitor's bundle view
-   is acceptable; `pgrep stache` is not, since it also matches the new app.
-3. Preserve `~/.config/stache` (or `$XDG_CONFIG_HOME/stache`), including `config.jsonc`; make a backup.
-4. Move `/Applications/Stache.app` to the Trash. Find other legacy bundles by identifier with
-   `mdfind "kMDItemCFBundleIdentifier == 'com.marcosmoura.stache'"`, including archive build output
-   under `_legacy/target`, and remove them explicitly. Do not build `_legacy/` again after the rename.
-5. Remove the legacy command-line binary installed by `_legacy/scripts/release.sh`:
-   `cargo uninstall stache`. Check `which -a stache` afterward; it shadows a newer link on `PATH`.
-6. Install the released app and CLI using [Install](#install) and [CLI access](#cli-access): the cask
-   installs the chosen CLI route, or a DMG/zip user creates the documented link or copies the separate
-   CLI. Confirm `which -a stache` resolves this released route, not a leftover Cargo binary.
-7. Before launching the new host, run `stache config migrate` through that released CLI route.
-   It writes per-module `<id>.toml` files and leaves `config.jsonc` unchanged. Resolve collisions
-   explicitly; do not overwrite existing config automatically. Launch the new app
-   and verify its behavior. Keep the backup and original `config.jsonc` until confident.
-   If the same directory also holds per-module `<id>.jsonc` files (left by a Stache Next
-   development build), plain `stache config migrate` converts those instead and only notes the
-   legacy file. In that case run `stache config migrate --from <path to config.jsonc>` (add
-   `--force` only after checking which `.toml` files it would replace).
-8. Optional, with the new app quit: clean leftover legacy cache and `stache.sock` at
-   `~/Library/Caches/com.marcosmoura.stache`. This is now also the release cache path; never delete
-   it while the release runs. Optionally remove the self-signed `Stache App` certificate and reset
-   stale privacy records with `tccutil reset Accessibility com.marcosmoura.stache` while both apps
-   are stopped, before granting any new permissions.
-
-**Owner's pre-rename rehearsal, not the public sequence:** with explicit approval, preserve config
-and rehearse explicit migration and new behavior through the development checkout's CLI and `.next`
-host, keeping device-changing automation mutually exclusive. Then perform steps 1–5 above and
-record the absence of legacy for `RELEASE-04-07` and `RELEASE-05-09`. The rename and private
-candidate installation follow; exercise steps 6–8 with that candidate in Part 06. Do not require
-a not-yet-published release or the legacy Cargo CLI to perform migration before removal.
+1. Quit the old app from its own tray with **Quit Stache**.
+2. Confirm it stopped by bundle identifier, not name (`lsappinfo` or Activity Monitor). A search by
+   the name `stache` also matches the new app.
+3. Keep `~/.config/stache` (or `$XDG_CONFIG_HOME/stache`), including `config.jsonc`; a backup is
+   recommended.
+4. Move the old `/Applications/Stache.app` to the Trash.
+5. Remove the old command-line binary: `cargo uninstall stache`. Check `which -a stache` afterwards.
+6. Install the new app and link the command line ([CLI access](#cli-access)).
+7. Before the first launch, run `stache config migrate`. It writes per-module `<id>.toml` files and
+   leaves `config.jsonc` unchanged, and refuses to overwrite existing files. If the directory also
+   holds per-module `<id>.jsonc` files, run `stache config migrate --from <path to config.jsonc>`
+   (add `--force` only after checking which `.toml` files it would replace).
+8. Optional, with the new app quit: clear leftover files in
+   `~/Library/Caches/com.marcosmoura.stache` with `stache cache clear`, and reset a stale
+   Accessibility record with `tccutil reset Accessibility com.marcosmoura.stache` before granting
+   it again.
 
 ### Config migration
 
-- `stache config migrate` remains explicit. It converts a legacy file into per-module `<id>.toml` files, leaves
-  the source unchanged, and refuses collisions without `--force`. Discovery follows
-  `ConfigPaths::legacy_sources`.
-- **Allowed diagnostic.** When a legacy source exists and `global.toml` does not, `config path` and the
-  host startup log print one line naming the source and `stache config migrate`. Detection uses paths
-  only. It does not parse, copy or rewrite, and it prompts nothing.
-  It is separate from the shipped stale-`<id>.jsonc` hint
-  ([config](../../architecture/config.md#path-command-markers)), which stays as it is, but uses the
-  same `note: … run \`stache config migrate\``line format. When per-module`<id>.jsonc`files are
-  also present, it names`stache config migrate --from <source>` instead, because plain migrate
-  would pick the per-module files.
+- `stache config migrate` remains explicit. Discovery follows `ConfigPaths::legacy_sources`.
+- **Legacy-config note (shipped).** When a legacy source exists and `global.toml` does not,
+  `config path` and the host startup log print one `note:` line naming the source and
+  `stache config migrate`, or `stache config migrate --from <source>` when per-module `<id>.jsonc`
+  files are also present. Detection uses paths only.
 
 ### CLI access
 
-A bundled executable always selects desktop, so the released app has no direct CLI at
-`<App>.app/Contents/MacOS/stache`. Mode selection does not change under either route below.
-
-**Primary route: symlink.** A link outside the bundle, through the cask's `binary` stanza or a documented
-`ln -s` for DMG and zip installs. On macOS `std::env::current_exe` is expected to report the launched
-path, so a link outside the bundle should select CLI mode. No run has proven this yet; `RELEASE-05-07`
-is what proves it.
-
-**Pre-approved fallback: separate CLI binary.** If the symlink probe fails, ship this without a fresh
-decision, and record the probe result and choice in this file:
-
-- A small CLI binary target, installed as `stache` and shipped outside the app bundle. It must stay out
-  of the bundle's `Contents/MacOS`, so `RELEASE-01-06`'s one-executable rule still holds; put it outside
-  `stache-app`'s `[[bin]]` list if the bundler would otherwise collect it.
-- It never starts the desktop host, and it resolves the same identity, lock and socket as the app.
-- The DMG and zip carry it beside the app. The cask's `binary` stanza installs it, and the guide documents
-  copying it for DMG and zip installs.
-- It is signed, notarized and verified like the app under [Part 03](03-signing-notarization.md). A bare
-  executable cannot hold a stapled ticket, so its staple check does not apply.
-
-Exactly one route is selected: `RELEASE-05-07` owns the symlink route's pass, or `RELEASE-05-10`
-owns the fallback route's pass. Record the unselected criterion as not applicable with the reason,
-never as passed. Part completion requires all unconditional criteria plus the selected route's
-criterion; this documented conditional applicability is not a skipped required check. Until then,
-a standalone debug binary from a checkout reaches only the development host after the rename;
-it is a rehearsal tool, not the public migration route.
+A bundled executable always selects desktop mode, so the app's own path is not a command line.
+The route is a symlink outside the bundle, which the [probe](#probe-record) proved selects CLI mode:
+`ln -s /Applications/Stache.app/Contents/MacOS/stache <a directory on PATH>/stache`. The guide
+gives that command and says to remove the link on uninstall. No separate CLI binary ships.
 
 ### Uninstall
 
-1. Tray **Quit**, or `brew uninstall --cask stache`.
-2. Move the app to the Trash if installed by hand, and remove any `ln -s` link or copied CLI binary.
-3. Remove the cache at `~/Library/Caches/<identity>`, and, only while the app is not running,
-   `$TMPDIR/<identity>`. The `.next` directories exist only if you ran a debug build from a checkout; remove
-   those only when no development session is active.
-4. **Configuration is opt-in.** `~/.config/stache` (or `$XDG_CONFIG_HOME/stache`) is yours and may still
-   be shared with legacy. The guide warns before giving the removal command.
+1. Quit from the tray.
+2. Move the app to the Trash and remove the `stache` link.
+3. Remove the cache at `~/Library/Caches/com.marcosmoura.stache` and, while the app is not running,
+   `$TMPDIR/com.marcosmoura.stache`.
+4. **Configuration is opt-in.** `~/.config/stache` is yours. The guide warns before giving the
+   removal command.
 
 ## Acceptance criteria
 
-- [x] `RELEASE-05-01` The rendered cask holds the real version and DMG checksum, `signal:` with
-      `on_upgrade: :signal`, `depends_on arch: :arm64`, `app` and `binary`. Local test-cask rendering
-      alone permits successive test versions and local URLs; app and published cask stay `0.26.0`.
-      Test: `scripts/release.test.ts`, including isolation of the test-only overrides.
-- [x] `RELEASE-05-02` The rendered cask has no `quit:`, `KILL`, `terminate_process`, `auto_updates`,
-      flight block or config path in `zap`. Test: `scripts/release.test.ts`.
-- [x] `RELEASE-05-03` The diagnostic appears when a legacy source exists and `global.toml` does not, is
-      absent otherwise, and leaves the source and directory byte-identical. Test: `cli/tests/commands.rs`,
-      with temporary roots.
-- [x] `RELEASE-05-04` The desktop startup path emits that line without reading the source. Test: app test
-      with temporary roots.
-- [x] `RELEASE-05-05` `config migrate` behavior is unchanged: source preserved, collisions refused without
-      `--force`. Test: existing `cli/src/migrate.rs` tests still pass, unedited.
-- [x] `RELEASE-05-06` `docs/guides/install.md` contains the sections above, and no `killall`, `pkill`,
-      `pgrep stache`, `xattr -d`, `xattr -cr`, `spctl --master-disable` or `--force` recommendation. It
-      links from `README.md` and `docs/index.md`. Test: a doc check in `scripts/release.test.ts`.
-- [ ] `RELEASE-05-07` Record the real symlink probe result: a helper checks whether `current_exe`
-      through a link outside the bundle feeds `is_app_bundle` as false without starting a host.
-      Only if the symlink is selected, this criterion passes after `stache cache path` and socket
-      access work through the shipped link on a real install. If the probe fails, preserve that
-      failure evidence, select the fallback and record this criterion as not applicable, not passed;
-      `RELEASE-05-10` then carries the shipped-route proof.
-- [ ] `RELEASE-05-08` A SIGTERM delivered through the cask's mechanism completes the coordinated teardown:
-      the runtime lock releases and the socket inode is removed. Gated manual check in `RELEASE-06-05`'s run,
-      since the existing opt-in harness covers SIGTERM only on a directly launched bundle.
-- [ ] `RELEASE-05-09` A person following the removal steps on the release machine ends with no legacy
-      process, bundle or Cargo-installed `stache` binary, and config intact. The owner's pre-rename
-      rehearsal and steps 1–5 are recorded with `RELEASE-04-07`; the full removal/install/migration
-      sequence is rehearsed with a private candidate in Part 06 before merge. Gated manual check;
-      it touches real user state and needs explicit approval.
+- [x] `RELEASE-05-03` The legacy-config note appears when a legacy source exists and `global.toml`
+      does not, is absent otherwise, and leaves the source and directory byte-identical. Test:
+      `cli/tests/commands.rs`.
+- [x] `RELEASE-05-04` The desktop startup path emits that line without reading the source. Test:
+      `app/tests/legacy_config_hint.rs`.
+- [x] `RELEASE-05-05` `config migrate` behavior is unchanged. Test: `cli/src/migrate.rs`, unedited.
+- [ ] `RELEASE-05-06` `docs/guides/install.md` contains the sections above in order, including
+      **First open** with the Open Anyway route and the not-notarized statement; says there is no
+      Homebrew route; and contains none of `killall`, `pkill`, `pgrep stache`, `xattr -d`,
+      `xattr -cr`, `spctl --master-disable` or `brew install`. It links from `README.md` and
+      `docs/index.md`. Test: a doc check in `scripts/release.test.ts`.
+- [ ] `RELEASE-05-07` On a self-signed install, `stache cache path` through the link prints the
+      release cache path without starting a host, and a command through the link is answered by the
+      running app without a second instance. Manual check, recorded below. The probe half is kept
+      proven by `cli/tests/symlink_probe.rs`.
+- [x] `RELEASE-05-09` The legacy app, its bundle and its Cargo-installed binary are gone from the
+      release machine and the configuration is intact. Recorded in the
+      [Stage 2 record](04-identity-switch.md#stage-2-record).
+- [ ] `RELEASE-05-11` No cask remains: `scripts/release/cask.ts`, its tests and the `Casks` output
+      are removed, and `release.json` and `SHA256SUMS` are unchanged by that. Test:
+      `scripts/release.test.ts`.
 
-- [ ] `RELEASE-05-10` Only if the fallback ships: the rendered cask's `binary` names it, the signing,
-      notarization and verification steps include it, and the DMG and zip carry it outside the bundle. Test:
-      `scripts/release.test.ts`, with fake runners. On a real install it runs `stache cache path`, reaches
-      a running app's socket, and shows the Developer ID authority and hardened runtime. Gated manual check;
-      requires credentials. If the symlink route passes, this is recorded as not applicable.
+## Withdrawn
+
+`RELEASE-05-01`, `05-02` and `05-08` covered the Homebrew cask, which Decision 24 removed.
+`RELEASE-05-10` covered a separate CLI binary; the symlink route was selected, so it never applied.
 
 ## Probe record
 
@@ -210,22 +128,17 @@ it is a rehearsal tool, not the public migration route.
 `<tmp>/Probe.app/Contents/MacOS/stache` reported `is_app_bundle=true` when run directly and
 `is_app_bundle=false` with `current_exe` equal to the link path when run through a link outside
 the bundle, also when found by name on `PATH`. Mode selection reads `current_exe` without
-canonicalizing it. **The symlink route is selected**; `RELEASE-05-10` is not applicable unless the
-real-install half of `RELEASE-05-07` fails. Kept proven by `cli/tests/symlink_probe.rs`. The
-real-install half is partly run.
+canonicalizing it. **The symlink route is selected.**
 
 2026-11-13, owner's ad-hoc install of `a744ddf` (Decision 21): `ditto -x -k` of
 `Stache_0.26.0_aarch64.zip` into `/Applications`, then
 `ln -s /Applications/Stache.app/Contents/MacOS/stache ~/.local/bin/stache`. Through the link,
 `stache cache path` printed `~/Library/Caches/com.marcosmoura.stache` and `stache --version` printed
-`0.26.0`, with no desktop host started. The owner then launched the installed app and reported that everything works. With it running
-(`com.marcosmoura.stache` at `/Applications/Stache.app`), `stache config path` through the link was
-answered by the host (every file marked `active`) and no second instance started. This was an
-ad-hoc build, not the signed artifact the criterion finally needs, so `RELEASE-05-07` stays open.
-
-Status 2026-11-13: the preparation is implemented. `RELEASE-05-07` has its probe half recorded
-above; its real-install half, `05-08` and `05-09` are not run. `05-10` is not applicable while the
-symlink route holds.
+`0.26.0`, with no desktop host started. The owner then launched the installed app and reported that
+everything works. With it running (`com.marcosmoura.stache` at `/Applications/Stache.app`),
+`stache config path` through the link was answered by the host (every file marked `active`) and no
+second instance started. This was an ad-hoc build; `RELEASE-05-07` is repeated on the self-signed
+install.
 
 ## Tests
 
@@ -233,7 +146,8 @@ Automated tests use temporary roots and never touch real caches, `/Applications`
 
 ## Notes
 
-- `cargo install --path` in `_legacy/scripts/release.sh` installs the legacy package named `stache` into
-  Cargo's bin directory, so a person's `stache` command may be the legacy CLI even after the app is gone.
-- `signal:` signals every process matching the bundle identifier. With legacy at the same identifier, that
-  would include it; this is one more reason the cask is published only after legacy removal.
+- A self-signed signature does not satisfy Gatekeeper on any Mac, the owner's included, for a
+  quarantined download. A copy built or expanded locally is not quarantined and opens directly.
+- macOS privacy records follow the identifier and the signature. Records made for the legacy app or
+  for an ad-hoc build do not match a self-signed build, so the first self-signed install asks for
+  Accessibility once more.

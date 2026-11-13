@@ -259,8 +259,8 @@ applications. The full suite plus `check:generated` must pass in the Stage 3 com
 - A refused launch from Finder has no visible UI, like the existing silent second launch. A dialog
   would be a new surface, so this is published as a limitation in Part 06.
 - macOS privacy records follow the identifier and signature. Legacy records for
-  `com.marcosmoura.stache` were made under the self-signed `Stache App`, so they will not match the
-  Developer ID build. Accessibility is an app-wide launch requirement (Accessibility launch gate), so the renamed bundle
+  `com.marcosmoura.stache` were made under the self-signed `Stache App`, so they will not match a
+  build with a different signature. Accessibility is an app-wide launch requirement (Accessibility launch gate), so the renamed bundle
   needs a fresh grant and shows the guidance window until it has one; Part 05 covers cleanup.
 - Building `_legacy/` after the rename produces a bundle with the same identifier. `_legacy/` stays
   unchanged; Part 05 documents the warning.

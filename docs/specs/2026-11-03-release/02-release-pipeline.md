@@ -11,7 +11,7 @@ Depends on [Part 01](01-build-metadata.md).
 
 One command produces a DMG, a zip, checksums and a truthful record, with predictable names
 and no secrets. This part is ad-hoc only, so the pipeline can be proven before credentials
-exist. Signing is [Part 03](03-signing-notarization.md); publishing is Part 03's workflow.
+exist. Signing is [Part 03](03-signing.md); publishing is Part 03's workflow.
 
 ## Requirements
 
@@ -33,7 +33,7 @@ exist. Signing is [Part 03](03-signing-notarization.md); publishing is Part 03's
   output from `Stache_Next_…` to `Stache_…` without touching the script. `Stache_Next_…` names
   exist only for ad-hoc dry runs; nothing under that name is ever published.
 - **The app keeps its name.** The `.app` inside each artifact stays `<productName>.app` and
-  is never versioned: Finder, `/Applications`, the cask's `app` stanza and
+  is never versioned: Finder, `/Applications`, the install guide and
   `scripts/measure/process.ts` all rely on that name. The raw bundle is not a distributable.
 - **DMG.** Built with `hdiutil` as a compressed read-only image with a fixed volume name,
   holding the app and an `Applications` symlink. No background, Finder scripting or anything
@@ -56,7 +56,7 @@ exist. Signing is [Part 03](03-signing-notarization.md); publishing is Part 03's
   `APPLE_API_ISSUER`, `APPLE_API_KEY` and `APPLE_API_KEY_PATH` from the child environment.
   This prevents credential-driven signing and notarization from stray exported values; it
   does not disable signing. The base config's `signingIdentity: "-"` intentionally lets
-  Tauri apply the initial ad-hoc signature. Part 03 replaces it with the final Developer ID signature.
+  Tauri apply the initial ad-hoc signature. Part 03's `--self-sign` mode replaces it with the owner's self-signed signature.
 - **CI.** `quality.yml` gains an ad-hoc `bun run release` step after `tauri:build`. It uploads
   nothing and gains no secret. Add a `push.tags` trigger for `v*-rc.*` alongside the existing
   `main` push and pull-request triggers, so candidate tags on `feat/release` run every source
