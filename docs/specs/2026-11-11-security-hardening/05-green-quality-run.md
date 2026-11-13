@@ -111,3 +111,11 @@ The changed tests are the tests. End-to-end scenario: the real Quality run on th
   - the real-time animation tests, which have no injectable pacer: a machine starved enough to
     coalesce every intermediate frame would still fail them;
   - `app/src/popover_actions_tests.rs` `drain()`, whose 200 ms idle receive is its idle detector.
+- UI real-time review outcome (2026-11-13). Changed: frame-count waits lowered to one sampled
+  frame, and waits for the end of a real animation raised to 5 s (`Bar`, `BarItem`, `Spaces`,
+  `Workspace`, `MotionProvider` tests). Left as they are and still timing-sensitive on a starved
+  machine: the mid-slide check in `Bar.test.tsx` "leaves and returns with the menu state" (a
+  150 ms slide can be skipped whole), and the "instant under reduced motion" checks in
+  `Bar.test.tsx` and `Spaces.test.tsx`, whose short bounds (60–180 ms) are what separates instant
+  from animated. A deterministic form needs an injectable duration or a way to read the transition
+  Motion was given.

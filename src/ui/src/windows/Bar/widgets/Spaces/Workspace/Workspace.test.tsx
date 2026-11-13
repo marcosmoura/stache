@@ -174,7 +174,7 @@ describe('Workspace refusal flash', () => {
           document.querySelector(`[aria-label="${name}"]`)!.hasAttribute('data-flashing'),
         ).toBe(false);
       },
-      { timeout: 3000 },
+      { timeout: 5000 },
     );
 
   it('flashes once per new refusal, not for the refusal at first render or another workspace', async () => {

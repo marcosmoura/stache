@@ -139,7 +139,7 @@ describe('BarItem', () => {
 
     expect(Number(getComputedStyle(element).opacity)).toBeLessThan(1);
     expect(element.style.transform).toBe('');
-    await expect.poll(() => getComputedStyle(element).opacity, { timeout: 2000 }).toBe('1');
+    await expect.poll(() => getComputedStyle(element).opacity, { timeout: 5000 }).toBe('1');
 
     await screen.rerender(<BarItem>fade</BarItem>);
     expect(getComputedStyle(element).opacity).toBe('1');
