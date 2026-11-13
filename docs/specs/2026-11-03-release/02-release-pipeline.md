@@ -96,7 +96,8 @@ exist. Signing is [Part 03](03-signing-notarization.md); publishing is Part 03's
       an approved run, recorded in Part 06, because it touches `/Applications`.
 
 Status 2026-11-13: `RELEASE-02-06` passed in a real local run (four outputs, checksums verify);
-its `quality.yml` step has not run because the branch is not pushed. `RELEASE-02-09` is the manual
+its `quality.yml` step has not run because the branch is not pushed. For the same reason
+`RELEASE-02-07` is proven by its test and the local run only, not yet confirmed on a CI run. `RELEASE-02-09` is the manual
 check deferred to Part 06 and is not run.
 
 ## Tests
