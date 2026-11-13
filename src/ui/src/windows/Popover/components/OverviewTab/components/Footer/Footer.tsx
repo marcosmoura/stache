@@ -2,6 +2,7 @@ import { PowerIcon } from '@hugeicons/core-free-icons';
 import * as stylex from '@stylexjs/stylex';
 
 import { Icon } from '@/components/Icon';
+import { PRODUCT_NAME } from '@/identity';
 import { useQuitApp } from '@/queries/access';
 
 import { styles } from './Footer.style';
@@ -19,7 +20,7 @@ export function Footer() {
         onClick={() => quit.mutate()}
       >
         <Icon icon={PowerIcon} size={16} />
-        Quit Stache Next
+        Quit {PRODUCT_NAME}
       </button>
     </nav>
   );

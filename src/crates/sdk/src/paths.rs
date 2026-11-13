@@ -11,8 +11,41 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::{fmt, fs};
 
+/// The release bundle identity, shared with the legacy application until the
+/// staged rename makes it this application's own.
+pub const RELEASE_IDENTITY: &str = "com.marcosmoura.stache";
+
+/// The development bundle identity.
+pub const DEVELOPMENT_IDENTITY: &str = "com.marcosmoura.stache.next";
+
 /// Bundle identity used for cache and runtime directories.
-pub const IDENTITY: &str = "com.marcosmoura.stache.next";
+pub const IDENTITY: &str = DEVELOPMENT_IDENTITY;
+
+/// The other of [`RELEASE_IDENTITY`] and [`DEVELOPMENT_IDENTITY`].
+pub const SIBLING_IDENTITY: &str = if same_str(IDENTITY, RELEASE_IDENTITY) {
+    DEVELOPMENT_IDENTITY
+} else {
+    RELEASE_IDENTITY
+};
+
+const fn same_str(left: &str, right: &str) -> bool {
+    let (left, right) = (left.as_bytes(), right.as_bytes());
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut index = 0;
+    while index < left.len() {
+        if left[index] != right[index] {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
+/// The product name shown where no Tauri package information exists, such as
+/// the command line. The desktop reads its name from the package information.
+pub const PRODUCT_NAME: &str = "Stache Next";
 
 /// Socket file name inside the runtime directory.
 pub const SOCKET_FILE_NAME: &str = "ipc";

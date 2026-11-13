@@ -396,6 +396,19 @@ them for the single-instance lock, socket server and published status. The runti
 `runtime/instance.lock`, a private `0600` regular file held for the process lifetime. See
 [ipc.md](ipc.md#identity-paths).
 
+The identity constants live in `stache_sdk::paths`: `RELEASE_IDENTITY` (`com.marcosmoura.stache`),
+`DEVELOPMENT_IDENTITY` (`.next`), `IDENTITY` (still the development one) and `SIBLING_IDENTITY`,
+plus `PRODUCT_NAME`, re-exported as `stache_app::PRODUCT_NAME` for places with no Tauri context such
+as the CLI `about` text. The tray tooltip and Quit label, window titles and `app_info` read the name
+from `AppHandle::package_info()`, compiled from `productName`; the UI falls back to one constant,
+`src/ui/src/identity.ts`, where copy renders before or without `app_info`.
+
+After claiming the instance lock and before the tray, modules or socket, the desktop host
+(`collision::check`) asks `NSRunningApplication` for running applications with exactly `IDENTITY`
+or the sibling identifier. Each match other than this PID logs one warning naming identifier,
+bundle path and PID, and startup continues; a failed query logs one warning. Prefix matches are
+ignored. Nothing refuses yet, and nothing is ever signaled, terminated or opened. The CLI never checks.
+
 ## Planned work
 
 Part 05 ships its native integration and the typed React client/router: static status surfaces,

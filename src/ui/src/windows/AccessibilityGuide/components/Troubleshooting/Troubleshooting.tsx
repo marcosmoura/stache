@@ -4,6 +4,7 @@ import { ArrowRight01Icon } from '@hugeicons/core-free-icons';
 import * as stylex from '@stylexjs/stylex';
 
 import { Icon } from '@/components/Icon';
+import { PRODUCT_NAME } from '@/identity';
 
 import { styles } from './Troubleshooting.style';
 
@@ -34,8 +35,8 @@ export function Troubleshooting({ bundled }: TroubleshootingProps) {
       {open ? (
         <p {...stylex.props(styles.text)} id={id}>
           {bundled
-            ? 'Stache Next is already on but this window stays open? That entry is from an older copy of the app. Select it, click − to remove it, then turn on the new entry or add the app at the path above.'
-            : "This copy of Stache Next isn't installed as a regular app, so macOS may give the permission to the app you opened it from, such as Terminal."}
+            ? `${PRODUCT_NAME} is already on but this window stays open? That entry is from an older copy of the app. Select it, click − to remove it, then turn on the new entry or add the app at the path above.`
+            : `This copy of ${PRODUCT_NAME} isn't installed as a regular app, so macOS may give the permission to the app you opened it from, such as Terminal.`}
         </p>
       ) : null}
     </div>

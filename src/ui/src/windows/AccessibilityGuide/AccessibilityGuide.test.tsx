@@ -206,6 +206,15 @@ describe('AccessibilityGuide', () => {
     expect(region?.textContent).toBe('Stache Next');
   });
 
+  it('names the app from app_info in the header and the Quit action', async () => {
+    setup().answer('app_info', { ...APP, name: 'Injected Name' });
+    const screen = await render(<AccessibilityGuide />);
+    const region = screen.container.querySelector('[data-tauri-drag-region]');
+
+    await expect.element(screen.getByRole('button', { name: 'Quit Injected Name' })).toBeVisible();
+    expect(region?.textContent).toBe('Injected Name');
+  });
+
   it('calls only the commands its capability allows', async () => {
     const host = setup();
     const screen = await render(<AccessibilityGuide />);

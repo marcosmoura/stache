@@ -6,7 +6,7 @@ import { Icon } from '@/components/Icon';
 import { styles } from './IdentityCard.style';
 
 export type IdentityCardProps = {
-  /** Product name; `Stache Next` until `app_info` answers. */
+  /** Product name; `PRODUCT_NAME` until `app_info` answers. */
   name: string;
   /** Bundle identifier; the row is omitted until `app_info` answers. */
   identifier: string | null;

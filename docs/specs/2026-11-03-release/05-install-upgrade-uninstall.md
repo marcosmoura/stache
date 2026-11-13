@@ -1,5 +1,5 @@
 ---
-status: draft
+status: in-progress
 ---
 
 # 05 — Install, upgrade, legacy removal and uninstall

@@ -1,3 +1,4 @@
+import { PRODUCT_NAME } from '@/identity';
 import type { HostStatus } from '@/ipc';
 
 /** What the guide shows. */
@@ -30,18 +31,18 @@ type Hero = { tone: GuideTone; title: string; body: string };
 
 /** The hero of each section. */
 export const HEROES: Readonly<Record<GuideSection, Hero>> = {
-  checking: { tone: 'neutral', title: 'Stache Next', body: 'Checking Accessibility access…' },
+  checking: { tone: 'neutral', title: PRODUCT_NAME, body: 'Checking Accessibility access…' },
   blocked: {
     tone: 'accent',
-    title: 'Stache Next needs Accessibility access',
-    body: 'Stache Next reads keyboard shortcuts and controls windows and apps. macOS only allows that with Accessibility access. Until you allow it, Stache Next waits and does nothing.',
+    title: `${PRODUCT_NAME} needs Accessibility access`,
+    body: `${PRODUCT_NAME} reads keyboard shortcuts and controls windows and apps. macOS only allows that with Accessibility access. Until you allow it, ${PRODUCT_NAME} waits and does nothing.`,
   },
   revoked: {
     tone: 'attention',
     title: 'Accessibility access was turned off',
-    body: 'Stache Next stopped all features until it is turned on again.',
+    body: `${PRODUCT_NAME} stopped all features until it is turned on again.`,
   },
-  open: { tone: 'success', title: 'Stache Next', body: 'Access granted. Starting Stache Next…' },
+  open: { tone: 'success', title: PRODUCT_NAME, body: `Access granted. Starting ${PRODUCT_NAME}…` },
 };
 
 /** The alert line: the host error, then any failed command, joined with `; `. */

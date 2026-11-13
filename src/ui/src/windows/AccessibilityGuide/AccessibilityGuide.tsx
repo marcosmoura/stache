@@ -13,6 +13,7 @@ import * as stylex from '@stylexjs/stylex';
 import { useQuery } from '@tanstack/react-query';
 
 import { Icon, type IconSource } from '@/components/Icon';
+import { PRODUCT_NAME } from '@/identity';
 import { closeCurrentWindow, dragRegion, type HostStatus } from '@/ipc';
 import { useFeed } from '@/queries';
 import {
@@ -98,7 +99,9 @@ export function AccessibilityGuide() {
           <span {...stylex.props(styles.glyph, styles.passThrough)}>
             <Icon icon={CommandIcon} size={14} strokeWidth={1.75} />
           </span>
-          <span {...stylex.props(styles.appName, styles.passThrough)}>Stache Next</span>
+          <span {...stylex.props(styles.appName, styles.passThrough)}>
+            {app?.name ?? PRODUCT_NAME}
+          </span>
         </div>
         <button
           type="button"
@@ -141,7 +144,7 @@ export function AccessibilityGuide() {
             <>
               <GuideSteps />
               <IdentityCard
-                name={app?.name ?? 'Stache Next'}
+                name={app?.name ?? PRODUCT_NAME}
                 identifier={app?.identifier ?? null}
                 appPath={access?.appPath ?? null}
               />
@@ -177,7 +180,7 @@ export function AccessibilityGuide() {
             },
             {
               id: 'quit',
-              label: 'Quit Stache Next',
+              label: `Quit ${app?.name ?? PRODUCT_NAME}`,
               pending: quit.isPending,
               onRun: () => quit.mutate(),
             },

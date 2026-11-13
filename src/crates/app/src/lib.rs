@@ -16,6 +16,7 @@ pub mod bar_tiling;
 pub mod bindings;
 pub mod caps_recovery;
 pub mod catalog;
+pub mod collision;
 pub mod commands;
 pub mod config_documents;
 pub mod config_edit;
@@ -59,6 +60,8 @@ use stache_cli::CliEnvironment;
 use stache_macos::{
     AccessibilityPermission, ActivationObserver, AssertionOwner, MainThread, TerminateObservation,
 };
+/// The product name for places with no Tauri package information.
+pub use stache_sdk::PRODUCT_NAME;
 use stache_sdk::{
     AppEnvironment, AppPaths, ConfigPaths, EventBus, InstanceError, InstanceLock, LogFilter,
     LogLevel, LogRecord, Logger, MainThreadExecutor, ModuleId, Operation, Permission,
@@ -413,6 +416,14 @@ fn run_with(
     let catalog = catalog::catalog().map_err(|error| error.to_string())?;
     let filter = Arc::new(LogFilter::default());
     let logger: Arc<dyn Logger> = Arc::new(StderrLogger::new(Arc::clone(&filter)));
+    // Advisory and warn-only in this stage: the lock above stays authoritative.
+    let refusals = collision::check(
+        &stache_macos::SystemRunningInstances,
+        i32::try_from(std::process::id()).unwrap_or(i32::MAX),
+        collision::POLICY,
+        logger.as_ref(),
+    );
+    debug_assert!(refusals.is_empty(), "the warn-only policy never refuses");
     let bindings = bindings::builder();
     let invoke = bindings.invoke_handler();
     let gate = ExitGate::new();

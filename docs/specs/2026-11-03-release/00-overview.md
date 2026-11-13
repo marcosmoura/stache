@@ -194,7 +194,7 @@ a claim made by this spec.
 | [02](02-release-pipeline.md)          | Artifacts, ad-hoc dry run, exact-SHA candidate Quality trigger.           | done        |
 | [03](03-signing-notarization.md)      | Final Developer ID re-sign, notarization, stapling, CI gate. **Blocked.** | in-progress |
 | [04](04-identity-switch.md)           | Staged switch, dev isolation, detectable sibling warnings. **Gated.**     | in-progress |
-| [05](05-install-upgrade-uninstall.md) | Executable migration/removal, exclusive CLI routes, local test casks.     | draft       |
+| [05](05-install-upgrade-uninstall.md) | Executable migration/removal, exclusive CLI routes, local test casks.     | in-progress |
 | [06](06-release-verification.md)      | Private candidate gates; separate public operational checklist.           | draft       |
 
 Implementation order differs from numbering at one point, because the rename needs the

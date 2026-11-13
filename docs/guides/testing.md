@@ -969,3 +969,5 @@ roots. It refuses to start while any Stache Next or legacy Stache process is
 running and never signals another instance. Build the bundles and follow
 [performance.md](performance.md) before running it; do not run a manual
 audio-device test at the same time.
+
+Identity preparation (release part 04, Stage 1): `app/tests/identity.rs` checks that `tauri.conf.json` matches `IDENTITY` and `PRODUCT_NAME`, that the other identity's literal stays inside a short allow-list of tracked sources, and that no tracked script or source uses `killall`, `pkill`, `pgrep` or compares a process name to `stache` (a text check with its limits stated in the test). `app/tests/collision.rs` drives the startup `collision::check` over `FakeRunningInstances` (sibling and foreign same-identifier warn once, own PID and prefix matches ignored, a failed query warns and continues); no test queries real applications.

@@ -2,6 +2,8 @@ import type { ReactNode } from 'react';
 
 import * as stylex from '@stylexjs/stylex';
 
+import { PRODUCT_NAME } from '@/identity';
+
 import { styles } from './GuideSteps.style';
 
 function Strong({ children }: { children: ReactNode }) {
@@ -13,9 +15,9 @@ const STEPS: ReactNode[] = [
     Click <Strong>Request Access</Strong>, or <Strong>Open System Settings</Strong>.
   </>,
   <>
-    In Privacy &amp; Security &gt; Accessibility, turn on <Strong>Stache Next</Strong>.
+    In Privacy &amp; Security &gt; Accessibility, turn on <Strong>{PRODUCT_NAME}</Strong>.
   </>,
-  <>Come back here; Stache Next starts by itself.</>,
+  <>Come back here; {PRODUCT_NAME} starts by itself.</>,
 ];
 
 /** The three numbered steps to grant Accessibility. */
