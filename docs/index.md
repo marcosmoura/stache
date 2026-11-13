@@ -15,6 +15,7 @@ Read when navigating the shipped foundation, explicitly planned rewrites or the 
 | Build, checks, hooks, coverage                    | [guides/testing.md](guides/testing.md)                                                                      |
 | Measure release startup and idle                  | [guides/performance.md](guides/performance.md)                                                              |
 | Release artifacts and signing (`bun run release`) | [guides/release.md](guides/release.md)                                                                      |
+| Install, upgrade, legacy removal (planned)        | [guides/install.md](guides/install.md)                                                                      |
 | Specs, worktrees and agents                       | [workflow.md](workflow.md), [specs/README.md](specs/README.md)                                              |
 | Foundation spec and acceptance                    | [spec](specs/2026-11-02-foundation/00-overview.md)                                                          |
 | Planned rewrite order                             | [roadmap](roadmap.md)                                                                                       |

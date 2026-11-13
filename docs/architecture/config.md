@@ -504,6 +504,17 @@ Exit status and markers do not change. The desktop host logs the same hint once
 at startup, as a single `warn` record that lists every stale file; reloads and
 watcher batches do not repeat it. Once both files exist there is no hint.
 
+A separate legacy-config note appears when a legacy source exists (the first
+existing path of `ConfigPaths::legacy_sources`, as migrate discovers it) and
+`global.toml` does not: one line ``note: <source> is a legacy config and is not
+read; run `stache config migrate` `` after the entries and stale hints. When a
+registered `<id>.jsonc` also sits in the directory, plain migrate would pick
+those, so the line names `stache config migrate --from <source>` instead. The
+desktop host logs the same line once at startup as an `info` record
+(`log_legacy_config_hint`). Both use `ConfigPaths::legacy_config_hint`, which
+checks paths only: it never opens, parses, copies or rewrites the source and
+prompts nothing.
+
 `config path` and the `schema` output never write ANSI when piped. `schema`
 styles keys, strings, numbers and literals only when stdout is a terminal; see
 [ipc.md](ipc.md#output).

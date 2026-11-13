@@ -398,6 +398,24 @@ pub fn run_smoke_relaunch(config_paths: ConfigPaths) -> Result<(), String> {
     }
 }
 
+/// Logs the one legacy-config note at startup, if a legacy source exists and
+/// `global.toml` does not. Paths only: the source is never read.
+pub fn log_legacy_config_hint(
+    paths: &ConfigPaths,
+    environment: &stache_sdk::config::ConfigEnvironment,
+    catalog: &stache_sdk::ConfigCatalog,
+    logger: &dyn Logger,
+) {
+    if let Some(message) = paths.legacy_config_hint(environment, catalog.ids()) {
+        logger.log(LogRecord {
+            level: LogLevel::Info,
+            module: ModuleId::new("host"),
+            operation: Operation::Start,
+            message,
+        });
+    }
+}
+
 #[allow(clippy::too_many_lines)] // One ordered Tauri setup and teardown sequence.
 fn run_with(
     config_paths: ConfigPaths,
@@ -424,6 +442,12 @@ fn run_with(
         logger.as_ref(),
     );
     debug_assert!(refusals.is_empty(), "the warn-only policy never refuses");
+    log_legacy_config_hint(
+        &config_paths,
+        &stache_sdk::config::ConfigEnvironment::from_env(),
+        &catalog,
+        logger.as_ref(),
+    );
     let bindings = bindings::builder();
     let invoke = bindings.invoke_handler();
     let gate = ExitGate::new();

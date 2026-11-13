@@ -148,6 +148,37 @@ fn push_file_pair(candidates: &mut Vec<PathBuf>, directory: &Path, stem: &str) {
     candidates.push(directory.join(format!("{stem}.json")));
 }
 
+impl ConfigPaths {
+    /// The one legacy-config note, if a legacy source exists and `global.toml`
+    /// does not.
+    ///
+    /// Paths only: the source is never opened, parsed, copied or rewritten.
+    /// When registered `<id>.jsonc` files also sit in the directory, plain
+    /// `config migrate` would convert those instead, so the note names
+    /// `--from <source>`.
+    #[must_use]
+    pub fn legacy_config_hint(
+        &self,
+        environment: &ConfigEnvironment,
+        ids: impl IntoIterator<Item = ModuleId>,
+    ) -> Option<String> {
+        if self.global_file().exists() {
+            return None;
+        }
+        let source = self.legacy_sources(environment).into_iter().find(|path| path.exists())?;
+        let module_jsonc = ids.into_iter().any(|id| self.module_jsonc_file(id).is_file());
+        let command = if module_jsonc {
+            format!("stache config migrate --from {}", source.display())
+        } else {
+            "stache config migrate".to_owned()
+        };
+        Some(format!(
+            "note: {} is a legacy config and is not read; run `{command}`",
+            source.display()
+        ))
+    }
+}
+
 /// The hint printed for one stale `<id>.jsonc` file name.
 #[must_use]
 pub fn stale_jsonc_hint(file_name: &str) -> String {

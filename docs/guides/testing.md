@@ -959,7 +959,21 @@ mounts and expands them to check the app and its signature, and writes `SHA256SU
 Part 03 signing order with identity `-` and hardened runtime, skipping notarization and stapling.
 `scripts/release.test.ts` covers both, the `--sign` refusals and fail-closed paths and the
 `release.yml` gates with fake runners; nothing signs with a real identity or contacts Apple.
-See [release](release.md).
+See [release](release.md). The same file covers the cask (`RELEASE-05-01`/`02`: stanzas, the
+DMG checksum, two-entry `SHA256SUMS`, test-cask isolation and loopback refusal) and the
+[install guide](install.md)'s doc check (`RELEASE-05-06`: sections, links, no process-name or
+quarantine-bypass commands, `--force` only on `stache config migrate`).
+
+Legacy-config note (`RELEASE-05-03`/`04`): `cli/tests/commands.rs` runs `config path` over
+temporary roots (present, absent, `global.toml` present, `<id>.jsonc` also present) and checks
+the directory stays byte-identical; `app/tests/legacy_config_hint.rs` drives the host's startup
+`log_legacy_config_hint` with an unreadable and a directory-shaped source.
+
+Symlink CLI probe (`RELEASE-05-07`, probe half): `cli/tests/symlink_probe.rs` copies its own test
+executable to `<tmp>/Probe.app/Contents/MacOS/stache`, links it from `<tmp>/bin/stache`, and runs
+it directly, through the link and by name on `PATH`. In child mode the copy only prints
+`current_exe` and `stache_cli::mode::is_app_bundle`'s verdict, so the real `stache` binary is
+never executed. Expected: `true` directly, `false` with the link path through the link.
 
 ## Release performance comparison
 

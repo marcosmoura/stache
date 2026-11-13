@@ -204,6 +204,16 @@ it is a rehearsal tool, not the public migration route.
       a running app's socket, and shows the Developer ID authority and hardened runtime. Gated manual check;
       requires credentials. If the symlink route passes, this is recorded as not applicable.
 
+## Probe record
+
+2026-11-13, macOS 27, `feat/release`: the symlink probe passed. A helper copied to
+`<tmp>/Probe.app/Contents/MacOS/stache` reported `is_app_bundle=true` when run directly and
+`is_app_bundle=false` with `current_exe` equal to the link path when run through a link outside
+the bundle, also when found by name on `PATH`. Mode selection reads `current_exe` without
+canonicalizing it. **The symlink route is selected**; `RELEASE-05-10` is not applicable unless the
+real-install half of `RELEASE-05-07` fails. Kept proven by `cli/tests/symlink_probe.rs`. The
+real-install half (`stache cache path` and socket access through the shipped link) is not run.
+
 ## Tests
 
 Automated tests use temporary roots and never touch real caches, `/Applications` or a running app.
