@@ -369,6 +369,8 @@ the real cache, runtime, configuration or legacy identity.
   reads the real process table, signals or launches a process. `scripts/measure/config.test.ts` pins
   the TOML that `writeNextConfigs` writes (`global.toml`, `proxyAudio.toml`) and that
   `writeLegacyConfig` keeps writing JSONC for the legacy app.
+  `scripts/release.test.ts` drives the release pipeline with an injected fake command runner
+  over temporary directories: it spawns no build and touches no real bundle.
 - `test:native`: cargo-nextest across only the root workspace with
   `--features stache-app/dev-tools`; checks desktop identity/window policy, the SDK lifecycle, config
   and window suites, app host races/permissions/shutdown, the proxyAudio policy and fake-backend
@@ -947,6 +949,13 @@ The bundle needs Accessibility for Stache Next before any module runs (the launc
 signing/notarization needs separate credentials. CI audits new locks, not the archive. Legacy build
 verification is opt-in via [_legacy/README.md](../../_legacy/README.md), including resource/signing gaps.
 Never run legacy and new device-changing automation together.
+
+## Release artifacts
+
+`bun run release` builds the release bundle, verifies it (contents, `arm64`, system-only
+linkage, the vendored `media-control` set, merged `Info.plist`), packages an ad-hoc DMG and zip,
+mounts and expands them to check the app and its signature, and writes `SHA256SUMS` and
+`release.json` to `target/release-artifacts/`. See [release](release.md).
 
 ## Release performance comparison
 

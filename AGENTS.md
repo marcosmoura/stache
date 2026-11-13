@@ -18,6 +18,7 @@ bun run lint
 bun run format:check
 bun run test        # test:ui + test:e2e + test:scripts + test:native
 bun run test:ui:coverage
+bun run release     # ad-hoc DMG/zip/SHA256SUMS in target/release-artifacts
 bun run generate-schema
 cargo run -q -p stache-app --bin stache -- schema   # one binary, CLI mode
 bun run format # explicit mutation

@@ -19,6 +19,7 @@
     "format:check": "oxfmt --disable-nested-config --check && cargo fmt --all -- --check",
     "measure": "bun scripts/measure-foundation.ts",
     "measure:bar": "bun scripts/measure-bar.ts",
+    "release": "bun scripts/release.ts",
     "test": "bun run test:ui && bun run test:e2e && bun run test:scripts && bun run test:native",
     "test:ui": "vitest run --project ui",
     "test:scripts": "vitest run --config vitest.scripts.config.ts",

@@ -1,5 +1,5 @@
 ---
-status: draft
+status: in-progress
 ---
 
 # 03 — Signing, notarization and stapling
