@@ -123,9 +123,11 @@ spaces as underscores and the version that of `tauri.conf.json`:
   authoritative version and the DMG's SHA-256. It names the DMG on the `v<version>` GitHub
   release, `depends_on arch: :arm64` and macOS 26 (`">= :tahoe"`, one constant),
   `app "<productName>.app"`, a `binary` link to `Contents/MacOS/stache` (the CLI route, see
-  [install](install.md#cli-access)), `uninstall signal: [["TERM", "<identifier>"]]` (Homebrew's
-  quit request to that bundle identifier, never a process name),
-  on_upgrade: :signal`and`zap`of`~/Library/Caches/<identifier>`only. It is not an artifact:`SHA256SUMS`and`release.json` list only the DMG and zip. Publishing it to the tap is manual
+  [install](install.md#cli-access)), `uninstall signal: [["TERM", "<identifier>"]]` with
+  `on_upgrade: :signal` (Homebrew sends SIGTERM to the app with that bundle identifier, never by
+  process name; the cask deliberately does not use `quit:`), and `zap` of
+  `~/Library/Caches/<identifier>` only. It is not an artifact: `SHA256SUMS` and `release.json`
+  list only the DMG and zip. Publishing it to the tap is manual
   (release Part 06); nothing pushes it.
 
 ### Local test cask

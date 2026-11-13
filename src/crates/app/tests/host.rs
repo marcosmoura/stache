@@ -5278,7 +5278,7 @@ fn a_gated_host_is_ready_with_a_blocked_access_view() {
 // AG-03: the socket while the Accessibility gate is closed
 // ---------------------------------------------------------------------------
 
-const GATE_MESSAGE: &str = "Stache is waiting for Accessibility permission. Grant it in System Settings > Privacy & Security > Accessibility.";
+const GATE_MESSAGE: &str = "Waiting for Accessibility permission. Grant it in System Settings > Privacy & Security > Accessibility.";
 
 struct EmptyAudio;
 

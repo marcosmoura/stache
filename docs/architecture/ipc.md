@@ -269,7 +269,7 @@ lock, so a refusal never waits on a busy worker or a stuck module start.
 
 `build_router` wraps every factory-contributed handler before registration.
 While the cell is not `open` (including `checking`) the wrapper answers the
-typed error `unavailable` with `Stache is waiting for Accessibility
+typed error `unavailable` with `Waiting for Accessibility
 permission. Grant it in System Settings > Privacy & Security > Accessibility.`
 and never calls the module; read-only methods such as `keepAwake.status` and
 `proxyAudio.list` are refused too. While `open` it delegates unchanged. The

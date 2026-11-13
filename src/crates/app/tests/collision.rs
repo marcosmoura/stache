@@ -168,3 +168,25 @@ fn the_later_policy_refuses_only_a_foreign_same_identifier() {
         Decision::Ignore
     );
 }
+
+/// The host itself must propagate the refusal: `run_with` calls
+/// `collision::guard(..)?` after the instance lock and before the Tauri
+/// builder. A source check, since `run_with` needs a real Tauri runtime.
+#[test]
+fn run_with_propagates_the_guard_before_the_tray() {
+    let source = include_str!("../src/lib.rs");
+    let body = source.split("fn run_with(").nth(1).expect("run_with");
+    let lock = body.find("InstanceLock::acquire(").expect("instance lock");
+    let guard = body.find("collision::guard(").expect("guard call");
+    let builder = body.find("tauri::Builder::default()").expect("builder");
+    assert!(
+        lock < guard && guard < builder,
+        "lock {lock}, guard {guard}, builder {builder}"
+    );
+    let end = guard + body[guard..].find(';').expect("statement end");
+    let statement = &body[guard..=end];
+    assert!(
+        statement.ends_with(")?;"),
+        "the guard result is propagated with `?`: {statement}"
+    );
+}

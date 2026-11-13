@@ -296,7 +296,7 @@ the remap only after a confirmed tap, and its first apply waits (bounded) for th
 recovery of a crash-left remap; real native behavior remains unverified. An apply runs under an identity-wide durable lease
 (`Application Support/<identity>/keybindings/caps-remap.lock`, five-second wait): strictly parse
 the whole current `UserKeyMapping` (unknown, truncated, quoted, null, hexadecimal or duplicate-Caps
-output is refused, and any Caps mapping without Next's journal is foreign, even Caps to F18), write
+output is refused, and any Caps mapping without this build identity's journal is foreign, even Caps to F18), write
 the versioned journal atomically (`caps-remap.journal`, phases `apply_pending`, `applied`,
 `restore_pending`, `ownership_lost`), run `hidutil` through the bounded shared executor (5 s child
 lifetime, 1 MiB stdout, 64 KiB stderr, 2 s cleanup then the bounded reaper), reread and verify.
@@ -311,7 +311,7 @@ The host runs one startup step per desktop start, `HostDriver::with_startup_reco
 `KeybindingsCapsRecovery` (module crate `stache_keybindings::caps::recover_stale_caps_remap`),
 before the factories register and regardless of module enabled state, configuration validity or
 the tray. It runs on its own cancellable `stache-caps-recovery` thread held in a monitor cell,
-so a slow step never blocks readiness and teardown cancels and reaps it. It acts only when Next's
+so a slow step never blocks readiness and teardown cancels and reaps it. It acts only when this build identity's
 own journal exists (with none it reads one directory entry: no lease, no `hidutil`, no created
 path), is never retried, and surfaces a returned diagnostic once as a persistent host condition.
 Recovering a crash needs a relaunch; until then physical Caps Lock may still send F18.
@@ -419,7 +419,9 @@ menu bar icon, to standard error (the host log stream) and exits non-zero. A sib
 and startup continues; a failed query logs one warning and continues. This PID and prefix matches
 are ignored, and an unbundled development binary has no bundle identifier, so it is not detected (the
 instance lock covers a shared identity). Nothing is ever signaled, terminated or opened. The CLI
-never checks. A refused launch from Finder shows no UI.
+never checks. A refused launch from Finder shows no UI. A bundled `TerminalAction::Restart` would
+relaunch while the old PID still holds the identifier, so the successor would likely refuse; nothing
+requests a restart today, and a future "Reload Stache" must account for it.
 
 ## Planned work
 

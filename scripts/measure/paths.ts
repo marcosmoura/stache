@@ -7,6 +7,12 @@ export const REPOSITORY_ROOT = fileURLToPath(new URL('../..', import.meta.url)).
 export const NEXT_BUNDLE_IDENTIFIER = 'com.marcosmoura.stache';
 
 /**
+ * Bundle identifier of a development build (`bun run tauri:dev` overlay). A
+ * running bundled development app blocks a measurement like the release does.
+ */
+export const DEVELOPMENT_BUNDLE_IDENTIFIER = 'com.marcosmoura.stache.next';
+
+/**
  * Bundle identifier of the archived legacy application. It equals the release
  * identifier, so a legacy process is classified only from an explicit
  * `--legacy-app` path, never from its identifier or bundle name.

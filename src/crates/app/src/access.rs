@@ -100,7 +100,7 @@ impl AccessGate {
 }
 
 /// The message every refused module method carries while the gate is closed.
-pub const ACCESS_WAITING_MESSAGE: &str = "Stache is waiting for Accessibility permission. Grant it in System Settings > Privacy & Security > Accessibility.";
+pub const ACCESS_WAITING_MESSAGE: &str = "Waiting for Accessibility permission. Grant it in System Settings > Privacy & Security > Accessibility.";
 
 const CELL_CHECKING: u8 = 0;
 const CELL_BLOCKED: u8 = 1;
@@ -540,7 +540,7 @@ mod tests {
         );
         assert_eq!(
             ACCESS_WAITING_MESSAGE,
-            "Stache is waiting for Accessibility permission. Grant it in System Settings > Privacy & Security > Accessibility."
+            "Waiting for Accessibility permission. Grant it in System Settings > Privacy & Security > Accessibility."
         );
 
         cell.store(AccessGateState::Open);

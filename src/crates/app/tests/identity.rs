@@ -20,12 +20,14 @@ const OTHER_IDENTIFIER: &str = DEVELOPMENT_IDENTITY;
 const OTHER_PRODUCT_NAME: &str = "Stache Next";
 
 /// Files allowed to name the development identity or product name: the
-/// identity constants and the development overlay. Test files (`tests/`
+/// identity constants, the development overlay and the measure tool's
+/// development identifier, which its exclusivity guard blocks on. Test files (`tests/`
 /// directories, `*.test.ts(x)`, `*.spec.ts`) are allowed by [`is_test`]; docs
 /// and archives are not sources.
 const IDENTIFIER_ALLOWED: &[&str] = &[
     "src/crates/sdk/src/paths.rs",
     "src/crates/app/tauri.dev.conf.json",
+    "scripts/measure/paths.ts",
 ];
 
 /// Files allowed to hold the development product name as a literal.
@@ -314,17 +316,17 @@ fn the_development_overlay_is_dev_only_and_release_builds_select_the_release_ide
     let manifest: toml::Value =
         toml::from_str(&read("Cargo.toml").expect("workspace manifest")).expect("toml");
     let release = &manifest["profile"]["release"];
+    let enables =
+        |text: &str| text.contains("debug-assertions") || text.contains("debug_assertions");
     assert!(release.get("debug-assertions").is_none(), "{release:?}");
-    let flags = release.get("rustflags").map(ToString::to_string).unwrap_or_default();
-    assert!(!flags.contains("debug-assertions"), "{flags}");
-    for section in ["package", "build-override"] {
-        let Some(overrides) = release.get(section) else {
-            continue;
-        };
-        assert!(
-            !overrides.to_string().contains("debug-assertions"),
-            "{section}: {overrides:?}"
-        );
+    // Keys, rustflags (`-Cdebug-assertions`, `--cfg debug_assertions`) and
+    // per-package or build-script overrides.
+    assert!(!enables(&release.to_string()), "{release:?}");
+    // A Cargo config can set profiles and rustflags too.
+    for config in [".cargo/config.toml", ".cargo/config"] {
+        if let Some(text) = read(config) {
+            assert!(!enables(&text), "{config} enables debug assertions");
+        }
     }
     for path in tracked_sources() {
         if path.ends_with("Cargo.toml") && path != "Cargo.toml" {
@@ -393,4 +395,28 @@ fn the_identity_is_selected_only_by_debug_assertions() {
         2,
         "definition and resolve only"
     );
+}
+
+/// Tauri's app path resolvers follow the config identifier, which is the
+/// release identity in a debug build without the dev overlay. Production code
+/// must use `AppPaths` (keyed by `IDENTITY`) instead.
+#[test]
+fn no_production_code_uses_tauri_identifier_keyed_paths() {
+    for path in tracked_sources() {
+        if Path::new(&path).extension().is_none_or(|extension| extension != "rs") || is_test(&path)
+        {
+            continue;
+        }
+        let Some(text) = read(&path) else { continue };
+        let production = text.split("#[cfg(test)]").next().unwrap_or_default();
+        for resolver in [
+            "app_cache_dir",
+            "app_data_dir",
+            "app_config_dir",
+            "app_local_data_dir",
+            "app_log_dir",
+        ] {
+            assert!(!production.contains(resolver), "{path} uses {resolver}");
+        }
+    }
 }

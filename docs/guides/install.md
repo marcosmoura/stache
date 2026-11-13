@@ -47,8 +47,9 @@ restart or power-off is not verified yet, so quit the app yourself before upgrad
 - Both read the configuration folder `~/.config/stache`, but different files: the old app reads
   `config.jsonc`; the new app reads `global.toml` and one `<module>.toml` per module.
 - A `bun run tauri:dev` session from a checkout is a development build named `Stache Next`
-  (`com.marcosmoura.stache.next`). It runs beside the release with its own lock, socket and cache,
-  and the release logs one warning when it sees it. Do not turn on the same device automation in
+  (`com.marcosmoura.stache.next`). It runs beside the release with its own lock, socket and cache.
+  The release cannot see an unbundled `tauri:dev` run; it logs one warning only for a bundled
+  development app (`Stache Next.app`). Do not turn on the same device automation in
   both: `proxyAudio` and `notunes` would fight.
 
 ## Legacy removal

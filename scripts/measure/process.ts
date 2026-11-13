@@ -1,7 +1,11 @@
 import { type ChildProcess, spawnSync } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 
-import { NEXT_BUNDLE_IDENTIFIER, SHUTDOWN_TIMEOUT_MS } from './paths';
+import {
+  DEVELOPMENT_BUNDLE_IDENTIFIER,
+  NEXT_BUNDLE_IDENTIFIER,
+  SHUTDOWN_TIMEOUT_MS,
+} from './paths';
 import type { ProcessRow, Target, TargetKind } from './types';
 
 export class CommandExecutionError extends Error {
@@ -288,11 +292,17 @@ export function findRunningStacheProcesses(
  * Classifies one Launch Services entry. The release and legacy identifiers are
  * equal, so an entry with that identifier is `legacy` only when its executable
  * is the explicit `--legacy-app` target; otherwise it is the measured identity.
+ * A bundled development app ({@link DEVELOPMENT_BUNDLE_IDENTIFIER}) is classified with
+ * it so it blocks too; nothing here signals it.
  */
 export function classifyApplication(
   application: RunningApplication,
   legacy: Target | null,
 ): TargetKind | null {
+  if (application.bundleIdentifier === DEVELOPMENT_BUNDLE_IDENTIFIER) {
+    return 'next';
+  }
+
   if (application.bundleIdentifier !== NEXT_BUNDLE_IDENTIFIER) {
     return null;
   }
@@ -325,7 +335,7 @@ export function classifyExecutable(
     return 'legacy';
   }
 
-  if (/\/Stache\.app\/Contents\/MacOS\//.test(executablePath)) {
+  if (/\/Stache( Next)?\.app\/Contents\/MacOS\//.test(executablePath)) {
     return 'next';
   }
 

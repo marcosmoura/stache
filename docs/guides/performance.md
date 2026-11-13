@@ -49,9 +49,9 @@ build it with `bun run tauri:build`. Legacy builds follow `_legacy/README.md`.
 - Quit every Stache release instance (`com.marcosmoura.stache`, any `Stache.app`). The tool
   refuses to start while one is running. The legacy app shared that identifier, so a process is
   classified as legacy only when it runs the explicit `--legacy-app` path; with `--legacy-app`,
-  that process blocks too. A development build (`com.marcosmoura.stache.next`) is a separate
-  identity and is not guarded; keep its proxyAudio disabled so only one device-changing watcher
-  runs. The tool never signals or terminates another instance; quit it from its own tray or menu.
+  that process blocks too. A bundled development app (`com.marcosmoura.stache.next`, any
+  `Stache Next.app`) blocks as well; an unbundled `tauri:dev` run is not detected, so keep its
+  proxyAudio disabled so only one device-changing watcher runs. The tool never signals or terminates another instance; quit it from its own tray or menu.
 - The report records the actual guard scope for every launch.
 - Each measured launch uses an isolated `HOME`, `TMPDIR` and `XDG_CONFIG_HOME`, so it shares no
   lock, socket, cache or config with an installed app; its socket is
@@ -310,7 +310,10 @@ bun run measure:bar -- --app "target/release/bundle/macos/Stache.app" --ssid-off
 Preconditions the script checks or explains:
 
 - **Accessibility.** The launch gate holds every module, Bar included, unless the
-  exact release `.app` being measured is trusted for Accessibility. Grant it for
+  exact release `.app` being measured is trusted for Accessibility. Granting it to a `Stache.app`
+  built in `target/` will likely invalidate the grant of an installed `/Applications/Stache.app`,
+  and the reverse: macOS keeps one Accessibility entry per bundle identifier, tied to the code
+  signature, and ad-hoc signatures differ per build (not yet observed). Grant it for
   that path first (System Settings > Privacy & Security > Accessibility). The
   script reads `core.status` over the isolated control socket; `access.state`
   must be `open` in both arms. A gated launch is reported as an **invalid trial**

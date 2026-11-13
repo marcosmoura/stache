@@ -20,6 +20,10 @@ pub enum CollisionPolicy {
 }
 
 /// The policy this build ships with.
+///
+/// Limit: a bundled `TerminalAction::Restart` relaunches while the old PID
+/// still runs with this identifier, so the successor would likely refuse.
+/// Nothing requests a restart today; a future "Reload Stache" must handle it.
 pub const POLICY: CollisionPolicy = CollisionPolicy::RefuseSameIdentity;
 
 /// What one running application means for startup.

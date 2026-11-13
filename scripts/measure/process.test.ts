@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { NEXT_BUNDLE_IDENTIFIER } from './paths';
+import { DEVELOPMENT_BUNDLE_IDENTIFIER, NEXT_BUNDLE_IDENTIFIER } from './paths';
 import {
   InstanceCollisionError,
   assertNoOtherNextInstance,
@@ -131,6 +131,23 @@ describe('process classification', () => {
         legacy,
       ),
     ).toBe('legacy');
+  });
+
+  it('blocks on a bundled development app too', () => {
+    expect(
+      classifyApplication(
+        {
+          name: 'Stache Next',
+          bundleIdentifier: DEVELOPMENT_BUNDLE_IDENTIFIER,
+          executablePath: '/Users/me/Stache Next.app/Contents/MacOS/stache',
+          pid: 10,
+        },
+        null,
+      ),
+    ).toBe('next');
+    expect(
+      classifyExecutable('/Users/me/Stache Next.app/Contents/MacOS/stache', MEASURED, null),
+    ).toBe('next');
   });
 
   it('ignores other identifiers and unrelated executables', () => {

@@ -4,7 +4,7 @@
 //! [`crate::host::StartupRecovery`]. It composes the Keybindings-owned
 //! [`CapsRecoveryStep`] the same way the production factories compose their
 //! modules; the SDK knows no module identity. It runs regardless of the
-//! module's enabled state and configuration validity, acts only when Next's own
+//! module's enabled state and configuration validity, acts only when this build identity's own
 //! journal exists, and reports a failure instead of retrying or blocking
 //! startup. Default and test builds construct it only over fakes.
 

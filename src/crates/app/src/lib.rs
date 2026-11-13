@@ -426,6 +426,10 @@ fn run_with(
     let app_paths = AppPaths::resolve(&environment).map_err(|error| error.to_string())?;
     let wallpapers_home = environment.home.clone();
     let bar_home = environment.home;
+    // The media artwork cache lives under this build's identity, never Tauri's
+    // config identifier: a debug build without the dev overlay would otherwise
+    // write into the release cache.
+    let media_cache = app_paths.cache_directory().to_path_buf();
     let instance = match InstanceLock::acquire(&app_paths) {
         Ok(instance) => instance,
         Err(InstanceError::AlreadyRunning { .. }) => return Ok(()),
@@ -466,7 +470,7 @@ fn run_with(
     // The Keybindings pieces, built once and inert: the bounded dispatcher backs
     // the one shared input service's work reservations, and the Caps recovery
     // step shares the runtime's `CapsRemap`. A crash can leave the global Caps
-    // Lock remap behind; the host recovers Next's own journal once per launch,
+    // Lock remap behind; the host recovers this build identity's own journal once per launch,
     // whatever the module state, and with no journal does nothing and never
     // starts `hidutil`. No tap or hotkey exists until an enabled module starts.
     let keybindings = keybindings::compose(&app_paths, Arc::clone(&main_thread));
@@ -563,10 +567,10 @@ fn run_with(
             // directory and home, and reads one native location per refresh.
             // Media reads the vendored adapter from the resource directory
             // (or the in-repo copy in debug builds) and caches artwork under
-            // this app's own cache directory; it never reads `_legacy`.
+            // this build identity's cache directory; it never reads `_legacy`.
             let media = media_resources::media_parts(
                 app.path().resource_dir().ok(),
-                app.path().app_cache_dir().ok().as_deref(),
+                Some(media_cache.as_path()),
             );
             let bar = BarFactory::production_with_media(Arc::clone(&main_thread), Some(media))
                 .with_weather(WeatherParts::new(
@@ -578,6 +582,8 @@ fn run_with(
             // Tiling is registered default disabled. Its construction is inert;
             // the module's own `enabled` setting starts it. The Bar strip click
             // uses its typed exact-focus path; neither crate imports the other.
+            // The bundle identifier, not `IDENTITY`: Tiling excludes this process's
+            // own windows by the `CFBundleIdentifier` the running bundle reports.
             let tiling =
                 TilingFactory::production(Arc::clone(&main_thread), &app.config().identifier);
             bar_bridge.set_tiling_focus(tiling.focus());

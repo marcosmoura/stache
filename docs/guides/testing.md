@@ -699,7 +699,11 @@ cargo build --release -p stache-app --features smoke --bin stache-smoke
 ### Manual gates
 
 One gate at a time, approved for that individual run. Never unattended, never
-bundled with another gate. Target only `com.marcosmoura.stache` (these are release builds). The
+bundled with another gate. Target only `com.marcosmoura.stache` (these are release builds).
+Granting Accessibility to a test `Stache.app` built in `target/` will likely invalidate the grant of
+an installed `/Applications/Stache.app`, and the reverse: macOS keeps one Accessibility entry per
+bundle identifier, tied to the code signature, and ad-hoc signatures differ per build (not yet
+observed). The
 env-selected scenarios live in the feature-gated `stache-smoke` binary; the
 `bun run tauri:build` bundle is the shipped binary and is used where a gate calls
 for the bundle itself. Both run with a temp-root environment and every module

@@ -728,7 +728,7 @@ function describeLimitations(legacyTarget: Target | null): string[] {
     'The measured machine is shared: unrelated system activity can add CPU noise.',
     'Two measurement tool instances are not mutually excluded; run one at a time.',
     'Process identity is matched by Launch Services bundle identifier, the measured executable ' +
-      'path, and any Stache.app path. A legacy process is identified only from --legacy-app. A bare release binary at a different path is ' +
+      'path, and any Stache.app or Stache Next.app path (release or development). A legacy process is identified only from --legacy-app. A bare release binary at a different path is ' +
       'not detected by the guard.',
   ];
 
