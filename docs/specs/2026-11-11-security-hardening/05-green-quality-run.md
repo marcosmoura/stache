@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 ---
 
 # 05 — Green Quality run
@@ -68,17 +68,17 @@ Run 43358013407 (2026-11-13, this branch after merging `main`) and run 433133136
 
 ## Acceptance criteria
 
-- [ ] The six named UI tests pass locally and the suite does not depend on the machine's Reduce
+- [x] The six named UI tests pass locally and the suite does not depend on the machine's Reduce
       Motion or keyboard-navigation settings (shown by reasoning in the handoff report where a
       system setting cannot be toggled; never change system settings).
-- [ ] `hops_share_the_request_budget` has at least 200 ms of slack on each timing edge (was
+- [x] `hops_share_the_request_budget` has at least 200 ms of slack on each timing edge (was
       50 ms) and a hop at least 4× the elapsed bound, and still fails if hops stop sharing the
       budget.
-- [ ] Every native wall-clock assertion was reviewed; the report lists each changed test with the
+- [x] Every native wall-clock assertion was reviewed; the report lists each changed test with the
       reason its property still holds, and the ones left unchanged by group with the reason.
-- [ ] No test was deleted, skipped, marked CI-only or had an assertion removed.
-- [ ] `bun run lint`, `bun run format:check` and `bun run test` pass locally.
-- [ ] A Quality run of the branch passes (the orchestrator pushes and checks). This also closes
+- [x] No test was deleted, skipped, marked CI-only or had an assertion removed.
+- [x] `bun run lint`, `bun run format:check` and `bun run test` pass locally.
+- [x] A Quality run of the branch passes (the orchestrator pushes and checks). This also closes
       Part 01's last criterion.
 
 ## Tests
@@ -136,3 +136,9 @@ The changed tests are the tests. End-to-end scenario: the real Quality run on th
   like the font-dependent screenshots) and retries any failed native test up to twice. This
   supersedes this part's "no CI-only skip" and "no retries" rules for the native suite; the
   default profile used locally is unchanged.
+- Run 43421412792 on `2f6362b` (2026-11-13) passed every step, for the first time including
+  coverage, the audits, `build`, `tauri:build` and the closing lockfile check. Native: 4514 run,
+  4514 passed, three of them on a retry (`shutdown_while_a_socket_request_waits_answers_before_the_client_budget`,
+  `a_retarget_mid_animation_keeps_the_border_on_written_frames_and_ends_on_the_new_target`,
+  `a_restore_readback_that_lags_clears_within_the_settle`). Locally on the same commit the
+  default profile ran all 4543 native tests without retries and passed.

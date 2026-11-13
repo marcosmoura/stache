@@ -147,13 +147,13 @@ and the alternative that was not taken after it.
 
 ## Parts
 
-| Part                                 | Summary                                                                                           | Status      |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------- | ----------- |
-| [01](01-ci-hardening.md)             | SHA-pinned actions, read-only token, no persisted credentials, pinned tools, lock guard           | in-progress |
-| [02](02-media-adapter-provenance.md) | Media adapter from a pinned bottle with manifest, offline and upstream checks; release-spec facts | done        |
-| [03](03-config-trust.md)             | Documented same-user trust model; non-fatal config ownership and mode warnings                    | done        |
-| [04](04-release-panic-semantics.md)  | Truthful panic docs and comments under `panic = "abort"`, pinned by a test                        | done        |
-| [05](05-green-quality-run.md)        | Runner-independent UI and Tiling tests so the Quality run passes (added 2026-11-13)               | in-progress |
+| Part                                 | Summary                                                                                           | Status |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------- | ------ |
+| [01](01-ci-hardening.md)             | SHA-pinned actions, read-only token, no persisted credentials, pinned tools, lock guard           | done   |
+| [02](02-media-adapter-provenance.md) | Media adapter from a pinned bottle with manifest, offline and upstream checks; release-spec facts | done   |
+| [03](03-config-trust.md)             | Documented same-user trust model; non-fatal config ownership and mode warnings                    | done   |
+| [04](04-release-panic-semantics.md)  | Truthful panic docs and comments under `panic = "abort"`, pinned by a test                        | done   |
+| [05](05-green-quality-run.md)        | Runner-independent UI and Tiling tests so the Quality run passes (added 2026-11-13)               | done   |
 
 Parts are independent except that Part 02 adds a step to the workflow Part 01 hardens, and
 Part 01's pin test must cover it. Each commit must pass `bun run lint`,

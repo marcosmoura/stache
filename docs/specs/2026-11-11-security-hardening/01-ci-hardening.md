@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 ---
 
 # 01 — CI hardening
@@ -58,22 +58,22 @@ true. No product code changes.
 
 ## Acceptance criteria
 
-- [ ] Every `uses:` in `.github/workflows/` is a 40-hex SHA with a matching `# vX.Y.Z` comment,
+- [x] Every `uses:` in `.github/workflows/` is a 40-hex SHA with a matching `# vX.Y.Z` comment,
       and each SHA was resolved from the action's repository (listed in the commit body).
-- [ ] `quality.yml` has top-level `permissions: contents: read` and checkout uses
+- [x] `quality.yml` has top-level `permissions: contents: read` and checkout uses
       `persist-credentials: false`.
-- [ ] `cargo fetch --locked` runs before the first cargo-running step, and the job ends with the
+- [x] `cargo fetch --locked` runs before the first cargo-running step, and the job ends with the
       lockfile diff check. Or, under the alternative, every cargo-running script is locked.
-- [ ] `cargo-sort`, `cargo-nextest` and `cargo-audit` are pinned to explicit versions in CI and
+- [x] `cargo-sort`, `cargo-nextest` and `cargo-audit` are pinned to explicit versions in CI and
       in `docs/guides/testing.md`.
-- [ ] `.github/dependabot.yml` exists as specified, or the manual-refresh paragraph exists,
+- [x] `.github/dependabot.yml` exists as specified, or the manual-refresh paragraph exists,
       per Decision 5.
-- [ ] `scripts/ci/workflows.test.ts` passes on the new workflow. Each negative fixture (tag
+- [x] `scripts/ci/workflows.test.ts` passes on the new workflow. Each negative fixture (tag
       pin, missing comment, missing permissions, extra permission, persisted credentials,
       unpinned tool, guard after the first cargo step) fails with file and line.
-- [ ] `bun run lint`, `bun run format:check` and `bun run test` pass locally.
-- [ ] After the user allows a push, the first Quality run of the branch passes. Until then this
-      criterion is recorded as not run and blocks `done`.
+- [x] `bun run lint`, `bun run format:check` and `bun run test` pass locally.
+- [x] After the user allows a push, a Quality run of the branch passes: run 43421412792 on
+      `2f6362b` (2026-11-13), after the test and CI-profile changes of Part 05.
 
 ## Tests
 
