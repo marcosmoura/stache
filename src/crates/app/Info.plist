@@ -2,6 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
     <dict>
+        <key>LSUIElement</key>
+        <true/>
+        <key>NSHighResolutionCapable</key>
+        <true/>
+        <key>LSApplicationCategoryType</key>
+        <string>public.app-category.utilities</string>
         <key>NSLocationWhenInUseUsageDescription</key>
         <string>Stache uses your location to show local weather in the bar.</string>
         <key>NSLocationTemporaryUsageDescriptionDictionary</key>

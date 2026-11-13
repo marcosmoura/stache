@@ -265,7 +265,7 @@ fn the_bundle_declares_location_usage_and_only_the_location_entitlement() {
         info.contains("<key>NSLocationWhenInUseUsageDescription</key>"),
         "{info}"
     );
-    assert!(!info.contains("LSUIElement"), "{info}");
+    assert!(info.contains("<key>LSUIElement</key>"), "{info}");
 }
 
 // ---------------------------------------------------------------------------

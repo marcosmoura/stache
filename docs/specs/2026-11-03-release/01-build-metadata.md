@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 01 — Build metadata and one version

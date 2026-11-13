@@ -1,5 +1,5 @@
 ---
-status: draft
+status: in-progress
 ---
 
 # 02 — Release pipeline
