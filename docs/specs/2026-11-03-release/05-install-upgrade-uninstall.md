@@ -51,11 +51,11 @@ actual DMG checksum. Never publish this test cask or expose a public prerelease.
 
 ### Upgrade
 
-- The running app must stop through the coordinated teardown, never a kill. **Manual:** tray **Quit**,
-  then replace the app. **Cask:** the `signal:` stanza sends SIGTERM by bundle identifier, which
+- The running app must stop through the coordinated teardown, never a kill. **Manual:** quit from
+  the tray, then replace the app. **Cask:** the `signal:` stanza sends SIGTERM by bundle identifier, which
   converges on the same teardown.
-- Do not rely on Cmd-Q, a quit Apple Event or logout: those are the known teardown gap on the
-  [roadmap](../../roadmap.md).
+- Tray Quit, Cmd-Q and SIGTERM are verified to run the teardown. Do not rely on logout, restart
+  or shutdown, which are not verified ([roadmap](../../roadmap.md)).
 - Nothing relaunches automatically; the guide says to launch again. Config and cache survive, and the
   runtime directory is recreated at launch.
 

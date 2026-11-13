@@ -69,16 +69,16 @@ repeat them:
 - No auto-updater: upgrades are manual or through `brew upgrade`.
 - No launch-at-login item.
 - No automatic configuration migration: run `stache config migrate`.
-- No Settings UI: configuration is files.
 - Identity: a release is always `com.marcosmoura.stache`; only development builds use
   `com.marcosmoura.stache.next`. A running legacy app shares this release's identifier and makes it
   refuse to start, with no visible dialog when opened from Finder.
 - Removing the legacy app is a manual step and is required before installing this release.
-- Cmd-Q-style quit, a quit Apple Event and logout do not run the coordinated teardown; tray Quit and
-  SIGTERM do. This is the known gap on the [roadmap](../../roadmap.md).
+- Tray Quit, Cmd-Q and SIGTERM run the coordinated teardown. Logout, restart and shutdown are not
+  verified to; see the [roadmap](../../roadmap.md).
 - The app's own path is not a CLI; use the documented `stache` command, which this line describes by the
   route that shipped ([Part 05](05-install-upgrade-uninstall.md#cli-access)).
-- Most planned features remain unshipped; the README feature table stays authoritative.
+- Native behaviour of several modules is not fully verified; the README feature table and the
+  roadmap stay authoritative.
 
 ### Docs
 
@@ -101,7 +101,7 @@ repeat them:
       `stapler validate` passes, and first open shows only the normal downloaded-app prompt. Gated manual
       check; requires credentials.
 - [ ] `RELEASE-06-04` On the second machine, DMG and zip installs each launch, create the tray, open the
-      test window, and quit from the tray, covering `RELEASE-01-07` and `RELEASE-02-09`. Gated manual check.
+      popover, and quit from the tray, covering `RELEASE-01-07` and `RELEASE-02-09`. Gated manual check.
 - [ ] `RELEASE-06-05` The private local test-cask rehearsal installs the app and selected CLI route,
       upgrades between distinct test-cask versions and candidate builds, proves bundle replacement
       with changed installed checksums (no skip), and records SIGTERM clean teardown

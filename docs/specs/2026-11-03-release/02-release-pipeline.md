@@ -40,7 +40,9 @@ exist. Signing is [Part 03](03-signing-notarization.md); publishing is Part 03's
   else requiring the Automation permission.
 - **Zip.** Built with `ditto -c -k --keepParent` so signatures and extended attributes survive.
 - **Bundle verifier.** Before packaging, assert `RELEASE-01-06`: stated contents, linkage,
-  `lipo -archs` reporting exactly `arm64` on the executable, merged `Info.plist`,
+  `lipo -archs` reporting exactly `arm64` on the executable and on each nested
+  `media-control` Mach-O, no file under `Contents/Resources/media-control/` beyond the
+  flattened vendored set, merged `Info.plist`,
   `CFBundleShortVersionString` equal to the authoritative version, and `CFBundleIdentifier` and
   `CFBundleName` equal to the base config's values, so an overlay cannot pass unnoticed. Test
   the artifact rather than the host, since a Rosetta shell can report a different architecture.
@@ -59,15 +61,9 @@ exist. Signing is [Part 03](03-signing-notarization.md); publishing is Part 03's
   nothing and gains no secret. Add a `push.tags` trigger for `v*-rc.*` alongside the existing
   `main` push and pull-request triggers, so candidate tags on `feat/release` run every source
   gate on the exact tagged SHA. A nearby branch or pull-request SHA is not evidence for a candidate.
-- **Script tests.** Vitest's `test.root` is `src/ui` and its `include` is
-  `./src/**/*.test.{ts,tsx}`, so it cannot collect anything in `scripts/`, which is outside that
-  tree and has no tests today. Add `test:scripts` running `bun test scripts` and include it in
-  `bun run test`.
-- **Second-runner exception.** `AGENTS.md` says browser tests use Vitest and not Bun's runner.
-  `test:scripts` is a deliberate Node-side exception to that rule, limited to `scripts/`: these
-  tests need the filesystem and child processes, which the browser project's WebKit environment
-  cannot host. Record the exception in `AGENTS.md` and `docs/guides/testing.md`. Repo-wide
-  `bun test` stays out, since it would run the browser tests under the wrong runner.
+- **Script tests.** `scripts/release.test.ts` runs under the existing `test:scripts` Vitest
+  project (`vitest.scripts.config.ts`, Node environment), which `bun run test` already
+  includes. Add no runner and do not use `bun test`.
 
 ## Acceptance criteria
 
@@ -77,7 +73,8 @@ exist. Signing is [Part 03](03-signing-notarization.md); publishing is Part 03's
 - [ ] `RELEASE-02-02` Injected failures in the build, verifier, `hdiutil`, `ditto` and checksum
       steps each exit non-zero and leave no `SHA256SUMS` in the output directory. Test:
       `scripts/release.test.ts`, with fake command runners.
-- [ ] `RELEASE-02-03` The verifier refuses a non-`arm64` executable, an extra executable, a
+- [ ] `RELEASE-02-03` The verifier refuses a non-`arm64` executable, an extra file in
+      `Contents/MacOS`, an unexpected file or a non-`arm64` Mach-O under `media-control`, a
       non-system linked library, a version mismatch, a missing `LSUIElement`, and a
       `CFBundleIdentifier` or `CFBundleName` that differs from the base config. Test:
       `scripts/release.test.ts`, with fake inspection output.
@@ -107,5 +104,8 @@ packaging runs in `bun run release` and CI. Automated checks never write to `/Ap
 
 - `hdiutil`, `ditto`, `shasum`, `lipo`, `otool`, `plutil` and `codesign` ship with macOS and
   the Xcode command-line tools. Add no dependency.
+- If strict deep verification of the Tauri-signed bundle fails because of the nested adapter,
+  the script re-signs the nested Mach-O files and then the app ad hoc, in Part 03's order,
+  before packaging. Record which happened in `release.json`; do not relax the check.
 - Keep to one script plus what its tests require. There is no per-artifact configuration file.
 - An ad-hoc artifact is a pipeline proof only. It is never uploaded as a release.

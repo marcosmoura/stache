@@ -25,25 +25,28 @@ statement below concerns the base `tauri.conf.json`, the only config a package i
   It runs in `bun run test`, so contributors need no extra command. Do not make
   `tauri.conf.json` derive its version at build time: this keeps the manifests readable and
   the mismatch visible.
-- **`Info.plist`.** Add `src/crates/app/Info.plist` beside the Tauri config, where Tauri
-  discovers and merges it without a config key. It sets `LSUIElement` true,
+- **`Info.plist`.** `src/crates/app/Info.plist` already sits beside the Tauri config, where
+  Tauri discovers and merges it without a config key. Add `LSUIElement` true,
   `NSHighResolutionCapable` true and `LSApplicationCategoryType`
-  `public.app-category.utilities`. Do not copy the legacy location strings: no shipped
-  module requests location, and a future part adds a usage string with its permission.
+  `public.app-category.utilities`. Keep its two location usage keys unchanged: the Bar's
+  weather requests location. Add no other usage-description key.
 - **Icons.** Keep the four referenced icons. `icons/icon.png` stays because `README.md`
   displays it. `icons/64x64.png` is referenced by nothing in the new tree; remove it, or
   reference it if a real use exists. Do not change the visual identity.
-- **Bundle contents.** The expected `.app` is `Contents/MacOS/stache` as the only
-  executable in `Contents/MacOS`, `Contents/Info.plist`, `Contents/Resources/icon.icns` and `_CodeSignature`.
-  Frontend assets are embedded in the binary by `custom-protocol`, so no separate frontend
-  directory is expected. `Contents/Resources/media-control/` holds exactly the files and symlink
-  targets in `scripts/media-control/manifest.json` (flattened by Tauri), plus `PROVENANCE.md` and
-  `LICENSE`. Generator and smoke binaries and any other framework must be absent.
+- **Bundle contents.** The expected `.app` is `Contents/MacOS/stache` as the only file in
+  `Contents/MacOS`, `Contents/Info.plist`, `Contents/Resources/icon.icns` and
+  `_CodeSignature`. Frontend assets are embedded in the binary by `custom-protocol`, so no
+  separate frontend directory is expected. `Contents/Resources/media-control/` holds
+  exactly the files committed under `src/crates/app/resources/media-control/` (the adapter
+  files pinned by `scripts/media-control/manifest.json`, plus `PROVENANCE.md` and `LICENSE`), as
+  Tauri flattens them, and is the only place another Mach-O file may appear. Generator and smoke
+  binaries and any other framework must be absent.
 - **Linkage.** `Contents/MacOS/stache` must be arm64 only and link only system libraries
-  under `/System` or `/usr/lib`. This rule covers `Contents/MacOS/stache` only; the nested
-  `media-control` code is signed separately by Part 03.
+  under `/System` or `/usr/lib`. This rule covers the main executable; the nested
+  `media-control` Mach-O files must be arm64 only and are signed separately by Part 03.
 - **Unchanged.** `bundle.targets` stays `["app"]`. The capability list stays exactly
-  `test-window`. No entitlements file is added.
+  `access-window`, `bar-window`, `popover-window`. `bundle.resources` stays exactly the
+  `media-control` entry. `Entitlements.plist` stays exactly the location entitlement.
 
 ## Acceptance criteria
 
@@ -53,17 +56,20 @@ statement below concerns the base `tauri.conf.json`, the only config a package i
       `package.json` and `tauri.conf.json`, and the message names the file. Test: parser unit
       cases in `release_metadata.rs`, using in-memory or temporary manifests.
 - [ ] `RELEASE-01-03` The committed `Info.plist` holds exactly the three stated keys and
-      values and no usage-description key. Test: `release_metadata.rs`.
+      values plus the two existing location usage keys, and nothing else. Test:
+      `release_metadata.rs`.
 - [ ] `RELEASE-01-04` Every icon in `bundle.icon` exists, every file in `icons/` is referenced
       by `bundle.icon` or is `icon.png`, and `icon.png` exists. Test: `release_metadata.rs`.
-- [ ] `RELEASE-01-05` The capability list is exactly `["test-window"]`, `bundle.targets` is
-      `["app"]`, and no `entitlements` key is set. Test: `release_metadata.rs`.
+- [ ] `RELEASE-01-05` The capability list is exactly the three shipped windows,
+      `bundle.targets` is `["app"]`, `bundle.resources` is exactly the `media-control`
+      entry, and `Entitlements.plist` holds exactly the location entitlement. Test:
+      `release_metadata.rs`.
 - [ ] `RELEASE-01-06` A built bundle matches the stated contents and linkage, and its merged
       `Info.plist` holds the three keys, `LSMinimumSystemVersion` `26.0`, and a
       `CFBundleIdentifier` and `CFBundleName` equal to the base config's `identifier` and
       `productName`. Check: the bundle verifier added in Part 02, run by `bun run release`.
 - [ ] `RELEASE-01-07` A packaged app launched from Finder shows no Dock icon, creates its
-      tray item, and opens the test window with its embedded document from the tray. Gated
+      tray item, and opens the popover with its embedded document from the tray. Gated
       manual check, recorded in Part 06.
 
 ## Tests
@@ -78,6 +84,8 @@ bundle. The bundle checks need a real `.app`, so they run in the pipeline, not t
 - `tauri-codegen` also embeds a neighboring `Info.plist` into the binary, so unbundled
   `bun run tauri:dev` runs read it too, with `CFBundleName` set from the merged `productName`.
   Confirm development behavior is unchanged.
+- The existing `Info.plist` is already embedded in development runs. Adding `LSUIElement`
+  must not change how `bun run tauri:dev` or the e2e harness behave.
 - No built bundle was inspected for this spec; the contents and linkage above are
   expectations for `RELEASE-01-06` to prove. If they differ, fix the spec or the bundle and
   do not relax the check silently.

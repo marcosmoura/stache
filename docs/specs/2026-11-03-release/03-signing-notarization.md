@@ -36,7 +36,9 @@ do not satisfy it, and the script must refuse them.
   The script then Developer ID re-signs the bundle Tauri built and is the single authority for
   the final signature and notarization; there is not a single signer across all build stages.
 - **Signing.** `codesign --force --options runtime --timestamp` with the Developer ID identity,
-  on each nested `media-control` Mach-O (see Notes), then the main executable and then the bundle. `--deep` is **never** used to sign, so an
+  on each nested `media-control` Mach-O, then the main executable and then the bundle
+  (Decision 16). The main executable and bundle signatures pass `--entitlements` with the
+  committed `Entitlements.plist`; the nested files get none. `--deep` is **never** used to sign, so an
   unexpected nested binary fails verification instead of being silently covered. Verification
   does use `codesign --verify --strict --deep`.
 - **Ad-hoc dry run.** With `--dry-run-signing`, the same step order runs with identity `-`,
@@ -44,9 +46,10 @@ do not satisfy it, and the script must refuse them.
   skipped. `release.json` records `ad-hoc` and `notarized: false`.
 - **CLI fallback.** If [Part 05](05-install-upgrade-uninstall.md#cli-access) ships the separate
   CLI binary, it goes through this same pipeline; `RELEASE-05-10` owns that proof.
-- **Entitlements.** None to start. No shipped module uses Apple Events, the camera, microphone
-  capture or screen capture. A signed-build failure that truly needs one requires a recorded
-  reason and the narrowest key, not a broad exception.
+- **Entitlements.** Exactly the committed `Entitlements.plist`: the location entitlement for the
+  Bar's weather (Decision 17). No shipped module uses Apple Events, the camera, microphone
+  capture or screen capture. A signed-build failure that truly needs another key requires a
+  recorded reason and the narrowest key, not a broad exception.
 - **Order.**
   1. Sign the app and verify it.
   2. Zip it with `ditto` for submission, `xcrun notarytool submit --wait`, and require `Accepted`.
@@ -101,8 +104,9 @@ do not satisfy it, and the script must refuse them.
       artifacts for the certificate password, the `.p12` contents and the API private key finds
       none, and the temporary keychain and key file are gone after the job. Evidence is the log.
 - [ ] `RELEASE-03-10` **Gated, requires credentials.** A signed app run under hardened runtime
-      creates its tray, loads the embedded test window and quits from the tray with no new
-      entitlement, and `proxyAudio` and `notunes` still start when enabled. Gated manual check,
+      creates its tray, loads the embedded popover and quits from the tray with no new
+      entitlement; `proxyAudio` and `notunes` still start when enabled; and with the Bar
+      enabled, weather location and the media adapter still work. Gated manual check,
       with per-run approval for noTunes' real termination behavior.
 
 ## Tests
@@ -113,15 +117,13 @@ is `RELEASE-06-03`.
 
 ## Notes
 
-- Nested code: `Contents/Resources/media-control/` holds two Mach-O files,
-  `MediaRemoteAdapterTestClient` and `MediaRemoteAdapter.framework/Versions/A/MediaRemoteAdapter`
-  (listed in `scripts/media-control/manifest.json`), plus `mediaremote-adapter.pl`. Upstream's
-  build ad-hoc signs them and its framework already fails `codesign --verify`, strict or not. Each nested Mach-O
-  must be signed individually, inside out, with the Developer ID, hardened runtime and a timestamp
-  before the app itself is signed. Tauri flattens the framework symlinks in the bundle (the
-  top-level `MediaRemoteAdapter` becomes a regular copy of the binary and `Versions/Current` and
-  `Resources` are absent), so signing must work on the flattened layout. Verification stays strict
-  and deep.
+- Nested code: `Contents/Resources/media-control/` holds `MediaRemoteAdapterTestClient`, the
+  `MediaRemoteAdapter.framework` library and `mediaremote-adapter.pl` (listed in
+  `scripts/media-control/manifest.json`). Tauri flattens the
+  framework's symlinks, so the library may appear more than once as a regular file, and the
+  directory is no longer a valid framework bundle: sign each Mach-O as a plain file. Upstream's
+  ad-hoc signatures are replaced. The adapter is loaded by `/usr/bin/perl`, not by Stache, so
+  Stache's library validation does not apply to it; `RELEASE-03-10` proves it still runs.
 - Apple's notarization documentation could not be retrieved while writing this spec. The zip
   submission and zip-cannot-be-stapled statements come from prior knowledge; `RELEASE-03-08` is
   what proves the sequence.

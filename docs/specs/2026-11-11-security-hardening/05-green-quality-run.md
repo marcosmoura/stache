@@ -9,7 +9,8 @@ status: done
 Make the Quality workflow pass on the GitHub `macos-26` runner so Part 01's last criterion can be
 judged. Added on 2026-11-13 with the user's approval: Quality is red on `main` for reasons this
 spec did not cause, and the user chose to fix them on this branch. Test code and test setup only.
-No product behavior changes, and no test is deleted, skipped on CI or weakened to pass.
+No product behavior changes, and no test is deleted or weakened to pass. As first written no test
+was to be skipped on CI either; the user later allowed that for the Tiling animation tests (Notes).
 
 ## Requirements
 
@@ -76,7 +77,9 @@ Run 43358013407 (2026-11-13, this branch after merging `main`) and run 433133136
       budget.
 - [x] Every native wall-clock assertion was reviewed; the report lists each changed test with the
       reason its property still holds, and the ones left unchanged by group with the reason.
-- [x] No test was deleted, skipped, marked CI-only or had an assertion removed.
+- [x] No test was deleted or had an assertion removed, and none is skipped or CI-only except the
+      Tiling animation test modules left out of the `ci` nextest profile (user decision,
+      2026-11-13; see Notes).
 - [x] `bun run lint`, `bun run format:check` and `bun run test` pass locally.
 - [x] A Quality run of the branch passes (the orchestrator pushes and checks). This also closes
       Part 01's last criterion.
@@ -102,8 +105,8 @@ The changed tests are the tests. End-to-end scenario: the real Quality run on th
   positive wait raised to 5 s; two real-time animation counts lowered to the minimum that still
   proves an intermediate frame. Left as they are, because a robust form needs a product change or
   a rig redesign, and still timing-sensitive on a starved machine:
-  - `app/src/bar_tests.rs`, two 200 ms bounds against the shared 250 ms rig `BUDGET` (a separate
-    budget for those two tests is needed; raising the shared one slows every stalled-hop test);
+  - `app/src/bar_tests.rs`, three 200 ms bounds against the shared 250 ms rig `BUDGET` (a separate
+    budget for those tests is needed; raising the shared one slows every stalled-hop test);
   - `tiling/src/visibility_tests.rs` `the_settle_never_outlasts_the_restore_hop`, bounded by the
     product constant `RESTORE_SETTLE` (250 ms);
   - `tiling/src/borders/engine_tests.rs` `nothing_to_hide_waits_for_nothing`, bounded by the
@@ -142,3 +145,8 @@ The changed tests are the tests. End-to-end scenario: the real Quality run on th
   `a_retarget_mid_animation_keeps_the_border_on_written_frames_and_ends_on_the_new_target`,
   `a_restore_readback_that_lags_clears_within_the_settle`). Locally on the same commit the
   default profile ran all 4543 native tests without retries and passed.
+- Changed after review (2026-11-13): `main` was merged again (its release-spec revision
+  `22319fb` conflicted with Part 02's edits; `main`'s text was kept and the manifest pointer added
+  to it). `a_stalled_main_queue_times_out_before_issuance_without_blocking_reads` went back to its
+  200 ms bound, since 2 s sat above the 250 ms budget it must stay under. The two animation frame
+  counts lowered for the runner went back to 4, because those tests no longer run in CI.

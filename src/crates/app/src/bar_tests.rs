@@ -2475,7 +2475,7 @@ fn a_stalled_main_queue_times_out_before_issuance_without_blocking_reads() {
             rig.bridge.snapshot(&label),
             BarSnapshotOutcome::Available { .. }
         ));
-        assert!(begun.elapsed() < Duration::from_secs(2));
+        assert!(begun.elapsed() < Duration::from_millis(200));
     }
     assert_eq!(
         click.join().expect("click"),

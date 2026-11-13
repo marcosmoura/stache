@@ -602,7 +602,7 @@ fn several_applications_animate_a_layout_change_in_per_application_batches() {
         assert_eq!(stages.last(), Some(&FrameStage::Final), "{stages:?}");
         assert_eq!(stages.iter().filter(|s| **s == FrameStage::Final).count(), 1);
         assert!(
-            stages.len() >= 3,
+            stages.len() >= 4,
             "intermediate frames, not one jump: {stages:?}"
         );
         assert_eq!(
