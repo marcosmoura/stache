@@ -51,11 +51,11 @@ directory is Stache code; it is third-party material shipped unmodified.
 - **Layout kept:** `Versions/A`, `Versions/Current -> A` and the top-level
   `MediaRemoteAdapter` and `Resources` links are stored in git as symlinks. Tauri's
   `bundle.resources` flattens them in the `.app` (see `docs/features/bar.md`).
-- **History:** the first import came from the archived legacy tree
-  (`_legacy/app/native/resources/`), committed in `e0b4648` and copied byte for byte. Those
+- **History:** the first import came from the resources of the application before 0.26,
+  committed in `e0b4648` and copied byte for byte. Those
   binaries were the `arm64_golden_gate` (macOS 27, `minos 27.0`) bottle's files after Homebrew's
   pour-time relocation and re-sign; they were replaced with the `arm64_tahoe` bottle's files on
-  2026-11-11. The runtime never reads `_legacy`.
+  2026-11-11.
 
 | File                                                         | SHA-256                                                            |
 | ------------------------------------------------------------ | ------------------------------------------------------------------ |

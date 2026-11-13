@@ -19,5 +19,5 @@
     "noUncheckedSideEffectImports": true
   },
   "include": ["playwright.config.ts", "src/ui/e2e"],
-  "exclude": ["_legacy", ".worktrees", "target", "node_modules", "src/ui/e2e/harness"]
+  "exclude": [".worktrees", "target", "node_modules", "src/ui/e2e/harness"]
 }

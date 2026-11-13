@@ -1,10 +1,9 @@
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 
-/** Paths outside the active tree, even when force-staged: archive, worktrees, builds, generated output. */
+/** Paths outside the active tree, even when force-staged: worktrees, builds, generated output. */
 const ignoredDirectories = [
   '.worktrees',
-  '_legacy',
   'coverage',
   'node_modules',
   'src/crates/app/gen',

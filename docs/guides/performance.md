@@ -42,7 +42,8 @@ an idle sample after a 10-second warmup. There are no requested windows.
 | `--help`, `-h`         | Prints flags, prerequisites, safety rules and the guarded command without side effects. |
 
 Relative paths resolve against the repository root. The new target must exist;
-build it with `bun run tauri:build`. Legacy builds follow `_legacy/README.md`.
+build it with `bun run tauri:build`. A legacy comparison needs an existing bundle of the application before 0.26, passed with
+`--legacy-app`; the repository no longer holds its source.
 
 ## Prerequisites and safety
 

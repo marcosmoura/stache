@@ -243,7 +243,3 @@ forced-sleep checks are **unverified**. A real-device power check requires
 explicit approval for each run and the `pmset -g assertions` protocol in the
 [spec](../specs/2026-11-03-keep-awake/00-overview.md#validation-and-safety).
 Bundle signing and notarization remain outside this scope.
-
-For the old Bar-bound behavior, read the
-[archived legacy feature](../../_legacy/docs/features/keep-awake.md). Its
-automatic activation and UI payload mismatch are not the new contract.

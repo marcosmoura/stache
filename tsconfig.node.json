@@ -28,5 +28,5 @@
     "lint-staged.config.ts",
     "scripts/**/*.ts"
   ],
-  "exclude": ["_legacy", ".worktrees", "target", "node_modules"]
+  "exclude": [".worktrees", "target", "node_modules"]
 }

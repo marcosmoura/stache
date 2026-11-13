@@ -256,4 +256,4 @@ Minimum sizes follow the legacy rules: a reported `AXMinimumSize` wins, otherwis
 
 The workspace/app strip UI is the Bar's Spaces widget (see [Bar](bar.md#tiling-strip-ui)); the published strip data in `BarView.tiling` is unchanged. Data uses optional typed published state; reserved screen area comes from the host registry, not Bar configuration or circular module dependencies. Borders are drawn by Stache itself (see [Borders](#borders)). All live native effects/tests need per-run approval; none ran.
 
-Lasting shipped behavior replaces only completed slices of this notice during implementation. Historical evidence remains in [legacy tiling docs](../../_legacy/docs/features/tiling.md); they do not describe current Next capabilities.
+Lasting shipped behavior replaces only completed slices of this notice during implementation.

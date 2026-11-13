@@ -5,7 +5,6 @@
     "**/coverage/**",
     "**/dist/**",
     ".worktrees/**",
-    "_legacy/**",
     "node_modules/**",
     "src/crates/app/gen/**",
     "target/**"

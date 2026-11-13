@@ -3,7 +3,7 @@
 //! The configured file is read on every weather refresh (no watcher, no cache)
 //! and the process environment is never written. The parser is `dotenvy`
 //! 0.15.7, the same crate the legacy application used
-//! (`_legacy/app/native/src/config/env.rs`: `dotenvy::from_path_iter`, bad
+//! (its `config/env.rs`: `dotenvy::from_path_iter`, bad
 //! lines skipped, later duplicates win), so the file format is unchanged.
 //!
 //! # Legacy audit

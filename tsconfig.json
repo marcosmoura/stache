@@ -11,5 +11,5 @@
       "path": "./tsconfig.e2e.json"
     }
   ],
-  "exclude": ["node_modules", "_legacy", ".worktrees", "target", "src/ui/dist", "src/ui/coverage"]
+  "exclude": ["node_modules", ".worktrees", "target", "src/ui/dist", "src/ui/coverage"]
 }

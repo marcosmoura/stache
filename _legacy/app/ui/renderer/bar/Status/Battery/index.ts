@@ -1,1 +1,0 @@
-export { Battery } from './Battery';

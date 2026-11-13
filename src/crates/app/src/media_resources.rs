@@ -3,7 +3,7 @@
 //! The adapter ships inside the app as `media-control/` (see
 //! `resources/media-control/PROVENANCE.md`). Packaged builds read it from
 //! Tauri's resource directory; debug builds without a bundle fall back to the
-//! in-repo copy. Nothing here ever reads `_legacy`, and nothing here spawns a
+//! in-repo copy. Nothing here spawns a
 //! process: the result is only validated absolute paths or a typed reason.
 //!
 //! The adapter binaries are arm64-only, so other hosts report
@@ -373,11 +373,10 @@ mod tests {
     }
 
     #[test]
-    fn the_development_directory_is_the_in_repo_copy_never_legacy() {
+    fn the_development_directory_is_the_in_repo_copy() {
         if let Some(directory) = development_directory() {
             assert!(directory.is_absolute());
             assert!(directory.ends_with("resources/media-control"));
-            assert!(!directory.to_string_lossy().contains("_legacy"));
             let resources = MediaResources::resolve_in(Some(&directory), true)
                 .expect("the vendored artifacts validate");
             assert!(resources.test_client.is_absolute());

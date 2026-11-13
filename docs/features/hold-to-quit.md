@@ -44,4 +44,4 @@ Automatic coverage uses only fakes: the shared input service over its fake tap a
 
 **Otherwise unverified on a real machine:** event tap behavior under real input, HUD visibility (another app's full-screen Space, secure input), display and Space placement, click-through, a real graceful quit and the HID-versus-Carbon ordering. A manual run needs approval for that run, the Next identity and a disposable application with no unsaved work, such as TextEdit: tap versus hold, repeat and Command release, focus switch mid-hold, Finder pass-through, pause mid-hold (the deferred tap must swallow repeats), display, Space, focus and click-through. Quit only the disposable app, and record skipped cases as unverified.
 
-For the old behavior, read the [archived legacy feature](../../_legacy/docs/features/hold-to-quit.md). The rewrite is specified in the [spec](../specs/2026-11-03-hold-to-quit/00-overview.md).
+The rewrite is specified in the [spec](../specs/2026-11-03-hold-to-quit/00-overview.md).

@@ -54,7 +54,6 @@ fn tracked_sources() -> Vec<String> {
         .filter(|path| !path.is_empty())
         .filter(|path| {
             ![
-                "_legacy/",
                 "docs/",
                 "target/",
                 "node_modules/",

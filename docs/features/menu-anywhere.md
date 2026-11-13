@@ -29,4 +29,4 @@ Automated tests (`stache-menu-anywhere` `tests.rs`, the MenuAnywhere host cases 
 
 ## Spec
 
-The [spec](../specs/2026-11-03-menu-anywhere/00-overview.md) defines three parts: the typed configuration (Part 01), the Accessibility reader, `NSMenu` presenter and exact-instance invocation adapters (Part 02) and this runtime (Part 03). All three parts are done; native gate evidence is recorded in the Part 02 and Part 03 specs. No Settings UI, private menu API, search or menu cache is planned. The old application is archived under `_legacy/`; its behavior is not the new runtime contract.
+The [spec](../specs/2026-11-03-menu-anywhere/00-overview.md) defines three parts: the typed configuration (Part 01), the Accessibility reader, `NSMenu` presenter and exact-instance invocation adapters (Part 02) and this runtime (Part 03). All three parts are done; native gate evidence is recorded in the Part 02 and Part 03 specs. No Settings UI, private menu API, search or menu cache is planned.

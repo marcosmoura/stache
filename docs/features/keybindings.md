@@ -76,7 +76,7 @@ and crash recovery are **unverified** against a live system.
 `Cmd`/`Super`/`Meta`, `Alt`/`Opt`, backtick) and routes each raw key: `CapsLock+<key>`
 first, then `§` (last component, only Command/Shift/Option/Control; `CapsLock+§` is the
 physical ISO key `0x0A`), then the ordinary grammar of `global-hotkey` 0.10.0, the parser
-the archived application used at 0.8.0 (parsing only, no native manager). 0.10.0 also parses
+the application before 0.26 used at 0.8.0 (parsing only, no native manager). 0.10.0 also parses
 key names 0.8.0 rejected (`F25` to `F35`, international, launch and media keys); none has a
 Carbon virtual key, so registration reports them unsupported. Raw keys are planned in
 lexical order; the last semantic duplicate wins and the diagnostic names both spellings.
@@ -112,9 +112,7 @@ by the accepted Keybindings reload its own command causes, because that reload i
 the generation and cancels the running sequence. Later steps of the same sequence never run,
 so do not rely on steps after a reload command.
 
-See the
-[archived behavior](../../_legacy/docs/features/keybindings.md) for the independent
-old application. Do not apply legacy Caps remap commands/state files to Next.
+Do not apply Caps remap commands or state files from the application before 0.26 to this one.
 
 **Unverified.** Everything above is exercised against fakes only. Real Carbon registration, the real
 HID-tap versus Carbon priority (whether a suppressing tap already prevents Carbon dispatch), layout

@@ -480,14 +480,13 @@ printf '\n// Native watch acceptance probe.\n' >> src/crates/app/src/lib.rs
 # Observe recompilation and restart in terminal A, then restore:
 cp "$backup" src/crates/app/src/lib.rs
 # Observe the restoration recompile/restart, then leave source untouched.
-legacy_probe=$(mktemp -d "$PWD/_legacy/.native-watch.XXXXXX")
 nested_probe=$(mktemp -d "$PWD/.worktrees/native-watch.XXXXXX")
 build_probe=$(mktemp "$PWD/target/native-watch.XXXXXX")
-touch "$legacy_probe/probe.rs" "$nested_probe/probe.rs" "$build_probe"
+touch "$nested_probe/probe.rs" "$build_probe"
 # Observe no rebuild/restart for at least five seconds after these ignored writes.
 # Stop terminal A with Ctrl+C before cleanup in terminal B:
-rm -- "$legacy_probe/probe.rs" "$nested_probe/probe.rs" "$build_probe" "$backup"
-rmdir -- "$legacy_probe" "$nested_probe"
+rm -- "$nested_probe/probe.rs" "$build_probe" "$backup"
+rmdir -- "$nested_probe"
 lsof -nP -iTCP:1420 -sTCP:LISTEN
 ```
 
@@ -986,9 +985,8 @@ not bundled.
 
 Launch only `target/release/bundle/macos/Stache.app`, verify tray/Quit and zero windows, then quit.
 The bundle needs Accessibility for Stache before any module runs (the launch gate; grant it for that bundle's entry, not a development build's `Stache Next` entry); it needs no audio permission. Local bundles use ad-hoc signing; `bun run release --self-sign`
-signs with the owner's self-signed certificate, and nothing is notarized. CI audits new locks, not the archive. Legacy build
-verification is opt-in via [_legacy/README.md](../../_legacy/README.md), including resource/signing gaps.
-Never run legacy and new device-changing automation together.
+signs with the owner's self-signed certificate, and nothing is notarized. CI audits the lockfiles.
+Never run a release and a development build's device-changing automation together.
 
 ## Release artifacts
 

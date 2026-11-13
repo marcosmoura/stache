@@ -3643,10 +3643,7 @@ fn production_media_parts_use_the_next_cache_directory_and_the_vendored_resource
     if cfg!(target_arch = "aarch64") {
         let paths = resolved.expect("the vendored resources resolve in a debug build");
         for path in [&paths.script, &paths.framework, &paths.test_client] {
-            assert!(
-                path.is_absolute() && !path.to_string_lossy().contains("_legacy"),
-                "{path:?}"
-            );
+            assert!(path.is_absolute(), "{path:?}");
         }
     } else {
         assert!(resolved.is_err());

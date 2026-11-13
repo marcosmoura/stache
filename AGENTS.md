@@ -3,11 +3,10 @@
 **Stache** is a macOS 26+ Tauri 2 tray-only skeleton. Typed configuration,
 the standalone CLI and the control-socket foundation ship; runtime modules do not.
 New sources live in `src/crates/` and `src/ui/`; root configs/scripts/docs remain at repository root.
-The independent old application lives in `_legacy/`; do not port its behavior without an approved part.
 
 ## Essentials
 
-- Package manager: Bun 1.4.4; pnpm is allowed only inside `_legacy/`.
+- Package manager: Bun 1.4.4.
 - Rust: retained nightly/rustfmt, workspace Clippy pedantic + nursery, warnings as errors.
 - UI: React + TypeScript + StyleX + React Compiler/Vite; TanStack Query, zustand, Motion, Hugeicons.
 - UI tests: Vitest browser mode + Playwright Test e2e, both WebKit, not Bun's test runner.
@@ -26,7 +25,7 @@ bun run format # explicit mutation
 ```
 
 Start at [docs/index.md](docs/index.md), then read only task-relevant docs.
-Root checks exclude archive/build/generated/worktree inputs. Never launch legacy automation for a build.
+Root checks exclude build/generated/worktree inputs.
 
 ## Workflow
 

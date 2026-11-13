@@ -1,6 +1,5 @@
 **/dist/**
 **/coverage/**
-_legacy/**
 .worktrees/**
 target/**
 node_modules/**

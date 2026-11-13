@@ -14,7 +14,7 @@ You implement one spec part, or one defined fix, for Stache. You are a subagent:
 2. Inspect the existing code and nearby tests before you edit.
 3. Implement the part, with tests for every acceptance criterion where testing is feasible.
 4. Update a doc in `docs/` when you change behavior it describes.
-5. Run `bun run lint`, `bun run format:check` and the tests for what you touched, or the commands the parent names. The parent runs the full suite. Run schema and binding checks when the part introduces them. pnpm is used only inside `_legacy/`.
+5. Run `bun run lint`, `bun run format:check` and the tests for what you touched, or the commands the parent names. The parent runs the full suite. Run schema and binding checks when the part introduces them.
 
 ## Report
 

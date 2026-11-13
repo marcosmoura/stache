@@ -12,6 +12,6 @@ export default defineConfig({
     root: import.meta.dirname,
     environment: 'node',
     include: ['scripts/**/*.test.ts'],
-    exclude: ['**/_legacy/**', '**/.worktrees/**', '**/node_modules/**', '**/target/**'],
+    exclude: ['**/.worktrees/**', '**/node_modules/**', '**/target/**'],
   },
 });

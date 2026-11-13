@@ -105,7 +105,7 @@ export default defineConfig({
     css: true,
     root: uiRoot,
     setupFiles: ['./tests/processShim.ts', './tests/setup.ts'],
-    exclude: ['**/_legacy/**', '**/.worktrees/**', '**/dist/**', '**/node_modules/**', 'e2e/**'],
+    exclude: ['**/.worktrees/**', '**/dist/**', '**/node_modules/**', 'e2e/**'],
     coverage: {
       provider: 'istanbul',
       reporter: ['text', 'json', 'html'],

@@ -133,7 +133,6 @@ Read when changing the shipped foundation boundaries.
   `src/main.tsx`; `src/router.ts` maps `?surface=` to a lazily loaded window under `src/windows/`;
   `src/ipc/` holds the generated bindings and is the only code allowed to import `@tauri-apps/*`;
   `tests/` and `e2e/` hold the Vitest and Playwright harnesses. See [ui.md](ui.md).
-- `_legacy`: independent Cargo/pnpm application, excluded from root workspace and quality tools.
 
 ## Desktop host
 

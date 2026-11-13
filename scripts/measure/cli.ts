@@ -97,7 +97,7 @@ export function helpText(): string {
     'Prerequisites:',
     '  - macOS 26 with Xcode command-line tools and the repository toolchain.',
     '  - New host built with: bun run tauri:build',
-    '  - Legacy comparison, when requested, built from _legacy/ per _legacy/README.md.',
+    '  - Legacy comparison, when requested, needs an existing legacy bundle (--legacy-app).',
     '  - No Stache process running. A legacy Stache is identified only from the',
     '    --legacy-app path and blocks only those runs; keep its proxyAudio disabled.',
     '    This tool refuses and never terminates another instance.',

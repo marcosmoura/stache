@@ -1,8 +1,8 @@
 //! Menu-bar visibility observation for the Bar's auto-hide behavior.
 //!
 //! This is the safe adapter behind the Bar module's menu-bar state. It ports
-//! the *semantics* of the legacy watcher
-//! (`_legacy/app/native/src/modules/bar/menubar.rs`), not its constant 100 ms
+//! the *semantics* of the watcher in the application before 0.26
+//! (its `modules/bar/menubar.rs`), not its constant 100 ms
 //! loop.
 //!
 //! # Legacy semantics (what is ported)

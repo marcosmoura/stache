@@ -567,7 +567,7 @@ fn run_with(
             // directory and home, and reads one native location per refresh.
             // Media reads the vendored adapter from the resource directory
             // (or the in-repo copy in debug builds) and caches artwork under
-            // this build identity's cache directory; it never reads `_legacy`.
+            // this build identity's cache directory.
             let media = media_resources::media_parts(
                 app.path().resource_dir().ok(),
                 Some(media_cache.as_path()),

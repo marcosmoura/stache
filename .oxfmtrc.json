@@ -6,7 +6,6 @@
     "**/coverage/**",
     "**/dist/**",
     ".worktrees/**",
-    "_legacy/**",
     "bun.lock",
     "node_modules/**",
     "schemas/**",
