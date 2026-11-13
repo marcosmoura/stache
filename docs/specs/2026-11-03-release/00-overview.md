@@ -197,7 +197,6 @@ Homebrew cask or a fallback CLI binary, and Decision 21's ad-hoc install:
 
 No credential gate remains. These need the owner and are recorded as evidence, never claimed:
 
-- [Part 03](03-signing.md): one check that a second self-signed build keeps the Accessibility grant.
 - [Part 06](06-release-verification.md): the candidate rehearsal, which needs the owner's go-ahead
   to push `feat/release` and a `v0.26.0-rc.1` tag.
 
@@ -211,7 +210,7 @@ The final `v0.26.0` tag belongs on `main` after the merge and follows the
 | ------------------------------------- | --------------------------------------------------------------------- | ----------- |
 | [01](01-build-metadata.md)            | One version, `Info.plist`, icon rule, bundle-content check.           | done        |
 | [02](02-release-pipeline.md)          | Artifacts, ad-hoc dry run, exact-SHA candidate Quality trigger.       | done        |
-| [03](03-signing.md)                   | Self-signed signing; the paid path removed.                           | in-progress |
+| [03](03-signing.md)                   | Self-signed signing; the paid path removed.                           | done        |
 | [04](04-identity-switch.md)           | Staged switch, dev isolation, detectable sibling warnings.            | done        |
 | [05](05-install-upgrade-uninstall.md) | Install guide with first-open approval, CLI link, legacy-config note. | done        |
 | [06](06-release-verification.md)      | Local publish command, limitations, candidate rehearsal.              | in-progress |

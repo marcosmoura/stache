@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 ---
 
 # 03 — Self-signed signing
@@ -72,7 +72,7 @@ updates signed with it, on the owner's Mac and on any Mac that installed an earl
 - [x] `RELEASE-03-16` On the owner's Mac, `STACHE_SIGNING_IDENTITY="Stache App" bun run release
       --self-sign` completes, the checksums verify, and the three verifications above pass on the
       real artifacts. Check: run by the orchestrator and recorded in this file.
-- [ ] `RELEASE-03-17` After a second self-signed build replaces the installed app, it starts
+- [x] `RELEASE-03-17` After a second self-signed build replaces the installed app, it starts
       without asking for Accessibility again. Owner's manual check, recorded in this file.
 
 ## Run record
@@ -88,7 +88,13 @@ same authority. No DMG was left mounted.
 
 The first attempt, at `9a8c11b`, signed correctly but was refused by the script's own check, which
 accepted only `certificate leaf`. A self-signed certificate is its own root, so `codesign` writes
-`certificate root`; `1119a34` accepts either. `RELEASE-03-17` is not run yet.
+`certificate root`; `1119a34` accepts either.
+
+`RELEASE-03-17`, 2026-11-13: the owner granted Accessibility to the first self-signed install
+(build of `a445fa9`, code hash `dfb5d797…`). After the owner quit it, the build of `5acb9e5` (code
+hash `b0bcd0de…`, same `Stache App` authority and the same `certificate root` requirement) replaced
+it in `/Applications`. The owner opened it and reported that both the Accessibility and the
+location grants persisted. The check passes.
 
 ## Withdrawn
 
