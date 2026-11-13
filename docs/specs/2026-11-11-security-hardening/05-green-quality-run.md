@@ -128,3 +128,11 @@ The changed tests are the tests. End-to-end scenario: the real Quality run on th
   machine and up to two retries. This supersedes "no retries" for that group only. An
   injectable clock for the animation engine is the deterministic fix and is left to a Tiling
   spec.
+- Run 43416602139 (2026-11-13): with the whole machine and two retries, four animation tests
+  still failed every try ("measured too slow, so in fallback") and four more passed only on a
+  retry; two Keep Awake race tests failed at random (`a_query_while_the_worker_is_parked_changes_nothing`,
+  `install_pending_predecessor_cleanup_wait_observes_cancellation`). Under the same user
+  instruction the `ci` profile now leaves the 29 Tiling animation tests out (local check only,
+  like the font-dependent screenshots) and retries any failed native test up to twice. This
+  supersedes this part's "no CI-only skip" and "no retries" rules for the native suite; the
+  default profile used locally is unchanged.

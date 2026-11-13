@@ -326,12 +326,14 @@ CI rules (`.github/workflows/`):
   listed above; every `tool:` entry carries `@<version>`. Dependabot moves the action SHAs, but
   these `tool:` versions are bumped by hand.
 - The pin test also rejects local actions, quoted `uses:` values and flow-style steps, by design.
-- The Quality job sets `NEXTEST_PROFILE=ci` (`.config/nextest.toml`): no fail-fast, so one run
-  reports every failing native test. In that profile the Tiling animation tests and the
-  restore-settle tests, which run the real engine on real time, each get the whole machine
-  (`threads-required = "num-cpus"`) and are retried up to twice; a starved runner otherwise puts
-  the animation engine in its `BelowMinimumRate` fallback. Local runs use the default profile:
-  no retries.
+- The Quality job sets `NEXTEST_PROFILE=ci` (`.config/nextest.toml`), because the runner is slow
+  and starved: no fail-fast, so one run reports every failing native test; a failed test is
+  retried up to twice and nextest lists one that then passed as `FLAKY`; the restore-settle tests
+  each get the whole machine. The profile leaves out the 29 Tiling animation tests
+  (`runtime_tests::animation` and `module_tests::animation`): they run the real engine on real
+  time, and the runner is slow enough that the engine falls back to direct writes
+  (`BelowMinimumRate`) even when a test runs alone. They are a local check: `bun run test` and
+  the pre-push hook use the default profile, which runs them and never retries.
 
 - `lint:ui`: strict typecheck of frontend, prepare script and root configs, then oxlint (including `@stylexjs/eslint-plugin` and the local `scripts/lint/stylex-animation.js` through `jsPlugins`, and the
   `src/ui/src/ipc/` import boundary; see [UI](../architecture/ui.md#conventions)), then stylelint over `src/ui/**/*.css`.
