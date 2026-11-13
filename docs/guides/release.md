@@ -45,7 +45,7 @@ is an error. CI runs only the ad-hoc mode.
 5. Mounts the DMG read-only at a temporary mount point (always detached), checks the app and
    link, expands the zip into a temporary directory, verifies its signature strictly and compares
    its `Info.plist` with the raw bundle. Nothing writes to `/Applications`.
-6. Writes `SHA256SUMS`, renders `Casks/stache.rb`, then writes `release.json`, then moves the
+6. Writes `SHA256SUMS`, then writes `release.json`, then moves the
    staging directory to `target/release-artifacts/`.
 
 The output directory is removed at the start of each run, so a failed run leaves no
@@ -116,25 +116,8 @@ spaces as underscores and the version that of `tauri.conf.json`:
   `notarized` (always `false`), `adHocResigned`, `artifacts`; `--self-sign` adds
   `certificateSha256`, the public SHA-256 fingerprint of the signing certificate, so a person can
   compare releases.
-- `Casks/stache.rb`: the Homebrew cask (`scripts/release/cask.ts`, `renderCask`), from the
-  authoritative version and the DMG's SHA-256. It names the DMG on the `v<version>` GitHub
-  release, `depends_on arch: :arm64` and macOS 26 (`">= :tahoe"`, one constant),
-  `app "<productName>.app"`, a `binary` link to `Contents/MacOS/stache` (the CLI route, see
-  [install](install.md#cli-access)), `uninstall signal: [["TERM", "<identifier>"]]` with
-  `on_upgrade: :signal` (Homebrew sends SIGTERM to the app with that bundle identifier, never by
-  process name; the cask deliberately does not use `quit:`), and `zap` of
-  `~/Library/Caches/<identifier>` only. It is not an artifact: `SHA256SUMS` and `release.json`
-  list only the DMG and zip. Publishing it to the tap is manual
-  (release Part 06); nothing pushes it.
 
-### Local test cask
-
-For private candidate rehearsals only, `bun scripts/release/cask.ts --test-version 0.26.0-test.1
---url http://127.0.0.1:<port>/<file>.dmg --dmg <candidate DMG> [--out <file>]` renders a cask
-marked `LOCAL TEST CASK` with that test version, the loopback URL and the candidate DMG's real
-checksum. It refuses a non-loopback URL or a version not shaped `x.y.z-test.n`. It is separate
-from `bun run release`: the production rendering takes no override, and the test version never
-reaches the app, `release.json`, the manifests or `Casks/stache.rb`. Never publish it.
+There is no Homebrew cask; the release is the DMG and zip on GitHub Releases.
 
 ## CI
 

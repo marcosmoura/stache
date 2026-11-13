@@ -42,7 +42,7 @@ the [roadmap](docs/roadmap.md), not shipped behavior.
 ## Installation
 
 There is no packaged release yet; the [install guide](docs/guides/install.md) describes the
-planned DMG, zip and Homebrew install. Build from source:
+planned DMG and zip install. Build from source:
 
 ```bash
 git clone https://github.com/marcosmoura/stache.git

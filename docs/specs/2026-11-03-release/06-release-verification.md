@@ -1,5 +1,5 @@
 ---
-status: draft
+status: in-progress
 ---
 
 # 06 — Publishing and verification

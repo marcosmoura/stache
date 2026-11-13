@@ -212,7 +212,7 @@ The final `v0.26.0` tag belongs on `main` after the merge and follows the
 | [03](03-signing.md)                   | Self-signed signing; the paid path removed.                           | in-progress |
 | [04](04-identity-switch.md)           | Staged switch, dev isolation, detectable sibling warnings.            | in-progress |
 | [05](05-install-upgrade-uninstall.md) | Install guide with first-open approval, CLI link, legacy-config note. | in-progress |
-| [06](06-release-verification.md)      | Local publish command, limitations, candidate rehearsal.              | draft       |
+| [06](06-release-verification.md)      | Local publish command, limitations, candidate rehearsal.              | in-progress |
 
 Parts 01, 02 and 04 were implemented before the no-Developer-ID revision, along with a first
 version of 03 and 05. The remaining order is 03 (remove the paid path, add self-signing) → 05

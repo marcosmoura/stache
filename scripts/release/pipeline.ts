@@ -16,8 +16,6 @@ import {
 } from 'node:fs';
 import { join, relative } from 'node:path';
 
-import { caskToken, renderCask } from './cask';
-
 /** Variables Tauri reads to sign or notarize; the build child never sees them. */
 export const scrubbedAppleVariables = [
   'APPLE_SIGNING_IDENTITY',
@@ -756,19 +754,6 @@ export function runRelease({ root, run, env, log, mode = 'ad-hoc' }: ReleaseDeps
 
     writeFileSync(join(staging, 'SHA256SUMS'), `${lines.join('\n')}\n`);
 
-    // The cask, from the authoritative version and the DMG's real checksum. Not an artifact:
-    // it stays out of SHA256SUMS and release.json, and Part 06 publishes it by hand.
-    mkdirSync(join(staging, 'Casks'));
-    writeFileSync(
-      join(staging, 'Casks', `${caskToken}.rb`),
-      renderCask({
-        productName: config.productName,
-        identifier: config.identifier,
-        version,
-        sha256: (lines.find((line) => line.endsWith(`  ${names.dmg}`)) ?? '').split('  ')[0],
-      }),
-    );
-
     const record: ReleaseRecord = {
       version,
       commit,
@@ -783,7 +768,7 @@ export function runRelease({ root, run, env, log, mode = 'ad-hoc' }: ReleaseDeps
     writeFileSync(join(staging, 'release.json'), `${JSON.stringify(record, null, 2)}\n`);
     renameSync(staging, output);
     log(
-      `Wrote ${output}: ${names.dmg}, ${names.zip}, SHA256SUMS, release.json, Casks/${caskToken}.rb (${record.signing}, notarized: ${record.notarized}).`,
+      `Wrote ${output}: ${names.dmg}, ${names.zip}, SHA256SUMS, release.json (${record.signing}, notarized: ${record.notarized}).`,
     );
 
     return record;

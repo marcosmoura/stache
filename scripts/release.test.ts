@@ -15,7 +15,6 @@ import { dirname, join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { renderCask, renderTestCask } from './release/cask';
 import { qualityGate, tagVersionProblem, type WorkflowRun } from './release/gate';
 import {
   artifactNames,
@@ -427,7 +426,6 @@ describe('RELEASE-02-04 replacement', () => {
     release(root).result();
 
     expect(readdirSync(output(root)).toSorted()).toEqual([
-      'Casks',
       'SHA256SUMS',
       'Stache_0.26.0_aarch64.dmg',
       'Stache_0.26.0_aarch64.zip',
@@ -917,40 +915,23 @@ describe('release gate (kept for Part 06)', () => {
   });
 });
 
-const caskPath = (root: string) => join(output(root), 'Casks/stache.rb');
+describe('RELEASE-05-11 no cask', () => {
+  it('has no cask module and writes exactly the four outputs', () => {
+    expect(existsSync(join(import.meta.dirname, 'release/cask.ts'))).toBe(false);
+    expect(readFileSync(join(import.meta.dirname, 'release/pipeline.ts'), 'utf8')).not.toMatch(
+      /cask/i,
+    );
 
-describe('RELEASE-05-01 cask', () => {
-  it('renders the real version, the DMG checksum and the required stanzas', () => {
     const root = makeRoot();
 
     release(root).result();
-    const cask = readFileSync(caskPath(root), 'utf8');
-    const dmgSum = createHash('sha256')
-      .update(readFileSync(join(output(root), 'Stache_0.26.0_aarch64.dmg')))
-      .digest('hex');
 
-    expect(cask).toContain('cask "stache" do\n');
-    expect(cask).toContain('  version "0.26.0"\n');
-    expect(cask).toContain(`  sha256 "${dmgSum}"\n`);
-    expect(cask).toContain(
-      '  url "https://github.com/marcosmoura/stache/releases/download/v#{version}/Stache_#{version}_aarch64.dmg"\n',
-    );
-    expect(cask).toContain('  depends_on arch: :arm64\n');
-    expect(cask).toContain('  depends_on macos: ">= :tahoe"\n');
-    expect(cask).toContain('  app "Stache.app"\n');
-    expect(cask).toContain(
-      '  binary "#{appdir}/Stache.app/Contents/MacOS/stache", target: "stache"\n',
-    );
-    expect(cask).toMatch(
-      /uninstall signal: +\[\["TERM", "com\.marcosmoura\.stache"\]\],\s+on_upgrade: :signal\n/,
-    );
-    expect(cask).toContain('  zap trash: "~/Library/Caches/com.marcosmoura.stache"\n');
-  });
-
-  it('keeps SHA256SUMS and release.json to the DMG and zip', () => {
-    const root = makeRoot();
-
-    release(root).result();
+    expect(readdirSync(output(root)).toSorted()).toEqual([
+      'SHA256SUMS',
+      'Stache_0.26.0_aarch64.dmg',
+      'Stache_0.26.0_aarch64.zip',
+      'release.json',
+    ]);
     const sums = readFileSync(join(output(root), 'SHA256SUMS'), 'utf8')
       .trim()
       .split('\n');
@@ -962,98 +943,12 @@ describe('RELEASE-05-01 cask', () => {
     ]);
     expect(record.artifacts).toEqual(['Stache_0.26.0_aarch64.dmg', 'Stache_0.26.0_aarch64.zip']);
   });
-
-  it('derives the names from the config, so the rename changes the output alone', () => {
-    const cask = renderCask({
-      productName: 'Stache',
-      identifier: 'com.marcosmoura.stache',
-      version: '0.26.0',
-      sha256: 'a'.repeat(64),
-    });
-
-    expect(cask).toContain('app "Stache.app"');
-    expect(cask).toContain('/Stache_#{version}_aarch64.dmg"');
-    expect(cask).toContain('[["TERM", "com.marcosmoura.stache"]]');
-    expect(cask).not.toContain('Next');
-  });
-
-  it('isolates the test-only overrides from the production rendering', () => {
-    const inputs = {
-      productName: 'Stache',
-      identifier: 'com.marcosmoura.stache',
-      sha256: 'b'.repeat(64),
-    };
-    const test = renderTestCask(inputs, '0.26.0-test.1', 'http://127.0.0.1:8123/candidate.dmg');
-
-    expect(test).toContain('version "0.26.0-test.1"');
-    expect(test).toContain('url "http://127.0.0.1:8123/candidate.dmg"');
-    expect(test).toContain(`sha256 "${'b'.repeat(64)}"`);
-    expect(test).toMatch(/^# LOCAL TEST CASK/);
-    expect(renderTestCask(inputs, '0.26.0-test.2', 'http://localhost/x.dmg')).toContain(
-      'version "0.26.0-test.2"',
-    );
-
-    for (const url of [
-      'https://github.com/marcosmoura/stache/releases/download/x.dmg',
-      'http://10.0.0.1/x.dmg',
-      'file:///tmp/x.dmg',
-      'http://127.0.0.1.example.com/x.dmg',
-    ]) {
-      expect(() => renderTestCask(inputs, '0.26.0-test.1', url)).toThrow(ReleaseError);
-    }
-
-    expect(() => renderTestCask(inputs, '0.26.0', 'http://127.0.0.1/x.dmg')).toThrow(ReleaseError);
-
-    // The production rendering has no override parameter: extra fields are ignored.
-    const production = renderCask({
-      ...inputs,
-      version: '0.26.0',
-      testVersion: '0.26.0-test.9',
-      url: 'http://127.0.0.1/x.dmg',
-    } as Parameters<typeof renderCask>[0]);
-
-    expect(production).toContain('version "0.26.0"');
-    expect(production).not.toMatch(/test|127\.0\.0\.1/);
-
-    // A full release never carries a test version anywhere.
-    const root = makeRoot();
-
-    release(root).result();
-
-    for (const file of ['release.json', 'SHA256SUMS', 'Casks/stache.rb']) {
-      expect(readFileSync(join(output(root), file), 'utf8')).not.toMatch(/-test\.|127\.0\.0\.1/);
-    }
-  });
-});
-
-describe('RELEASE-05-02 cask safety', () => {
-  it('has no quit, kill, process-name, updater, flight or config-path stanza', () => {
-    const root = makeRoot();
-
-    release(root).result();
-    const cask = readFileSync(caskPath(root), 'utf8');
-
-    for (const forbidden of [
-      'quit:',
-      'KILL',
-      'terminate_process',
-      'auto_updates',
-      'preflight',
-      'postflight',
-      '.config/stache',
-    ]) {
-      expect(cask).not.toContain(forbidden);
-    }
-
-    const zap = cask.split('\n').filter((line) => line.includes('zap'));
-
-    expect(zap).toEqual(['  zap trash: "~/Library/Caches/com.marcosmoura.stache"']);
-  });
 });
 
 describe('RELEASE-05-06 install guide', () => {
   const read = (path: string) => readFileSync(join(import.meta.dirname, '..', path), 'utf8');
   const guide = read('docs/guides/install.md');
+  const section = (name: string) => guide.split(`## ${name}\n`)[1]?.split('\n## ')[0] ?? '';
 
   it('has the sections, in order, after the Read when line', () => {
     expect(guide.split('\n')[2]).toMatch(/^Read when /);
@@ -1062,6 +957,7 @@ describe('RELEASE-05-06 install guide', () => {
     expect(headings).toEqual([
       '## Requirements',
       '## Install',
+      '## First open',
       '## Upgrade',
       '## Coexistence',
       '## Legacy removal',
@@ -1072,7 +968,20 @@ describe('RELEASE-05-06 install guide', () => {
     expect(guide).toMatch(/no release has been published yet/i);
   });
 
-  it('never recommends a kill, quarantine removal, Gatekeeper bypass or brew --force', () => {
+  it('explains the missing notarization and gives the Open Anyway route in First open', () => {
+    const firstOpen = section('First open');
+
+    expect(firstOpen).toMatch(/not notarized/);
+    expect(firstOpen).toContain('Privacy & Security');
+    expect(firstOpen).toContain('**Open Anyway**');
+    expect(firstOpen).toMatch(/once for each version/);
+  });
+
+  it('says there is no Homebrew route', () => {
+    expect(guide).toMatch(/There is no Homebrew cask or formula/);
+  });
+
+  it('never recommends a kill, quarantine removal, Gatekeeper bypass or brew install', () => {
     // Split so `app/tests/identity.rs`'s process-name tool scan does not match this list itself.
     for (const forbidden of [
       ['kill', 'all'].join(''),
@@ -1081,13 +990,13 @@ describe('RELEASE-05-06 install guide', () => {
       'xattr -d',
       'xattr -cr',
       'spctl --master-disable',
+      'brew install',
     ]) {
       expect(guide).not.toContain(forbidden);
     }
 
-    // `--force` appears only on `stache config migrate`, never on a `brew` line.
+    // `--force` appears only on `stache config migrate`.
     for (const line of guide.split('\n').filter((line) => line.includes('--force'))) {
-      expect(line).not.toMatch(/brew/);
       expect(line).toMatch(/stache config migrate/);
     }
   });

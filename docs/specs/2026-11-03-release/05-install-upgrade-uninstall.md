@@ -101,7 +101,7 @@ gives that command and says to remove the link on uninstall. No separate CLI bin
 - [x] `RELEASE-05-04` The desktop startup path emits that line without reading the source. Test:
       `app/tests/legacy_config_hint.rs`.
 - [x] `RELEASE-05-05` `config migrate` behavior is unchanged. Test: `cli/src/migrate.rs`, unedited.
-- [ ] `RELEASE-05-06` `docs/guides/install.md` contains the sections above in order, including
+- [x] `RELEASE-05-06` `docs/guides/install.md` contains the sections above in order, including
       **First open** with the Open Anyway route and the not-notarized statement; says there is no
       Homebrew route; and contains none of `killall`, `pkill`, `pgrep stache`, `xattr -d`,
       `xattr -cr`, `spctl --master-disable` or `brew install`. It links from `README.md` and
@@ -113,7 +113,7 @@ gives that command and says to remove the link on uninstall. No separate CLI bin
 - [x] `RELEASE-05-09` The legacy app, its bundle and its Cargo-installed binary are gone from the
       release machine and the configuration is intact. Recorded in the
       [Stage 2 record](04-identity-switch.md#stage-2-record).
-- [ ] `RELEASE-05-11` No cask remains: `scripts/release/cask.ts`, its tests and the `Casks` output
+- [x] `RELEASE-05-11` No cask remains: `scripts/release/cask.ts`, its tests and the `Casks` output
       are removed, and `release.json` and `SHA256SUMS` are unchanged by that. Test:
       `scripts/release.test.ts`.
 

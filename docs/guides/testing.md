@@ -964,10 +964,11 @@ the certificate named by `STACHE_SIGNING_IDENTITY` and verifies authority, harde
 certificate-anchored designated requirement (`RELEASE-03-11` to `03-15`). `scripts/release.test.ts`
 covers both modes, the refusals, the fail-closed paths and the removal of the paid path with fake
 runners; nothing touches a keychain, signs with a real identity or contacts Apple.
-See [release](release.md). The same file covers the cask (`RELEASE-05-01`/`02`: stanzas, the
-DMG checksum, two-entry `SHA256SUMS`, test-cask isolation and loopback refusal) and the
-[install guide](install.md)'s doc check (`RELEASE-05-06`: sections, links, no process-name or
-quarantine-bypass commands, `--force` only on `stache config migrate`).
+See [release](release.md). The same file checks that no cask remains (`RELEASE-05-11`: no cask
+module, exactly the DMG, zip, `SHA256SUMS` and `release.json`, two-entry `SHA256SUMS`) and the
+[install guide](install.md)'s doc check (`RELEASE-05-06`: sections, the not-notarized statement and
+Open Anyway route, no Homebrew route, links, no process-name, quarantine-bypass or `brew install`
+commands, `--force` only on `stache config migrate`).
 
 Legacy-config note (`RELEASE-05-03`/`04`): `cli/tests/commands.rs` runs `config path` over
 temporary roots (present, absent, `global.toml` present, `<id>.jsonc` also present) and checks
