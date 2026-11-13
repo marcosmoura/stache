@@ -27,15 +27,15 @@ export function Troubleshooting({ bundled }: TroubleshootingProps) {
         onClick={() => setOpen(!open)}
       >
         <span {...stylex.props(styles.chevron, open && styles.chevronOpen)} data-chevron>
-          <Icon icon={ArrowRight01Icon} size={14} strokeWidth={1.75} />
+          <Icon icon={ArrowRight01Icon} size={12} strokeWidth={1.75} />
         </span>
         Troubleshooting
       </button>
       {open ? (
         <p {...stylex.props(styles.text)} id={id}>
           {bundled
-            ? 'Stache Next is already on but this window stays open? The entry belongs to an older build. Select it, remove it with −, then turn on the new entry or add the app at the path above.'
-            : 'This copy is not an app bundle. macOS may assign the permission to the app that launched it, such as your terminal.'}
+            ? 'Stache Next is already on but this window stays open? That entry is from an older copy of the app. Select it, click − to remove it, then turn on the new entry or add the app at the path above.'
+            : "This copy of Stache Next isn't installed as a regular app, so macOS may give the permission to the app you opened it from, such as Terminal."}
         </p>
       ) : null}
     </div>

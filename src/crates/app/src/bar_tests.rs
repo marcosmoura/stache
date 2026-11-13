@@ -877,6 +877,21 @@ impl Rig {
     /// The live Bar panel label.
     fn label(&self) -> String { self.windows.live_label(BarConfig::ID).expect("a live Bar window") }
 
+    /// Opens the Accessibility guide, a real non-Bar host window, and returns
+    /// its live label.
+    fn open_guide(&self) -> String {
+        use stache_sdk::WindowBackend as _;
+
+        let request = crate::windows::access_window_request().expect("a guide request");
+        self.windows.open(crate::windows::HOST_OWNER, &request).expect("a guide window");
+        let label = self
+            .windows
+            .live_label(crate::windows::HOST_OWNER)
+            .expect("a live guide window");
+        assert!(label.starts_with("stache-access-"), "{label}");
+        label
+    }
+
     /// `bar_snapshot` as the live Bar window.
     fn snapshot(&self) -> BarSnapshotOutcome { self.bridge.snapshot(&self.label()) }
 
@@ -1576,9 +1591,10 @@ fn only_the_live_bar_window_is_authorized_and_everything_else_is_typed() {
         rig.bridge.snapshot(&label),
         BarSnapshotOutcome::Available { .. }
     ));
-    // The test window, the access window, a shell window and forged labels.
-    rig.windows.open_test_window().expect("a test window");
+    // The live guide window, forged host and shell labels and forged Bar labels.
+    let guide = rig.open_guide();
     for foreign in [
+        guide.as_str(),
         "stache-test-1",
         "stache-access-1",
         "main",
@@ -1862,7 +1878,7 @@ fn events_follow_the_menu_with_increasing_sequences_and_only_to_the_bar_window()
     rig.start();
     rig.wait_loaded();
     rig.wait_menu(MenuBarState::Hidden);
-    rig.windows.open_test_window().expect("a test window");
+    rig.open_guide();
     let mut held = sequence_of(&rig.available());
     for step in 0..6 {
         let visible = step % 2 == 0;
@@ -2294,8 +2310,9 @@ fn only_the_live_bar_window_may_click_and_everything_else_is_unauthorized() {
     rig.start();
     rig.wait_loaded();
     let label = rig.label();
-    rig.windows.open_test_window().expect("a test window");
+    let guide = rig.open_guide();
     for foreign in [
+        guide.as_str(),
         "stache-test-1",
         "stache-access-1",
         "main",
@@ -2672,8 +2689,9 @@ fn weather_is_unavailable_with_zero_reads_while_bar_is_disabled_paused_failed_or
 fn only_the_live_bar_window_may_ask_for_weather() {
     let rig = Rig::weather_rig();
     let label = rig.label();
-    rig.windows.open_test_window().expect("a test window");
+    let guide = rig.open_guide();
     for foreign in [
+        guide.as_str(),
         "stache-test-1",
         "stache-access-1",
         "main",
@@ -3537,8 +3555,9 @@ fn only_the_live_bar_window_may_fetch_artwork_and_bad_ids_are_missing() {
     });
     let id = rig.media_view().and_then(|m| m.artwork_id).expect("id");
     let label = rig.label();
-    rig.windows.open_test_window().expect("a test window");
+    let guide = rig.open_guide();
     for foreign in [
+        guide.as_str(),
         "stache-test-1",
         "stache-access-1",
         "main",

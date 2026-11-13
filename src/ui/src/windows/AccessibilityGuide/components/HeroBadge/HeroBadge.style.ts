@@ -1,6 +1,6 @@
 import * as stylex from '@stylexjs/stylex';
 
-import { color, duration, easing, guide, media } from '@/theme/tokens.stylex';
+import { duration, easing, guide, media, native } from '@/theme/tokens.stylex';
 
 const pulse = stylex.keyframes({
   '0%': { opacity: 1 },
@@ -20,23 +20,22 @@ export const styles = stylex.create({
     width: guide.badgeSize,
     height: guide.badgeSize,
     borderRadius: '50%',
-    backgroundColor: `color-mix(in srgb, currentColor 14%, ${color.surfaceSunken})`,
-    boxShadow: 'inset 0 0 0 1px color-mix(in srgb, currentColor 28%, transparent)',
+    backgroundColor: 'color-mix(in srgb, currentColor 16%, transparent)',
   },
   large: {
     width: guide.badgeSizeLarge,
     height: guide.badgeSizeLarge,
   },
   neutral: {
-    color: color.textSubtle,
+    color: native.secondaryLabel,
     animationName: { default: pulse, [media.reducedMotion]: 'none' },
     animationDuration: duration.pulse,
     animationTimingFunction: easing.inOut,
     animationIterationCount: 'infinite',
   },
-  accent: { color: color.accent },
-  attention: { color: color.attention },
-  success: { color: color.success },
+  accent: { color: native.accent },
+  attention: { color: native.orange },
+  success: { color: native.green },
   spinner: {
     display: 'grid',
     placeItems: 'center',

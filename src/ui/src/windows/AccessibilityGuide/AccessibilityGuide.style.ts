@@ -1,9 +1,9 @@
 import * as stylex from '@stylexjs/stylex';
 
-import { color, duration, easing, font, guide, media, space, zIndex } from '@/theme/tokens.stylex';
+import { duration, easing, guide, media, native, space, zIndex } from '@/theme/tokens.stylex';
 
 const panelIn = stylex.keyframes({
-  from: { transform: 'scale(0.97)', opacity: 0 },
+  from: { transform: 'scale(0.98)', opacity: 0 },
   to: { transform: 'scale(1)', opacity: 1 },
 });
 
@@ -12,6 +12,11 @@ const fadeIn = stylex.keyframes({
   to: { opacity: 1 },
 });
 
+/*
+ * The guide has the native macOS look of the popover: a transparent page over
+ * the window's rounded native material, system colours and the system font.
+ * Colors are the `native` system-color tokens only.
+ */
 export const styles = stylex.create({
   /** One rounded panel filling the transparent window. */
   panel: {
@@ -23,17 +28,18 @@ export const styles = stylex.create({
     width: '100%',
     height: '100vh',
     margin: 0,
-    borderRadius: guide.panelRadius,
-    fontFamily: font.family,
-    fontSize: guide.fontSize,
-    fontWeight: guide.fontWeight,
+    borderRadius: native.panelRadius,
+    fontFamily: native.family,
+    fontSize: native.fontSize,
+    fontWeight: native.fontWeight,
     fontVariantNumeric: 'tabular-nums',
-    lineHeight: guide.lineHeight,
-    color: color.text,
-    backgroundColor: color.surfaceSunken,
+    WebkitFontSmoothing: 'antialiased',
+    lineHeight: native.lineHeight,
+    color: native.label,
+    backgroundColor: { default: native.tint, [media.reducedTransparency]: native.tintOpaque },
     animationName: { default: panelIn, [media.reducedMotion]: 'none' },
-    animationDuration: duration.panelIn,
-    animationTimingFunction: easing.inOut,
+    animationDuration: duration.normal,
+    animationTimingFunction: easing.enter,
     animationFillMode: 'both',
     // The ring sits above the content, so scrolled text never covers it.
     '::after': {
@@ -42,8 +48,8 @@ export const styles = stylex.create({
       position: 'absolute',
       zIndex: zIndex.raised,
       inset: 0,
-      borderRadius: guide.panelRadius,
-      boxShadow: `inset 0 0 0 1px ${color.divider}`,
+      borderRadius: native.panelRadius,
+      boxShadow: `inset 0 0 0 0.5px ${native.separator}`,
     },
   },
   header: {
@@ -52,13 +58,13 @@ export const styles = stylex.create({
     alignItems: 'center',
     height: guide.headerHeight,
     paddingBlock: 0,
-    paddingRight: space.lg,
-    paddingLeft: space.xxl,
+    paddingRight: space.md,
+    paddingLeft: space.lg,
   },
   dragRegion: {
     display: 'flex',
     flexGrow: 1,
-    gap: space.md,
+    gap: space.sm,
     alignItems: 'center',
     height: '100%',
   },
@@ -71,39 +77,34 @@ export const styles = stylex.create({
     placeItems: 'center',
     width: guide.markSize,
     height: guide.markSize,
-    borderRadius: space.md,
-    color: color.accent,
-    backgroundColor: `color-mix(in srgb, ${color.accent} 16%, ${color.surfaceSunken})`,
+    color: native.secondaryLabel,
   },
   appName: {
-    fontSize: font.sizeMd,
-    color: color.textMuted,
+    fontWeight: native.titleWeight,
+    color: native.label,
   },
   close: {
-    cursor: 'pointer',
+    cursor: 'default',
     display: 'grid',
     placeItems: 'center',
     width: guide.closeSize,
     height: guide.closeSize,
     padding: 0,
-    borderColor: { default: 'transparent', ':hover': color.surface },
-    borderStyle: 'solid',
-    borderWidth: '1px',
-    borderRadius: guide.controlRadius,
-    color: { default: color.textMuted, ':hover': color.text },
+    borderStyle: 'none',
+    borderRadius: native.buttonRadius,
+    color: { default: native.secondaryLabel, ':hover': native.label },
     appearance: 'none',
-    backgroundColor: { default: 'transparent', ':hover': color.surfaceActive },
+    backgroundColor: { default: 'transparent', ':hover': native.tabHover },
     outline: {
       default: 'none',
-      ':focus-visible': `2px solid ${color.focus}`,
+      ':focus-visible': `3px solid ${native.focus}`,
     },
-    outlineOffset: '1px',
-    transitionTimingFunction: easing.inOut,
-    transitionDuration: { default: duration.fade, [media.reducedMotion]: '0ms' },
-    transitionProperty: 'background-color, border-color, color',
+    outlineOffset: '0px',
+    transitionTimingFunction: easing.standard,
+    transitionDuration: { default: duration.fast, [media.reducedMotion]: '0ms' },
+    transitionProperty: 'background-color, color',
   },
   scroll: {
-    scrollbarColor: `${color.surfaceActive} transparent`,
     scrollbarWidth: 'thin',
     overflowX: 'hidden',
     overflowY: 'auto',
@@ -111,7 +112,7 @@ export const styles = stylex.create({
     display: 'flex',
     flexDirection: 'column',
     minHeight: 0,
-    paddingInline: space.xxl,
+    paddingInline: space.xl,
     paddingTop: space.xs,
     paddingBottom: space.xl,
   },
@@ -122,7 +123,7 @@ export const styles = stylex.create({
     marginBlock: 0,
     animationName: { default: fadeIn, [media.reducedMotion]: 'none' },
     animationDuration: duration.fade,
-    animationTimingFunction: easing.inOut,
+    animationTimingFunction: easing.standard,
     animationFillMode: 'both',
   },
   /** Short states center their hero; auto margins keep overflow scrollable. */
@@ -150,32 +151,47 @@ export const styles = stylex.create({
   title: {
     margin: 0,
     fontSize: guide.titleSize,
-    fontWeight: guide.titleWeight,
-    lineHeight: guide.titleLineHeight,
-    color: color.text,
+    fontWeight: native.titleWeight,
+    lineHeight: '20px',
+    color: native.label,
   },
   body: {
     margin: 0,
-    color: color.textMuted,
+    color: native.secondaryLabel,
   },
+  /** A status line: a small coloured dot before the text. */
+  status: {
+    // Centres the dot on the first line's x-height.
+    transform: 'translateY(-1px)',
+    display: 'inline-block',
+    width: native.dotSize,
+    height: native.dotSize,
+    marginRight: space.sm,
+    borderRadius: '50%',
+    verticalAlign: 'middle',
+  },
+  neutral: { backgroundColor: native.gray },
+  accent: { backgroundColor: native.orange },
+  attention: { backgroundColor: native.red },
+  success: { backgroundColor: native.green },
   alert: {
     display: 'flex',
     gap: space.md,
     alignItems: 'flex-start',
     marginBlock: space.md,
-    marginInline: space.xxl,
+    marginInline: space.xl,
     paddingBlock: space.md,
     paddingInline: space.lg,
-    borderRadius: guide.controlRadius,
-    fontSize: font.sizeMd,
-    color: color.danger,
+    borderRadius: native.cardRadius,
+    fontSize: native.smallSize,
+    lineHeight: '14px',
+    color: native.label,
     overflowWrap: 'anywhere',
-    backgroundColor: `color-mix(in srgb, ${color.danger} 12%, ${color.surfaceSunken})`,
-    boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${color.danger} 24%, transparent)`,
+    backgroundColor: native.bannerError,
   },
   alertIcon: {
     display: 'flex',
     flexShrink: 0,
-    marginTop: '2px',
+    color: native.red,
   },
 });

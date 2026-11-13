@@ -7,9 +7,9 @@ host opens for the UI.
 The UI was rebuilt from scratch on the [UI foundation](../specs/2026-11-11-ui-rebuild/00-overview.md)
 (toolchain, tokens, data layer, Bar layout engine) and the
 [migration](../specs/2026-11-11-ui-migration/00-overview.md) (the Bar shell, its eight
-widgets, the Accessibility guide and the test window). `bar` renders the Bar window,
-`access` the Accessibility guide, `test` the test window; `shell` keeps a placeholder
-as the development fallback.
+widgets, the Accessibility guide and the test window, since removed). `bar` renders the
+Bar window, `access` the Accessibility guide and `popover` the tray popover; there is
+no default window.
 
 ## Stack
 
@@ -46,8 +46,8 @@ src/ui/
     utils/                errorMessage (text of a thrown value)
     theme/                palette.stylex.ts, tokens.stylex.ts, motion.ts
     components/<Name>/    shared components (Icon, ScrollingLabel)
-    windows/<Name>/       one directory per window (Bar, AccessibilityGuide, TestWindow, Popover,
-                          Placeholder, UnknownSurface)
+    windows/<Name>/       one directory per window (Bar, AccessibilityGuide, Popover,
+                          UnknownSurface)
       Bar/                Bar.tsx, Bar.style.ts, Bar.css, Bar.test.tsx, index.ts
         components/       Bar-only components (BarItem/)
         widgets/          registry.ts (registry + its context), types.ts, resolve.ts,
@@ -57,13 +57,28 @@ src/ui/
         utils/            nodes.ts (persistent DOM node per item id) + test
       AccessibilityGuide/ AccessibilityGuide.tsx, .style.ts, .test.tsx, .state.ts (+ test), index.ts
         components/       HeroBadge/, GuideSteps/, IdentityCard/, Troubleshooting/, ActionFooter/
-      Popover/            Popover.tsx, .style.ts, .test.tsx, .tabs.ts (+ test), index.ts
-        components/       Sidebar/, OverviewTab/ (OverviewTab.tsx, .style.ts, .model.ts + tests),
-                          FileTab/ (FileTab.tsx, SchemaForm.tsx, Select.tsx, schema.ts, values.ts,
-                          form.ts, .model.ts, .style.ts + tests)
-      TestWindow/         TestWindow.tsx, .style.ts, .test.tsx, .labels.ts (+ test), index.ts
-        components/       StateBadge/, ModuleList/, ConfigList/
-        styles/           card.style.ts (section, list, card and callout styles)
+      Popover/            Popover.tsx, Popover.style.ts, Popover.test.tsx, index.ts
+        utils/            tabs.ts (sidebar tabs, badges, file icons) + test
+        styles/           controls.style.ts (push buttons, icon buttons, switches; shared by the tabs)
+        settingsCopy/     the settings form's words: one file per config file, shared.ts,
+                          types.ts, index.ts (COPY, fieldCopy, optionCopy, humanise) and
+                          settingsCopy.test.ts
+        components/
+          Sidebar/        Sidebar.tsx, .style.ts, .test.tsx, index.ts
+          OverviewTab/    OverviewTab.tsx, .style.ts, .test.tsx, index.ts
+            components/   AccessBanner/, ModuleRow/, Footer/
+            styles/       row.style.ts (a group row: icon tile, name, secondary lines)
+            utils/        modules.ts (names, labels, eligibility, outcome texts, reconcile) + test
+          FileTab/        FileTab.tsx, .style.ts, .test.tsx, .text.test.tsx, index.ts
+            components/   SchemaForm/, Field/, Body/, ObjectBody/, TableBlock/, Section/,
+                          UnionBlock/, OptionalBlock/, ScalarRow/, Row/, Marker/, Notes/,
+                          Stepper/, Select/, UnknownRow/, UnknownValue/, RoundButton/,
+                          ResetButton/, MapBody/, MapEntry/, NewMapEntry/, ListBody/,
+                          CardsBody/, Card/, ItemActions/, InvalidBanner/, Warnings/
+            styles/       form.style.ts (cards, items, text fields, toggles, inline messages)
+            utils/        schema.ts, values.ts, form.ts (context, effectiveAt, useWrite,
+                          useDraft), copyContext.ts, fields.ts, arrayEdits.ts,
+                          itemTitle.ts, diagnostic.ts, each with its test where it has logic
   e2e/
     fakeHost.ts, fixtures.ts, harness.html, harness/ (main.tsx, BarItemGallery.tsx)
     scenarios/            Playwright scenarios
@@ -73,19 +88,25 @@ src/ui/
 Dependencies point one way: `windows/Bar` → `windows/Bar/providers` →
 `windows/Bar/widgets` → `windows/Bar/components`, `windows/Bar/styles` → `components` → `theme`; widgets also read `queries`, `stores` and `hooks`;
 `queries` → `ipc`; `stores` never import `ipc`, `queries` or widgets. The
-Accessibility guide and the test window read `queries`, `ipc` (window wrappers) and `utils`;
-the popover reads `queries`, `ipc` and `stores`.
+Accessibility guide reads `queries`, `ipc` (window wrappers) and `utils`;
+the popover reads `queries`, `ipc` and `stores`. Inside the popover, `Popover` →
+`components` → `styles`, `utils` and `settingsCopy`; a tab's own `components` →
+its `styles` and `utils`, never a sibling tab.
 
 ## Conventions
 
 - **Directories.** Each component or window directory holds `<Name>.tsx`,
   `<Name>.style.ts` (exports `stylex.create` styles), `<Name>.test.tsx` and `index.ts`.
   A component that renders no element of its own (`Providers`,
-  `WidgetRegistryProvider`, `WidgetSlot`) has no style file. No component lives
-  as a flat file. Directories exist only when they have content.
+  `WidgetRegistryProvider`, `WidgetSlot`), or that is styled only by its window's or
+  parent's shared `styles/` (`Field`, `MapBody`, `RoundButton`), has no style file. No
+  component lives as a flat file. Directories exist only when they have content.
 - **Window-local folders.** A window may have its own `components/`, `widgets/`,
   `providers/`, `styles/` and `utils/` folders for code only it uses (the Bar
-  does); code shared by several windows lives under `src/`.
+  does); hooks go in `utils/`. A component with sub-components may nest the same
+  folders (`Popover/components/FileTab/components/`). A window's static text data has a
+  named folder of its own (`Popover/settingsCopy/`). Code shared by several windows
+  lives under `src/`.
 - **Screenshot tests** live in `src/ui/e2e/screenshots/` (Playwright), never next
   to source.
 - **Alias.** `@/` → `src/ui/src/`, defined once in `tsconfig.app.json` (`paths`). Vite
@@ -138,15 +159,13 @@ Token files are `src/ui/src/theme/*.stylex.ts` and export only `defineVars` /
   `textFaint` (overlay2), `border`, `divider` (surface0), `focus` (lavender),
   `accent`, `onAccent`, `success`, `warning`, `danger`, `attention` (peach),
   `info`, `highlight`), `space` (`none` to `xxxl` 32px), `radius`, `font` (family
-  `'Maple Mono NF', 'SF Mono', monospace`, `familySystem` and `familySystemMono`
-  (the system stacks of the test window), sizes, weights, line heights; fonts are
+  `'Maple Mono NF', 'SF Mono', monospace`, sizes, weights, line heights; fonts are
   system installed, never bundled), `shadow` and `size` (control and icon
-  sizes), `guide` (the Accessibility guide's own text style in the Bar typeface:
-  13px, weight 500, line height 1.6em, 17px titles, 12.5px steps; 16px panel and
-  12px control radii, 48px header, 36px buttons, 44/64px hero badges),
-  `statusPage` (the test window: 13px/1.5 system text, 20px title, a 54rem column,
-  8px cards), `popover` (the tray popover's native macOS look, part 05: see
-  [Popover native look](#popover-native-look))
+  sizes), `native` (the native macOS look shared by the popover and the
+  Accessibility guide: see [Native look](#popover-native-look)), `popover` (the tray
+  popover's own geometry: 36px header, 44px sidebar, 28px tabs with a 6px radius,
+  16px icons, 7px badges, 22px tiles), `guide` (the Accessibility guide's own
+  geometry: 15px title, 40px header, 20px marks, 22px Close, 44/64px hero badges)
   and `bar` (the Bar text style and item shape: `fontSize` 13px,
   `fontWeight` 500, `lineHeight` 1.6, `itemRadius` 12px, `itemPaddingInline`
   10px, `itemBorderWidth` 1px, `labelFadeWidth` 10px, `iconSize` 18px (widget
@@ -154,7 +173,7 @@ Token files are `src/ui/src/theme/*.stylex.ts` and export only `defineVars` /
   a widget's text label grows before it scrolls), and Media's `mediaIconSize`
   22px, `mediaArtworkSize` 24px, `mediaLabelMaxWidth` 560px and
   `mediaLabelMaxWidthCompact` 400px, `inactiveOpacity` 0.4: an inactive Spaces
-  workspace's icon). Every color outside `popover` is `light-dark(<latte>, <mocha>)`,
+  workspace's icon). Every color outside `native` is `light-dark(<latte>, <mocha>)`,
   composed at compile time from the palette consts.
 - **Bar values.** Today's Bar (on `main`) maps onto the tokens as follows; dark
   is the Mocha value, light its Latte counterpart: item rest surface
@@ -164,8 +183,9 @@ Token files are `src/ui/src/theme/*.stylex.ts` and export only `defineVars` /
   `success`, sky `color.highlight`; the gap inside an item `space.sm` (6px) and
   between items in a zone `space.xs` (4px). Tabular numbers are
   `font-variant-numeric: tabular-nums` on the Bar window.
-- **Popover native look.** <a id="popover-native-look"></a>The `popover` group never
-  reads the palette: its colours are WebKit's system colour keywords, so light and dark
+- **Native look.** <a id="popover-native-look"></a>The tray popover (part 05) and the
+  Accessibility guide read the `native` group; `popover` and `guide` hold only each
+  window's own geometry. None of them reads the palette: its colours are WebKit's system colour keywords, so light and dark
   follow the app appearance with no hand-picked dark values. `label`, `secondaryLabel`,
   `tertiaryLabel` (`-apple-system-label` and its levels), `separator`
   (`-apple-system-separator`), `accent` (`-apple-system-control-accent`, the user's
@@ -176,16 +196,17 @@ Token files are `src/ui/src/theme/*.stylex.ts` and export only `defineVars` /
   keyword: `tint` is `transparent` (the page shows the native `.popover` material);
   the fills `card`, `tabHover`, `control`, `controlHover` and `switchOff` are
   `color-mix` of `-apple-system-label` at 5–14% (the system fill colours have no CSS
-  keyword); `banner` is `color-mix` of the system orange; the switch knob is white with a
+  keyword); `banner` and `bannerError` are `color-mix` of the system orange and red; the switch knob is white with a
   neutral black shadow, and the select menu's drop shadow is neutral black. Type is the
   system stack (`family`), 13px body with a 16px line height, 11px secondary text and
   11px semibold section headings, a 13px semibold header, tabular figures on the panel;
   `familyMono` is used only for the file path. Geometry: a 12px panel radius (the same
   as `POPOVER_CORNER_RADIUS` in `panel.rs`), 36px header, 44px sidebar with 28px tabs
   (6px radius), 8px group radius, 28px rows, 22px push buttons and pop-up buttons (5px
-  radius), a 26×15px switch, 7px status dots. `windows/Popover/nativeLook.test.ts` fails if
-  any popover source imports the palette or uses the `color` group, or if the `popover`
-  group reads the palette.
+  radius), a 26×15px switch, 7px status dots (the shared values are in `native`; header,
+  sidebar, tab and tile sizes in `popover`). `theme/native.test.ts` fails if
+  any popover or Accessibility guide source imports the palette or uses the `color` or
+  `font` group, or if the `native`, `popover` or `guide` group reads the palette.
 - **Static consts** (`tokens.stylex.ts`): `duration`, `easing`, `zIndex` and
   `media` (`reducedMotion`, `reducedTransparency`, `moreContrast`, `compact`)
   never theme. A `media` const works as a conditional style key
@@ -330,15 +351,14 @@ behavior.
 
 ## Router and app shell
 
-`router.ts` exports the `surfaces` table, `DEFAULT_SURFACE` and `resolveRoute(search)`.
+`router.ts` exports the `surfaces` table and `resolveRoute(search)`.
 Every surface maps to a `React.lazy` window, so each window is its own chunk: `bar` maps
-to `windows/Bar`, `access` to `windows/AccessibilityGuide`, `test` to `windows/TestWindow`,
-`popover` to `windows/Popover` ([popover](../features/popover.md#ui-shell))
-and `shell` to `windows/Placeholder` (the development fallback). Rules:
+to `windows/Bar`, `access` to `windows/AccessibilityGuide` and
+`popover` to `windows/Popover` ([popover](../features/popover.md#ui-shell)). Rules:
 
-- `surface` absent → `shell`.
-- `surface` empty or unknown → the local `UnknownSurface` fallback, which calls no native
-  command. Matching is case-sensitive (`Bar` is unknown).
+- `surface` absent, empty or unknown → the local `UnknownSurface` fallback, which calls
+  no native command. There is no default window. Matching is case-sensitive (`Bar` is
+  unknown).
 - A repeated parameter uses the first value.
 
 `App` resolves `window.location.search` once and renders the window inside `AppShell`:
@@ -426,26 +446,44 @@ only a rejected `invoke` is an error. Everything else imports from `@/ipc`.
   key `['config', 'files']`), invalidated by the popover on `config-changed`,
   `status-changed` and `popover-shown`; `hidePopoverOptions()`/`useHidePopover()` for
   `hide_popover`. `queries/overview.ts`: `mutationOptions` factories for
-  `set_module_enabled`, `module_session_action`, `retry_module`, `open_test_window` and
-  `open_accessibility_guide` (`useOpenTestWindow()`, `useOpenAccessibilityGuide()`); the
+  `set_module_enabled`, `module_session_action`, `retry_module` and
+  `open_accessibility_guide` (`useOpenAccessibilityGuide()`); the
   Overview reuses the access mutations for the gate banner and Quit.
   `queries/configDocument.ts`: `configDocumentOptions(file)` (key
   `['config', 'document', file]`), `createDocumentEditor(client, file)` (one queue per
   file: each `config_edit` waits for the previous one, sends the `baseHash` the caller
   captured when it built the op, then refetches; resolves to `ok`, `stale` or `error` with the message) and
   `useOpenConfigFile()`.
-- **Settings form** (`windows/Popover/components/FileTab/`). `schema.ts` is the pure
+- **Settings form** (`windows/Popover/components/FileTab/`). `utils/schema.ts` is the pure
   walk from a JSON Schema to a field tree (`boolean`, `enum`, `number`, `string`,
   `const`, `object`, `map`, `array`, `optional`, `union`, `unknown`) plus `matches`,
-  `variantOf` and `seed`. `values.ts` builds the edit ops (`setOp`, `removeOp`,
+  `variantOf` and `seed`. `utils/values.ts` builds the edit ops (`setOp`, `removeOp`,
   `insertOp`, `moveOp`, `renameOp`; an array absent from the file is written whole).
-  `form.ts` holds the `FormContext` (file value, defaults, read-only, edit, open in
+  `utils/form.ts` holds the `FormContext` (file value, defaults, read-only, edit, open in
   editor), `effectiveAt` (file, else catalog default, else schema default), `useWrite`
-  (pending and inline message) and `useDraft` (text drafts, Esc, the disk conflict).
-  `SchemaForm.tsx` renders one component per kind: `ScalarRow` (switch, `Select`, number
-  with steppers, text, constant), `Section` (collapsible), `UnionBlock`, `OptionalBlock`,
-  `MapBody`/`MapEntry`, `ListBody` and `CardsBody`/`Card`; every row carries
-  `data-path` (`workspaces[1].layout`). Behaviour: [popover](../features/popover.md#settings-editor).
+  (pending and inline message) and `useDraft` (text drafts, Esc, the disk conflict);
+  `utils/copyContext.ts` the file's copy and `useCopy`, `utils/fields.ts` the shared
+  `FieldProps`, key `ordered`, `numberError` and select options, `utils/arrayEdits.ts`
+  `useArrayEdits`, `utils/diagnostic.ts` the invalid-file sentence and the raw text.
+  `components/` has one folder per component: `SchemaForm` provides the copy and renders
+  the root; `Field` dispatches by kind to `ScalarRow` (switch, `Select`, a number with
+  `Stepper`, text; a constant renders nothing), `OptionalBlock`, `UnionBlock`,
+  `TableBlock` (a `Section` around a `Body`) or `UnknownRow`; `Body` dispatches to
+  `ObjectBody`, `MapBody` (`MapEntry` rows and the inline `NewMapEntry`), `ListBody` or
+  `CardsBody` (`Card`, with `ItemActions`); `Row`, `Marker`, `Notes`, `RoundButton`,
+  `ResetButton` and `UnknownValue` are the building blocks; `InvalidBanner` and
+  `Warnings` are the file's state notes. Every row carries
+  `data-path` (`workspaces[1].layout`). Each field also carries its copy path `at`
+  (`workspaces.*.layout`) and reads its label, hint, unit and option names from the
+  file's entry in `windows/Popover/settingsCopy/` (`COPY`, `fieldCopy`, `optionCopy`); schema descriptions are
+  never rendered. A new setting needs a copy entry: `settingsCopy/settingsCopy.test.ts` walks all ten
+  schemas and fails on a missing or stale entry, an over-long label or hint, or code-like
+  text, a list or map without a `noun`, or a table without a valid `order`.
+  `ObjectBody` sorts keys by the copy's `order`; `itemTitle` (`utils/itemTitle.ts`) titles
+  cards from a name field, a widget's human name or the noun ("Rule 2").
+  `FileTab.text.test.tsx` checks every tab's visible text against a deny-list. Component
+  tests render inside the form and copy contexts with `tests/settingsForm.tsx`.
+  Behaviour: [popover](../features/popover.md#settings-editor).
 - `hostStatusFeed`/`hostStatusOptions`: `commands.hostStatus()` and
   `events.statusChanged` (no sequences). `barFeed`/`barSnapshotOptions`:
   `commands.barSnapshot()` and `events.barChanged`, ordered by `sequence`,
@@ -660,7 +698,7 @@ mounted popover, so the selected tab lasts for the session. The sample scoped st
   framed `shot-rest`/`shot-active` element, for the screenshot specs.
 - **Window scenarios**: `e2e/scenarios/access.spec.ts` (blocked, request,
   error, revoked, open and self-close; unbundled, Escape, Close, Quit),
-  `test-window.spec.ts`, `popover-shell.spec.ts` (sidebar, badges, keyboard, remembered
+  `popover-shell.spec.ts` (sidebar, badges, keyboard, remembered
   tab, refetch, Escape), `popover-overview.spec.ts` (enable, pause/resume, retry, the gate
   banner and quit on the user's setup), `popover-settings.spec.ts` (the settings editor
   over `e2e/fakeConfig.ts`, an in-memory store of real TOML text) and `bar-session.spec.ts` (a whole Bar session with the
@@ -803,14 +841,16 @@ The generated file is excluded from oxfmt, oxlint and lint-staged: specta emits
 tabs and its own layout. The generator only trims trailing line whitespace before
 writing or comparing. Never hand-format or edit it; regenerate it instead.
 
-## Test window
+## Host windows
 
-Launch creates no windows and no Dock icon (`ActivationPolicy::Accessory`). The
-tray's **Open Test Window** action is the only launch path that creates a webview:
+Launch creates no windows and no Dock icon (`ActivationPolicy::Accessory`). Every
+webview is opened through `NativeWindows`: the popover (prewarmed hidden shortly after
+the host is ready, see [popover](../features/popover.md)), the Accessibility guide
+while the launch gate blocks, and module windows such as the Bar panel:
 
-- Rust opens one `Standard` window through `NativeWindows`, labelled
-  `stache-test-<n>` where `<n>` is a monotonic host id.
-- The URL is the app URL plus `?surface=test`; `src/ui/index.html` remains the
+- Windows are labelled `stache-<surface>-<n>` where `<n>` is a monotonic host id
+  (the popover is the fixed `stache-popover`).
+- The URL is the app URL plus `?surface=<surface>`; `src/ui/index.html` remains the
   Vite entry, so the router (`src/ui/src/router.ts`) reads `surface` from the query string. There is no
   arbitrary URL, JavaScript URL or native flag input.
 - The `stache-app` crate defines `custom-protocol = ["tauri/custom-protocol"]`
@@ -820,7 +860,7 @@ tray's **Open Test Window** action is the only launch path that creates a webvie
   opt-in harness exercises the embedded bundle.
 - Module and host requests are validated twice: the SDK capability checks the
   declared surface, kind and size, and `NativeWindows` repeats the check for
-  host-owned requests. Only the shipped `test` and `access` surfaces are implemented; surface
+  host-owned requests. The only `Standard` surface is `access`; surface
   spellings must be ASCII letters, digits, `-` or `_`, so they cannot add a query
   parameter.
 - The same owner/key request reuses and focuses the existing window; closing it
@@ -834,7 +874,7 @@ tray's **Open Test Window** action is the only launch path that creates a webvie
   defines its native semantics. A module may only request a surface declared in
   its descriptor.
 - `WindowKind::NonActivatingPanel` is landed for surface `bar` only; `bar` is
-  admitted only as a panel, and `test`/`access` stay `Standard`-only. Bar's
+  admitted only as a panel, and `access` stays `Standard`-only. Bar's
   production factory is chained next to Tiling in `lib.rs` (default disabled,
   inert until `enabled = true`) and requests it; the `bar` route and the
   `bar-window` capability exist. A panel request must carry an explicit
@@ -868,7 +908,7 @@ tray's **Open Test Window** action is the only launch path that creates a webvie
   call is used.
 - **Bar data bridge authorization (slice c).** `bar_snapshot` takes the actual
   calling `WebviewWindow` injected by Tauri; its label must be the live window held
-  by owner `bar` (`stache-bar-<digits>`). The test, access, shell and any forged or
+  by owner `bar` (`stache-bar-<digits>`). The access window, the popover and any forged or
   stale Bar label get the typed `{"kind":"unauthorized"}`. A Bar-shaped label while
   Bar is not running gets `{"kind":"unavailable","reason":...}` (`disabled`,
   `paused`, `waitingForPermission`, `failed`, `starting`, `stopping`, `stopped`,
@@ -895,29 +935,6 @@ tray's **Open Test Window** action is the only launch path that creates a webvie
   backwards, so a late created/loaded callback after a close or failure is
   ignored.
 
-**React window** (`windows/TestWindow/`). A read-only status surface: the
-header (app name, "Host test surface", `identifier (vversion)`), "Application
-identity unavailable: …" when `app_info` fails, and a Host section reading
-"Reading host status…" until the feed writes, an alert "Host status
-unavailable" when it fails, or "Host ready"/"Host starting" with a "Host error"
-alert. Then **Modules** (or "No modules registered.") with one card per
-module: id, state badge (`Stopped`, `Disabled`, `Running`, `Paused`, `Waiting for
-permission`, `Unavailable`, `Failed`), Enabled, Paused and Revision rows, and
-separately labelled **Runtime detail** (`detail`) and **Configuration
-diagnostic** (`diagnostic`) callouts; and **Configuration** (or "No
-configuration files.") with one card per file: name, `Missing`/`Valid`/`Invalid`,
-path, whether it is active, **File diagnostic** and **Warnings**. `revision` is
-rendered as the received text and never converted to a number. It calls only
-`app_info`, `host_status` and the event listen. Its markup is what the opt-in
-`stache-smoke` harness reads (see [testing](../guides/testing.md#native-host-smoke-opt-in)).
-
-`src/crates/app/capabilities/test-window.json` grants the test labels only
-`allow-app-info`, `allow-host-status`, `core:event:allow-listen`,
-`core:event:allow-unlisten` and `core:window:allow-close` (every app command is in
-the app manifest, so an ungranted one is refused, read-only or not). `app.security.capabilities` lists it explicitly, so a
-new capability file is not silently enabled. No filesystem, shell, dialog, HTTP,
-media, weather, system or tray permission applies.
-
 ## Accessibility guidance window
 
 While the Accessibility launch gate blocks, the host opens one more host-owned
@@ -926,8 +943,8 @@ logical pixels (not resizable), labelled `stache-access-<n>`:
 
 - Chrome comes from `chrome_for(surface)` in `windows.rs`, carried in
   `NativeWindowSpec`: `access` is frameless (`decorations(false)`), transparent,
-  not resizable and keeps the native shadow; `test` keeps the decorated, opaque,
-  resizable defaults. There is no title bar or traffic lights. Transparency needs
+  not resizable and keeps the native shadow, with the rounded `.popover` material set by window effects in `open`; any other `Standard` surface would keep
+  the decorated, opaque, resizable defaults. There is no title bar or traffic lights. Transparency needs
   Tauri's `macos-private-api` cargo feature and `app.macOSPrivateApi: true` in
   `tauri.conf.json` (app-wide; it authorizes no other private API). The page sets
   `html[data-surface='access']`, which makes `html`, `body` and `#root` transparent
@@ -935,7 +952,7 @@ logical pixels (not resizable), labelled `stache-access-<n>`:
 
 - The runner opens it once per gated episode on each `Blocked` transition (first
   check or revocation) through `NativeWindows`; `window.set_focus` brings the
-  Accessory app and the window forward, exactly like the test window. A user
+  Accessory app and the window forward. A user
   close does not reopen it in the same episode. The tray row `access-guide`
   (**Show Accessibility Help…**) opens or focuses it again; the next episode
   opens it automatically. On `Opened` the runner closes it through the release
@@ -976,10 +993,21 @@ logical pixels (not resizable), labelled `stache-access-<n>`:
   `closeCurrentWindow()`). `HostStatus.error` and any rejected command show in
   one alert line (`role="alert"`, joined with `; `). The footer holds **Request
   Access** (primary, full width), **Open System Settings** and **Quit Stache
-  Next**, each disabled with a spinner while its mutation is pending. Chrome:
-  one rounded panel (16px, `color.surfaceSunken`, an inset `color.divider`
-  ring above the content) filling the transparent window (`html`, `body` and
-  `#root` are transparent in `main.css`), a header whose left part is the drag
+  Next**, each disabled with a spinner while its mutation is pending. Look: the
+  popover's [native look](#popover-native-look) from the `native` tokens. The
+  page is transparent (`html`, `body`, `#root` and the panel; the opaque
+  `tintOpaque` under reduced transparency) over the window's native material:
+  `open` gives the `access` window Tauri window effects (`Effect::Popover`,
+  active, `ACCESS_CORNER_RADIUS` 12pt in `windows.rs`) plus the native shadow.
+  One 12px rounded panel with a 0.5px `separator` ring above the content; system
+  font at 13px (secondary text and the hint, troubleshooting text and alert at
+  11px), a 15px semibold title, a 13px semibold app name; the steps and the
+  identity card are inset translucent groups (`card`, 8px radius, hairline row
+  separators); the footer holds push buttons (`control` face, 22px), the primary
+  one in the user's accent; the alert is a soft red banner. The state is a 7px
+  coloured dot before the title (blocked orange, revoked red) or before the
+  status line (checking gray, open green); the hero badge tints its icon with the
+  accent, orange or green. A header whose left part is the drag
   region (app glyph and name, children `pointer-events: none`) with the Close
   button outside it, a scrolling body and the fixed footer. Escape (not a key
   auto-repeat) and Close call `closeCurrentWindow()`. The panel scales in and

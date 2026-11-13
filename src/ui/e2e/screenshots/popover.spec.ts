@@ -1,20 +1,20 @@
-import type { Page } from '@playwright/test';
-
 import type {
   ConfigFileView_Serialize,
   HostStatus_Serialize,
   ModuleStatusView_Serialize,
 } from '../../src/ipc/bindings.gen';
-import { TILING } from '../configFixtures';
+import { BAR, TILING } from '../configFixtures';
 import { FakeConfig } from '../fakeConfig';
 import { expect, test } from '../fixtures';
+
+import { pinSystemColours } from './systemColours';
 
 /*
  * Baselines of the tray popover, dark and light, from production
  * `index.html` with the fake host: the shell (the sidebar with each badge
  * kind over an empty Overview), the Overview with the user's modules, and
- * the settings editor: a simple tab (`keepAwake`), `tiling` and an invalid
- * file. The page is transparent, as it is over the native material, so the
+ * the settings editor: a simple tab (`keepAwake`), `tiling`, `bar` (its
+ * layout zones and a widget expanded, then Weather) and an invalid file. The page is transparent, as it is over the native material, so the
  * harness paints a neutral stand-in for the material. The popover uses the system font and WebKit's
  * system colours; the user-dependent ones (accent and focus ring) are pinned
  * by `pinSystemColours` so the baselines do not follow System Settings, and
@@ -85,59 +85,6 @@ const MODULES: ModuleStatusView_Serialize[] = [
   module('wallpapers', { state: 'disabled', enabled: false }),
 ];
 
-/** The system colours that follow user settings, pinned to macOS defaults. */
-const PINNED: Readonly<Record<string, string>> = {
-  '-apple-system-control-accent': 'rgb(0 122 255)',
-  '-apple-system-selected-content-background': 'rgb(0 99 225)',
-  '-webkit-focus-ring-color': 'rgb(0 103 244)',
-};
-
-/** Neutral stand-ins for the native `.popover` material behind the page. */
-const MATERIAL = { dark: 'rgb(44 44 46)', light: 'rgb(236 236 236)' } as const;
-
-/**
- * The harness's stable fallbacks: overrides each StyleX variable whose value
- * is a user-dependent system colour keyword with its default, on the root
- * element (inline styles win over the `:root` declarations), and paints a
- * neutral stand-in for the native material behind the transparent page.
- */
-async function pinSystemColours(page: Page, scheme: keyof typeof MATERIAL) {
-  const count = await page.evaluate(
-    ([pinned, material]) => {
-      let pinnedCount = 0;
-
-      document.documentElement.style.background = material;
-
-      // StyleX nests its rules in `@layer` blocks.
-      const walk = (rules: CSSRuleList) => {
-        for (const rule of rules) {
-          if (rule instanceof CSSGroupingRule) {
-            walk(rule.cssRules);
-          } else if (rule instanceof CSSStyleRule) {
-            for (const name of rule.style) {
-              const value = pinned[rule.style.getPropertyValue(name).trim()];
-
-              if (name.startsWith('--') && value !== undefined) {
-                document.documentElement.style.setProperty(name, value);
-                pinnedCount += 1;
-              }
-            }
-          }
-        }
-      };
-
-      for (const sheet of document.styleSheets) {
-        walk(sheet.cssRules);
-      }
-
-      return pinnedCount;
-    },
-    [PINNED, MATERIAL[scheme]] as const,
-  );
-
-  expect(count, 'the popover tokens were found and pinned').toBeGreaterThan(0);
-}
-
 for (const scheme of ['dark', 'light'] as const) {
   test.describe(`popover (${scheme})`, () => {
     test.use({ deviceScaleFactor: 2 });
@@ -195,5 +142,36 @@ for (const scheme of ['dark', 'light'] as const) {
         });
       });
     }
+
+    test('popover bar tab', async ({ page, host }) => {
+      await page.setViewportSize({ width: 480, height: 1100 });
+      // One widget with its own options, so the expanded card shows them.
+      const bar = BAR.replace('"cpu"', '{ widget = "cpu", temperature_alert = 90 }');
+
+      expect(bar).not.toBe(BAR);
+      new FakeConfig(host, { 'bar.toml': bar });
+      host.answerHostStatus(status(MODULES));
+      await page.emulateMedia({ colorScheme: scheme, reducedMotion: 'reduce' });
+      await page.goto('/index.html?surface=popover');
+      await pinSystemColours(page, scheme);
+
+      await page.getByRole('tab', { name: 'bar.toml' }).click();
+      await expect(page.getByTestId('settings-form')).toBeVisible();
+
+      for (const zone of ['Left', 'Right']) {
+        await page
+          .getByRole('region', { name: zone, exact: true })
+          .getByRole('button', { name: zone, exact: true })
+          .click();
+      }
+
+      await page
+        .getByRole('group', { name: 'CPU' })
+        .getByRole('button', { name: 'CPU', exact: true })
+        .click();
+      await expect(page.getByText('Alert temperature')).toBeVisible();
+      await page.evaluate(() => document.fonts.ready.then(() => undefined));
+      await expect(page).toHaveScreenshot(`popover-bar-${scheme}.png`, { omitBackground: true });
+    });
   });
 }

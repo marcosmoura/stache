@@ -10,21 +10,23 @@ describe('Troubleshooting', () => {
     const toggle = screen.getByRole('button', { name: 'Troubleshooting' });
 
     await expect.element(toggle).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.container.textContent).not.toContain('older build');
+    expect(screen.container.textContent).not.toContain('older copy of the app');
     await toggle.click();
     await expect.element(toggle).toHaveAttribute('aria-expanded', 'true');
-    await expect.element(screen.getByText(/The entry belongs to an older build/)).toBeVisible();
+    await expect
+      .element(screen.getByText(/That entry is from an older copy of the app/))
+      .toBeVisible();
     await expect
       .poll(() => getComputedStyle(toggle.element().querySelector('[data-chevron]')!).transform)
       .not.toBe('none');
     await toggle.click();
-    expect(screen.container.textContent).not.toContain('older build');
+    expect(screen.container.textContent).not.toContain('older copy of the app');
   });
 
   it('explains an unbundled binary', async () => {
     const screen = await render(<Troubleshooting bundled={false} />);
 
     await screen.getByRole('button', { name: 'Troubleshooting' }).click();
-    await expect.element(screen.getByText(/This copy is not an app bundle\./)).toBeVisible();
+    await expect.element(screen.getByText(/isn't installed as a regular app/)).toBeVisible();
   });
 });

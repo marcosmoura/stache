@@ -205,7 +205,7 @@ independent of disk validity; `config path` sends host diagnostics to stderr.
 existing `ConfigStore`; the store still owns last-good state, so one rejected
 file never blocks the others. The desktop `core.reload` wrapper asks the host
 worker to publish the resulting module status once, so a CLI reload updates the
-tray and test window without a restart.
+tray and popover without a restart.
 
 ### Tiling methods
 

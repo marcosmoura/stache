@@ -46,7 +46,6 @@ function setup(status: HostStatus_Serialize = STATUS) {
     .answer('set_module_enabled', { kind: 'applied' })
     .answer('retry_module', null)
     .answer('module_session_action', { kind: 'applied' })
-    .answer('open_test_window', null)
     .answer('open_accessibility_guide', null)
     .answer('request_accessibility', null)
     .answer('open_accessibility_settings', null)
@@ -293,12 +292,12 @@ describe('OverviewTab', () => {
       setup(hostStatusFixture({ access: { state, revoked: false, appPath: null } }));
       const screen = await render(<OverviewTab files={[]} onSelectTab={() => {}} />);
 
-      await expect.element(screen.getByRole('button', { name: 'Open Test Window' })).toBeVisible();
+      await expect.element(screen.getByRole('button', { name: 'Quit Stache Next' })).toBeVisible();
       expect(screen.getByRole('region', { name: /Accessibility/ }).query()).toBeNull();
     });
   }
 
-  it('lists file diagnostics and warnings, and the footer actions', async () => {
+  it('lists file diagnostics and warnings, and the footer action', async () => {
     const host = setup(
       hostStatusFixture({
         config: [
@@ -335,10 +334,39 @@ describe('OverviewTab', () => {
     await expect.element(screen.getByText('unknown key `x`')).toBeVisible();
     expect(screen.container.querySelector('[data-file="global.toml"]')).toBeNull();
 
-    await screen.getByRole('button', { name: 'Open Test Window' }).click();
     await screen.getByRole('button', { name: 'Quit Stache Next' }).click();
     await vi.waitFor(() => expect(host.callsOf('quit_app')).toHaveLength(1));
-    expect(host.callsOf('open_test_window')).toHaveLength(1);
+    expect(
+      screen.getByRole('navigation', { name: 'Actions' }).getByRole('button').all(),
+    ).toHaveLength(1);
+  });
+
+  it('matches the DOM the native smoke harness reads', async () => {
+    setup(
+      hostStatusFixture({
+        modules: [module('proxyAudio', { state: 'disabled', enabled: false })],
+        config: [
+          {
+            file: 'proxyAudio.toml',
+            path: '/c/proxyAudio.toml',
+            state: 'valid',
+            active: true,
+            diagnostic: null,
+            warnings: ['smoke_marker'],
+          },
+        ],
+      }),
+    );
+    const screen = await render(<OverviewTab files={[]} onSelectTab={() => {}} />);
+
+    await expect.element(screen.getByTestId('overview')).toBeVisible();
+    const proxy = row(screen.container, 'proxyAudio');
+
+    expect(proxy?.dataset.state).toBe('disabled');
+    expect(proxy?.querySelector('[role=switch]')?.getAttribute('aria-checked')).toBe('false');
+    expect(screen.container.querySelector('[data-file="proxyAudio.toml"]')?.textContent).toContain(
+      'smoke_marker',
+    );
   });
 
   it("selects a module's file tab from its name", async () => {

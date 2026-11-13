@@ -1179,12 +1179,11 @@ fn a_blocking_startup_command_does_not_delay_ready_controls_or_shutdown() {
             pid_file.display()
         ),
     );
-    let windows = Arc::new(RecordingWindows::default());
     let mut harness = Harness::new(
         FakePermissions::new(PermissionStatus::Granted),
         Arc::new(InlineMain),
         Arc::new(stache_app::startup::ProcessCommands::new()),
-        windows.clone(),
+        Arc::new(RecordingWindows::default()),
     );
     let started = Instant::now();
     harness.start(&fixture, false, None);
@@ -1199,19 +1198,19 @@ fn a_blocking_startup_command_does_not_delay_ready_controls_or_shutdown() {
         std::thread::sleep(Duration::from_millis(10));
     }
     let pid = fs::read_to_string(&pid_file).expect("pid").trim().to_owned();
-    harness.handle.open_test_window();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while windows.opened.load(Ordering::SeqCst) == 0 {
-        assert!(
-            Instant::now() < deadline,
-            "tray window command was not processed"
-        );
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    assert_eq!(
-        windows.opened.load(Ordering::SeqCst),
-        1,
-        "tray commands must run while startup is still executing"
+    // A runner-processed control returns its outcome while startup still runs;
+    // an unprocessed one would time out as `Unavailable`.
+    let outcome = harness.handle.set_enabled_outcome("missing", true);
+    assert!(
+        !matches!(
+            outcome,
+            stache_app::popover_actions::ModuleEnableOutcome::Unavailable { .. }
+        ),
+        "controls must run while startup is still executing: {outcome:?}"
+    );
+    assert!(
+        fs::read_to_string(&pid_file).is_ok(),
+        "startup child still running"
     );
     harness.handle.request_shutdown();
     assert!(harness.wait_exit(), "shutdown must not wait for the child");
@@ -1619,21 +1618,22 @@ fn queued_main_thread_work_is_drained_after_shutdown_without_waiting_on_it() {
         host.clone(),
         Arc::new(DiscardLogger),
     ));
+    // A gated, denied host opens the Accessibility guide on its own.
     let mut harness = Harness::new(
-        FakePermissions::new(PermissionStatus::Granted),
+        FakePermissions::new(PermissionStatus::Denied),
         queued.clone(),
         Arc::new(FakeCommands::default()),
         windows.clone(),
     );
+    harness.gated = true;
     harness.start(&fixture, false, None);
     harness.wait_ready();
     harness
         .teardown
         .register_owner(NativeSlot::Windows, Arc::new(WindowsOwner::new(windows.clone())));
-    harness.handle.open_test_window();
     let deadline = Instant::now() + Duration::from_secs(10);
     while windows.is_empty() {
-        assert!(Instant::now() < deadline, "test window was not requested");
+        assert!(Instant::now() < deadline, "the guide window was not requested");
         std::thread::sleep(Duration::from_millis(5));
     }
     assert!(host.opened.lock().expect("opened").is_empty());
@@ -1677,15 +1677,16 @@ fn an_off_main_executor_that_never_drains_still_reaches_the_outcome() {
         Arc::new(FakeWindowHost::default()),
         Arc::new(DiscardLogger),
     ));
+    // A gated, denied host opens the Accessibility guide on its own.
     let mut harness = Harness::new(
-        FakePermissions::new(PermissionStatus::Granted),
+        FakePermissions::new(PermissionStatus::Denied),
         main.clone(),
         Arc::new(FakeCommands::default()),
         windows,
     );
+    harness.gated = true;
     harness.start(&fixture, false, None);
     harness.wait_ready();
-    harness.handle.open_test_window();
     let deadline = Instant::now() + Duration::from_secs(10);
     while main.len() == 0 {
         assert!(Instant::now() < deadline, "the open job was not queued");

@@ -100,9 +100,9 @@ Bar part 06 slice A, the weather location adapter, is fake-backed. `stache_macos
 
 Bar part 06 slice B, the weather data path (`bar_weather`), is fake-backed and reads no real location, home or environment. `stache-bar` `weather/tests.rs` (child of the crate `tests` module, so it reuses the real-registry harness): env parser fixtures (quoted, single-quoted, comments, `export`, whitespace, CRLF, `=` in values, missing/empty/blank key, malformed lines, last duplicate wins, unterminated quote, substitution from earlier entries only, BOM, invalid UTF-8), the file reader over temp directories with an injected home and config directory (empty `api_keys` reads nothing, relative against the config directory and never the working directory, absolute, `~` with and without a home, missing, directory, oversized and exactly-at-cap, unreadable, symlink, key absent, redacted `Debug`), the exact serde wire forms, and the resolver over `FakeLocationSource` and a gated source: a fix, a reduced fix, every `LocationUnavailable` variant falling back with its typed diagnostic, an empty default location giving `none`, `precise_location` reaching the recorded request and a reconfigure applying at the next read, 60 s reuse on a fake clock (59 s reuses, 60 s reads), a new revision or restart reading again, no read while disabled, zero-size, paused or failed, four concurrent calls sharing one read, a hung read timing joiners out without a second read, stale after a revision change or a stop during the read with nothing recorded, and a weather note changing no sequence. `stache-app` `bar_tests.rs` adds end-to-end scenarios (28/14, two displays, `[weather]` with an env file and a default location, Tiling top 42): `bar_weather` through the real bridge returns the key and coordinates without touching the view, denied/undetermined/no-usage-description fall back, `precise_location` applies without a restart, `unavailable` with zero recorded reads for disabled, paused, gated, failed and zero-size, `unauthorized` for test/access/shell/forged/stale labels, stop during a blocked read is `stale` with no later effect, a hung read never blocks `bar_snapshot` (under 200 ms) or shutdown, a missing key file is a redacted diagnostic and Open Meteo reads no key, and a sentinel key and sentinel coordinates never appear in the serialized `BarView`, `BarChanged`, `BarRuntimeStatus`, `ModuleStatusView`, `StatusChanged`, any `Debug` output or captured logs (with the response as the positive control). The weather click is covered like the other actions in `bar_actions_tests.rs` and the click scenarios. UI code, providers and CSP tests are slice C (next paragraph).
 
-Bar part 07 slice B, the media provider, is fake-backed: no adapter, perl, real child, real clock sleep or user cache directory is touched. `stache-bar` `providers/media/tests.rs` uses a scripted `ChildProcess`/`ProcessFactory`, a virtual clock and a temp cache directory. Parser: empty payload, missing title, full mapping, unknown keys, wrong-typed fields, character caps, invalid wrapper/type/payload shapes, nesting past the recursion limit, artwork pairing. Artwork: every MIME fixture generated in-test with the `image` crate (center crop and deterministic pixels, solid-color exactness, portrait crop), stable content id, placeholder/MIME/base64 rejection, the encoded cap before decoding, dimension and pixel caps rejected from a header-patched PNG before the pixel decode. Store: round trip as base64 `.txt` with `0600`/`0700`, memory-only, traversal-proof ids, symlinked entry and directory refusal, corrupt/oversized/mismatched entries, pruning to 64 entries, bounded memory layer. Publisher: duplicate coalescing, stale artwork never attaching to a newer state, nothing published after close. Owner: exact command line, state then artwork id, coalescing, whole-state replacement, split UTF-8 and multi-line chunks, oversized/invalid frames, backoff schedule 1, 2, 5, 10, 30, 60, 60 s on the fake clock, reset after a 60 s run, restarting then unavailable (media hidden), cancel during backoff waking at once, stop ordering (media invalidated before SIGTERM), SIGTERM ignored then SIGKILL, an unreapable child staying retained with no second spawn, bounded sanitized stderr flood, unavailable or relative resources spawning nothing, a stop before the first spawn. `stache-app` `bar_actions_tests.rs` covers the media click map (four players, look-alikes inert, not installed, stale) and `bar_tests.rs` adds end-to-end scenarios (bar.toml 28/14, two displays, Tiling top 42): a Spotify track with artwork reaching `BarView.media` and `bar_media_artwork` with the wire form pinned and the artwork bytes absent from the view, `BarChanged`, status, module view, `Debug` and logs; stop/pause reaping the exact child, hiding media with no late publish, and a resumed successor inheriting nothing; crash then recovery; repeated crashes reporting `unavailable` while Bar stays Running; unavailable resources; disabled, zero-size and permission-revoked Bars with zero children; a click for each known player and inert unknown/absent media; artwork authorization for test/access/shell/forged/stale labels and malformed ids; production parts using `<cache>/media-artwork` and the vendored resources. `host_policy.rs` now expects `allow-bar-media-artwork`. Live streaming was observed only in the approved dev run (Spotify, macOS 27.0, which counts for the macOS 26+ gate by user decision 2026-11-10); the adapter from the bundled copy and artwork under the real CSP in a bundle stay unverified.
+Bar part 07 slice B, the media provider, is fake-backed: no adapter, perl, real child, real clock sleep or user cache directory is touched. `stache-bar` `providers/media/tests.rs` uses a scripted `ChildProcess`/`ProcessFactory`, a virtual clock and a temp cache directory. Parser: empty payload, missing title, full mapping, unknown keys, wrong-typed fields, character caps, invalid wrapper/type/payload shapes, nesting past the recursion limit, artwork pairing. Artwork: every MIME fixture generated in-test with the `image` crate (center crop and deterministic pixels, solid-color exactness, portrait crop), stable content id, placeholder/MIME/base64 rejection, the encoded cap before decoding, dimension and pixel caps rejected from a header-patched PNG before the pixel decode. Store: round trip as base64 `.txt` with `0600`/`0700`, memory-only, traversal-proof ids, symlinked entry and directory refusal, corrupt/oversized/mismatched entries, pruning to 64 entries, bounded memory layer. Publisher: duplicate coalescing, stale artwork never attaching to a newer state, nothing published after close. Owner: exact command line, state then artwork id, coalescing, whole-state replacement, split UTF-8 and multi-line chunks, oversized/invalid frames, backoff schedule 1, 2, 5, 10, 30, 60, 60 s on the fake clock, reset after a 60 s run, restarting then unavailable (media hidden), cancel during backoff waking at once, stop ordering (media invalidated before SIGTERM), SIGTERM ignored then SIGKILL, an unreapable child staying retained with no second spawn, bounded sanitized stderr flood, unavailable or relative resources spawning nothing, a stop before the first spawn. `stache-app` `bar_actions_tests.rs` covers the media click map (four players, look-alikes inert, not installed, stale) and `bar_tests.rs` adds end-to-end scenarios (bar.toml 28/14, two displays, Tiling top 42): a Spotify track with artwork reaching `BarView.media` and `bar_media_artwork` with the wire form pinned and the artwork bytes absent from the view, `BarChanged`, status, module view, `Debug` and logs; stop/pause reaping the exact child, hiding media with no late publish, and a resumed successor inheriting nothing; crash then recovery; repeated crashes reporting `unavailable` while Bar stays Running; unavailable resources; disabled, zero-size and permission-revoked Bars with zero children; a click for each known player and inert unknown/absent media; artwork authorization for the live Accessibility guide window, forged test/access/shell labels, forged and stale Bar labels and malformed ids; production parts using `<cache>/media-artwork` and the vendored resources. `host_policy.rs` now expects `allow-bar-media-artwork`. Live streaming was observed only in the approved dev run (Spotify, macOS 27.0, which counts for the macOS 26+ gate by user decision 2026-11-10); the adapter from the bundled copy and artwork under the real CSP in a bundle stay unverified.
 
-The Accessibility guide and the test window (migration part 07) are covered by `windows/AccessibilityGuide/**/*.test.ts(x)` (every section, the unbundled variant, the error line, self-close on `open`, each command sent once and disabled while pending, Escape without auto-repeat and Close through a mocked current window, the drag region, the calls made) and `windows/TestWindow/**/*.test.ts(x)` (loading, unavailable, identity failure, ready/starting with the host error, empty lists, separate detail/diagnostic and file diagnostic/warning labels, a `revision` above `Number.MAX_SAFE_INTEGER` rendered exactly, the smoke harness's DOM), with `e2e/scenarios/access.spec.ts`, `test-window.spec.ts` and the whole-session `bar-session.spec.ts`. `windows/Bar/widgets/registry.test.ts` proves the registry is exhaustive at the type level.
+The Accessibility guide (migration part 07) is covered by `windows/AccessibilityGuide/**/*.test.ts(x)` (every section, the unbundled variant, the error line, self-close on `open`, each command sent once and disabled while pending, Escape without auto-repeat and Close through a mocked current window, the drag region, the calls made), with `e2e/scenarios/access.spec.ts` and the whole-session `bar-session.spec.ts`. `windows/Bar/widgets/registry.test.ts` proves the registry is exhaustive at the type level.
 
 Bar part 06 slice C (the weather UI) and Bar part 04 slice (b) (the static surface) were tested by WebKit suites of the previous UI; their replacements are the UI suites below. The rebuilt weather UI (migration part 04) is covered by `windows/Bar/widgets/Weather/*.test.ts(x)` (providers and location with a stubbed `fetch`, fake-timer timeout and interval tests, abort, key contents, icon tables, display states and click) and `e2e/scenarios/weather.spec.ts` (fake host plus Playwright routes for the provider hosts; any other remote request is aborted and asserted absent). The Rust fakes of part 04 slice (b) remain under `test:native`. The rebuilt Media UI (migration part 05) is covered by `windows/Bar/widgets/Media/*.test.ts(x)` (label, icon table, artwork query outcomes and id changes against the mocked IPC, retained artwork with real decoding of the valid and invalid PNG fixtures in `tests/png.ts`) and `e2e/scenarios/media.spec.ts`. The rebuilt Spaces UI (migration part 06) is covered by `windows/Bar/widgets/Spaces/**/*.test.ts(x)` (states, Tiling's published order, labels, compact mode, clicks, every icon-table entry rendered, motion with animations on and under reduced motion, and a render-count test) and `e2e/scenarios/spaces.spec.ts` (a whole session through the fake host).
 
@@ -342,13 +342,15 @@ the real cache, runtime, configuration or legacy identity.
   PNG fixture from `tests/png.ts`), and the Spaces strip wide (every app) and compact
   (the focused app only) in dark and light (`spaces.spec.ts`, reduced motion so the
   strip is settled), and the Accessibility guide blocked and revoked (480×640, the
-  page captured with a transparent background) and the test window (full page) in
-  dark and light (`windows.spec.ts`, reduced motion so nothing is mid-animation),
+  page captured with a transparent background) in dark and light (`windows.spec.ts`, reduced motion so nothing is mid-animation),
   and the tray popover shell with every badge kind, its Overview with the user's modules and
   the settings editor on `keepAwake`, `tiling` and an invalid `tiling.toml` (480×640,
-  transparent background) in dark and light (`popover.spec.ts`). The popover uses the
-  system font and WebKit's system colours; `popover.spec.ts` pins the user-dependent ones
-  (accent, selection, focus ring) to the macOS defaults, so it needs no font skip. The
+  transparent background) in dark and light (`popover.spec.ts`). The popover and the
+  Accessibility guide use the system font and WebKit's system colours; their specs pin the
+  user-dependent ones (accent, selection, focus ring) to the macOS defaults and paint a
+  neutral stand-in for the native material (`pinSystemColours`, which both specs import
+  from `e2e/screenshots/systemColours.ts`), so
+  they need no font skip. The
   other baselines depend on the
   system font 'Maple Mono NF': after loading, each test calls `skipWithoutMapleMono(page)`
   (`e2e/screenshots/font.ts`, a DOM measurement evaluated in the page, since WebKit's
@@ -417,7 +419,7 @@ Check routing manually in a disposable checkout for TS, TSX, Markdown, Rust and 
 stages.
 Vite uses its default watcher rooted at `src/ui`; native crates, archive and root build outputs are
 outside that root. No custom watcher module or ancestor-matching ignore is needed.
-Smoke HMR once with `bun run dev`: edit/restore the Placeholder text and observe an update without navigation;
+Smoke HMR once with `bun run dev`: edit/restore the `UnknownSurface` text (open `/` with no surface) and observe an update without navigation;
 write an ignored archive/nested-worktree probe and observe no update. Stop the owned server with Ctrl+C.
 
 Correction smoke (2026-11-02): Shell edit/restoration hot-updated with the same page time origin and
@@ -457,11 +459,10 @@ Record the actual restart/quiet-period/cleanup observations before marking this 
 
 ## Native host smoke (opt-in)
 
-The harness's WebKit probes read the test window's DOM: the text `Host test surface`, `Host ready`
-and the file names, and per card an `li` whose `h3` is the module id or file name, `div` rows of
-`dt`/`dd` (`Enabled`, `Revision`) and a first `[data-state]` badge whose text is the state label
-(`Disabled`, `Valid`), plus `Active configuration`. `windows/TestWindow/TestWindow.test.tsx`
-("matches the DOM the native smoke harness reads") pins that markup.
+The harness's WebKit probes read the popover Overview's DOM: `[data-testid=overview]`, the
+`proxyAudio` row (`[data-module=proxyAudio]` with `data-state="disabled"` and an unchecked
+`role=switch`) and, after the reload, the `[data-file="proxyAudio.toml"]` configuration note
+carrying the reload's `smoke_marker` warning. `OverviewTab.test.tsx` pins those attributes.
 
 `cargo nextest run --workspace --features stache-app/dev-tools` covers the host
 composition with fake native and permission services: early quit, repeated
@@ -516,13 +517,16 @@ the deliberate failure probe below, not the normal run.
 `smoke` implies `custom-protocol`, so the harness loads the embedded production
 assets rather than a dev server. It proves zero webviews, `run_on_main` on the
 AppKit main thread, the activation observer delivering on main and removing itself
-on drop, the React `TestWindow` DOM reporting `Host ready` and every registered
-config file, generated `host_status`/`app_info` IPC inside WebKit, a pre-start
+on drop, the popover opened through the host (`NativeWindows::open_popover`; the
+prewarm is compiled out under `smoke`) with its React Overview rendering the disabled
+`proxyAudio` row, generated `host_status` IPC inside WebKit, a pre-start
 `proxyAudio.toml` loaded as a valid disabled config, a real socket reload
-accepted from a changed valid config that stays disabled, the resulting
-`statusChanged` update advancing the exact revision in both the React DOM and the
-`host_status` snapshot, window create/reuse/close, the host still answering on
-its socket and not shutting down after the last window closed, the second process
+accepted from a changed valid config that stays disabled (with one ignored
+`smoke_marker` key), the resulting `statusChanged` update advancing the exact
+revision in the `host_status` snapshot and showing the new warning in the React DOM,
+the popover hidden (webview and bookkeeping kept, never destroyed), the host still
+answering on its socket and not shutting down while it is hidden, the popover shown
+again as the same document, the second process
 rejected by the instance lock, and a real SIGTERM delivered only to the owned
 PID. It exits 0 after the shared shutdown path completes. The reload never
 enables `proxyAudio`, so smoke never starts the audio runtime or changes the
@@ -650,15 +654,15 @@ its terminal record, and the exit status from `AppKit`. Any other non-empty
 `STACHE_SMOKE_TERMINATE` value keeps the previous behaviour.
 
 `STACHE_SMOKE_HOLD=1` starts the normal app with that hanging owner registered,
-schedules no `terminate:`, opens the explicit test window the smoke checks use,
+schedules no `terminate:`, shows the popover the smoke checks use,
 and waits for an external quit. It prints:
 
 ```text
-smoke: ok: test window stache-test-N visible
+smoke: ok: popover stache-popover visible
 smoke: ok: holding for an external quit
 ```
 
-Bring the window frontmost and press Cmd-Q (twice for the repeat case). With
+Bring Stache frontmost (the popover is key) and press Cmd-Q (twice for the repeat case). With
 nothing arriving it prints `smoke: FAIL: no external quit arrived within 120 s`
 and exits non-zero. `STACHE_SMOKE_HOLD=clean` is the same without the hanging
 owner. A successful run ends inside `AppKit`, so the verdict is the stderr log
@@ -762,7 +766,7 @@ in the teardown outcome, while an unchanged `dispatch` may still return OS statu
   PID=$!
   ```
 
-  Bring `smoke: ok: test window stache-test-N visible` frontmost, press Cmd-Q
+  After `smoke: ok: popover stache-popover visible`, with the popover key, press Cmd-Q
   once, then `wait "$PID"`. Pass: one coordinated run, one `Clean` record, no
   owned socket. If the key never reaches AppKit, the gate fails and requires
   explicit re-planning with the owner; app-menu or quit-event evidence is

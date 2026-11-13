@@ -1,54 +1,53 @@
 import * as stylex from '@stylexjs/stylex';
 
-import { color, font, guide, space } from '@/theme/tokens.stylex';
+import { guide, native, space } from '@/theme/tokens.stylex';
 
+/** An inset translucent group of label/value rows, then a hint. */
 export const styles = stylex.create({
   card: {
     display: 'flex',
     flexDirection: 'column',
-    gap: space.md,
-    paddingBlock: space.md,
     paddingInline: space.lg,
-    borderRadius: guide.controlRadius,
-    backgroundColor: color.surfaceRaised,
-    boxShadow: `inset 0 0 0 1px ${color.divider}`,
+    borderRadius: native.cardRadius,
+    backgroundColor: native.card,
   },
   fields: {
     userSelect: 'text',
     display: 'flex',
     flexDirection: 'column',
-    gap: space.xs,
     margin: 0,
   },
   field: {
     display: 'grid',
     gridTemplateColumns: `${guide.fieldLabelWidth} minmax(0, 1fr)`,
     gap: space.lg,
-    fontSize: font.sizeMd,
+    alignItems: 'baseline',
+    paddingBlock: space.sm,
+    borderBottomColor: native.separator,
+    borderBottomStyle: 'solid',
+    borderBottomWidth: '0.5px',
   },
   term: {
-    color: color.textSubtle,
+    color: native.secondaryLabel,
   },
   value: {
     margin: 0,
-    color: color.text,
+    color: native.label,
     overflowWrap: 'anywhere',
   },
   hint: {
     display: 'flex',
-    gap: space.md,
+    gap: space.sm,
     alignItems: 'flex-start',
     margin: 0,
-    paddingTop: space.md,
-    borderTopColor: color.divider,
-    borderTopStyle: 'solid',
-    borderTopWidth: '1px',
-    fontSize: font.sizeMd,
-    color: color.warning,
+    paddingBlock: space.sm,
+    fontSize: native.smallSize,
+    lineHeight: '14px',
+    color: native.secondaryLabel,
   },
   hintIcon: {
     display: 'flex',
     flexShrink: 0,
-    marginTop: '3px',
+    color: native.orange,
   },
 });

@@ -13,7 +13,7 @@ import { FileTab } from './components/FileTab';
 import { OverviewTab } from './components/OverviewTab';
 import { Sidebar } from './components/Sidebar';
 import { styles } from './Popover.style';
-import { PANEL_ID, tabId, tabsFor } from './Popover.tabs';
+import { PANEL_ID, tabId, tabsFor } from './utils/tabs';
 
 /**
  * The tray popover (`?surface=popover`): a frosted panel with the "Stache"

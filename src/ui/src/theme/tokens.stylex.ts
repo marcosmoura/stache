@@ -66,11 +66,6 @@ export const radius = stylex.defineVars({
 /** Font family (system installed, never bundled), sizes, weights and line heights. */
 export const font = stylex.defineVars({
   family: "'Maple Mono NF', 'SF Mono', monospace",
-  /** The system UI stack (the test window). */
-  familySystem:
-    '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif',
-  /** The system monospace stack (identifiers and paths in the test window). */
-  familySystemMono: 'ui-monospace, "SF Mono", Menlo, monospace',
   sizeXs: '10px',
   sizeSm: '11px',
   sizeMd: '12px',
@@ -117,54 +112,13 @@ export const bar = stylex.defineVars({
 });
 
 /**
- * The Accessibility guide's text style and shape: its own size and weight in
- * the Bar typeface (`font.family`), a 16px panel and 12px controls.
+ * The native macOS look shared by the popover and the Accessibility guide.
+ * Colors are WebKit's `-apple-system-*` semantic keywords and the user's
+ * accent, so they follow the app appearance and the system settings with no
+ * hand-picked dark values; fills are `color-mix` of the label color. Never the
+ * Catppuccin palette (`native.test.ts`).
  */
-export const guide = stylex.defineVars({
-  fontSize: '13px',
-  fontWeight: '500',
-  lineHeight: '1.6em',
-  titleSize: '17px',
-  titleWeight: '600',
-  titleLineHeight: '1.3',
-  stepSize: '12.5px',
-  stepLineHeight: '22px',
-  panelRadius: '16px',
-  controlRadius: '12px',
-  headerHeight: '48px',
-  /** The app glyph in the header and the step numbers. */
-  markSize: '22px',
-  closeSize: '28px',
-  buttonHeight: '36px',
-  /** The hero badge: beside the title, and centered for checking/open. */
-  badgeSize: '44px',
-  badgeSizeLarge: '64px',
-  /** Gap between the body's sections. */
-  sectionGap: '14px',
-  /** Width of the identity card's labels. */
-  fieldLabelWidth: '68px',
-  /** Indent of the troubleshooting text under its summary. */
-  disclosureIndent: '18px',
-});
-
-/** The test window's page: system type, a centered column and card shape. */
-export const statusPage = stylex.defineVars({
-  fontSize: '13px',
-  lineHeight: '1.5',
-  titleSize: '20px',
-  titleWeight: '600',
-  maxWidth: '54rem',
-  cardRadius: '8px',
-  ruleWidth: '3px',
-});
-
-/**
- * The tray popover: a native macOS look (part 05). Colors are WebKit's
- * `-apple-system-*` semantic keywords and the user's accent, so they follow the
- * app appearance and the system settings with no hand-picked dark values;
- * fills are `color-mix` of the label color. Never the Catppuccin palette.
- */
-export const popover = stylex.defineVars({
+export const native = stylex.defineVars({
   /** The system UI stack; monospace only for file paths. */
   family: '-apple-system, BlinkMacSystemFont, system-ui, sans-serif',
   familyMono: 'ui-monospace, "SF Mono", Menlo, monospace',
@@ -173,20 +127,13 @@ export const popover = stylex.defineVars({
   lineHeight: '16px',
   titleSize: '13px',
   titleWeight: '600',
-  /** The native corner radius of the material behind the webview (panel.rs). */
+  /** The native corner radius of the material behind the webview. */
   panelRadius: '12px',
-  headerHeight: '36px',
-  sidebarWidth: '44px',
-  tabSize: '28px',
-  tabRadius: '6px',
-  iconSize: '16px',
-  badgeSize: '7px',
   smallSize: '11px',
   sectionSize: '11px',
   /** An inset group of rows. */
   cardRadius: '8px',
   rowHeight: '28px',
-  tileSize: '22px',
   tileRadius: '5px',
   /** A push button and a stepper button. */
   buttonHeight: '22px',
@@ -226,8 +173,39 @@ export const popover = stylex.defineVars({
   switchOff: 'color-mix(in srgb, -apple-system-label 12%, transparent)',
   /** A menu's raised surface. */
   menu: '-apple-system-control-background',
-  /** The Accessibility banner: a soft orange fill. */
+  /** An attention banner: a soft orange fill. */
   banner: 'color-mix(in srgb, -apple-system-orange 14%, transparent)',
+  /** An error banner: a soft red fill. */
+  bannerError: 'color-mix(in srgb, -apple-system-red 12%, transparent)',
+});
+
+/** The tray popover's own geometry (part 05); its look comes from `native`. */
+export const popover = stylex.defineVars({
+  headerHeight: '36px',
+  sidebarWidth: '44px',
+  tabSize: '28px',
+  tabRadius: '6px',
+  iconSize: '16px',
+  badgeSize: '7px',
+  tileSize: '22px',
+});
+
+/** The Accessibility guide's own geometry; its look comes from `native`. */
+export const guide = stylex.defineVars({
+  titleSize: '15px',
+  headerHeight: '40px',
+  /** The app glyph in the header and the step numbers. */
+  markSize: '20px',
+  closeSize: '22px',
+  /** The hero badge: beside the title, and centered for checking/open. */
+  badgeSize: '44px',
+  badgeSizeLarge: '64px',
+  /** Gap between the body's sections. */
+  sectionGap: '14px',
+  /** Width of the identity card's labels. */
+  fieldLabelWidth: '68px',
+  /** Indent of the troubleshooting text under its summary. */
+  disclosureIndent: '18px',
 });
 
 /** Elevation shadows. */

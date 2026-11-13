@@ -48,7 +48,7 @@ open.
 ## Former menu rows
 
 The former menu rows (status header, gate actions, per-module Enable, Pause/Resume, Retry,
-diagnostics, warnings, Open Test Window and Quit) live in the popover's
+diagnostics, warnings and Quit) live in the popover's
 [Overview](popover.md#overview), with the same state labels and eligibility rules.
 
 ## Invariants and pitfalls

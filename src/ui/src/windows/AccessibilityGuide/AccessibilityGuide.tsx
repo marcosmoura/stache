@@ -96,7 +96,7 @@ export function AccessibilityGuide() {
       <header {...stylex.props(styles.header)}>
         <div {...stylex.props(styles.dragRegion)} {...dragRegion}>
           <span {...stylex.props(styles.glyph, styles.passThrough)}>
-            <Icon icon={CommandIcon} size={13} strokeWidth={1.75} />
+            <Icon icon={CommandIcon} size={14} strokeWidth={1.75} />
           </span>
           <span {...stylex.props(styles.appName, styles.passThrough)}>Stache Next</span>
         </div>
@@ -106,7 +106,7 @@ export function AccessibilityGuide() {
           aria-label="Close"
           onClick={() => void closeCurrentWindow()}
         >
-          <Icon icon={Cancel01Icon} size={16} strokeWidth={1.75} />
+          <Icon icon={Cancel01Icon} size={14} strokeWidth={1.75} />
         </button>
       </header>
 
@@ -115,8 +115,24 @@ export function AccessibilityGuide() {
           <div {...stylex.props(styles.hero, centered && styles.heroCentered)}>
             <HeroBadge tone={hero.tone} icon={ICONS[section]} large={centered} />
             <div {...stylex.props(styles.heroText)}>
-              <h1 {...stylex.props(styles.title)}>{hero.title}</h1>
+              <h1 {...stylex.props(styles.title)}>
+                {centered ? null : (
+                  <span
+                    {...stylex.props(styles.status, styles[hero.tone])}
+                    aria-hidden="true"
+                    data-status-dot
+                  />
+                )}
+                {hero.title}
+              </h1>
               <p {...stylex.props(styles.body)} role={centered ? 'status' : undefined}>
+                {centered ? (
+                  <span
+                    {...stylex.props(styles.status, styles[hero.tone])}
+                    aria-hidden="true"
+                    data-status-dot
+                  />
+                ) : null}
                 {hero.body}
               </p>
             </div>
@@ -138,7 +154,7 @@ export function AccessibilityGuide() {
       {message ? (
         <p {...stylex.props(styles.alert)} role="alert">
           <span {...stylex.props(styles.alertIcon)}>
-            <Icon icon={AlertCircleIcon} size={16} strokeWidth={1.75} />
+            <Icon icon={AlertCircleIcon} size={14} strokeWidth={1.75} />
           </span>
           <span>{message}</span>
         </p>

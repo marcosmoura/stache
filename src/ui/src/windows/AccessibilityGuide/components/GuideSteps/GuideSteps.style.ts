@@ -1,23 +1,26 @@
 import * as stylex from '@stylexjs/stylex';
 
-import { color, font, guide, space } from '@/theme/tokens.stylex';
+import { guide, native, space } from '@/theme/tokens.stylex';
 
+/** The steps: an inset translucent group with numbered rows. */
 export const styles = stylex.create({
   list: {
     display: 'flex',
     flexDirection: 'column',
-    gap: space.md,
+    gap: space.xs,
     margin: 0,
-    padding: 0,
+    paddingBlock: space.sm,
+    paddingInline: space.lg,
+    borderRadius: native.cardRadius,
     listStyle: 'none',
+    backgroundColor: native.card,
   },
   step: {
     display: 'flex',
-    gap: space.lg,
+    gap: space.md,
     alignItems: 'flex-start',
-    fontSize: guide.stepSize,
-    lineHeight: guide.stepLineHeight,
-    color: color.textSecondary,
+    paddingBlock: space.xs,
+    color: native.label,
   },
   number: {
     display: 'grid',
@@ -25,13 +28,15 @@ export const styles = stylex.create({
     placeItems: 'center',
     width: guide.markSize,
     height: guide.markSize,
+    marginTop: '-2px',
     borderRadius: '50%',
-    fontSize: font.sizeMd,
-    color: color.accent,
-    backgroundColor: color.divider,
+    fontSize: native.smallSize,
+    fontWeight: native.titleWeight,
+    color: native.onAccent,
+    backgroundColor: native.accent,
   },
   strong: {
-    fontWeight: guide.titleWeight,
-    color: color.text,
+    fontWeight: native.titleWeight,
+    color: native.label,
   },
 });

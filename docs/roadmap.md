@@ -33,7 +33,7 @@ has shipped.
 
 Foundation also includes the owned [module SDK](architecture/sdk.md),
 [typed configuration and reload](architecture/config.md), [socket IPC and standalone CLI](architecture/ipc.md),
-and [typed UI SDK and test window](architecture/ui.md). The [tray](features/tray.md)
+and [typed UI SDK and host windows](architecture/ui.md). The [tray](features/tray.md)
 belongs to foundation, not a separate spec; [proxyAudio](features/proxy-audio.md) switches audio devices.
 
 Keep Awake and Wallpapers are recorded on `main` after their approved squash merges.

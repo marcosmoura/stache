@@ -75,7 +75,7 @@ test.describe('Popover settings editor', () => {
 
     // The layout enum: a floating menu, written at once; the trailing comment stays.
     await page.getByRole('button', { name: 'Default layout', exact: true }).click();
-    await page.getByRole('option', { name: /^master/ }).click();
+    await page.getByRole('option', { name: /^Master and stack/ }).click();
     await expect
       .poll(() => store.text('tiling.toml'))
       .toContain('default_layout = "master" # most workspaces tile');
@@ -83,7 +83,7 @@ test.describe('Popover settings editor', () => {
     // Add a workspace, move it up, then remove it.
     const workspaces = page.getByRole('region', { name: 'Workspaces' });
 
-    await workspaces.getByRole('button', { name: 'Add item' }).click();
+    await workspaces.getByRole('button', { name: 'Add workspace' }).click();
     await expect.poll(() => store.text('tiling.toml')).toMatch(/\[\[workspaces\]\]\nname = "new"/);
     await page.getByRole('button', { name: 'Move new up' }).click();
     await expect
@@ -99,7 +99,7 @@ test.describe('Popover settings editor', () => {
     // Reset to default removes the key and marks the field default.
     const ratio = field(page, 'master.ratio');
 
-    await ratio.getByRole('button', { name: 'Reset Ratio to default' }).click();
+    await ratio.getByRole('button', { name: 'Reset Master size to default' }).click();
     await expect.poll(() => store.text('tiling.toml')).not.toContain('ratio = 60');
     await expect(ratio.getByText('default', { exact: true })).toBeVisible();
     await expect(ratio.locator('input')).toHaveValue('60');
@@ -127,8 +127,8 @@ test.describe('Popover settings editor', () => {
 
     const terminal = page.getByRole('group', { name: 'cmd+shift+t' });
 
-    await terminal.getByRole('textbox', { name: 'Key' }).fill('cmd+alt+t');
-    await terminal.getByRole('textbox', { name: 'Key' }).press('Enter');
+    await terminal.getByRole('textbox', { name: 'Shortcut' }).fill('cmd+alt+t');
+    await terminal.getByRole('textbox', { name: 'Shortcut' }).press('Enter');
     await expect
       .poll(() => store.text('keybindings.toml'))
       .toContain('"cmd+alt+t" = "open -a Ghostty"');
@@ -138,6 +138,32 @@ test.describe('Popover settings editor', () => {
     await expect.poll(() => store.text('keybindings.toml')).not.toContain('cmd+shift+m');
     keepsComments(store.text('keybindings.toml'), comments);
     await expect(page.getByRole('group', { name: 'cmd+shift+m' })).toHaveCount(0);
+  });
+
+  test('keybindings: add a binding through the inline new row', async ({ page, host }) => {
+    const store = await open(page, host, 'keybindings.toml');
+    const before = store.text('keybindings.toml');
+    const add = page.getByRole('button', { name: 'Add shortcut' });
+    const row = page.getByRole('group', { name: 'New shortcut' });
+
+    // Esc cancels: nothing is written and the popover stays open.
+    await add.click();
+    await expect(row.getByRole('textbox', { name: 'Shortcut' })).toBeFocused();
+    await expect(row.getByRole('textbox', { name: 'Shortcut' })).toHaveValue('');
+    await page.keyboard.press('Escape');
+    await expect(row).toHaveCount(0);
+    expect(host.commands().filter((command) => command === 'hide_popover')).toEqual([]);
+    expect(store.text('keybindings.toml')).toBe(before);
+
+    // A typed key is written once on Enter, never a placeholder key.
+    await add.click();
+    await page.keyboard.type('cmd+shift+k');
+    await page.keyboard.press('Enter');
+    await expect.poll(() => store.text('keybindings.toml')).toContain('"cmd+shift+k" = ""');
+    await expect(page.getByRole('group', { name: 'cmd+shift+k' })).toBeVisible();
+    await expect(row).toHaveCount(0);
+    expect(store.text('keybindings.toml')).not.toContain('new_key');
+    keepsComments(store.text('keybindings.toml'), ['# Global shortcuts.', '# Terminal.']);
   });
 
   test('bar: change the height', async ({ page, host }) => {

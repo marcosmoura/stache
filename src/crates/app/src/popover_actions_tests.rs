@@ -34,10 +34,6 @@ fn each_popover_request_queues_the_tray_rows_host_command() {
         HostCommand::Retry(id) if id == "proxyAudio"
     ));
     assert!(matches!(
-        queued(PopoverRequest::TestWindow),
-        HostCommand::OpenTestWindow
-    ));
-    assert!(matches!(
         queued(PopoverRequest::AccessGuide),
         HostCommand::OpenAccessGuide
     ));

@@ -1,14 +1,6 @@
 import { useEffect, useState } from 'react';
 
-import {
-  Alert02Icon,
-  File01Icon,
-  PauseIcon,
-  PlayIcon,
-  PowerIcon,
-  RefreshIcon,
-  TestTube01Icon,
-} from '@hugeicons/core-free-icons';
+import { File01Icon } from '@hugeicons/core-free-icons';
 import * as stylex from '@stylexjs/stylex';
 import { useMutation, useQuery } from '@tanstack/react-query';
 
@@ -22,39 +14,30 @@ import {
   type SessionAction,
 } from '@/ipc';
 import { useFeed } from '@/queries';
-import {
-  useOpenAccessibilitySettings,
-  useQuitApp,
-  useRequestAccessibility,
-} from '@/queries/access';
 import { hostStatusFeed, hostStatusOptions } from '@/queries/host';
 import {
   moduleSessionActionOptions,
   retryModuleOptions,
   setModuleEnabledOptions,
-  useOpenAccessibilityGuide,
-  useOpenTestWindow,
 } from '@/queries/overview';
 import { errorMessage } from '@/utils';
+import { FILE_ICONS } from '@/windows/Popover/utils/tabs';
 
-import { FILE_ICONS } from '../../Popover.tabs';
-
+import { AccessBanner } from './components/AccessBanner';
+import { Footer } from './components/Footer';
+import { ModuleRow } from './components/ModuleRow';
+import { styles } from './OverviewTab.style';
+import { styles as row } from './styles/row.style';
 import {
-  bannerTitle,
   headerLine,
-  moduleActions,
   moduleFile,
-  moduleName,
   enableOutcomeText,
   reconcile,
   sessionOutcomeText,
-  STATE_LABELS,
-  STATE_TONES,
   type ErrorMap,
   type Pending,
   type PendingMap,
-} from './OverviewTab.model';
-import { styles } from './OverviewTab.style';
+} from './utils/modules';
 
 export type OverviewTabProps = {
   /** Selects a sidebar tab (a module's name selects its file tab). */
@@ -204,26 +187,19 @@ export function OverviewTab({ onSelectTab, files }: OverviewTabProps) {
           </h3>
           <ul {...stylex.props(styles.card)} aria-labelledby="overview-config">
             {notes.map((file) => (
-              <li key={file.file} {...stylex.props(styles.row)} data-file={file.file}>
-                <span {...stylex.props(styles.tile)}>
+              <li key={file.file} {...stylex.props(row.row)} data-file={file.file}>
+                <span {...stylex.props(row.tile)}>
                   <Icon icon={FILE_ICONS[file.file] ?? File01Icon} size={16} />
                 </span>
-                <div {...stylex.props(styles.text)}>
-                  <span {...stylex.props(styles.name)}>{file.file}</span>
+                <div {...stylex.props(row.text)}>
+                  <span {...stylex.props(row.name)}>{file.file}</span>
                   {file.diagnostic != null ? (
-                    <span
-                      {...stylex.props(styles.secondary, styles.danger)}
-                      title={file.diagnostic}
-                    >
+                    <span {...stylex.props(row.secondary, row.danger)} title={file.diagnostic}>
                       {file.diagnostic}
                     </span>
                   ) : null}
                   {file.warnings.map((warning, index) => (
-                    <span
-                      key={index}
-                      {...stylex.props(styles.secondary, styles.warning)}
-                      title={warning}
-                    >
+                    <span key={index} {...stylex.props(row.secondary, row.warning)} title={warning}>
                       {warning}
                     </span>
                   ))}
@@ -236,203 +212,5 @@ export function OverviewTab({ onSelectTab, files }: OverviewTabProps) {
 
       <Footer />
     </div>
-  );
-}
-
-function AccessBanner({ status }: { status: HostStatus }) {
-  const guide = useOpenAccessibilityGuide();
-  const request = useRequestAccessibility();
-  const settings = useOpenAccessibilitySettings();
-  const title = bannerTitle(status.access);
-
-  if (title === null) {
-    return null;
-  }
-
-  return (
-    <section {...stylex.props(styles.banner)} aria-labelledby="overview-access" role="region">
-      <div {...stylex.props(styles.bannerHead)}>
-        <Icon icon={Alert02Icon} size={16} />
-        <h3 {...stylex.props(styles.bannerTitle)} id="overview-access">
-          {title}
-        </h3>
-      </div>
-      <p {...stylex.props(styles.bannerText)}>
-        Stache needs Accessibility to run its modules. Until it is granted every module waits;
-        Enable, Pause, the Test Window and Quit keep working.
-      </p>
-      <div {...stylex.props(styles.bannerActions)}>
-        <button
-          type="button"
-          {...stylex.props(styles.button, styles.primary)}
-          disabled={guide.isPending}
-          onClick={() => guide.mutate()}
-        >
-          Show Accessibility Help…
-        </button>
-        <button
-          type="button"
-          {...stylex.props(styles.button)}
-          disabled={request.isPending}
-          onClick={() => request.mutate()}
-        >
-          Request Accessibility…
-        </button>
-        <button
-          type="button"
-          {...stylex.props(styles.button)}
-          disabled={settings.isPending}
-          onClick={() => settings.mutate()}
-        >
-          Open Accessibility Settings…
-        </button>
-      </div>
-    </section>
-  );
-}
-
-type ModuleRowProps = {
-  module: ModuleStatusView;
-  pending: 'enable' | 'retry' | 'session' | null;
-  error: string | null;
-  hasTab: boolean;
-  onSelect: () => void;
-  onToggle: () => void;
-  onSession: (action: SessionAction) => void;
-  onRetry: () => void;
-};
-
-function ModuleRow({
-  module,
-  pending,
-  error,
-  hasTab,
-  onSelect,
-  onToggle,
-  onSession,
-  onRetry,
-}: ModuleRowProps) {
-  const name = moduleName(module.id);
-  const actions = moduleActions(module);
-  const busy = pending !== null;
-  const tone = STATE_TONES[module.state];
-
-  return (
-    <li
-      {...stylex.props(styles.row)}
-      data-module={module.id}
-      data-state={module.state}
-      data-pending={pending ?? undefined}
-      aria-busy={busy}
-    >
-      <span {...stylex.props(styles.tile)}>
-        <Icon icon={FILE_ICONS[moduleFile(module.id)] ?? File01Icon} size={16} />
-      </span>
-      <div {...stylex.props(styles.text)}>
-        <div {...stylex.props(styles.titleLine)}>
-          {hasTab ? (
-            <button
-              type="button"
-              {...stylex.props(styles.name, styles.nameButton)}
-              onClick={onSelect}
-              title={`Open ${moduleFile(module.id)}`}
-            >
-              {name}
-            </button>
-          ) : (
-            <span {...stylex.props(styles.name)}>{name}</span>
-          )}
-          <span {...stylex.props(styles.state)} data-testid="state" data-tone={tone}>
-            <span {...stylex.props(styles.dot, styles[tone])} aria-hidden="true" />
-            {STATE_LABELS[module.state]}
-          </span>
-        </div>
-        {module.detail ? (
-          <span {...stylex.props(styles.secondary)} title={module.detail}>
-            {module.detail}
-          </span>
-        ) : null}
-        {module.diagnostic ? (
-          <span
-            {...stylex.props(styles.secondary, styles.attention)}
-            title={`configuration: ${module.diagnostic}`}
-          >
-            configuration: {module.diagnostic}
-          </span>
-        ) : null}
-        {error ? (
-          <span {...stylex.props(styles.secondary, styles.danger)} role="alert" title={error}>
-            {error}
-          </span>
-        ) : null}
-      </div>
-      <div {...stylex.props(styles.controls)}>
-        {actions.retry ? (
-          <button
-            type="button"
-            {...stylex.props(styles.round)}
-            aria-label={`Retry ${name}`}
-            title={`Retry ${name}`}
-            disabled={busy}
-            onClick={onRetry}
-          >
-            <Icon icon={RefreshIcon} size={14} />
-          </button>
-        ) : null}
-        {actions.session ? (
-          <button
-            type="button"
-            {...stylex.props(styles.round)}
-            aria-label={`${actions.session === 'pause' ? 'Pause' : 'Resume'} ${name}`}
-            title={`${actions.session === 'pause' ? 'Pause' : 'Resume'} ${name}`}
-            disabled={busy}
-            onClick={() => onSession(actions.session ?? 'pause')}
-          >
-            <Icon icon={actions.session === 'pause' ? PauseIcon : PlayIcon} size={14} />
-          </button>
-        ) : null}
-        <button
-          type="button"
-          role="switch"
-          aria-checked={module.enabled}
-          aria-label={`Enable ${name}`}
-          title={`${module.enabled ? 'Disable' : 'Enable'} ${name}`}
-          disabled={busy}
-          {...stylex.props(styles.switch, module.enabled && styles.switchOn)}
-          onClick={onToggle}
-        >
-          <span {...stylex.props(styles.knob, module.enabled && styles.knobOn)} />
-        </button>
-      </div>
-    </li>
-  );
-}
-
-function Footer() {
-  const testWindow = useOpenTestWindow();
-  const quit = useQuitApp();
-
-  return (
-    <nav {...stylex.props(styles.footer)} aria-label="Actions">
-      <button
-        type="button"
-        {...stylex.props(styles.action)}
-        disabled={testWindow.isPending}
-        onClick={() => testWindow.mutate()}
-      >
-        <Icon icon={TestTube01Icon} size={16} />
-        Open Test Window
-      </button>
-      <hr {...stylex.props(styles.separator)} />
-      <button
-        type="button"
-        {...stylex.props(styles.action)}
-        disabled={quit.isPending}
-        onClick={() => quit.mutate()}
-      >
-        <Icon icon={PowerIcon} size={16} />
-        Quit Stache Next
-      </button>
-    </nav>
   );
 }

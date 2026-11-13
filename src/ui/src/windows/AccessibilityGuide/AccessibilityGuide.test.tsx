@@ -77,7 +77,7 @@ describe('AccessibilityGuide', () => {
       .element(screen.getByRole('heading', { name: 'Stache Next needs Accessibility access' }))
       .toBeVisible();
     await expect
-      .element(screen.getByText(/Until you grant it, Stache Next stays idle\./))
+      .element(screen.getByText(/Until you allow it, Stache Next waits and does nothing\./))
       .toBeVisible();
     expect(screen.getByRole('listitem').elements()).toHaveLength(3);
     await expect.element(screen.getByText(APP.identifier)).toBeVisible();
@@ -86,9 +86,17 @@ describe('AccessibilityGuide', () => {
       .element(screen.getByRole('button', { name: 'Troubleshooting' }))
       .toHaveAttribute('aria-expanded', 'false');
     await screen.getByRole('button', { name: 'Troubleshooting' }).click();
-    expect(screen.container.textContent).toContain('older build');
+    expect(screen.container.textContent).toContain('older copy of the app');
     expect(screen.container.querySelector('[data-tone="accent"]')).not.toBeNull();
     expect(screen.container.querySelector('[role="alert"]')).toBeNull();
+    // The state is a coloured dot before the title, hidden from assistive tech.
+    const dot = screen.getByRole('heading').element().querySelector('[data-status-dot]')!;
+
+    expect(dot).toHaveAttribute('aria-hidden', 'true');
+    expect(getComputedStyle(dot).width).toBe('7px');
+    await expect
+      .element(screen.getByRole('heading'))
+      .toHaveTextContent('Stache Next needs Accessibility access');
   });
 
   it('shows the unbundled variant without an app path', async () => {
@@ -97,7 +105,7 @@ describe('AccessibilityGuide', () => {
 
     await expect.element(screen.getByText('not an app bundle')).toBeVisible();
     await screen.getByRole('button', { name: 'Troubleshooting' }).click();
-    expect(screen.container.textContent).toContain('This copy is not an app bundle.');
+    expect(screen.container.textContent).toContain("isn't installed as a regular app");
   });
 
   it('shows the revoked title and line', async () => {
@@ -208,13 +216,17 @@ describe('AccessibilityGuide', () => {
     );
   });
 
-  it('is one rounded, transparent-backed panel with a scrolling body', async () => {
+  it('is one rounded, transparent native panel with a scrolling body', async () => {
     setup();
     const screen = await render(<AccessibilityGuide />);
     const main = screen.getByRole('main').element();
 
-    await expect.poll(() => getComputedStyle(main).borderTopLeftRadius).toBe('16px');
+    // The native material's radius (`ACCESS_CORNER_RADIUS`) shows through the page.
+    await expect.poll(() => getComputedStyle(main).borderTopLeftRadius).toBe('12px');
     expect(getComputedStyle(main).height).toBe(`${window.innerHeight}px`);
+    expect(getComputedStyle(main).backgroundColor).toBe('rgba(0, 0, 0, 0)');
+    expect(getComputedStyle(main).fontFamily).toMatch(/^-apple-system/);
+    expect(getComputedStyle(main).fontSize).toBe('13px');
     expect(getComputedStyle(document.body).backgroundColor).toBe('rgba(0, 0, 0, 0)');
     expect(getComputedStyle(main.children[1]!).overflowY).toBe('auto');
   });

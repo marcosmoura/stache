@@ -34,7 +34,7 @@ export const HEROES: Readonly<Record<GuideSection, Hero>> = {
   blocked: {
     tone: 'accent',
     title: 'Stache Next needs Accessibility access',
-    body: 'Stache Next reads keyboard shortcuts and controls windows and apps. macOS only allows that with Accessibility access. Until you grant it, Stache Next stays idle.',
+    body: 'Stache Next reads keyboard shortcuts and controls windows and apps. macOS only allows that with Accessibility access. Until you allow it, Stache Next waits and does nothing.',
   },
   revoked: {
     tone: 'attention',

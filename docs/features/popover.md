@@ -14,7 +14,7 @@ user's check in the running app. Sources: `src/crates/app/src/popover.rs`, `src/
   only shown and hidden; the webview stays alive. The prewarm uses the same creation path,
   shows nothing and emits no `popover-shown`; a click before or during it reuses the one
   window and shows it once built. It is skipped once shutdown is requested (and in the
-  smoke build); a failed prewarm is logged and the first click creates the window.
+  smoke build, whose harness opens it itself); a failed prewarm is logged and the first click creates the window.
 - Tauri builds it hidden, frameless and transparent; `PanelAdapter::host_popover` moves its
   webview into `StacheNextPopoverPanel`, an `NSPanel` subclass (`Borderless |
   NonactivatingPanel`) whose only override is `canBecomeKeyWindow = YES`, so text fields get
@@ -53,8 +53,8 @@ right click (none: the origin of the first display, clamped).
   `NSWindowDidResignKeyNotification` observer reports it; a shown popover hides at once on
   the main thread.
 - `hide_popover` (Esc in the UI): hides a shown popover; otherwise nothing.
-- Opening the Test Window or the Accessibility guidance window (any `test` or `access`
-  open through `NativeWindows`) hides the popover first.
+- Opening the Accessibility guidance window (any `access` open through `NativeWindows`)
+  hides the popover first.
 - `Open Stache`: always shows (again), so the panel regains key.
 - A failed creation resets it to hidden; the next click retries.
 
@@ -120,15 +120,13 @@ rendered from `host_status` plus every `status-changed`:
   A module whose file has a tab shows its name as a button that selects that tab.
 
 - **Configuration**: each catalog file with a diagnostic or warnings, with the full texts.
-- **Footer**: `Open Test Window` (`open_test_window`), a separator, `Quit Stache Next`
-  (power icon, `quit_app`).
+- **Footer**: `Quit Stache Next` (power icon, `quit_app`).
 
 Commands (`popover_actions.rs`) map to exactly the host command the former tray row used:
 `set_module_enabled` to the runner's configuration-backed enable edit (the tray's
 `HostHandle::set_enabled`), `retry_module` to `HostHandle::retry` (the host keeps the tray's
-retry rule), `open_test_window` and `open_accessibility_guide` to the host's window commands
-(both open through `NativeWindows`, which hides the popover first). Retry and the window
-commands return at once. `set_module_enabled` returns a typed `ModuleEnableOutcome`
+retry rule) and `open_accessibility_guide` to the host's guide command (it opens through
+`NativeWindows`, which hides the popover first). Retry and the guide command return at once. `set_module_enabled` returns a typed `ModuleEnableOutcome`
 (`applied`, `unchanged`, `refused { message }`, `unavailable { message }`) after the runner
 processed it; the wait is bounded (15 s), a shutdown wakes it, and a request still queued
 then is cancelled and never runs. A refusal is also published as the host error.
@@ -157,16 +155,49 @@ runtime from the file's catalog schema (`config_document`); no module has its ow
 - **Coverage.** `schemaTree` walks the schema: `$ref` into `$defs` (sibling `properties`
   merged), booleans as switches, string enums (`oneOf` of string constants) as a macOS
   pop-up button (value plus an up/down chevron) opening a menu-styled list with each
-  variant's description, a leading check on the selected one and the accent highlight,
+  value's label and optional hint, a leading check on the selected one and the accent highlight,
   integers/numbers as a text field with the schema bounds plus a small up/down stepper, strings as filled text fields, `anyOf`/`type` with `null` as an optional
-  field ("Not set" with **Set**), other `anyOf`/`oneOf` as a union with a kind menu (a
-  table form is named by its constant, such as a Bar widget), nested tables as collapsible
-  sections, `additionalProperties` as key/value entries (rename, remove, **Add entry**),
-  lists of scalars as rows and arrays of tables as collapsible cards titled from a
-  `name`/`id`/`widget`-like key (drag the handle, or **Move up/down**, **Remove**, **Add
-  item**). All ten committed schemas map with no fallback; anything unrecognised shows its
-  TOML text read-only with **Open in editor** for that field only. Labels are the
-  humanised key. Help is the first sentence of the schema `description` on one line (ellipsis when it overflows), as are the descriptions in an enum menu; the full text is the tooltip and the field's accessible description (`summary` in `FileTab/summary.ts`).
+  field ("Not set" with **Set**), other `anyOf`/`oneOf` as a union with a kind menu (each
+  form named by the copy), nested tables as collapsible
+  sections, `additionalProperties` as key/value entries (rename, remove, and **Add shortcut**,
+  which opens an inline row with an empty, focused key field: nothing is written until a
+  key is typed and confirmed with Enter or by leaving the field, an empty field closes the
+  row on leaving it, a key already in the map is refused inline, and Esc cancels without
+  closing the popover),
+  lists of scalars as rows and arrays of tables as collapsible cards (drag the handle, or
+  **Move up/down**, **Remove**, **Add workspace**). A card is titled by its `name`,
+  `title`, `app_name` or `app_id`, else the human name of its widget (a string item or a
+  `widget` tag, such as "CPU"), else its `id`, else the list's noun and position
+  ("Workspace 3", "Rule 2"). Constant fields (a Bar item's `widget` tag) render nothing;
+  the item's form menu already names it. All ten committed schemas map with no fallback; anything unrecognised shows its
+  TOML text read-only with **Open in editor** for that field only.
+- **Copy.** Every word of the form comes from the UI copy module `windows/Popover/settingsCopy/` (one file
+  per config file, `COPY` in `index.ts`), never from the schema: schema `description` text
+  is developer documentation and is not rendered anywhere (no tooltip, no hidden text).
+  Each copy path (keys joined with `.`, `*` for an array element or map entry, such as
+  `workspaces.*.layout`) has a sentence-case `label`, an optional one-sentence `hint` shown
+  under the label (it wraps; it is the control's accessible description), an optional
+  `unit` shown after a number (`px`, `ms`, `s`, `minutes`, `%`, `°`, `°C`), and labels
+  with optional hints for enum values (`options`) and union forms (`variants`, keyed by
+  `variantId`: the constant tag, else the sorted table keys such as `color+width`, else
+  the kind). Section headers show their label and hint. A table's copy may set `order`,
+  its child keys in display order (the `enabled` switch first, then the main settings,
+  nested sections, and per-layout overrides and advanced settings last); keys left out
+  follow in schema order. Every list and map has a singular `noun` ("Workspace",
+  "Shortcut") for untitled items, rows of a scalar list, the map's key field and the add
+  button ("Add rule"); a union inside an item or entry labels its form menu with
+  `kindLabel` (default "Type") and its value with `valueLabel` ("Command"). A path missing from the copy
+  falls back to the humanised key with no hint. To add a setting, add its entry to the
+  file's copy; `settingsCopy/settingsCopy.test.ts` fails until every key, enum value and union form of the
+  ten committed schemas has a label, and it rejects stale paths, labels over 32 or hints
+  over 60 characters, hints of more than one sentence, "Whether…" phrasing and code-like
+  text (backticks, `~`, `/`, `=`, `_`, "TOML", "schema", "env", camelCase or capitals
+  outside a short list of words such as "API" and "macOS"); it also requires a noun for
+  every list and map and an `order` for every table with more than one key, listing only
+  real keys, each once, with `enabled` first. `FileTab.text.test.tsx` renders all ten
+  tabs with realistic data, expands every section and card, and rejects visible
+  snake_case keys, backticks, schema description text, quoted JSON or brackets, and
+  "Item" followed by a number.
 - **Defaults.** A key absent from the file shows the catalog default (array elements in
   the file use the schema default) with a `default` marker; editing it inserts the key.
   A set key of a table has **Reset to default** (`remove`). An array that exists only as a
@@ -190,7 +221,10 @@ runtime from the file's catalog schema (`config_document`); no module has its ow
 - **States.** Header: the path (**Copy path**) and **Open in editor**
   (`open_config_file`, the one accent button). Unknown-key warnings are listed at the
   top. A missing file shows defaults and "File not created yet; the first change creates
-  it." An invalid file shows its diagnostic (`Line L, column C: message`) and the form
+  it." An invalid file shows a plain sentence built from the diagnostic's line and a small
+  mapping of common parser and type messages ("Line 3 has a problem: a key is missing its
+  value."), or "Line 3 can't be read." for any other message (no raw parser text), with
+  the raw `Line L, column C: message` behind a **Details** disclosure, and the form
   read-only on the defaults until a valid save lands; a symlink is read-only with a note.
 - **Performance.** Sections below the first level start collapsed, as do array cards
   and lists longer than eight items; collapsed content is not rendered.
@@ -201,29 +235,34 @@ runtime from the file's catalog schema (`config_document`); no module has its ow
   display with a negative origin, a frame smaller than the panel, display lookup by scale);
   `app::popover` (toggle, guard, hide and resign transitions); `app::windows` (created once
   then shown and hidden, hide only when shown, `Open Stache` anchor, the resign-key and
-  click race, hide before the test window and the guide, failed creation, release on
+  click race, hide before the guide, failed creation, release on
   shutdown, a queued show after a hide, module requests refused, the popover host and its
   resign callback); `tests/host_policy.rs` (the capability).
 - Rust Overview: `host::popover_actions_tests` (each request queues the tray row's host
   command; the session action queues one job; Enable, Pause, a stale Pause, Resume and
   Disable over the real runner, `ConfigStore` and watcher in a temp dir, with the exact file
   bytes and module state; an unknown module becomes the host error).
-- UI: `Popover.test.tsx`, `Popover.tabs.test.ts`, `Sidebar.test.tsx`,
-  `stores/popover/popover.test.tsx`, `OverviewTab.model.test.ts` (names, labels, the
+- UI: `Popover.test.tsx`, `utils/tabs.test.ts`, `Sidebar.test.tsx`,
+  `stores/popover/popover.test.tsx`, `OverviewTab/utils/modules.test.ts` (names, labels, the
   Enable/Pause/Resume/Retry eligibility table for every state, header, banner, outcome texts,
   settling) and `OverviewTab.test.tsx` (rows, pending and inline errors, the banner and its
-  commands, file notes, footer, name selects the file tab), `FileTab/schema.test.ts`
+  commands, file notes, footer, name selects the file tab) with one test per Overview
+  component (`AccessBanner`, `ModuleRow`, `Footer`), `FileTab/utils/schema.test.ts`
   (all ten schemas walk with no fallback, each construct, an unknown and a recursive
-  reference, variant matching and seeds), `FileTab/values.test.ts` (paths, ops, array
-  materialisation, labels) and `FileTab/FileTab.test.tsx` (each control's op, hash and
-  moment, serialization, invalid and stale keep the draft, external changes, missing,
-  invalid, symlink and warnings); Playwright
+  reference, variant matching and seeds), `FileTab/utils/values.test.ts` (paths, ops, array
+  materialisation), `fields.test.ts`, `itemTitle.test.ts`, `diagnostic.test.ts` (the
+  sentence mapping, the generic fallback, no code punctuation), one test per form
+  component under `FileTab/components/` and `FileTab/FileTab.test.tsx` (each control's op, hash and
+  moment, serialization, invalid and stale keep the draft, external changes, the inline
+  new map entry, missing, invalid, symlink and warnings); Playwright
   `e2e/scenarios/popover-shell.spec.ts`, `e2e/scenarios/popover-overview.spec.ts`,
   `e2e/scenarios/popover-settings.spec.ts` (against `e2e/fakeConfig.ts`, an in-memory store
   of real TOML text from `e2e/configFixtures.ts`: tiling gap, layout enum, add/move/remove a
-  workspace, reset, out-of-range number; rename and remove a keybinding; the Bar height;
+  workspace, reset, out-of-range number; rename and remove a keybinding; add one through
+  the inline new row (Esc cancels, the popover stays, no placeholder key); the Bar height;
   an outside save while focused; an invalid save and its fix; comments checked after each
   step) and the `e2e/screenshots/popover.spec.ts` baselines (shell, Overview, `keepAwake`,
-  `tiling` and an invalid file, light and dark).
+  `tiling`, `bar` with its zones, a widget and Weather expanded, and an invalid file,
+  light and dark).
 - Native behavior (key without activation, all Spaces, full-screen, the real toggle race,
   material and shadow) is verified by the user in the running app at the end of part 04.

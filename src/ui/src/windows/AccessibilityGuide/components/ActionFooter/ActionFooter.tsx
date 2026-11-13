@@ -36,7 +36,7 @@ export function ActionFooter({ actions }: ActionFooterProps) {
         >
           {pending ? (
             <span {...stylex.props(styles.spinner)} data-spinner>
-              <Icon icon={Loading03Icon} size={14} strokeWidth={1.75} />
+              <Icon icon={Loading03Icon} size={12} strokeWidth={1.75} />
             </span>
           ) : null}
           {label}

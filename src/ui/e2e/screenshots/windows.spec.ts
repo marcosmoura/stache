@@ -1,12 +1,14 @@
 import type { HostStatus_Serialize } from '../../src/ipc/bindings.gen';
 import { expect, test } from '../fixtures';
 
-import { skipWithoutMapleMono } from './font';
+import { pinSystemColours } from './systemColours';
 
 /*
- * Baselines of the Accessibility guide (blocked, revoked) and the test window,
- * dark and light, from production `index.html` with the fake host. Compared
- * only with 'Maple Mono NF' installed. Update with
+ * Baselines of the Accessibility guide (blocked, revoked),
+ * dark and light, from production `index.html` with the fake host. The guide
+ * has the popover's native look: `pinSystemColours` pins the user-dependent
+ * system colours and paints a stand-in for the native material behind the
+ * transparent page, and the system font needs no skip. Update with
  * `bunx playwright test src/ui/e2e/screenshots/windows.spec.ts --update-snapshots`.
  */
 
@@ -20,50 +22,6 @@ const guide = (revoked: boolean): HostStatus_Serialize => ({
   config: [],
 });
 
-const TEST_STATUS: HostStatus_Serialize = {
-  ready: true,
-  error: null,
-  access: { state: 'open', revoked: false, appPath: null },
-  modules: [
-    {
-      id: 'proxyAudio',
-      state: 'disabled',
-      enabled: false,
-      paused: false,
-      revision: '18446744073709551615',
-      detail: null,
-      diagnostic: null,
-    },
-    {
-      id: 'tiling',
-      state: 'running',
-      enabled: true,
-      paused: false,
-      revision: '4',
-      detail: 'waiting for displays',
-      diagnostic: 'unknown layout "spiral"',
-    },
-  ],
-  config: [
-    {
-      file: 'global.toml',
-      path: '/Users/me/.config/stache/global.toml',
-      state: 'valid',
-      active: true,
-      diagnostic: null,
-      warnings: ['unknown key `foo`'],
-    },
-    {
-      file: 'tiling.toml',
-      path: '/Users/me/.config/stache/tiling.toml',
-      state: 'invalid',
-      active: false,
-      diagnostic: 'expected a table',
-      warnings: [],
-    },
-  ],
-};
-
 for (const scheme of ['dark', 'light'] as const) {
   test.describe(`windows (${scheme})`, () => {
     test.use({ deviceScaleFactor: 2 });
@@ -76,7 +34,7 @@ for (const scheme of ['dark', 'light'] as const) {
         host.answer('app_info', APP).answerHostStatus(guide(revoked));
         await page.emulateMedia({ colorScheme: scheme, reducedMotion: 'reduce' });
         await page.goto('/index.html?surface=access');
-        await skipWithoutMapleMono(page);
+        await pinSystemColours(page, scheme);
 
         await expect(page.getByText(APP.identifier)).toBeVisible();
         await page.evaluate(() => document.fonts.ready.then(() => undefined));
@@ -85,17 +43,5 @@ for (const scheme of ['dark', 'light'] as const) {
         });
       });
     }
-
-    test('test window', async ({ page, host }) => {
-      await page.setViewportSize({ width: 900, height: 1100 });
-      host.answer('app_info', APP).answerHostStatus(TEST_STATUS);
-      await page.emulateMedia({ colorScheme: scheme, reducedMotion: 'reduce' });
-      await page.goto('/index.html?surface=test');
-      await skipWithoutMapleMono(page);
-
-      await expect(page.getByText('Host ready')).toBeVisible();
-      await page.evaluate(() => document.fonts.ready.then(() => undefined));
-      await expect(page).toHaveScreenshot(`test-window-${scheme}.png`, { fullPage: true });
-    });
   });
 }

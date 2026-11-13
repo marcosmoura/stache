@@ -19,7 +19,6 @@ export const overviewMutationKeys = {
   enable: ['overview', 'enable'] as const,
   session: ['overview', 'session'] as const,
   retry: ['overview', 'retry'] as const,
-  testWindow: ['overview', 'testWindow'] as const,
   guide: ['overview', 'guide'] as const,
 };
 
@@ -52,24 +51,12 @@ export function retryModuleOptions() {
   });
 }
 
-/** `open_test_window()`: opens or focuses the test window; the popover hides. */
-export function openTestWindowOptions() {
-  return mutationOptions({
-    mutationKey: overviewMutationKeys.testWindow,
-    mutationFn: (): Promise<void> => commands.openTestWindow(),
-  });
-}
-
 /** `open_accessibility_guide()`: opens or focuses the guide; the popover hides. */
 export function openAccessibilityGuideOptions() {
   return mutationOptions({
     mutationKey: overviewMutationKeys.guide,
     mutationFn: (): Promise<void> => commands.openAccessibilityGuide(),
   });
-}
-
-export function useOpenTestWindow() {
-  return useMutation(openTestWindowOptions());
 }
 
 export function useOpenAccessibilityGuide() {

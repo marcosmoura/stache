@@ -7,7 +7,7 @@ import { flush, mockHost, type MockHost } from '../../../../../tests/ipc';
 import { render } from '../../../../../tests/render';
 
 import { FileTab } from './FileTab';
-import { setAt } from './values';
+import { setAt } from './utils/values';
 
 const SCHEMAS = import.meta.glob<JsonValue>('../../../../../../../schemas/*.json', {
   eager: true,
@@ -72,27 +72,23 @@ const committed = (hash: string): ConfigEditOutcome_Serialize => ({
 const edits = (host: MockHost) =>
   host.callsOf('config_edit').map((call) => (call.args as { request: Edit }).request);
 
-describe('FileTab help text', () => {
-  it('shows only the first sentence and keeps the full description as the accessible one', async () => {
-    setup(doc('tiling', {}));
-    const screen = await render(<FileTab file="tiling.toml" />);
-    const full = (
-      (SCHEMAS['../../../../../../../schemas/tiling.schema.json'] as Record<string, unknown>)
-        .$defs as Record<string, { properties?: Record<string, { description?: string }> }>
-    ).BordersConfig?.properties?.enabled?.description;
+describe('FileTab copy', () => {
+  it('shows the UI copy with its hint and never a schema description', async () => {
+    setup(doc('bar', {}));
+    const screen = await render(<FileTab file="bar.toml" />);
+    const weather = (schema('bar') as { $defs: Record<string, Record<string, unknown>> }).$defs
+      .WeatherConfig as { properties: { api_keys: { description: string } } };
+    const description = weather.properties.api_keys.description;
 
-    expect(full?.split('. ').length).toBeGreaterThan(1);
-    const shown = full!.slice(0, full!.indexOf('.') + 1);
+    const field = screen.getByRole('textbox', { name: 'API keys file' });
 
-    await expect.element(screen.getByText(shown, { exact: true })).toBeVisible();
-    const help = [...document.querySelectorAll('[id$="-help"]')].find(
-      (node) => node.textContent === full,
-    );
-
-    expect(help).toBeDefined();
-    expect(
-      document.querySelector(`[role="switch"][aria-describedby="${help!.id}"]`),
-    ).not.toBeNull();
+    await expect.element(field).toBeVisible();
+    await expect.element(screen.getByText('File with your weather API key.')).toBeVisible();
+    await expect.element(field).toHaveAccessibleDescription('File with your weather API key.');
+    await expect.element(screen.getByText('minutes')).toBeVisible();
+    expect(description.length).toBeGreaterThan(0);
+    expect(document.body.innerHTML).not.toContain(description.slice(0, 40));
+    expect(document.querySelector('[title*="environment"]')).toBeNull();
   });
 });
 
@@ -115,21 +111,21 @@ describe('FileTab controls', () => {
       ]);
   });
 
-  it('a select opens a menu with descriptions and writes the chosen option', async () => {
+  it('a select opens a menu with labels and hints and writes the chosen option', async () => {
     const { host } = setup(doc('tiling', { default_layout: 'dwindle' }));
     const screen = await render(<FileTab file="tiling.toml" />);
 
     await screen.getByRole('button', { name: 'Default layout' }).click();
     await expect
-      .element(screen.getByRole('option', { name: /dwindle/ }))
+      .element(screen.getByRole('option', { name: /^Dwindle/ }))
       .toHaveAttribute('aria-selected', 'true');
-    await expect.element(screen.getByText('One master window with a stack.')).toBeVisible();
-    const selected = screen.getByRole('option', { name: /dwindle/ }).element();
+    await expect.element(screen.getByText('One large window, the rest beside it')).toBeVisible();
+    const selected = screen.getByRole('option', { name: /^Dwindle/ }).element();
 
     // A menu: the check leads the selected item, which has the accent highlight.
     expect(selected.firstElementChild?.querySelector('svg')).not.toBeNull();
     expect(getComputedStyle(selected).backgroundColor).not.toBe('rgba(0, 0, 0, 0)');
-    await screen.getByRole('option', { name: /^master/ }).click();
+    await screen.getByRole('option', { name: /^Master and stack/ }).click();
 
     await expect
       .poll(() => edits(host).map((edit) => edit.op))
@@ -148,15 +144,15 @@ describe('FileTab controls', () => {
       return committed('h2');
     });
     const screen = await render(<FileTab file="tiling.toml" />);
-    const ratio = screen.getByRole('textbox', { name: 'Ratio' });
+    const ratio = screen.getByRole('textbox', { name: 'Master size' });
     const stepper = (
-      screen.getByRole('button', { name: 'Increase Ratio' }).element() as HTMLElement
+      screen.getByRole('button', { name: 'Increase Master size' }).element() as HTMLElement
     ).parentElement;
 
     // A text field followed by a small stepper: Increase above Decrease.
     expect(stepper?.previousElementSibling).toBe(ratio.element());
     expect([...(stepper?.children ?? [])].map((child) => child.getAttribute('aria-label'))).toEqual(
-      ['Increase Ratio', 'Decrease Ratio'],
+      ['Increase Master size', 'Decrease Master size'],
     );
 
     await userEvent.fill(ratio, '-5');
@@ -170,8 +166,10 @@ describe('FileTab controls', () => {
     await expect
       .poll(() => edits(host).map((edit) => edit.op))
       .toEqual([{ op: 'set', path: ['master', 'ratio'], value: 70 }]);
-    await expect.element(screen.getByRole('button', { name: 'Increase Ratio' })).toBeEnabled();
-    await screen.getByRole('button', { name: 'Increase Ratio' }).click();
+    await expect
+      .element(screen.getByRole('button', { name: 'Increase Master size' }))
+      .toBeEnabled();
+    await screen.getByRole('button', { name: 'Increase Master size' }).click();
     await expect.poll(() => edits(host).length).toBe(2);
     expect(edits(host)[1].op).toEqual({ op: 'set', path: ['master', 'ratio'], value: 71 });
   });
@@ -204,7 +202,7 @@ describe('FileTab controls', () => {
       return committed('h2');
     });
     const screen = await render(<FileTab file="tiling.toml" />);
-    const ratio = screen.getByRole('textbox', { name: 'Ratio' });
+    const ratio = screen.getByRole('textbox', { name: 'Master size' });
 
     await userEvent.fill(ratio, '70');
     await userEvent.keyboard('{Enter}');
@@ -235,24 +233,71 @@ describe('FileTab controls', () => {
     const screen = await render(<FileTab file="keybindings.toml" />);
     const entry = screen.getByRole('group', { name: 'cmd+a' });
 
-    await userEvent.fill(entry.getByRole('textbox', { name: 'Key' }), 'cmd+b');
+    await userEvent.fill(entry.getByRole('textbox', { name: 'Shortcut' }), 'cmd+b');
     await userEvent.keyboard('{Enter}');
     await expect
       .poll(() => edits(host).map((edit) => edit.op))
       .toEqual([{ op: 'rename', path: ['bindings'], from: 'cmd+a', to: 'cmd+b' }]);
 
     await screen.getByRole('button', { name: 'Remove cmd+a' }).click();
-    await screen.getByRole('button', { name: 'Add entry' }).click();
     await expect
-      .poll(() =>
-        edits(host)
-          .map((edit) => edit.op)
-          .slice(1),
-      )
-      .toEqual([
-        { op: 'remove', path: ['bindings', 'cmd+a'] },
-        { op: 'set', path: ['bindings', 'new_key'], value: '' },
-      ]);
+      .poll(() => edits(host).map((edit) => edit.op))
+      .toContainEqual({ op: 'remove', path: ['bindings', 'cmd+a'] });
+  });
+
+  it('a new map entry opens an empty, focused key field and writes nothing until a key is entered', async () => {
+    const { host } = setup(doc('keybindings', { bindings: { 'cmd+a': 'open -a Safari' } }));
+    const screen = await render(<FileTab file="keybindings.toml" />);
+    const add = screen.getByRole('button', { name: 'Add shortcut' });
+
+    // Esc cancels without writing and without reaching the popover.
+    await add.click();
+    const row = screen.getByRole('group', { name: 'New shortcut' });
+    const key = row.getByRole('textbox', { name: 'Shortcut' });
+
+    await expect.element(key).toHaveValue('');
+    await expect.element(key).toHaveFocus();
+    const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+
+    key.element().dispatchEvent(escape);
+    expect(escape.defaultPrevented).toBe(true);
+    await expect.element(row).not.toBeInTheDocument();
+
+    // A blur with nothing typed closes the row; Enter on an empty or taken key stays.
+    await add.click();
+    await userEvent.keyboard('{Enter}');
+    await expect.element(screen.getByRole('alert')).toHaveTextContent('Enter a key.');
+    await userEvent.keyboard('cmd+a{Enter}');
+    await expect.element(screen.getByRole('alert')).toHaveTextContent('"cmd+a" already exists.');
+    await userEvent.fill(screen.getByRole('textbox', { name: 'Shortcut' }).last(), '');
+    (document.activeElement as HTMLElement).blur();
+    await expect
+      .element(screen.getByRole('group', { name: 'New shortcut' }))
+      .not.toBeInTheDocument();
+    expect(edits(host)).toEqual([]);
+
+    // A valid key writes the entry once, on Enter (the blur that follows sends nothing).
+    await add.click();
+    await userEvent.keyboard('cmd+shift+k{Enter}');
+    await expect
+      .poll(() => edits(host).map((edit) => edit.op))
+      .toEqual([{ op: 'set', path: ['bindings', 'cmd+shift+k'], value: '' }]);
+    await expect
+      .element(screen.getByRole('group', { name: 'New shortcut' }))
+      .not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('new_key');
+  });
+
+  it('a new map entry is written on blur once a key is typed', async () => {
+    const { host } = setup(doc('keybindings', { bindings: {} }));
+    const screen = await render(<FileTab file="keybindings.toml" />);
+
+    await screen.getByRole('button', { name: 'Add shortcut' }).click();
+    await userEvent.keyboard('cmd+j');
+    (document.activeElement as HTMLElement).blur();
+    await expect
+      .poll(() => edits(host).map((edit) => edit.op))
+      .toEqual([{ op: 'set', path: ['bindings', 'cmd+j'], value: '' }]);
   });
 
   it('arrays of tables add, move and remove cards', async () => {
@@ -265,7 +310,7 @@ describe('FileTab controls', () => {
     await expect.poll(() => edits(host).length).toBe(2);
     await screen
       .getByRole('region', { name: 'Workspaces' })
-      .getByRole('button', { name: 'Add item' })
+      .getByRole('button', { name: 'Add workspace' })
       .click();
     await expect
       .poll(() => edits(host).map((edit) => edit.op))
@@ -296,7 +341,7 @@ describe('FileTab controls', () => {
     await screen.getByRole('switch', { name: 'Enabled' }).last().click();
     await expect.poll(() => edits(host).length, { timeout: 5000 }).toBe(1);
 
-    const increase = screen.getByRole('button', { name: 'Increase Ratio' });
+    const increase = screen.getByRole('button', { name: 'Increase Master size' });
 
     await increase.click();
     // The control locks while its op is queued behind the held edit.
@@ -316,7 +361,7 @@ describe('FileTab controls', () => {
       .poll(() => host.callsOf('config_document').length, { timeout: 5000 })
       .toBeGreaterThanOrEqual(reads + 2);
     await expect.element(increase, { timeout: 5000 }).toBeEnabled();
-    await screen.getByRole('button', { name: 'Decrease Ratio' }).click();
+    await screen.getByRole('button', { name: 'Decrease Master size' }).click();
     await expect.poll(() => edits(host).at(-1)?.baseHash, { timeout: 5000 }).toBe('h3');
   });
 
@@ -331,7 +376,7 @@ describe('FileTab controls', () => {
 
     await screen.getByRole('switch', { name: 'Enabled' }).last().click();
     await expect.element(screen.getByText(/ipc broke/)).toBeVisible();
-    await screen.getByRole('button', { name: 'Increase Ratio' }).click();
+    await screen.getByRole('button', { name: 'Increase Master size' }).click();
     await expect
       .poll(() => edits(host).map((edit) => edit.op))
       .toEqual([
@@ -491,7 +536,7 @@ describe('FileTab refusals and sync', () => {
       doc('tiling', { master: { ratio: 60 }, workspaces: [{ name: 'a' }] }),
     );
     const screen = await render(<FileTab file="tiling.toml" />);
-    const ratio = screen.getByRole('textbox', { name: 'Ratio' });
+    const ratio = screen.getByRole('textbox', { name: 'Master size' });
 
     await screen.getByRole('button', { name: 'a', exact: true }).click();
     const name = screen.getByRole('textbox', { name: 'Name' });
@@ -545,7 +590,9 @@ describe('FileTab states', () => {
     );
     const screen = await render(<FileTab file="tiling.toml" />);
 
-    await expect.element(screen.getByText('Line 3, column 7: expected `=`')).toBeVisible();
+    await expect
+      .element(screen.getByText('Line 3 has a problem: a key is missing its value.'))
+      .toBeVisible();
     await expect.element(screen.getByRole('switch', { name: 'Enabled' }).last()).toBeDisabled();
     await expect.element(screen.getByRole('button', { name: 'Default layout' })).toBeDisabled();
     await screen.getByRole('button', { name: 'Open in editor' }).click();

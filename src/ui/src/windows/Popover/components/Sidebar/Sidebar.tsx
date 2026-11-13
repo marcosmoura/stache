@@ -3,8 +3,7 @@ import type { KeyboardEvent } from 'react';
 import * as stylex from '@stylexjs/stylex';
 
 import { Icon } from '@/components/Icon';
-
-import { BADGE_TEXT, PANEL_ID, tabId, type PopoverTab } from '../../Popover.tabs';
+import { BADGE_TEXT, PANEL_ID, tabId, type PopoverTab } from '@/windows/Popover/utils/tabs';
 
 import { styles } from './Sidebar.style';
 

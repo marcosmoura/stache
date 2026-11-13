@@ -110,8 +110,6 @@ export const commands = {
 	 *  enabled, unpaused unavailable one. Returns at once.
 	 */
 	retryModule: (id: string) => __TAURI_INVOKE<void>("retry_module", { id }),
-	/**  Opens or focuses the test window (the popover hides first). Returns at once. */
-	openTestWindow: () => __TAURI_INVOKE<void>("open_test_window"),
 	/**
 	 *  Opens or focuses the Accessibility guidance window while the gate is not
 	 *  open (the popover hides first). Returns at once.
@@ -232,7 +230,7 @@ export type ApiKeyProblem =
 /**  The file was read but has no non-empty `VISUAL_CROSSING_API_KEY`. */
 "keyAbsent";
 
-/**  Application identity shown by the test window. */
+/**  Application identity shown by the Accessibility guide. */
 export type AppInfo = {
 	/**  Product name. */
 	name: string,
@@ -2341,10 +2339,10 @@ export type GradientConfig_Serialize = {
 	angle: number | null,
 };
 
-/**  Point-in-time status published to the tray and the test window. */
+/**  Point-in-time status published to the popover and the host windows. */
 export type HostStatus = HostStatus_Serialize | HostStatus_Deserialize;
 
-/**  Point-in-time status published to the tray and the test window. */
+/**  Point-in-time status published to the popover and the host windows. */
 export type HostStatus_Deserialize = {
 	/**  Whether initial host setup completed. */
 	ready: boolean,
@@ -2364,7 +2362,7 @@ export type HostStatus_Deserialize = {
 	config: ConfigFileView_Deserialize[],
 };
 
-/**  Point-in-time status published to the tray and the test window. */
+/**  Point-in-time status published to the popover and the host windows. */
 export type HostStatus_Serialize = {
 	/**  Whether initial host setup completed. */
 	ready: boolean,

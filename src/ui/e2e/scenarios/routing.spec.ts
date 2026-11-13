@@ -1,7 +1,7 @@
 import type { HostStatus_Serialize } from '../../src/ipc/bindings.gen';
 import { expect, test } from '../fixtures';
 
-/* `bar` renders the Bar window (bar-layout.spec.ts); `test` and `access` their windows. */
+/* `bar` renders the Bar window (bar-layout.spec.ts); `access` the Accessibility guide. */
 const READY: HostStatus_Serialize = {
   ready: true,
   error: null,
@@ -12,21 +12,7 @@ const READY: HostStatus_Serialize = {
 const APP = { name: 'Stache Next', version: '0.1.0', identifier: 'com.marcosmoura.stache.next' };
 
 test.describe('surface routing', () => {
-  test('?surface=shell renders the placeholder', async ({ page, host, consoleErrors }) => {
-    await page.goto('/?surface=shell');
-
-    const main = page.getByRole('main');
-
-    await expect(main).toHaveText('shell');
-    await expect(main).toHaveAttribute('data-surface', 'shell');
-    // StyleX output is loaded in dev through the plugin's virtual stylesheet.
-    await expect(main).toHaveCSS('display', 'grid');
-    expect(host.calls).toEqual([]);
-    expect(consoleErrors).toEqual([]);
-  });
-
   for (const [surface, heading] of [
-    ['test', 'Host test surface'],
     ['access', 'Stache Next needs Accessibility access'],
   ] as const) {
     test(`?surface=${surface} renders its window with only app_info, host_status and the event listen`, async ({
@@ -48,14 +34,14 @@ test.describe('surface routing', () => {
     });
   }
 
-  test('no surface parameter renders the shell placeholder', async ({ page, consoleErrors }) => {
-    await page.goto('/');
-
-    await expect(page.getByRole('main')).toHaveText('shell');
-    expect(consoleErrors).toEqual([]);
-  });
-
-  for (const search of ['?surface=settings', '?surface=', '?surface=Bar']) {
+  for (const search of [
+    '',
+    '?surface=settings',
+    '?surface=',
+    '?surface=Bar',
+    '?surface=shell',
+    '?surface=test',
+  ]) {
     test(`${search} renders the fallback with zero commands`, async ({
       page,
       host,
@@ -73,8 +59,8 @@ test.describe('surface routing', () => {
 test.describe('fake host', () => {
   test('answers scripted commands, records calls and delivers events', async ({ page, host }) => {
     host.answer('app_info', { name: 'Stache' }).fail('host_status', 'offline');
-    await page.goto('/?surface=shell');
-    await expect(page.getByRole('main')).toHaveText('shell');
+    await page.goto('/?surface=nope');
+    await expect(page.getByRole('heading', { name: 'Unknown surface' })).toBeVisible();
 
     const result = await page.evaluate(async () => {
       const internals = (

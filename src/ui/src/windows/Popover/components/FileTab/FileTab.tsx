@@ -13,14 +13,15 @@ import {
   useOpenConfigFile,
 } from '@/queries/configDocument';
 import { errorMessage } from '@/utils';
+import { COPY } from '@/windows/Popover/settingsCopy';
+import { styles as controls } from '@/windows/Popover/styles/controls.style';
 
-import { styles as overview } from '../OverviewTab/OverviewTab.style';
-
-import { diagnosticText } from './FileTab.model';
+import { InvalidBanner } from './components/InvalidBanner';
+import { SchemaForm } from './components/SchemaForm';
+import { Warnings } from './components/Warnings';
 import { styles } from './FileTab.style';
-import { FormContext } from './form';
-import { schemaTree } from './schema';
-import { SchemaForm } from './SchemaForm';
+import { FormContext } from './utils/form';
+import { schemaTree } from './utils/schema';
 
 /**
  * One catalog file's tab: the header (path with copy, Open in editor), the
@@ -67,11 +68,11 @@ export function FileTab({ file }: { file: string }) {
 
   if (query.data === undefined) {
     return query.isError ? (
-      <p {...stylex.props(overview.error)} role="alert">
+      <p {...stylex.props(styles.error)} role="alert">
         Could not read {file}: {errorMessage(query.error)}
       </p>
     ) : (
-      <p {...stylex.props(overview.muted)} role="status">
+      <p {...stylex.props(styles.status)} role="status">
         Reading {file}…
       </p>
     );
@@ -79,7 +80,7 @@ export function FileTab({ file }: { file: string }) {
 
   if (query.data.status === 'unknownFile') {
     return (
-      <p {...stylex.props(overview.error)} role="alert">
+      <p {...stylex.props(styles.error)} role="alert">
         {file} is not a catalog file.
       </p>
     );
@@ -105,7 +106,7 @@ export function FileTab({ file }: { file: string }) {
           aria-label="Copy path"
           title="Copy path"
           onClick={copyPath}
-          {...stylex.props(overview.round)}
+          {...stylex.props(controls.round)}
         >
           <Icon icon={Copy01Icon} size={14} />
         </button>
@@ -113,7 +114,7 @@ export function FileTab({ file }: { file: string }) {
           type="button"
           disabled={open.isPending}
           onClick={openInEditor}
-          {...stylex.props(overview.button, overview.primary)}
+          {...stylex.props(controls.button, controls.primary)}
         >
           Open in editor
         </button>
@@ -124,16 +125,7 @@ export function FileTab({ file }: { file: string }) {
         </p>
       ) : null}
 
-      {document.warnings.length > 0 ? (
-        <section {...stylex.props(styles.alert)} aria-label="Warnings">
-          <p {...stylex.props(styles.warningTitle)}>Warnings</p>
-          <ul {...stylex.props(styles.list)}>
-            {document.warnings.map((warning, index) => (
-              <li key={index}>{warning}</li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
+      <Warnings warnings={document.warnings} />
 
       {document.state === 'missing' ? (
         <p {...stylex.props(styles.note)} role="status">
@@ -141,18 +133,7 @@ export function FileTab({ file }: { file: string }) {
         </p>
       ) : null}
 
-      {document.state === 'invalid' ? (
-        <div {...stylex.props(styles.alert)} role="alert">
-          <p {...stylex.props(styles.alertTitle)}>This file is invalid and read-only</p>
-          {document.diagnostic ? (
-            <p {...stylex.props(styles.list)}>{diagnosticText(document.diagnostic)}</p>
-          ) : null}
-          <p {...stylex.props(styles.list, styles.muted)}>
-            Fix it in an editor; the form shows the defaults and becomes editable as soon as a valid
-            save lands.
-          </p>
-        </div>
-      ) : null}
+      {document.state === 'invalid' ? <InvalidBanner diagnostic={document.diagnostic} /> : null}
 
       {document.state === 'symlink' ? (
         <p {...stylex.props(styles.note)} role="status">
@@ -170,7 +151,7 @@ export function FileTab({ file }: { file: string }) {
           openInEditor,
         }}
       >
-        <SchemaForm tree={schemaTree(document.schema)} />
+        <SchemaForm tree={schemaTree(document.schema)} copy={COPY[file] ?? {}} />
       </FormContext>
     </div>
   );

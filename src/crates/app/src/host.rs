@@ -48,8 +48,7 @@ use stache_sdk::{
     MainThreadExecutor, Module, ModuleConfig, ModuleHandle, ModuleId, ModuleSnapshot, ModuleStatus,
     PathEntry, Permission, PermissionProvider, PermissionRequirement, PermissionStatus, Registry,
     RegistryError, RegistryResult, ReloadOutcome, StateObserver, StateSchemas, WatchError,
-    WindowBackend, WindowError, WindowId, WindowKey, WindowKind, WindowRequest, WindowSize,
-    inspect_paths,
+    WindowBackend, WindowError, WindowId, inspect_paths,
 };
 use stache_tiling::ipc::{
     ActionLane, IpcTiming, LifecycleControl, LifecycleFailure, LifecycleThread, TilingFocus,
@@ -1418,9 +1417,6 @@ impl HostHandle {
     /// open.
     pub fn open_access_guide(&self) { self.send(HostCommand::OpenAccessGuide); }
 
-    /// Opens the explicit developer test window. Launch never calls this.
-    pub fn open_test_window(&self) { self.send(HostCommand::OpenTestWindow); }
-
     /// Retries an enabled, non-paused module that is failed or unavailable.
     pub fn retry(&self, id: impl Into<String>) { self.send(HostCommand::Retry(id.into())); }
 
@@ -1961,7 +1957,6 @@ enum HostCommand {
         job: Arc<HostJob<ConfigEditOutcome>>,
     },
     WatcherFailed(String),
-    OpenTestWindow,
     OpenAccessibilitySettings,
     OpenAccessGuide,
     Shutdown,
@@ -2205,7 +2200,6 @@ impl Runner {
                     job.finish(self.config_edit(&request));
                 }
             }
-            HostCommand::OpenTestWindow => self.open_test_window(),
             HostCommand::OpenAccessibilitySettings => self.open_accessibility_settings(),
             HostCommand::OpenAccessGuide => self.open_access_guide(),
         }
@@ -2829,29 +2823,6 @@ impl Runner {
         }
     }
 
-    fn open_test_window(&mut self) {
-        if self.handle.shutdown_requested() {
-            // A request that arrived while this command waited must not open a
-            // window after the hosts' windows were released.
-            return;
-        }
-        let Ok(key) = WindowKey::new("test") else {
-            self.record_action_error("invalid built-in test window key".to_owned());
-            return;
-        };
-        let Ok(size) = WindowSize::new(900, 640) else {
-            self.record_action_error("invalid built-in test window size".to_owned());
-            return;
-        };
-        let request =
-            WindowRequest::new(key, crate::windows::TEST_SURFACE, size, WindowKind::Standard);
-        match self.services.windows.open(HOST_OWNER, &request) {
-            Ok(_) => self.clear_action_error(),
-            Err(error) => self.record_action_error(error.to_string()),
-        }
-        self.publish();
-    }
-
     /// Publishes the final ready=false status and releases `wait_for_exit`.
     ///
     /// A setup failure records the flag the stage driver reports as
@@ -2970,7 +2941,7 @@ mod tests {
 
     use stache_sdk::{
         AppEnvironment, AppPaths, DiscardLogger, EventBus, LogFilter, PermissionError,
-        PermissionStatus, ThreadError, WindowId,
+        PermissionStatus, ThreadError, WindowId, WindowRequest,
     };
 
     use super::*;

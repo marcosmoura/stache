@@ -48,14 +48,14 @@ describe('App', () => {
     await screen.rerender(<App search="?surface=access" />);
     await screen.rerender(<App search="?surface=nope" />);
     await expect.element(screen.getByRole('heading')).toHaveTextContent('Unknown surface');
-    await screen.rerender(<App search="?surface=test" />);
-    await expect.element(screen.getByRole('main')).toHaveAttribute('data-surface', 'test');
+    await screen.rerender(<App search="?surface=access" />);
+    await expect.element(screen.getByRole('main')).toHaveAttribute('data-surface', 'access');
   });
 
-  it('renders the shell surface when the parameter is absent', async () => {
+  it('renders the local fallback when the parameter is absent', async () => {
     const screen = await render(<App search="" />);
 
-    await expect.element(screen.getByRole('main')).toHaveTextContent('shell');
+    await expect.element(screen.getByRole('heading')).toHaveTextContent('Unknown surface');
   });
 
   it('renders the local fallback for an unknown surface without IPC', async () => {

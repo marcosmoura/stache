@@ -3,14 +3,14 @@
 //! Each command maps to exactly the host command the former tray row used
 //! ([`PopoverRequest::send`]): Enable is configuration-backed
 //! (`HostHandle::set_enabled`), Retry keeps the tray's eligibility rule on the
-//! host side, and the Test Window and the Accessibility guide open through
-//! `NativeWindows`, which hides the popover first. Retry and the windows return
+//! host side, and the Accessibility guide opens through `NativeWindows`, which
+//! hides the popover first. Retry and the guide return
 //! at once; the result arrives through `status-changed`. Enable returns a typed
 //! [`ModuleEnableOutcome`] once the runner processed it. Pause/Resume reuse the generic
 //! session action ([`crate::session_action`]) with its stale-click rule and
 //! return its typed outcome.
 //!
-//! All five are ACL-gated: only the `popover-window` capability
+//! All four are ACL-gated: only the `popover-window` capability
 //! (`stache-popover`) grants them (`build.rs`).
 
 use serde::{Deserialize, Serialize};
@@ -31,8 +31,6 @@ pub enum PopoverRequest {
     },
     /// Retry an eligible failed or unavailable module (`retry:<id>`).
     Retry(String),
-    /// Open or focus the development test window (`test-window`).
-    TestWindow,
     /// Open or focus the Accessibility guidance window (`access-guide`).
     AccessGuide,
 }
@@ -43,7 +41,6 @@ impl PopoverRequest {
         match self {
             Self::SetEnabled { id, enabled } => host.set_enabled(id, enabled),
             Self::Retry(id) => host.retry(id),
-            Self::TestWindow => host.open_test_window(),
             Self::AccessGuide => host.open_access_guide(),
         }
     }
@@ -102,14 +99,6 @@ pub async fn set_module_enabled(
 #[allow(clippy::needless_pass_by_value)] // Tauri injects managed state by value.
 pub fn retry_module(state: tauri::State<'_, HostState>, id: String) {
     PopoverRequest::Retry(id).send(&state.0);
-}
-
-/// Opens or focuses the test window (the popover hides first). Returns at once.
-#[tauri::command]
-#[specta::specta]
-#[allow(clippy::needless_pass_by_value)] // Tauri injects managed state by value.
-pub fn open_test_window(state: tauri::State<'_, HostState>) {
-    PopoverRequest::TestWindow.send(&state.0);
 }
 
 /// Opens or focuses the Accessibility guidance window while the gate is not

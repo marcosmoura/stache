@@ -46,7 +46,7 @@ use crate::bar_bridge::{
 use crate::host::HostState;
 pub use crate::keep_awake::KeepAwakeStatus;
 
-/// Application identity shown by the test window.
+/// Application identity shown by the Accessibility guide.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct AppInfo {
@@ -251,7 +251,7 @@ pub struct AccessView {
     pub app_path: Option<String>,
 }
 
-/// Point-in-time status published to the tray and the test window.
+/// Point-in-time status published to the popover and the host windows.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct HostStatus {
@@ -368,7 +368,6 @@ pub fn builder() -> Builder<tauri::Wry> {
             crate::popover_actions::set_module_enabled,
             crate::popover_actions::module_session_action,
             crate::popover_actions::retry_module,
-            crate::popover_actions::open_test_window,
             crate::popover_actions::open_accessibility_guide
         ])
         .events(collect_events![

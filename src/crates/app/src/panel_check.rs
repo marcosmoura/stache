@@ -2,10 +2,10 @@
 //! `--features panel-native-check` and never run by the automated suite.
 //!
 //! It runs the real Tauri application against an isolated configuration root
-//! and opens the existing `test` surface as a non-activating panel at a frame
-//! on `NSScreen.screens[0]`, hosted in a native non-activating `NSPanel`, and
+//! and opens a `panel-check` surface (the UI's local fallback page) as a
+//! non-activating panel at a frame on `NSScreen.screens[0]`, hosted in a native non-activating `NSPanel`, and
 //! logs `activation: frontmost=<app> stache_active=<bool>` on every change. Production [`windows`](crate::windows) validation
-//! still rejects a panel for `test`; only this feature's
+//! still rejects a panel for any surface but `bar`; only this feature's
 //! [`NativeWindows::open_test_panel`] bypasses the surface check.
 
 use std::sync::Arc;

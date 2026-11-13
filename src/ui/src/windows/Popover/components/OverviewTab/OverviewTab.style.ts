@@ -1,22 +1,11 @@
 import * as stylex from '@stylexjs/stylex';
 
-import { duration, easing, media, popover, space } from '@/theme/tokens.stylex';
-
-/** Shared by every control: the system focus ring and a dimmed disabled state. */
-const control = {
-  cursor: { default: 'default', ':disabled': 'default' },
-  opacity: { default: 1, ':disabled': 0.4 },
-  outline: { default: 'none', ':focus-visible': `3px solid ${popover.focus}` },
-  outlineOffset: '0px',
-  transitionTimingFunction: easing.inOut,
-  transitionDuration: { default: duration.fast, [media.reducedMotion]: '0ms' },
-  transitionProperty: 'background-color, color, opacity',
-} as const;
+import { native, space } from '@/theme/tokens.stylex';
 
 /*
- * Native macOS controls (part 05): NSSwitch-like switches, push buttons,
- * translucent inset groups with ~28px rows, and a status dot with secondary
- * text instead of pills. Colors are the `popover` system-color tokens only.
+ * The Overview, native macOS style (part 05): translucent inset groups of
+ * ~28px rows under small section headings. Colors are the `native`
+ * system-color tokens only.
  */
 export const styles = stylex.create({
   root: {
@@ -25,19 +14,19 @@ export const styles = stylex.create({
     gap: space.lg,
     paddingTop: space.sm,
   },
-  muted: { margin: 0, color: popover.secondaryLabel },
+  muted: { margin: 0, color: native.secondaryLabel },
   error: {
     margin: 0,
-    color: popover.red,
+    color: native.red,
     overflowWrap: 'anywhere',
   },
   heading: {
     margin: 0,
     marginBottom: space.xs,
     paddingInline: space.sm,
-    fontSize: popover.sectionSize,
-    fontWeight: popover.titleWeight,
-    color: popover.secondaryLabel,
+    fontSize: native.sectionSize,
+    fontWeight: native.titleWeight,
+    color: native.secondaryLabel,
   },
   /** A translucent inset group of rows. */
   card: {
@@ -45,216 +34,8 @@ export const styles = stylex.create({
     flexDirection: 'column',
     margin: 0,
     padding: space.xxs,
-    borderRadius: popover.cardRadius,
+    borderRadius: native.cardRadius,
     listStyle: 'none',
-    backgroundColor: popover.card,
-  },
-  row: {
-    display: 'grid',
-    gridTemplateColumns: `${popover.tileSize} minmax(0, 1fr) auto`,
-    gap: space.md,
-    alignItems: 'center',
-    minHeight: popover.rowHeight,
-    paddingBlock: space.xs,
-    paddingInline: space.sm,
-  },
-  /** The row's monochrome icon. */
-  tile: {
-    display: 'grid',
-    placeItems: 'center',
-    alignSelf: 'start',
-    width: popover.tileSize,
-    height: popover.tileSize,
-    color: popover.secondaryLabel,
-  },
-  text: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: space.xxs,
-    minWidth: 0,
-  },
-  titleLine: {
-    display: 'flex',
-    gap: space.sm,
-    alignItems: 'center',
-    minWidth: 0,
-  },
-  name: {
-    overflow: 'hidden',
-    margin: 0,
-    padding: 0,
-    fontFamily: 'inherit',
-    fontSize: 'inherit',
-    fontWeight: popover.fontWeight,
-    color: popover.label,
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  nameButton: {
-    ...control,
-    borderStyle: 'none',
-    borderRadius: space.xs,
-    textAlign: 'start',
-    appearance: 'none',
-    backgroundColor: 'transparent',
-  },
-  /** The module state: secondary text after a small status dot. */
-  state: {
-    display: 'inline-flex',
-    flexShrink: 0,
-    gap: space.xs,
-    alignItems: 'center',
-    fontSize: popover.smallSize,
-    color: popover.secondaryLabel,
-  },
-  dot: {
-    flexShrink: 0,
-    width: popover.dotSize,
-    height: popover.dotSize,
-    borderRadius: '50%',
-  },
-  green: { backgroundColor: popover.green },
-  orange: { backgroundColor: popover.orange },
-  red: { backgroundColor: popover.red },
-  gray: { backgroundColor: popover.gray },
-  /** A secondary line; long text wraps, the full text is the tooltip. */
-  secondary: {
-    WebkitBoxOrient: 'vertical',
-    WebkitLineClamp: 3,
-    overflow: 'hidden',
-    display: '-webkit-box',
-    fontSize: popover.smallSize,
-    color: popover.secondaryLabel,
-    overflowWrap: 'anywhere',
-  },
-  danger: { color: popover.red },
-  warning: { color: popover.orange },
-  attention: { color: popover.orange },
-  controls: {
-    display: 'flex',
-    gap: space.sm,
-    alignItems: 'center',
-  },
-  /** A small borderless icon button (retry, pause, reset, stepper). */
-  round: {
-    ...control,
-    display: 'grid',
-    placeItems: 'center',
-    width: popover.buttonHeight,
-    height: popover.buttonHeight,
-    padding: 0,
-    borderStyle: 'none',
-    borderRadius: popover.buttonRadius,
-    color: popover.secondaryLabel,
-    appearance: 'none',
-    backgroundColor: { default: 'transparent', ':hover:not(:disabled)': popover.tabHover },
-  },
-  /** NSSwitch, small size: a gray track, the accent when on, a white knob. */
-  switch: {
-    ...control,
-    position: 'relative',
-    flexShrink: 0,
-    width: popover.switchWidth,
-    height: popover.switchHeight,
-    padding: 0,
-    borderStyle: 'none',
-    borderRadius: '999px',
-    appearance: 'none',
-    backgroundColor: popover.switchOff,
-  },
-  switchOn: { backgroundColor: popover.accent },
-  knob: {
-    position: 'absolute',
-    top: '1px',
-    left: '1px',
-    width: `calc(${popover.switchHeight} - 2px)`,
-    height: `calc(${popover.switchHeight} - 2px)`,
-    borderRadius: '50%',
-    backgroundColor: '#fff',
-    boxShadow: '0 0 0 0.5px rgb(0 0 0 / 0.12), 0 1px 1.5px rgb(0 0 0 / 0.2)',
-    transitionTimingFunction: easing.standard,
-    transitionDuration: { default: duration.normal, [media.reducedMotion]: '0ms' },
-    transitionProperty: 'transform',
-  },
-  knobOn: { transform: `translateX(calc(${popover.switchWidth} - ${popover.switchHeight}))` },
-  banner: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: space.sm,
-    padding: space.md,
-    borderRadius: popover.cardRadius,
-    backgroundColor: popover.banner,
-  },
-  bannerHead: {
-    display: 'flex',
-    gap: space.sm,
-    alignItems: 'center',
-    color: popover.orange,
-  },
-  bannerTitle: {
-    margin: 0,
-    fontSize: 'inherit',
-    fontWeight: popover.titleWeight,
-    color: popover.label,
-  },
-  bannerText: { margin: 0, color: popover.secondaryLabel },
-  bannerActions: {
-    display: 'flex',
-    flexWrap: 'wrap',
-    gap: space.sm,
-  },
-  /** A push button: a rounded rectangle with the control fill. */
-  button: {
-    ...control,
-    height: popover.buttonHeight,
-    paddingBlock: 0,
-    paddingInline: space.md,
-    borderStyle: 'none',
-    borderRadius: popover.buttonRadius,
-    fontFamily: 'inherit',
-    fontSize: popover.fontSize,
-    color: popover.label,
-    appearance: 'none',
-    backgroundColor: { default: popover.control, ':hover:not(:disabled)': popover.controlHover },
-    boxShadow: `inset 0 0 0 0.5px ${popover.separator}`,
-  },
-  /** The default push button: the accent fill. */
-  primary: {
-    color: popover.onAccent,
-    backgroundColor: { default: popover.accent, ':hover:not(:disabled)': popover.accent },
-  },
-  footer: {
-    display: 'flex',
-    flexDirection: 'column',
-    padding: space.xxs,
-    borderRadius: popover.cardRadius,
-    backgroundColor: popover.card,
-  },
-  /** A menu-like action: highlighted in the accent on hover. */
-  action: {
-    ...control,
-    display: 'flex',
-    gap: space.md,
-    alignItems: 'center',
-    minHeight: popover.rowHeight,
-    paddingBlock: 0,
-    paddingInline: space.sm,
-    borderStyle: 'none',
-    borderRadius: popover.buttonRadius,
-    fontFamily: 'inherit',
-    fontSize: 'inherit',
-    fontWeight: 'inherit',
-    color: { default: popover.label, ':hover:not(:disabled)': popover.onAccent },
-    textAlign: 'start',
-    appearance: 'none',
-    backgroundColor: { default: 'transparent', ':hover:not(:disabled)': popover.accent },
-  },
-  separator: {
-    width: `calc(100% - 2 * ${space.sm})`,
-    height: '0.5px',
-    marginBlock: space.xxs,
-    marginInline: space.sm,
-    borderStyle: 'none',
-    backgroundColor: popover.separator,
+    backgroundColor: native.card,
   },
 });

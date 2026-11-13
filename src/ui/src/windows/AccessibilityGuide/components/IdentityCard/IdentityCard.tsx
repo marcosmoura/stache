@@ -34,7 +34,7 @@ export function IdentityCard({ name, identifier, appPath }: IdentityCardProps) {
       </dl>
       <p {...stylex.props(styles.hint)}>
         <span {...stylex.props(styles.hintIcon)}>
-          <Icon icon={InformationCircleIcon} size={14} strokeWidth={1.75} />
+          <Icon icon={InformationCircleIcon} size={13} strokeWidth={1.75} />
         </span>
         <span>Make sure you turn on Stache Next, not Stache.</span>
       </p>

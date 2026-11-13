@@ -70,7 +70,7 @@ test.describe('Accessibility guide', () => {
     expect(
       await page.evaluate(() => getComputedStyle(document.documentElement).backgroundColor),
     ).toBe('rgba(0, 0, 0, 0)');
-    await expect(page.getByRole('main')).toHaveCSS('border-top-left-radius', '16px');
+    await expect(page.getByRole('main')).toHaveCSS('border-top-left-radius', '12px');
 
     // Request: sent once, disabled while pending.
     const request = page.getByRole('button', { name: 'Request Access' });
@@ -122,7 +122,7 @@ test.describe('Accessibility guide', () => {
 
     await expect(page.getByText('not an app bundle')).toBeVisible();
     await page.getByRole('button', { name: 'Troubleshooting' }).click();
-    await expect(page.getByText(/This copy is not an app bundle\./)).toBeVisible();
+    await expect(page.getByText(/isn't installed as a regular app/)).toBeVisible();
 
     const closes = () => host.commands().filter((command) => command === 'plugin:window|close');
 

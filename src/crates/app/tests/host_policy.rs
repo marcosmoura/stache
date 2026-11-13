@@ -1,40 +1,6 @@
 //! Static least-privilege and identity checks for the desktop manifest.
 
 #[test]
-fn the_test_window_has_only_the_named_least_privilege_permissions() {
-    let capability: serde_json::Value =
-        serde_json::from_str(include_str!("../capabilities/test-window.json")).expect("capability");
-    assert_eq!(capability["windows"], serde_json::json!(["stache-test-*"]));
-    let permissions: Vec<&str> = capability["permissions"]
-        .as_array()
-        .expect("permissions")
-        .iter()
-        .map(|value| value.as_str().expect("permission"))
-        .collect();
-    assert_eq!(permissions, [
-        "allow-app-info",
-        "allow-host-status",
-        "core:event:allow-listen",
-        "core:event:allow-unlisten",
-        "core:window:allow-close",
-    ]);
-    let joined = permissions.join(" ");
-    for forbidden in [
-        "core:default",
-        "fs:",
-        "shell:",
-        "http:",
-        "dialog:",
-        "media",
-        "weather",
-        "system",
-        "tray",
-    ] {
-        assert!(!joined.contains(forbidden), "capability grants {forbidden}");
-    }
-}
-
-#[test]
 fn the_desktop_manifest_has_no_fixed_window_and_an_explicit_capability() {
     let config: serde_json::Value =
         serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri config");
@@ -42,12 +8,7 @@ fn the_desktop_manifest_has_no_fixed_window_and_an_explicit_capability() {
     assert_eq!(config["app"]["windows"], serde_json::json!([]));
     assert_eq!(
         config["app"]["security"]["capabilities"],
-        serde_json::json!([
-            "test-window",
-            "access-window",
-            "bar-window",
-            "popover-window"
-        ])
+        serde_json::json!(["access-window", "bar-window", "popover-window"])
     );
     for key in ["csp", "devCsp"] {
         let csp = config["app"]["security"][key].as_str().expect("csp");
@@ -136,21 +97,6 @@ fn the_access_window_has_only_the_named_least_privilege_permissions() {
 }
 
 #[test]
-fn the_test_window_does_not_gain_the_guidance_commands() {
-    let capability: serde_json::Value =
-        serde_json::from_str(include_str!("../capabilities/test-window.json")).expect("capability");
-    let joined = capability["permissions"].to_string();
-    assert!(!joined.contains("start-dragging"), "test window grants dragging");
-    for command in [
-        "request-accessibility",
-        "open-accessibility-settings",
-        "quit-app",
-    ] {
-        assert!(!joined.contains(command), "test window grants {command}");
-    }
-}
-
-#[test]
 fn macos_private_api_is_enabled_in_config_and_cargo() {
     let config: serde_json::Value =
         serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri config");
@@ -221,10 +167,13 @@ fn the_bar_window_has_only_the_snapshot_and_event_listener_permissions() {
 #[test]
 fn only_the_bar_capability_reaches_bar_windows() {
     for (name, text) in [
-        ("test-window", include_str!("../capabilities/test-window.json")),
         (
             "access-window",
             include_str!("../capabilities/access-window.json"),
+        ),
+        (
+            "popover-window",
+            include_str!("../capabilities/popover-window.json"),
         ),
     ] {
         let capability: serde_json::Value = serde_json::from_str(text).expect("capability");
@@ -251,7 +200,6 @@ fn the_popover_has_only_its_named_commands_and_the_event_listener() {
             "allow-set-module-enabled",
             "allow-module-session-action",
             "allow-retry-module",
-            "allow-open-test-window",
             "allow-open-accessibility-guide",
             "allow-config-files",
             "allow-config-document",
@@ -265,7 +213,6 @@ fn the_popover_has_only_its_named_commands_and_the_event_listener() {
         ])
     );
     for (name, text) in [
-        ("test-window", include_str!("../capabilities/test-window.json")),
         (
             "access-window",
             include_str!("../capabilities/access-window.json"),
@@ -279,7 +226,6 @@ fn the_popover_has_only_its_named_commands_and_the_event_listener() {
             "set-module-enabled",
             "module-session-action",
             "retry-module",
-            "open-test-window",
             "open-accessibility-guide",
             "config-files",
             "config-document",
@@ -526,7 +472,6 @@ fn every_surface_capability_grants_each_command_its_ui_calls() {
     for (surface, capability) in [
         ("Popover", include_str!("../capabilities/popover-window.json")),
         ("Bar", include_str!("../capabilities/bar.json")),
-        ("TestWindow", include_str!("../capabilities/test-window.json")),
         (
             "AccessibilityGuide",
             include_str!("../capabilities/access-window.json"),
@@ -544,9 +489,7 @@ fn every_surface_capability_grants_each_command_its_ui_calls() {
             "{surface} calls ungranted commands: {missing:?}"
         );
     }
-    for surface in ["Placeholder", "UnknownSurface"] {
-        assert_eq!(surface_calls(surface), BTreeSet::new(), "{surface}");
-    }
+    assert_eq!(surface_calls("UnknownSurface"), BTreeSet::new());
 }
 
 #[test]
@@ -572,7 +515,6 @@ fn the_scan_follows_hooks_to_the_commands_they_reach() {
                 "open_config_file",
                 "hide_popover",
                 "quit_app",
-                "open_test_window",
                 "open_accessibility_guide",
                 "request_accessibility",
                 "open_accessibility_settings",

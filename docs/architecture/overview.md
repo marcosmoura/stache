@@ -3,8 +3,8 @@
 Read when changing the shipped foundation boundaries.
 
 - `src/crates/app`: the only desktop binary (`stache`), Tauri composition root, native tray,
-  configuration-backed enable/pause actions, permission policy, shutdown coordinator, test-window
-  backend, configuration catalog in `catalog.rs`, contributed CLI commands in `commands.rs`, and the
+  configuration-backed enable/pause actions, permission policy, shutdown coordinator, host window
+  bookkeeping, configuration catalog in `catalog.rs`, contributed CLI commands in `commands.rs`, and the
   developer-only `generate-schema`/`generate-bindings` binaries. The same `stache` binary selects
   desktop or CLI before any Tauri startup.
 - `src/crates/sdk`: owned module SDK — registry, lifecycle, threading, typed events/errors,
@@ -200,7 +200,7 @@ extra platform call. The registry's own `on_permission_change` stops running mod
 order on revocation and restarts them in dependency order on a grant; the gate adds no lifecycle
 path. Each transition writes one info record: `access: blocked (accessibility denied|unknown)`,
 `access: open` or `access: revoked`. While gated the tray, instance lock, configuration store and
-watcher, permission ticker, activation observer, test window, Quit and Caps Lock startup recovery
+watcher, permission ticker, activation observer, popover, Quit and Caps Lock startup recovery
 keep working. The host never calls `PermissionProvider::request` on its own: only the explicit
 tray **Request Accessibility…** (`HostHandle::request_permission`) does, and it requests nothing
 while the gate is open. **Open Accessibility Settings…** (`HostHandle::open_accessibility_settings`)
@@ -212,11 +212,12 @@ URL verified manually). A failure is the last action error until the next succes
 enclosing `.app` of the running executable, or absent for an unbundled binary. `ready` keeps its
 meaning: a gated host is `ready: true` with `access.state = blocked`.
 
-Launch creates no webview and no Dock icon. The explicit **Open Test Window** action opens the app
-URL with `?surface=test` as `stache-test-<n>`, reuses it for the same owner/key and closes it on
-request; stop releases module windows, and each window counts as released only after its
-`Destroyed` event or a native "already gone" answer. `src/crates/app/tauri.conf.json` has no fixed
-windows and lists only the least-privilege `test-window` capability. The app crate defines the
+Launch creates no webview and no Dock icon. Host windows (the popover, the Accessibility guide)
+and module windows open the app URL with `?surface=<surface>` as `stache-<surface>-<n>`, reuse
+the window for the same owner/key and close it on request; stop releases module windows, and each
+window counts as released only after its `Destroyed` event or a native "already gone" answer.
+`src/crates/app/tauri.conf.json` has no fixed windows and lists only the least-privilege
+`access-window`, `bar-window` and `popover-window` capabilities. The app crate defines the
 `custom-protocol` feature that `bun run tauri:build` enables; without it, Tauri stays in dev mode and a
 packaged window has no embedded document. Generate/schema binaries require `dev-tools` and are not
 packaged. See [ui.md](ui.md).
@@ -377,7 +378,7 @@ closed and joined by that terminal action, never on the main thread. Only an exp
 request starts teardown: Tauri's last-window `ExitRequested` (`code: None`, from
 `tauri-runtime-wry`'s `Destroyed` handler) just drops the window registry entry, while the
 `Some(code)` form from `app.exit` prevents that exit and requests the shutdown. Real Cmd-Q
-reaches the coordinator through the default menu's Quit item, with the Test Window frontmost, but
+reaches the coordinator through the default menu's Quit item, with Stache frontmost, but
 a repeat Cmd-Q does not escalate while the reply is pending; a signal does. Logout, restart and
 shutdown have not been verified end to end.
 `exec_on_startup` runs once, through the shared SDK command runner, on its own owned thread, never for CLI, reload or a
@@ -398,7 +399,7 @@ them for the single-instance lock, socket server and published status. The runti
 ## Planned work
 
 Part 05 ships its native integration and the typed React client/router: static status surfaces,
-capabilities, tray, permission policy, shutdown, test-window backend, generated bindings and the
+capabilities, tray, permission policy, shutdown, host window backend, generated bindings and the
 browser suites. [ui.md](ui.md) records the contract. Remaining manual coverage is a real tray click
 and SIGINT delivery; the opt-in harness covers SIGTERM and the WebKit surface. The proxyAudio
 runtime ships in [Foundation part 06](../specs/2026-11-02-foundation/06-proxy-audio.md); only its

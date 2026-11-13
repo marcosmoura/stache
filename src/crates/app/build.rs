@@ -11,14 +11,14 @@ fn main() {
     // commands, a command missing from it is refused for every window ("not
     // allowed. Command not found"), so read-only commands are listed too and
     // each one is granted only to the capabilities whose UI calls it:
-    // - `app_info`, `host_status`: test window, Accessibility guide; the
-    //   popover gets `host_status`.
+    // - `app_info`, `host_status`: Accessibility guide; the popover gets
+    //   `host_status`.
     // - `request_accessibility`, `open_accessibility_settings`, `quit_app`:
     //   Accessibility guide and popover.
     // - `bar_*`: only the `bar-window` capability (`stache-bar-*`), on top of
     //   their own caller-label check.
     // - `hide_popover`, the Overview's `set_module_enabled`,
-    //   `module_session_action`, `retry_module`, `open_test_window`,
+    //   `module_session_action`, `retry_module`,
     //   `open_accessibility_guide`, and the settings editor's `config_files`,
     //   `config_document`, `config_edit` and `open_config_file`: only the
     //   `popover-window` capability (`stache-popover`).
@@ -40,7 +40,6 @@ fn main() {
             "set_module_enabled",
             "module_session_action",
             "retry_module",
-            "open_test_window",
             "open_accessibility_guide",
             "config_files",
             "config_document",
