@@ -44,6 +44,10 @@ pub(super) fn suspend(state: &mut TilingState, token: WindowInstance) {
         return;
     };
     if window.suspended || window.departing.is_some() {
+        // Unlisted again: a return still waiting for the settle is void.
+        if let Some(window) = state.windows.get_mut(&token) {
+            window.returning = false;
+        }
         return;
     }
     let held = window.desired.workspace.is_some_and(|id| {

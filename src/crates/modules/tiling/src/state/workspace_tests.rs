@@ -1447,6 +1447,28 @@ fn reload_places_windows_of_a_removed_workspace_by_rule_else_by_the_startup_fall
 }
 
 #[test]
+fn windows_adopted_before_the_first_configuration_are_placed_by_its_rules() {
+    // Startup: the first enumeration runs while the configuration is still on
+    // its way, so the first windows land on the generated default workspace.
+    let mut world = World::new(None, false);
+    let browser = world.add_with(2, 1, "browser", 0.0, SnapshotOrigin::Enumeration);
+    let editor = world.add_with(1, 1, "editor", 0.0, SnapshotOrigin::Enumeration);
+    let terminal = world.add_with(3, 1, "terminal", 0.0, SnapshotOrigin::Enumeration);
+    world.reload(serde_json::json!({"workspaces": [
+        {"name": "files", "rules": [{"app_id": "com.apple.finder"}]},
+        {"name": "coding", "rules": [{"app_id": "com.editor"}]},
+        {"name": "browser", "rules": [{"app_id": "com.browser"}]},
+    ]}));
+    assert_eq!(world.order("browser"), vec![browser], "the rule decides");
+    assert_eq!(world.order("coding"), vec![editor], "the rule decides");
+    assert_eq!(
+        world.order("files"),
+        vec![terminal],
+        "no rule: the startup fallback"
+    );
+}
+
+#[test]
 fn reload_keeps_an_unmatched_window_that_was_sent_by_hand() {
     let (mut world, [_, y, z]) = reeval_world();
     world.intent(Intent::SendWindowToWorkspace {

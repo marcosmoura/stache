@@ -987,6 +987,115 @@ fn a_return_announced_before_the_close_waits_for_the_settle_instead_of_adding_a_
     assert_eq!(tabs.writes(), writes);
 }
 
+/// Tabs A (suspended member) and B (the tile) of one group next to another
+/// application's window.
+fn two_known_tabs() -> (Tabs, WindowInstance, WindowInstance, WindowInstance, Rect) {
+    let (mut tabs, a, other) = Tabs::finder_group();
+    tabs.focus(a);
+    let slot = tabs.slot(a);
+    let b = tabs.token(FINDER);
+    tabs.listed(b, bar(7, 3), slot);
+    tabs.suspend(a);
+    tabs.end_listing();
+    assert_eq!(tabs.order(), vec![b, other]);
+    assert!(tabs.suspended_of(a));
+    (tabs, a, b, other, slot)
+}
+
+/// Tab A is selected for good: it is listed and B leaves the list alive.
+fn select_first_tab(tabs: &mut Tabs, a: WindowInstance, b: WindowInstance, slot: Rect) {
+    tabs.focus(a);
+    tabs.settle_delay();
+    tabs.listed(a, bar(7, 3), slot);
+    tabs.suspend(b);
+    tabs.end_listing();
+}
+
+#[test]
+fn a_tab_left_again_before_its_return_settled_stays_tracked() {
+    // Fast tab cycling: A is selected and one read of it answers, then B is
+    // selected again before the settle listing ran.
+    let (mut tabs, a, b, other, slot) = two_known_tabs();
+    let read = Tabs::snapshot(a, bar(7, 3), Some(slot));
+    tabs.rig.backend.script_snapshot(a, SnapshotOutcome::Snapshot(Box::new(read)));
+    tabs.rig.push(WindowEventKind::Window {
+        window: a,
+        change: WindowChange::Resized,
+    });
+    tabs.rig.pump();
+    tabs.wait(Duration::from_millis(20));
+    assert!(
+        tabs.rig.calls().contains(&FakeBackendCall::Snapshot(a)),
+        "the returning tab was read"
+    );
+    assert!(tabs.suspended_of(a), "B still looks alive: wait for the settle");
+
+    // The settle listing holds B only; the owner reports A unlisted again.
+    tabs.settle_delay();
+    tabs.listed(b, bar(7, 3), slot);
+    tabs.suspend(a);
+    tabs.end_listing();
+    assert_eq!(tabs.order(), vec![b, other], "no tile for the unlisted tab");
+    assert!(tabs.suspended_of(a), "still a member of the slot");
+    tabs.settled_listing(&[(b, bar(7, 3))]);
+    assert!(
+        tabs.rig.snap().window(a).is_some(),
+        "an alive tab is never destroyed"
+    );
+    assert_eq!(tabs.rig.snap().diagnostics.missed_destroys_repaired, 0);
+
+    select_first_tab(&mut tabs, a, b, slot);
+    assert_eq!(tabs.order(), vec![a, other], "the tab is the tile again");
+    assert_eq!(tabs.windows(), vec![a, other]);
+    assert_eq!(tabs.rig.snap().diagnostics.ignored_after_destroy, 0);
+}
+
+#[test]
+fn a_read_answered_after_the_tab_left_again_is_not_a_return() {
+    // The read of A is applied after the report that A left again, so nothing
+    // reports it unlisted a second time: the listing that does not hold it
+    // decides.
+    let (mut tabs, a, b, other, slot) = two_known_tabs();
+    tabs.created(a, bar(7, 3), slot);
+    assert!(tabs.suspended_of(a), "B still looks alive: wait for the settle");
+    tabs.settled_listing(&[(b, bar(7, 3))]);
+    assert_eq!(tabs.order(), vec![b, other], "no tile for the unlisted tab");
+    assert!(tabs.suspended_of(a));
+    tabs.settled_listing(&[(b, bar(7, 3))]);
+    assert!(
+        tabs.rig.snap().window(a).is_some(),
+        "an alive tab is never destroyed"
+    );
+
+    select_first_tab(&mut tabs, a, b, slot);
+    assert_eq!(tabs.order(), vec![a, other]);
+    assert_eq!(tabs.rig.snap().diagnostics.ignored_after_destroy, 0);
+}
+
+#[test]
+fn a_tab_unlisted_again_during_its_listing_does_not_return() {
+    let (mut tabs, a, b, other, slot) = two_known_tabs();
+    // A listing holds A, then the owner sees it leave (a creation between two
+    // chunks of the listing) before the listing ends.
+    tabs.focus(a);
+    tabs.settle_delay();
+    tabs.listed(a, bar(7, 3), slot);
+    tabs.suspend(a);
+    tabs.listed(b, bar(7, 3), slot);
+    tabs.end_listing();
+    assert_eq!(tabs.order(), vec![b, other]);
+    assert!(tabs.suspended_of(a), "unlisted when the listing ended");
+    tabs.settled_listing(&[(b, bar(7, 3))]);
+    assert!(
+        tabs.rig.snap().window(a).is_some(),
+        "an alive tab is never destroyed"
+    );
+
+    select_first_tab(&mut tabs, a, b, slot);
+    assert_eq!(tabs.order(), vec![a, other]);
+    assert_eq!(tabs.rig.snap().diagnostics.ignored_after_destroy, 0);
+}
+
 #[test]
 fn a_window_back_from_native_fullscreen_is_laid_out_again() {
     // Native run 4: Ghostty enters native fullscreen, leaves `AXWindows` alive

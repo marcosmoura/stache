@@ -38,8 +38,8 @@ mod tab_sync;
 mod transition;
 pub use drag::{DragOutcome, DragRecord, DragReport, DragState};
 pub use frames::{
-    AttemptStatus, Binding, FrameAttempt, FrameBook, FrameRecord, FrameStatus,
-    MAX_EXTERNAL_ATTEMPTS, MAX_IN_FLIGHT_FRAMES, MAX_INFERENCES, NoFrameReason,
+    AttemptStatus, Binding, DISPLAY_CHANGE_ATTEMPTS, FrameAttempt, FrameBook, FrameRecord,
+    FrameStatus, MAX_EXTERNAL_ATTEMPTS, MAX_IN_FLIGHT_FRAMES, MAX_INFERENCES, NoFrameReason,
 };
 pub use transition::transition;
 

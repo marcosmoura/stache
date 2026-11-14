@@ -3614,3 +3614,125 @@ fn a_window_on_another_display_makes_an_empty_workspace_reachable() {
     assert!(desk.requests_since(requests).is_empty());
     assert_eq!(desk.visible_set(), ["terminal", "browser"]);
 }
+
+// ------------------------------------------------- a display goes away
+
+/// The system (or the application) moves `window` off its tile; returns the
+/// frame writes that followed.
+fn system_moves(desk: &mut Desktop, window: WindowInstance, to: Rect) -> Vec<Write> {
+    let mark = desk.mark();
+    script_read(desk, ghostty_read(desk, window, false, to));
+    resized(desk, window);
+    desk.writes_since(mark)
+}
+
+fn layout_of(displays: &[(u32, bool)]) -> Input {
+    let mut x = 0.0;
+    let displays = displays
+        .iter()
+        .map(|(id, primary)| {
+            let display = crate::test_support::display(*id, *primary, Some(60.0), x);
+            x += 1920.0;
+            display
+        })
+        .collect();
+    Input::Displays(Arc::new(stache_macos::DisplayLayout::new(displays)))
+}
+
+/// Unplugging the external display: the system rearranges the windows in
+/// several steps, also after the change was reported. Every step is corrected,
+/// even for a window that had already used its one external correction.
+fn unplugging_retiles(external_is_main: bool) {
+    use crate::state::{DISPLAY_CHANGE_ATTEMPTS, MAX_EXTERNAL_ATTEMPTS};
+    let mut desk = Desktop::boot(Delivery::Immediate, GHOSTTY);
+    let ghostty = desk.token(GHOSTTY, 1);
+    let both = if external_is_main {
+        [(2, true), (1, false)]
+    } else {
+        [(1, true), (2, false)]
+    };
+    desk.submit(layout_of(&both));
+    desk.settle();
+    desk.cmd_tab(GHOSTTY);
+    // Docked: every correction this target allows is used up, so the next
+    // move is left alone (an application is never fought).
+    let away = |step: u8| Rect::new(100.0 * f64::from(step), 80.0, 1000.0, 700.0);
+    let allowed = usize::from(DISPLAY_CHANGE_ATTEMPTS + MAX_EXTERNAL_ATTEMPTS);
+    let corrected = (0..=allowed)
+        .take_while(|_| !system_moves(&mut desk, ghostty, away(1)).is_empty())
+        .count();
+    assert_eq!(corrected, allowed, "bounded while docked");
+
+    desk.submit(layout_of(&[(1, true)]));
+    desk.settle();
+    assert_eq!(desk.visible_workspace(), "terminal");
+    let slot = desk.desired_of(ghostty);
+    assert_eq!(
+        desk.actual_of(ghostty),
+        slot,
+        "main={external_is_main}: laid out again on the remaining display"
+    );
+    for step in 1..=DISPLAY_CHANGE_ATTEMPTS {
+        let writes = system_moves(&mut desk, ghostty, away(step));
+        assert_eq!(
+            writes.len(),
+            1,
+            "main={external_is_main}: move {step} is corrected"
+        );
+        assert_eq!(writes[0].target, slot);
+        assert_eq!(desk.actual_of(ghostty), slot);
+    }
+    // Bounded: then the ordinary one correction, then nothing.
+    for _ in 0..MAX_EXTERNAL_ATTEMPTS {
+        assert_eq!(system_moves(&mut desk, ghostty, away(1)).len(), 1);
+    }
+    assert!(system_moves(&mut desk, ghostty, away(2)).is_empty());
+}
+
+#[test]
+fn unplugging_a_secondary_display_lays_the_windows_out_again() { unplugging_retiles(false); }
+
+#[test]
+fn unplugging_the_main_display_lays_the_windows_out_again() { unplugging_retiles(true); }
+
+#[test]
+fn the_same_display_layout_delivered_again_grants_nothing() {
+    let mut desk = Desktop::boot(Delivery::Immediate, GHOSTTY);
+    let ghostty = desk.token(GHOSTTY, 1);
+    let away = Rect::new(100.0, 80.0, 1000.0, 700.0);
+    assert_eq!(system_moves(&mut desk, ghostty, away).len(), 1);
+    desk.submit(Input::Displays(Arc::new(one_display())));
+    desk.settle();
+    assert!(
+        system_moves(&mut desk, ghostty, away).is_empty(),
+        "no display changed: the window is not fought"
+    );
+}
+
+// ------------------------------------- a window left off its tile
+
+#[test]
+fn showing_a_workspace_lays_out_a_window_that_was_left_off_its_tile() {
+    // The live case: Ghostty alone on `terminal` keeps one target for the
+    // whole run. Its one external correction is used, a later move is left
+    // alone, and the window sits off its tile.
+    let mut desk = Desktop::boot(Delivery::Immediate, GHOSTTY);
+    let ghostty = desk.token(GHOSTTY, 1);
+    let slot = desk.desired_of(ghostty);
+    let away = Rect::new(199.0, 95.0, slot.width, slot.height);
+    assert_eq!(system_moves(&mut desk, ghostty, away).len(), 1);
+    assert!(system_moves(&mut desk, ghostty, away).is_empty());
+    assert_eq!(desk.actual_of(ghostty), away, "off its tile, not fought");
+
+    // Leaving the workspace and coming back shows it laid out, with nothing
+    // left pending (a pending write keeps the border hidden).
+    desk.focus_workspace("coding");
+    let mark = desk.mark();
+    desk.focus_workspace("terminal");
+    let writes = desk.writes_since(mark);
+    assert!(
+        writes.iter().any(|write| write.window == ghostty && write.target == slot),
+        "written to its tile when the workspace is shown: {writes:?}"
+    );
+    assert_eq!(desk.actual_of(ghostty), slot);
+}

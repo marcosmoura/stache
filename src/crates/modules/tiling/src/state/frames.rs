@@ -10,8 +10,8 @@
 //! Only changed, eligible frames are written. Per window and attempt each
 //! component (position, size) is issued at most once. An attempt, once
 //! settled, is not repeated: only a new target, a user command
-//! ([`super::Input::Relayout`]) or one meaningful external change creates
-//! another. The window's own echoes and periodic refreshes show the frame the
+//! ([`super::Input::Relayout`]), a display change, showing the window's
+//! workspace or one meaningful external change creates another. The window's own echoes and periodic refreshes show the frame the
 //! attempt already recorded, so they create nothing. There is no retry loop and
 //! no fighting an application that refuses to resize.
 
@@ -38,6 +38,11 @@ pub const MAX_IN_FLIGHT_FRAMES: usize = 16;
 /// External-change attempts per window until the target changes or the user
 /// asks again.
 pub const MAX_EXTERNAL_ATTEMPTS: u8 = 1;
+/// External changes corrected per window after a display change, for free.
+///
+/// They do not spend [`MAX_EXTERNAL_ATTEMPTS`]: the system and the applications
+/// move windows in more than one step while the displays are rearranged.
+pub const DISPLAY_CHANGE_ATTEMPTS: u8 = 3;
 /// Minimum-size inferences per window until the user asks again.
 pub const MAX_INFERENCES: u8 = 2;
 /// Own geometry echoes ignored per window after an animation settled. A read
@@ -119,6 +124,8 @@ pub struct FrameRecord {
     pub inferences: u8,
     /// External-change attempts used for the current target.
     pub externals: u8,
+    /// External changes still corrected for free after a display change.
+    pub settling: u8,
     /// A user command asked for a fresh attempt.
     pub forced: bool,
     /// Own geometry echoes of a settled animation still to ignore (bounded).
@@ -446,7 +453,18 @@ enum Decision {
     Issue { external: bool },
 }
 
-fn decide(record: &FrameRecord, target: &Rect, actual: &Rect, revision: u64) -> Decision {
+/// `revealed`: the window's workspace was just shown. Showing a workspace lays
+/// it out, so a settled attempt does not hold back a window left off its tile
+/// (its external correction was used, or its last write ended unknown): it is
+/// written once more. One write per showing, so nothing is fought; skipped, the
+/// window would also stay revealed and its border hidden for good.
+fn decide(
+    record: &FrameRecord,
+    target: &Rect,
+    actual: &Rect,
+    revision: u64,
+    revealed: bool,
+) -> Decision {
     let Some(attempt) = &record.attempt else {
         return Decision::Issue { external: false };
     };
@@ -460,7 +478,7 @@ fn decide(record: &FrameRecord, target: &Rect, actual: &Rect, revision: u64) -> 
             }
         }
         AttemptStatus::Settled(outcome) => {
-            if record.forced || !same_target || record.size_check {
+            if record.forced || revealed || !same_target || record.size_check {
                 return Decision::Issue { external: false };
             }
             // A proven-no-send caused by a plan or revision change never
@@ -487,7 +505,7 @@ fn decide(record: &FrameRecord, target: &Rect, actual: &Rect, revision: u64) -> 
             {
                 return Decision::Skip;
             }
-            if record.externals < MAX_EXTERNAL_ATTEMPTS {
+            if record.settling > 0 || record.externals < MAX_EXTERNAL_ATTEMPTS {
                 Decision::Issue { external: true }
             } else {
                 Decision::Skip
@@ -618,8 +636,9 @@ pub(super) fn plan_and_issue(state: &mut TilingState, fx: &mut Vec<Effect>) {
             state.frames.pinned.remove(token);
             continue;
         }
+        let revealed = state.frames.revealed.contains(token);
         let record = state.frames.records.entry(*token).or_default();
-        let external = match decide(record, target, &actual, revision) {
+        let external = match decide(record, target, &actual, revision, revealed) {
             Decision::Skip => continue,
             Decision::Issue { external } => external,
         };
@@ -635,9 +654,11 @@ pub(super) fn plan_and_issue(state: &mut TilingState, fx: &mut Vec<Effect>) {
             .attempt
             .as_ref()
             .is_none_or(|attempt| !near_rect(&attempt.target, target));
-        if external {
+        if external && record.settling > 0 {
+            record.settling -= 1;
+        } else if external {
             record.externals += 1;
-        } else if target_changed || record.forced {
+        } else if target_changed || record.forced || revealed {
             record.externals = 0;
         }
         record.forced = false;
@@ -744,6 +765,20 @@ pub(super) fn relayout(state: &mut TilingState) {
         record.externals = 0;
         record.inferences = 0;
         record.minimum.clear_inferred();
+    }
+}
+
+/// The displays changed: what an earlier attempt proved says nothing about the
+/// new arrangement, so every window may be attempted again, and the next
+/// [`DISPLAY_CHANGE_ATTEMPTS`] external changes of each are corrected too (the
+/// system keeps moving windows after the change is reported).
+pub(super) fn displays_changed(state: &mut TilingState) {
+    let tokens: Vec<WindowInstance> = state.windows.keys().copied().collect();
+    for token in tokens {
+        let record = state.frames.records.entry(token).or_default();
+        record.forced = true;
+        record.externals = 0;
+        record.settling = DISPLAY_CHANGE_ATTEMPTS;
     }
 }
 

@@ -1318,6 +1318,16 @@ fn finish_scan(state: &mut TilingState, application: ApplicationId, truncated: b
     state.startup.transient.remove(&application);
     state.startup.failure_reasons.remove(&application);
     let unsettled = state.reconcile.unsettled.remove(&application);
+    // A return still pending for a window this complete listing does not hold
+    // is void: the window left `AXWindows` again (a tab selected and left
+    // before the listing ran). Resolving it would tile an unlisted window.
+    if !truncated && let Some(scan) = state.reconcile.scans.get(&application) {
+        for window in state.windows.values_mut() {
+            if window.application == application && !scan.seen.contains(&window.token) {
+                window.returning = false;
+            }
+        }
+    }
     // Windows listed again take their slots before held-back windows close.
     slots::resolve_returns(state, application);
     if truncated {
@@ -1666,6 +1676,9 @@ fn apply_displays(state: &mut TilingState, layout: &DisplayLayout) {
         return;
     }
     state.no_screens = false;
+    if state.layout != *layout {
+        frames::displays_changed(state);
+    }
     state.layout = layout.clone();
     let previous: std::collections::BTreeMap<DisplayId, u64> =
         state.screens.iter().map(|screen| (screen.id, screen.presence)).collect();
@@ -1753,10 +1766,13 @@ fn apply_config(
     let assignment_key = |c: &TilingConfig| -> Vec<(String, Vec<_>)> {
         c.workspaces.iter().map(|ws| (ws.name.clone(), ws.rules.clone())).collect()
     };
+    // The first configuration counts as a change: windows adopted before it
+    // arrived (the startup enumeration can overtake it) were placed without
+    // any rule.
     let workspaces_changed = state
         .config
         .as_deref()
-        .is_some_and(|old| assignment_key(old) != assignment_key(&config));
+        .is_none_or(|old| assignment_key(old) != assignment_key(&config));
     let previous_order: Vec<(WindowInstance, String)> = state
         .workspaces
         .iter()

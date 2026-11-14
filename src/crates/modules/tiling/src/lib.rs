@@ -142,12 +142,12 @@ pub use rules::{
     is_system_bundle, management_exclusion, matches_unprepared,
 };
 pub use state::{
-    AppInfo, AppRecord, AttemptStatus, Binding, Cause, CompletionResult, DesiredWindow,
-    Diagnostics, DragOutcome, DragRecord, DragReport, Effect, FocusState, FrameAttempt, FrameBook,
-    FrameRecord, FrameStatus, Health, HealthFault, Input, MAX_EXTERNAL_ATTEMPTS,
-    MAX_IN_FLIGHT_FRAMES, MAX_INFERENCES, NoFrameReason, ObservedWindow, Phase, RefusedFocus,
-    Scope, ScreenState, Stamp, TilingSnapshot, TilingState, WindowState, WorkspaceId,
-    WorkspaceState, transition,
+    AppInfo, AppRecord, AttemptStatus, Binding, Cause, CompletionResult, DISPLAY_CHANGE_ATTEMPTS,
+    DesiredWindow, Diagnostics, DragOutcome, DragRecord, DragReport, Effect, FocusState,
+    FrameAttempt, FrameBook, FrameRecord, FrameStatus, Health, HealthFault, Input,
+    MAX_EXTERNAL_ATTEMPTS, MAX_IN_FLIGHT_FRAMES, MAX_INFERENCES, NoFrameReason, ObservedWindow,
+    Phase, RefusedFocus, Scope, ScreenState, Stamp, TilingSnapshot, TilingState, WindowState,
+    WorkspaceId, WorkspaceState, transition,
 };
 pub use status::{
     TilingRuntimeState, TilingRuntimeStatus, TilingStatusSource, unsupported_features,
