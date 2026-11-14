@@ -13,6 +13,8 @@
 //! * [`BatteryBackend`]: `starship-battery` (legacy source).
 //! * [`WifiBackend`]: `CoreWLAN` interface names, power and RSSI only. See
 //!   [`wifi`] for the Location Services evidence.
+//! * [`WifiEventMonitor`]: `CoreWLAN` event monitoring as a change signal for
+//!   the Wi-Fi provider; see [`wifi_events`] for its Location evidence.
 
 use std::fmt;
 
@@ -21,6 +23,7 @@ pub mod cpu;
 pub mod smc;
 mod smc_io;
 pub mod wifi;
+pub mod wifi_events;
 
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
@@ -34,6 +37,7 @@ pub use smc::{
 pub use wifi::{
     InterfaceName, InterfaceNameError, SystemWifi, WifiBackend, WifiInterfaceReading, WifiPower,
 };
+pub use wifi_events::{WifiEventMonitor, WifiSignalKind, WifiSignalSink};
 
 /// Why a system read failed. The text is for diagnostics only.
 #[derive(Clone, Debug, PartialEq, Eq)]

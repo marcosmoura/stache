@@ -179,6 +179,47 @@ single-display harness in the same session gave a median of 767 ms (runs:
 coordinator's `prepare_plan` order, so the cost grows roughly with total target
 pixels. The budgets were not changed.
 
+The release run on November 13, 2026 on the same Apple M1 Pro (macOS 27.3)
+measured the change to Fast PNG compression, parallel plan preparation and
+`opt-level = 3` for `stache-wallpapers` and the image, codec and hashing crates.
+Both harnesses ran once before and once after in the same session with
+`cargo test -p stache-wallpapers --release measure_cold_processing -- --ignored
+--nocapture --test-threads=1`:
+
+| Harness                         | Before                            | After                             |
+| ------------------------------- | --------------------------------- | --------------------------------- |
+| Single display, median of three | 701.7 ms (700.4, 701.7, 715.9 ms) | 433.2 ms (432.9, 433.2, 449.5 ms) |
+| Three displays, median of three | 4,094 ms (4,093, 4,094, 4,178 ms) | 1,035 ms (1,017, 1,035, 1,100 ms) |
+| Release `stache` binary (bytes) | 10,317,440                        | 10,598,448 (+281,008)             |
+
+The release run on November 14, 2026 on the same machine measured the switch
+of the cover resize to `fast_image_resize`. The same harnesses ran once before
+and once after in the same session, and
+`cargo test -p stache-wallpapers --release measure_cover_resize -- --ignored
+--nocapture` timed the resize alone (6000 × 4000 RGB8 to 2560 × 1440, median of
+five, against the previous `image` crate resizer in the same run):
+
+| Harness                         | Before                             | After                             |
+| ------------------------------- | ---------------------------------- | --------------------------------- |
+| Single display, median of three | 431.6 ms (430.6, 431.6, 444.8 ms)  | 235.4 ms (233.0, 235.4, 240.5 ms) |
+| Three displays, median of three | 1,024 ms (1,012, 1,024, 1,042 ms)  | 657 ms (656, 658, 678 ms)         |
+| Cover resize alone              | 270.9 ms (`image` crate, same run) | 66.0 ms (4.10 times faster)       |
+| Release `stache` binary (bytes) | 10,598,448                         | 10,730,736 (+132,288)             |
+
+The release run on November 14, 2026 on the same machine measured the host's
+warm path: `apply::tests::measure_warm_plan_with_and_without_memo` prepares an
+already cached two-display plan (one 6000 × 4000 JPEG at 2560 × 1440 and
+1920 × 1200, `radius = 24`, `blur = 12`) fifteen times without and fifteen
+times with the per-process memo, interleaved in one run, with
+`cargo test -p stache-wallpapers --release measure_warm_plan_with_and_without_memo
+-- --ignored --nocapture --test-threads=1`. The median without the memo (source
+read and hash plus two PNG decodes) was **20.5 ms**; with the memo it was
+**0.25 ms**.
+
+The binary size is `stat -f%z target/release/stache` after `bun run tauri:build
+-- --no-bundle`. The synthetic gradient compresses far more easily than a
+photograph, so these runs understate the encoder gain on real wallpapers.
+
 This evidence covers three synthetic target geometries with a fake desktop, one
 local SSD and page-cache-warm source files. It does not measure physically
 attached multi-display hardware, 8K targets, cold storage reads, macOS AppKit
@@ -353,9 +394,20 @@ the lease and applies the outputs. `prepare_plan(plan, deps, cancel)` takes a
 caller-snapshotted plan of one `SelectedTarget` and one source path per display,
 with per-target effects. It validates every display, target and effect before
 any read or cache write, refuses an empty plan and duplicate display
-identities, and prepares every output before returning. Adjacent targets that
-share a source reuse that source's bounded bytes and decode; a different source
-releases the previous decode before it is read. `prepare_batch` does the same
+identities, and prepares every output before returning. Each distinct source is
+read and hashed once and decoded at most once (only when one of its outputs
+misses the cache), wherever its targets sit in the plan, and each distinct
+output (same source, pixels and effects) is produced once and returned for every
+target that uses it. Distinct outputs run in parallel on at most
+`min(available_parallelism, 4)` scoped threads that all join before the call
+returns; a plan with one distinct output runs on the calling thread. Work is
+ordered so all outputs of one source are adjacent, and a source's bytes and
+decode are released when its last output finishes, so at most four decoded
+sources are resident at once. Cancellation is observed at the same stage
+boundaries in every worker; after one output fails or the call is cancelled the
+others stop at their next boundary and remove only their own temporaries. With
+several failures the error of the lowest plan index is returned.
+`prepare_batch` does the same
 preparation for many sources with bounded workers. All are ordinary blocking
 functions; none spawns a native hop or a timer.
 
@@ -373,11 +425,39 @@ functions; none spawns a native hop or a timer.
   that same buffer. Device, inode, length and modification time are compared on
   the descriptor and the path before and after the read; a replacement is a
   typed `SourceChanged` error. Sources are never written, renamed or removed.
-- **Order.** Decode, cover resize with Lanczos3, center crop to the exact
-  pixels, blur, black rounded corners, then RGB8 PNG with Best compression and
-  adaptive filtering. Zero effects skip their stages. JPEG, PNG and WebP decode
+  In the host, every target still resolves the source and checks it on fresh
+  no-follow metadata (regular file, not a link, within the byte limit), once per
+  distinct source per plan, with the same typed errors. The first read of a
+  source in the host process records its fingerprint (device, inode, length,
+  modification time and change time) and digest; while the fingerprint is
+  unchanged, later targets use the recorded digest and open the file only if
+  their output must be rebuilt. Any change to the fingerprint, including a
+  same-length rewrite with a restored modification time (the change time
+  moves), reads and hashes the file again. Standalone commands always read.
+- **Order.** Decode, cover resize and center crop to the exact pixels in one
+  step with `fast_image_resize` (SIMD Lanczos3 convolution over only the crop
+  window of the source; non-RGB8 sources are converted to RGB8 first), blur,
+  black rounded corners, then RGB8 PNG with Fast compression and adaptive
+  filtering. The compression level changes only the file size (about 1.8 times
+  larger than Best), not the decoded pixels, so it is not part of
+  `PROCESSING_VERSION` and files written with Best compression remain cache
+  hits. Zero effects skip their stages. JPEG, PNG and WebP decode
   from content; a JPEG under a `.jpg` name is accepted, and WebP decoding is an
   intentional improvement over the legacy processor.
+- **Resizer.** `fast_image_resize` exists because the resize dominated cold
+  processing: it is about 4 times faster than the `image` crate's Lanczos3
+  (66 ms against 271 ms for 6000 × 4000 to 2560 × 1440). It costs about 130 KB
+  of release binary (132,288 bytes, with only the RGB8 path linked), three
+  crates in the lockfile (`fast_image_resize`, `document-features`, `litrs`),
+  and SIMD code in `unsafe`; it is MIT or Apache-2.0. Its intermediate image
+  between the two passes is 8-bit, where the previous resizer kept it in
+  floating point, so Lanczos overshoot past black or white is cut at a
+  different point. On content away from pure black and white the output is
+  within 1 level per channel of the previous resizer. On synthetic per-pixel
+  noise over the full range fewer than 0.1 % of channels differ by more than
+  1 level (0.015 % at most), with single channels differing by up to 7 levels
+  on a downscale close to 1:1 and 9 on an upscale. The crop window is clamped
+  to the source, so every source size resizes.
 - **Effects.** Blur at most 5 uses a true Gaussian; above 5 uses the
   native-resolution fast-blur approximation. Corners cap the radius at half the
   smaller dimension and use 8×8 supersampling. The blur is bounded before any
@@ -387,11 +467,21 @@ functions; none spawns a native hop or a timer.
   radius, the blur and `PROCESSING_VERSION`. The file is
   `<AppPaths cache>/wallpapers/<hex>.png`. A different directory with the same
   basename gets a different key; changed bytes invalidate even with an unchanged
-  length and modification time.
+  length and modification time. In the host the digest may come from the
+  per-process record described under Read once; it is used only while the
+  source's fingerprint matches, and a rebuild keys the output with the digest
+  of the bytes it just read.
 - **Validation.** A hit is used only when it is an owned regular file (no
   symlink) that fully decodes as RGB8 PNG with the expected dimensions. An
   owned corrupt or truncated file is rebuilt. A symlinked or foreign entry, a
-  symlinked `wallpapers` directory or an unsafe cache root is refused.
+  symlinked `wallpapers` directory or an unsafe cache root is refused. The
+  entry checks (not a link, regular file, owned) run on fresh metadata at every
+  lookup. The full decode runs at every lookup in standalone commands; the host
+  runs it on first use per process and records the file's fingerprint after it
+  or after validating its own publication (at most 256 outputs and 256 sources
+  per process, least recently used evicted). While the fingerprint is unchanged
+  the decode is skipped; any change, eviction or failed check runs the full
+  validation again.
 - **Publication.** A completed output is written to a uniquely named
   `create_new` temporary in the same directory, flushed, synced, closed,
   reopened and validated, then renamed over the final name atomically. A final
@@ -430,14 +520,15 @@ functions; none spawns a native hop or a timer.
 
 Internal limits are not configuration:
 
-| Bound          | Value                           | Rationale                                                       |
-| -------------- | ------------------------------- | --------------------------------------------------------------- |
-| Source bytes   | 128 MiB                         | Large camera exports and panoramas; one bounded buffer per job. |
-| Decoded source | 100 MP, 65,536 px edge          | 8K is 33 MP; a 20,000 × 4,000 panorama (80 MP) fits.            |
-| Target         | 100 MP, 16,384 px edge          | Above 8K on either axis with headroom.                          |
-| Cover canvas   | 100 MP, 65,536 px edge          | Rejects an exploding intermediate before allocating it.         |
-| Blur           | 4,096 px                        | Beyond this no supported panel distinguishes the effect.        |
-| Workers        | `min(available_parallelism, 4)` | Bounded batch concurrency.                                      |
+| Bound            | Value                           | Rationale                                                         |
+| ---------------- | ------------------------------- | ----------------------------------------------------------------- |
+| Source bytes     | 128 MiB                         | Large camera exports and panoramas; one bounded buffer per job.   |
+| Decoded source   | 100 MP, 65,536 px edge          | 8K is 33 MP; a 20,000 × 4,000 panorama (80 MP) fits.              |
+| Target           | 100 MP, 16,384 px edge          | Above 8K on either axis with headroom.                            |
+| Cover canvas     | 100 MP, 65,536 px edge          | Rejects an exploding intermediate before allocating it.           |
+| Blur             | 4,096 px                        | Beyond this no supported panel distinguishes the effect.          |
+| Workers          | `min(available_parallelism, 4)` | Bounded batch and plan concurrency.                               |
+| Resident decodes | 4                               | One per worker; a plan or batch never holds more decoded sources. |
 
 `prepare_batch` pulls work from the caller's iterator through a bounded channel,
 so `screens × images` is never materialized as a queue. The first failure stops

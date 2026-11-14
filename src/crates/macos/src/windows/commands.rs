@@ -13,7 +13,7 @@ use super::issuance::{
     WindowActionOutcome, WindowIssuance,
 };
 use crate::applications::ApplicationId;
-use crate::ax::{AxError, AxPoint, AxReading, AxSize};
+use crate::ax::{AxError, AxPoint, AxReading, AxSize, FrameRead};
 
 /// A reply callback. It runs on the owner thread and must not block.
 pub type Reply<T> = Box<dyn FnOnce(T) + Send>;
@@ -241,6 +241,16 @@ pub enum SnapshotOutcome {
     OwnerUnavailable,
 }
 
+/// The result of a frame-only read: `AXPosition` and `AXSize` of one tracked
+/// window after the light validation (no `AXWindows` listing).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FrameReadOutcome {
+    /// Both halves as read; either may be unknown.
+    Frame(FrameRead),
+    /// The token no longer names a live window, or it is suspended.
+    Stale(StaleReason),
+}
+
 /// The result of reading an application's real focused window. It is a pure
 /// answer: the consumer decides what to do with it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -406,6 +416,11 @@ pub(super) enum Command {
     Snapshot {
         window: WindowInstance,
         reply: Reply<SnapshotOutcome>,
+    },
+    /// A frame-only read of one tracked window.
+    ReadFrame {
+        window: WindowInstance,
+        reply: Reply<FrameReadOutcome>,
     },
     #[cfg(test)]
     Resolve {

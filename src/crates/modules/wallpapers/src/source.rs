@@ -7,6 +7,12 @@
 //! descriptor and the path, so a replacement during the read is reported
 //! instead of producing a key for one file and an output for another. Sources
 //! are never written, renamed or removed.
+//!
+//! [`inspect_source`] runs the same pre-open checks without opening the file.
+//! The host uses it with its per-process memo: when the fresh fingerprint
+//! (device, inode, length, modification and change time) matches the one
+//! recorded after an earlier read, the recorded digest forms the cache key and
+//! the file is read only if that output must be rebuilt.
 
 use std::fs;
 use std::io::Read;
@@ -16,6 +22,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 use crate::limits::{self, MAX_SOURCE_BYTES};
+use crate::memo::FileFingerprint;
 use crate::processing::ProcessError;
 
 /// The bytes, digest and canonical identity of one source read.
@@ -27,6 +34,32 @@ pub struct SourceBytes {
     pub digest: [u8; 32],
     /// The canonical source path used in the cache key.
     pub canonical: PathBuf,
+    /// The path's no-follow fingerprint, when it was identical before and
+    /// after the read, including the change time.
+    pub fingerprint: Option<FileFingerprint>,
+}
+
+/// Canonicalizes and inspects a source without opening it.
+///
+/// Runs exactly the checks [`read_source`] runs before it opens the file
+/// (resolution, no-follow regular-file check and byte limit) and fails with the
+/// same typed errors, returning the canonical path and its fresh metadata.
+pub fn inspect_source(path: &Path) -> Result<(PathBuf, fs::Metadata), ProcessError> {
+    let canonical = fs::canonicalize(path).map_err(|error| ProcessError::Io {
+        action: "resolve source",
+        path: path.to_path_buf(),
+        error,
+    })?;
+    let metadata = fs::symlink_metadata(&canonical).map_err(|error| ProcessError::Io {
+        action: "inspect source",
+        path: canonical.clone(),
+        error,
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(ProcessError::NotRegularFile { path: canonical });
+    }
+    limits::check_source_len(&canonical, metadata.len())?;
+    Ok((canonical, metadata))
 }
 
 /// Reads a source with the production byte bound.
@@ -40,20 +73,7 @@ pub fn read_source_with(
     limit: u64,
     before_read: &dyn Fn(&Path),
 ) -> Result<SourceBytes, ProcessError> {
-    let canonical = fs::canonicalize(path).map_err(|error| ProcessError::Io {
-        action: "resolve source",
-        path: path.to_path_buf(),
-        error,
-    })?;
-    let path_before = fs::symlink_metadata(&canonical).map_err(|error| ProcessError::Io {
-        action: "inspect source",
-        path: canonical.clone(),
-        error,
-    })?;
-    if path_before.file_type().is_symlink() || !path_before.is_file() {
-        return Err(ProcessError::NotRegularFile { path: canonical });
-    }
-    limits::check_source_len(&canonical, path_before.len())?;
+    let (canonical, path_before) = inspect_source(path)?;
     let mut file = fs::File::open(&canonical).map_err(|error| ProcessError::Io {
         action: "open source",
         path: canonical.clone(),
@@ -119,7 +139,14 @@ pub fn read_source_with(
     }
 
     let digest: [u8; 32] = hasher.finalize().into();
-    Ok(SourceBytes { bytes, digest, canonical })
+    let before = FileFingerprint::of(&path_before);
+    let fingerprint = (before == FileFingerprint::of(&path_after)).then_some(before);
+    Ok(SourceBytes {
+        bytes,
+        digest,
+        canonical,
+        fingerprint,
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

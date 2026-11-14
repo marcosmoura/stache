@@ -278,8 +278,11 @@ impl Harness {
         signals.advance(by);
     }
 
-    /// Advances one full reconciliation interval.
+    /// Advances the 2 s polling and retry interval.
     pub fn tick(&self) { self.advance(Duration::from_secs(2)); }
+
+    /// Advances the 30 s interval of a settled worker with notifications.
+    pub fn settled_tick(&self) { self.advance(Duration::from_secs(30)); }
 }
 
 impl Drop for Harness {

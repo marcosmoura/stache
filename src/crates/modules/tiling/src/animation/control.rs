@@ -3,8 +3,9 @@
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
+use stache_macos::ax::{AxPoint, AxReading, AxSize, FrameRead};
 use stache_macos::windows::{
-    FrameAck, FrameReply, FrameReplyFn, NotIssuedReason, SnapshotOutcome, WindowActionOutcome,
+    FrameAck, FrameReadOutcome, FrameReply, FrameReplyFn, NotIssuedReason, WindowActionOutcome,
 };
 use stache_macos::{ApplicationId, FrameClockFactory, StuckClock};
 use stache_sdk::CancellationToken;
@@ -78,19 +79,20 @@ impl<T> Once<T> {
 }
 
 impl LiveSink {
+    /// A frame-only read: `AXPosition` and `AXSize`, no full snapshot.
     fn submit_read(&self, job: &AnimationJob, reply: ReadReplyFn) {
         if self.stopping().is_some() {
             return reply(None);
         }
         let reply = Once::new(reply);
         let answer = reply.clone();
-        let outcome = self.backend.submit_snapshot(
+        let outcome = self.backend.submit_frame_read(
             job.window,
             Box::new(move |outcome| {
                 if let Some(reply) = answer.take() {
                     reply(match outcome {
-                        SnapshotOutcome::Snapshot(snapshot) => Some(snapshot.frame),
-                        _ => None,
+                        FrameReadOutcome::Frame(frame) => Some(frame),
+                        FrameReadOutcome::Stale(_) => None,
                     });
                 }
             }),
@@ -183,7 +185,21 @@ impl AnimationSink for LiveSink {
         self.submit_read(job, reply);
     }
 
+    /// Where the window is now, for the start of the new job: from the window
+    /// server when it answers (no wait on the application), otherwise a
+    /// frame-only read.
     fn submit_retarget_read(&self, job: &AnimationJob, reply: ReadReplyFn) {
+        if self.stopping().is_none()
+            && let Some(frame) = job.cg_window_id.and_then(|id| self.backend.window_bounds(id))
+        {
+            return reply(Some(FrameRead {
+                position: AxReading::Value(AxPoint { x: frame.x, y: frame.y }),
+                size: AxReading::Value(AxSize {
+                    width: frame.width,
+                    height: frame.height,
+                }),
+            }));
+        }
         self.submit_read(job, reply);
     }
 
@@ -555,6 +571,12 @@ impl AnimationControl {
     /// Workers closed but not yet joined.
     #[must_use]
     pub fn retired(&self) -> usize { self.slot().retired.len() }
+
+    /// Jobs submitted and not yet taken by the worker (tests).
+    #[cfg(test)]
+    pub(crate) fn pending_jobs(&self) -> usize {
+        self.slot().worker.as_ref().map_or(0, |worker| worker.pending())
+    }
 }
 
 /// A short label for a job's final outcome in a debug line.

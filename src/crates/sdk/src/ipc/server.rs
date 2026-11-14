@@ -232,7 +232,17 @@ impl IpcServer {
             path: socket.clone(),
             error,
         })?;
-        let gate = Arc::new(Gate::new(config.max_connections));
+        let gate = match Gate::new(config.max_connections) {
+            Ok(gate) => Arc::new(gate),
+            Err(error) => {
+                let _ = endpoint.remove();
+                return Err(ServerError::Io {
+                    action: "configure",
+                    path: socket,
+                    error,
+                });
+            }
+        };
         let worker_gate = Arc::clone(&gate);
         let worker_router = Arc::clone(&router);
         let worker = match thread::Builder::new()
@@ -592,20 +602,36 @@ struct Gate {
     stopped: AtomicBool,
     available: Mutex<usize>,
     wake: Condvar,
+    /// Read end of the wake pipe; readable once `stop` ran.
+    wake_read: std::os::fd::OwnedFd,
+    /// Non-blocking write end of the wake pipe.
+    wake_write: std::os::fd::OwnedFd,
     #[cfg(test)]
     retained_handles: std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
+    passes: std::sync::atomic::AtomicUsize,
 }
 
 impl Gate {
-    const fn new(limit: usize) -> Self {
-        Self {
+    fn new(limit: usize) -> io::Result<Self> {
+        use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
+        use rustix::io::{FdFlags, fcntl_setfd};
+        let (wake_read, wake_write) = rustix::pipe::pipe()?;
+        fcntl_setfd(&wake_read, FdFlags::CLOEXEC)?;
+        fcntl_setfd(&wake_write, FdFlags::CLOEXEC)?;
+        fcntl_setfl(&wake_write, fcntl_getfl(&wake_write)? | OFlags::NONBLOCK)?;
+        Ok(Self {
             limit,
             stopped: AtomicBool::new(false),
             available: Mutex::new(limit),
             wake: Condvar::new(),
+            wake_read,
+            wake_write,
             #[cfg(test)]
             retained_handles: std::sync::atomic::AtomicUsize::new(0),
-        }
+            #[cfg(test)]
+            passes: std::sync::atomic::AtomicUsize::new(0),
+        })
     }
 
     /// Whether no connection currently holds a permit.
@@ -636,6 +662,23 @@ impl Gate {
         let _available = lock(&self.available);
         self.stopped.store(true, Ordering::SeqCst);
         self.wake.notify_all();
+        // A full pipe already holds a wake byte, so a failed write is fine.
+        let _ = rustix::io::write(&self.wake_write, &[1]);
+    }
+
+    /// Blocks until the listener is readable or `stop` wrote the wake byte.
+    fn wait_for_connection(&self, listener: &UnixListener) {
+        use rustix::event::{PollFd, PollFlags, poll};
+        let mut fds = [
+            PollFd::new(listener, PollFlags::IN),
+            PollFd::new(&self.wake_read, PollFlags::IN),
+        ];
+        match poll(&mut fds, None) {
+            // Ready or interrupted: the loop goes back to `accept`.
+            Ok(_) | Err(rustix::io::Errno::INTR) => {}
+            // A wait that keeps failing must not turn the loop into a spin.
+            Err(_) => self.wait_for_stop(Duration::from_millis(50)),
+        }
     }
 
     fn wait_for_stop(&self, timeout: Duration) {
@@ -679,6 +722,8 @@ fn serve(listener: UnixListener, router: Arc<Router>, config: ServerConfig, gate
     let mut workers = HashMap::new();
     let (completed, completions) = sync_channel(config.max_connections);
     loop {
+        #[cfg(test)]
+        gate.passes.fetch_add(1, Ordering::SeqCst);
         reap_workers(&mut workers, &completions);
         if gate.stopped.load(Ordering::SeqCst) {
             break;
@@ -686,10 +731,11 @@ fn serve(listener: UnixListener, router: Arc<Router>, config: ServerConfig, gate
         let stream = match listener.accept() {
             Ok((stream, _)) => stream,
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                gate.wait_for_stop(Duration::from_millis(50));
+                gate.wait_for_connection(&listener);
                 continue;
             }
             Err(_) => {
+                // A persistent error must not spin; stop still wakes this wait.
                 gate.wait_for_stop(Duration::from_millis(50));
                 continue;
             }
@@ -964,7 +1010,7 @@ mod tests {
     #[test]
     fn stopping_races_blocked_acquire_without_losing_wakes() {
         for _ in 0..100 {
-            let gate = Arc::new(Gate::new(1));
+            let gate = Arc::new(Gate::new(1).expect("gate"));
             assert!(gate.acquire());
             let barrier = Arc::new(std::sync::Barrier::new(2));
             let (tx, rx) = std::sync::mpsc::channel();
@@ -1036,6 +1082,100 @@ mod tests {
         assert!(Endpoint::claim(&target, paths.owner()).is_err());
         assert_eq!(fs::metadata(&target).expect("target").mode() & 0o777, 0o640);
         assert_eq!(fs::read_to_string(&target).expect("contents"), "keep");
+    }
+
+    /// Deterministic gaps between 3 ms and 120 ms (linear congruential).
+    fn uneven_gaps(count: usize) -> Vec<Duration> {
+        let mut state: u64 = 0x2545_f491;
+        (0..count)
+            .map(|_| {
+                state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+                Duration::from_millis(3 + (state >> 33) % 118)
+            })
+            .collect()
+    }
+
+    fn median(mut samples: Vec<Duration>) -> Duration {
+        samples.sort();
+        samples[samples.len() / 2]
+    }
+
+    #[test]
+    fn round_trips_at_uneven_gaps_are_answered_promptly() {
+        use crate::ipc::client::IpcClient;
+        let root = root();
+        let paths = paths(root.path());
+        let server = IpcServer::start(&paths, router()).expect("server");
+        let client = IpcClient::new(server.socket_path());
+        let echo = Request::new("demo", "echo", 1).expect("request");
+        let mut single = Vec::new();
+        let mut paired = Vec::new();
+        for gap in uneven_gaps(40) {
+            thread::sleep(gap);
+            let started = Instant::now();
+            assert!(client.request(&echo).is_ok());
+            single.push(started.elapsed());
+        }
+        for gap in uneven_gaps(40) {
+            thread::sleep(gap);
+            let started = Instant::now();
+            client.status().expect("status");
+            assert!(client.request(&echo).is_ok());
+            paired.push(started.elapsed());
+        }
+        let single = median(single);
+        let paired = median(paired);
+        assert!(single < Duration::from_millis(10), "single median {single:?}");
+        assert!(paired < Duration::from_millis(10), "paired median {paired:?}");
+    }
+
+    #[test]
+    fn an_idle_accept_loop_makes_no_pass() {
+        let root = root();
+        let paths = paths(root.path());
+        let server = IpcServer::start(&paths, router()).expect("server");
+        // Let the loop reach its wait after the first pass.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while server.gate.passes.load(Ordering::SeqCst) == 0 {
+            assert!(Instant::now() < deadline, "the accept loop never ran");
+            thread::yield_now();
+        }
+        thread::sleep(Duration::from_millis(20));
+        let before = server.gate.passes.load(Ordering::SeqCst);
+        thread::sleep(Duration::from_millis(300));
+        assert_eq!(server.gate.passes.load(Ordering::SeqCst), before);
+    }
+
+    #[test]
+    fn stop_accepting_ends_the_accept_thread_without_a_connection() {
+        let root = root();
+        let paths = paths(root.path());
+        let server = IpcServer::start(&paths, router()).expect("server");
+        thread::sleep(Duration::from_millis(20));
+        server.stop_accepting();
+        let started = Instant::now();
+        let worker = server.worker.as_ref().expect("accept thread");
+        while !worker.is_finished() {
+            assert!(
+                started.elapsed() < Duration::from_millis(100),
+                "the accept thread did not finish"
+            );
+            thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn the_wake_pipe_is_close_on_exec_and_its_write_end_non_blocking() {
+        use rustix::fs::{OFlags, fcntl_getfl};
+        use rustix::io::{FdFlags, fcntl_getfd};
+        let gate = Gate::new(1).expect("gate");
+        assert!(fcntl_getfd(&gate.wake_read).expect("read").contains(FdFlags::CLOEXEC));
+        assert!(fcntl_getfd(&gate.wake_write).expect("write").contains(FdFlags::CLOEXEC));
+        assert!(fcntl_getfl(&gate.wake_write).expect("write").contains(OFlags::NONBLOCK));
+        // Stopping more often than the pipe holds never blocks or fails.
+        for _ in 0..100_000 {
+            gate.stop();
+        }
     }
 
     struct NoCore;
@@ -1451,7 +1591,7 @@ mod tests {
 
     #[test]
     fn the_gate_blocks_until_a_slot_frees() {
-        let gate = Arc::new(Gate::new(1));
+        let gate = Arc::new(Gate::new(1).expect("gate"));
         assert!(gate.acquire());
         let blocked = Arc::clone(&gate);
         let (sender, receiver) = std::sync::mpsc::channel();
@@ -1471,7 +1611,7 @@ mod tests {
 
     #[test]
     fn stopping_the_gate_wakes_waiters() {
-        let gate = Arc::new(Gate::new(1));
+        let gate = Arc::new(Gate::new(1).expect("gate"));
         assert!(gate.acquire());
         let blocked = Arc::clone(&gate);
         let (sender, receiver) = std::sync::mpsc::channel();

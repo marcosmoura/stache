@@ -53,6 +53,7 @@ pub(super) fn job(plan: u64, from: Rect, target: Rect, easing: EasingType) -> An
         revision: 1,
         plan_sequence: plan,
         window: window(1),
+        cg_window_id: None,
         from,
         target,
         components: BOTH,

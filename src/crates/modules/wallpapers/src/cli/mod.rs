@@ -197,7 +197,7 @@ impl WallpapersCliEnv {
             current_dir: Arc::new(std::env::current_dir),
             transport: Arc::new(IpcTransport::production()),
             desktop,
-            processor: Arc::new(RealProcessor),
+            processor: Arc::new(RealProcessor::default()),
             random: Arc::new(SystemRandom),
             clock: Arc::new(SystemRuntimeClock),
             cancel,

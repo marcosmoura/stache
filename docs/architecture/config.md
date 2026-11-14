@@ -378,9 +378,19 @@ announced a second time, so one edit is one event.
 
 `ConfigWatcher` watches the configuration directory itself; while that directory
 is absent it watches the nearest existing ancestor and moves the watch into the
-directory once it appears. It debounces for 200 ms, watches directories rather
-than files and therefore handles atomic save-by-rename. It reports only the
-catalog files in the batch. Identical source bytes are a no-op only while no
+directory once it appears. It uses `notify`'s recommended backend (FSEvents)
+directly and debounces on the caller's thread: a batch is reported once the
+directory was quiet for 200 ms, and a continuous stream of events cannot
+postpone a report by more than 2 s after the batch's first event. It watches
+directories rather than files and therefore handles atomic save-by-rename. It
+reports only the catalog files in the batch. The host's `stache-config` thread
+uses the watcher's blocking `wait`, which sleeps with no deadline until a
+change, a stop request or a backend failure; the stop handle only sends on the
+watcher's in-process channel, and cancelling the watcher job calls it, so
+teardown wakes the thread at once and nothing ticks while the directory is
+quiet. `next(timeout)` remains for bounded callers.
+
+Identical source bytes are a no-op only while no
 diagnostic is held; a held diagnostic re-decodes and reapplies the file, so
 undoing a bad edit or recreating a deleted file clears the diagnostic, and an
 identical save retries a failed start. A changed file that decodes to the same

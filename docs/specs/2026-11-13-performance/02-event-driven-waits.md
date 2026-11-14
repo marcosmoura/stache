@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 02 — Host, config watcher, Tiling reservations and Keep Awake wait instead of poll
@@ -18,19 +18,19 @@ Files expected to change: `src/crates/sdk/src/config/watcher.rs`, `src/crates/sd
 - **Config thread.** The `stache-config` thread in `Runner::start_watcher` uses the blocking wait. Stopping the `WatcherJob` wakes it at once; the teardown stage that reaps the watcher keeps its budget and its record name.
 - **Host worker loop.** `Runner::run` blocks on its command channel. Every way a teardown can be requested ends the loop without a timed poll: check each caller of the teardown coordinator's request (the `HostHandle` methods, the signal bridge, the AppKit terminate path, the Tauri exit event) and make sure each delivers a wake. Queued non-teardown work is still dropped once a shutdown is requested.
 - **Tiling reservation watcher.** `ReservationWatcher` waits for a change with no deadline. The call already takes the cancellation token, so `stop` wakes it. `wait_primed` keeps its bounded wait.
-- **Keep Awake.** The worker's scheduled pass runs every 30 s while a `NativeObservation` is installed (`notificationsAndPolling`) and every 2 s without one (`pollingFallback`). Hints, the probe, the published `observation` values and every transition are unchanged.
+- **Keep Awake.** The worker's scheduled pass runs every 30 s while a `NativeObservation` is installed (`notificationsAndPolling`) and every 2 s without one (`pollingFallback`). The 30 s interval applies only after a pass that left nothing to retry: when a pass ends with the lock state unknown, an acquisition failed or a release pending, the next pass runs 2 s later in both modes, as today. Hints, the probe, the published `observation` values and every transition are unchanged.
 - **Docs.** `docs/architecture/config.md` (watcher backend, debounce, the blocking wait), `docs/architecture/overview.md` (the host worker blocks), `docs/features/keep-awake.md` (the two intervals and what a dropped notification now costs), `docs/guides/performance.md` (the idle wakeups this removes).
 
 ## Acceptance criteria
 
-- [ ] PF-02-01: A burst of writes to one config file within 200 ms yields one batch; a file saved through a temporary file and a rename yields a batch naming that file; a directory that disappears and returns yields `rescan`. The existing watcher tests pass unchanged in meaning.
-- [ ] PF-02-02: Events arriving every 50 ms for 5 s yield a batch no later than 2 s after the first event, and further batches after that.
-- [ ] PF-02-03: With no file activity for 500 ms the watcher completes no wait pass, and a stop request ends a blocked wait within 100 ms.
-- [ ] PF-02-04: The host worker loop completes no pass while no command arrives for 500 ms, and a teardown requested through each entry point ends the loop within 100 ms.
-- [ ] PF-02-05: The reservation watcher makes one `wait_for_change` call that stays outstanding while nothing changes; a change is delivered; `stop` joins it within its hop.
-- [ ] PF-02-06: On the fake clock, Keep Awake with notifications installed runs no scheduled pass before 30 s and one at 30 s; without notifications it runs one every 2 s; a hint runs a pass at once in both modes.
-- [ ] PF-02-07: `notify-debouncer-full` is absent from every manifest and from `Cargo.lock`.
-- [ ] PF-02-08: `bun run lint`, `bun run format:check` and `bun run test` pass.
+- [x] PF-02-01: A burst of writes to one config file within 200 ms yields one batch; a file saved through a temporary file and a rename yields a batch naming that file; a directory that disappears and returns yields `rescan`. The existing watcher tests pass unchanged in meaning.
+- [x] PF-02-02: Events arriving every 50 ms for 5 s yield a batch no later than 2 s after the first event, and further batches after that.
+- [x] PF-02-03: With no file activity for 500 ms the watcher completes no wait pass, and a stop request ends a blocked wait within 100 ms.
+- [x] PF-02-04: The host worker loop completes no pass while no command arrives for 500 ms, and a teardown requested through each entry point ends the loop within 100 ms.
+- [x] PF-02-05: The reservation watcher makes one `wait_for_change` call that stays outstanding while nothing changes; a change is delivered; `stop` joins it within its hop.
+- [x] PF-02-06: On the fake clock, Keep Awake with notifications installed runs no scheduled pass before 30 s and one at 30 s; without notifications it runs one every 2 s; a hint runs a pass at once in both modes. With notifications installed, a pass that left an unknown lock state, a failed acquisition or a pending release is retried 2 s later, and the interval returns to 30 s once a pass leaves nothing to retry.
+- [x] PF-02-07: `notify-debouncer-full` is absent from every manifest and from `Cargo.lock`.
+- [x] PF-02-08: `bun run lint`, `bun run format:check` and `bun run test` pass.
 
 ## Tests
 
@@ -44,4 +44,8 @@ Files expected to change: `src/crates/sdk/src/config/watcher.rs`, `src/crates/sd
 
 - The `notify` crate's macOS backend runs its own FSEvents thread, which blocks in a run loop. That thread is not a timed wake.
 - The 30 s Keep Awake interval is decision D5. If lock notifications prove unreliable on the user's machine the interval is one constant.
+- Found in review (2026-11-13): the scheduled pass is also what retries a failed acquisition, a pending release and an unreadable lock state. Stretching every pass to 30 s would have slowed those recoveries too, which D5 does not intend, so the long interval is limited to a settled worker.
+- Measured on the branch (2026-11-13) with the test-only pass counters: over 500 ms idle the host worker loop, the config watcher wait and the reservation watcher complete no pass. Before, their fixed periods (100 ms, 250 ms plus the debouncer's 50 ms tick, 250 ms) gave 5, 2 plus about 10, and 2 passes in the same window; that figure comes from the periods, not from a counter run. Each teardown entry point ends the host loop within 100 ms with the coordinator thread not yet started, so the wake comes from the request listener alone.
+- The teardown wake is delivered at the source: `Teardown::on_request` listeners run from `record()` after the state lock is released, and `new_host` registers one that sends `HostCommand::Shutdown`. That covers the AppKit `begin_terminate` path, which sent no command before.
+- A stop that arrives while a batch is still collecting drops that batch; the host is tearing down at that point.
 - For the user to check: editing a config file still reloads within about a quarter of a second; quitting from the tray still ends cleanly; Keep Awake still releases on lock and returns on unlock.

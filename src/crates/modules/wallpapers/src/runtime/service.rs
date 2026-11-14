@@ -41,6 +41,7 @@ use crate::WallpapersConfig;
 use crate::apply::{PlannedTarget, PrepareError, PreparePlanDeps, Prepared, prepare_plan_with};
 use crate::cache::NoFailures;
 use crate::config::WallpaperMode;
+use crate::memo::PrepareMemo;
 use crate::processing::Effects;
 use crate::selection::{SelectedTarget, SelectionError, resolve_targets};
 use crate::sources::{
@@ -92,8 +93,29 @@ pub trait Processor: Send + Sync {
 }
 
 /// The production processor over the shared cache and image pipeline.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct RealProcessor;
+///
+/// [`RealProcessor::host`] owns one [`PrepareMemo`] for its lifetime, so a
+/// cached switch skips the source read and the output decode while neither
+/// file changed. [`RealProcessor::default`] has no memo and behaves like the
+/// standalone commands.
+#[derive(Clone, Debug, Default)]
+pub struct RealProcessor {
+    memo: Option<Arc<PrepareMemo>>,
+}
+
+impl RealProcessor {
+    /// A processor that owns a fresh per-process memo.
+    #[must_use]
+    pub fn host() -> Self {
+        Self {
+            memo: Some(Arc::new(PrepareMemo::new())),
+        }
+    }
+
+    /// The owned memo, if any.
+    #[must_use]
+    pub fn memo(&self) -> Option<&PrepareMemo> { self.memo.as_deref() }
+}
 
 impl Processor for RealProcessor {
     fn prepare(
@@ -102,7 +124,8 @@ impl Processor for RealProcessor {
         paths: &AppPaths,
         cancel: &CancellationToken,
     ) -> Result<Prepared, PrepareError> {
-        prepare_plan_with(plan, &PreparePlanDeps { paths }, cancel, None, &NoFailures)
+        let deps = PreparePlanDeps { paths, memo: self.memo() };
+        prepare_plan_with(plan, &deps, cancel, None, &NoFailures)
     }
 }
 
@@ -183,7 +206,7 @@ pub struct ServiceConfig {
     pub clock: Arc<dyn RuntimeClock>,
     /// Random draw source.
     pub random: Arc<dyn RandomSource>,
-    /// Processing coordinator. Production passes [`RealProcessor`].
+    /// Processing coordinator. Production passes [`RealProcessor::host`].
     pub processor: Arc<dyn Processor>,
 }
 
@@ -201,7 +224,7 @@ impl ServiceConfig {
             backend,
             clock: Arc::new(SystemRuntimeClock),
             random: Arc::new(SystemRandom),
-            processor: Arc::new(RealProcessor),
+            processor: Arc::new(RealProcessor::host()),
         }
     }
 }

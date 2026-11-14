@@ -1551,6 +1551,32 @@ mod production_surface {
     }
 
     #[test]
+    fn missing_window_server_bounds_add_one_diagnostic_line() {
+        let host = Host::new();
+        host.backend.script_bounds_missing(true);
+        host.registry.start_all().expect("start");
+        let lines = |host: &Host| {
+            host.runtime
+                .status()
+                .read()
+                .diagnostics
+                .iter()
+                .filter(|d| *d == crate::module::GEOMETRY_READS_USE_ACCESSIBILITY)
+                .count()
+        };
+        assert_eq!(lines(&host), 1, "{:?}", host.runtime.status().read());
+        // A later adopted revision recomputes it: still once.
+        let mut config = enabled();
+        config.animations.enabled = true;
+        host.reload(config).expect("reload");
+        wait_until("adopted", || {
+            host.runtime_revision() == host.revision().to_string()
+        });
+        assert_eq!(lines(&host), 1);
+        host.disable();
+    }
+
+    #[test]
     fn the_default_configuration_reports_only_the_tab_capability() {
         let host = Host::started();
         let diagnostics = host.runtime.status().read().diagnostics;

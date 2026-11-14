@@ -45,10 +45,10 @@ pub use layout::{
 pub use menubar::{MENU_JOIN, MENU_POLL, MENU_RETRY, MenuMonitor, Schedule, next_wake};
 pub use module::{BarModule, BarRuntime, KEEP_AWAKE_PROVIDER, TILING_PROVIDER};
 pub use providers::{
-    ArtworkLookup, ArtworkStore, BatteryChargeState, BatteryReading, CpuReading, MediaParts,
-    MediaPaths, MediaReading, MediaResolver, MediaRunState, MediaStatus, MediaTiming, MediaUpdate,
-    ProviderDiagnostic, ProviderKind, ProviderMonitor, ProviderParts, ProviderTiming, PublishMedia,
-    SSID_GATE_ENV, SsidGate, WifiReading, WifiSignals, WifiStatus,
+    ArtworkLookup, ArtworkStore, BatteryChargeState, BatteryReading, CoreWlanSignals, CpuReading,
+    MediaParts, MediaPaths, MediaReading, MediaResolver, MediaRunState, MediaStatus, MediaTiming,
+    MediaUpdate, ProviderDiagnostic, ProviderKind, ProviderMonitor, ProviderParts, ProviderTiming,
+    PublishMedia, SSID_GATE_ENV, SsidGate, WifiReading, WifiSignalKind, WifiSignals, WifiStatus,
 };
 pub use runtime::{BAR_SURFACE, BarParts, BarTiming, PANEL_LOAD_DEADLINE};
 pub use status::{

@@ -12,6 +12,14 @@
 //! writes a unique same-directory temporary with `create_new`, flushes, syncs,
 //! reopens and validates it, then renames it over the final name atomically.
 //! Failures remove only the temporary this call created.
+//!
+//! In the host, a per-process memo remembers the fingerprint (device, inode,
+//! length, modification and change time) of each output it fully validated,
+//! after a decoding lookup or after its own publication. A later lookup still
+//! runs the entry checks (not a link, regular file, owned) on fresh metadata
+//! every time; only the decode is skipped, and only while the fingerprint is
+//! unchanged. Any change runs the full validation again. Standalone commands
+//! have no memo and always decode.
 
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
@@ -26,6 +34,7 @@ use sha2::{Digest, Sha256};
 use stache_sdk::{AppPaths, CacheLease, CancellationToken};
 
 use crate::limits;
+use crate::memo::{FileFingerprint, PrepareMemo};
 use crate::processing::{self, Effects, PROCESSING_VERSION, ProcessError};
 use crate::selection::TargetPixels;
 
@@ -187,17 +196,62 @@ impl Cache {
     /// Refuses a symlinked, foreign-owned or non-file entry instead of reading
     /// through it.
     pub fn lookup(&self, key: &str, expected: TargetPixels) -> Result<Option<PathBuf>, CacheError> {
+        self.lookup_with(key, expected, None, &|_| {})
+    }
+
+    /// [`Cache::lookup`] with an optional memo and a hook that runs before
+    /// each full PNG decode.
+    ///
+    /// The entry checks always run on fresh no-follow metadata. With a memo,
+    /// a fingerprint that matches the one recorded after a full validation
+    /// skips the decode; any other outcome runs the full validation and
+    /// records or forgets the entry.
+    pub fn lookup_with(
+        &self,
+        key: &str,
+        expected: TargetPixels,
+        memo: Option<&PrepareMemo>,
+        before_decode: &dyn Fn(&Path),
+    ) -> Result<Option<PathBuf>, CacheError> {
         let path = self.path_for(key);
+        let forget = |path: &Path| {
+            if let Some(memo) = memo {
+                memo.forget_output(path);
+            }
+        };
         let metadata = match fs::symlink_metadata(&path) {
             Ok(metadata) => metadata,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(io_error("inspect cache entry", &path, error)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                forget(&path);
+                return Ok(None);
+            }
+            Err(error) => {
+                forget(&path);
+                return Err(io_error("inspect cache entry", &path, error));
+            }
         };
-        validate_entry(&path, &metadata, self.owner)?;
+        if let Err(error) = validate_entry(&path, &metadata, self.owner) {
+            forget(&path);
+            return Err(error);
+        }
+        let fingerprint = FileFingerprint::of(&metadata);
+        if memo.is_some_and(|memo| memo.output_matches(&path, &fingerprint)) {
+            return Ok(Some(path));
+        }
+        before_decode(&path);
         match validate_output(&path, &metadata, expected, self.owner) {
-            Ok(()) => Ok(Some(path)),
-            Err(InvalidOutput::Corrupt(_)) => Ok(None),
+            Ok(()) => {
+                if let Some(memo) = memo {
+                    memo.record_output(&path, fingerprint);
+                }
+                Ok(Some(path))
+            }
+            Err(InvalidOutput::Corrupt(_)) => {
+                forget(&path);
+                Ok(None)
+            }
             Err(InvalidOutput::Unsafe { message }) => {
+                forget(&path);
                 Err(CacheError::UnsafeEntry { path, message })
             }
         }
@@ -215,10 +269,28 @@ impl Cache {
         seam: &dyn PublishSeam,
         commit: &dyn PublishCommit,
     ) -> Result<PathBuf, ProcessError> {
+        self.publish_with(key, expected, image, seam, commit, None)
+    }
+
+    /// [`Cache::publish`] that records the published output in `memo` when
+    /// the final file is the inode that was validated, unchanged.
+    pub fn publish_with(
+        &self,
+        key: &str,
+        expected: TargetPixels,
+        image: &RgbImage,
+        seam: &dyn PublishSeam,
+        commit: &dyn PublishCommit,
+        memo: Option<&PrepareMemo>,
+    ) -> Result<PathBuf, ProcessError> {
         let final_path = self.path_for(key);
+        if let Some(memo) = memo {
+            memo.forget_output(&final_path);
+        }
         reject_unsafe_destination(&final_path, self.owner)?;
         let temporary = self.temporary_path(key);
-        let result = self.write_and_publish(&temporary, &final_path, expected, image, seam, commit);
+        let result =
+            self.write_and_publish(&temporary, &final_path, expected, image, seam, commit, memo);
         if result.is_err() {
             // Only this call's uniquely named temporary is ever removed.
             let _ = fs::remove_file(&temporary);
@@ -231,6 +303,7 @@ impl Cache {
         self.root.join(format!(".{key}.{}.{sequence}.tmp", std::process::id()))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn write_and_publish(
         &self,
         temporary: &Path,
@@ -239,6 +312,7 @@ impl Cache {
         image: &RgbImage,
         seam: &dyn PublishSeam,
         commit: &dyn PublishCommit,
+        memo: Option<&PrepareMemo>,
     ) -> Result<PathBuf, ProcessError> {
         let file = OpenOptions::new()
             .write(true)
@@ -274,9 +348,22 @@ impl Cache {
         }
         // Last commit check: cancellation or a replaced lease observed during
         // the encoder must not publish an obsolete output.
+        // The memo records only the inode that validated, unchanged since the
+        // metadata the validation read.
+        let validated = memo
+            .and_then(|_| fs::symlink_metadata(temporary).ok())
+            .map(|after| FileFingerprint::of(&after))
+            .filter(|after| *after == FileFingerprint::of(&metadata));
         commit.commit()?;
         fs::rename(temporary, final_path)
             .map_err(|error| io_error("publish output", final_path, error))?;
+        if let (Some(memo), Some(validated)) = (memo, validated)
+            && let Ok(published) = fs::symlink_metadata(final_path)
+            && validate_entry(final_path, &published, self.owner).is_ok()
+            && FileFingerprint::of(&published).same_contents_as(&validated)
+        {
+            memo.record_output(final_path, FileFingerprint::of(&published));
+        }
         Ok(final_path.to_path_buf())
     }
 }
@@ -476,6 +563,50 @@ mod tests {
     }
 
     #[test]
+    fn a_memoized_output_of_another_owner_is_refused_as_without_a_memo() {
+        use stache_sdk::{AppEnvironment, CacheLease, LeaseWait};
+
+        let root = tempfile::tempdir().expect("root");
+        let paths = AppPaths::resolve(&AppEnvironment {
+            home: Some(root.path().to_path_buf()),
+            temporary: Some(root.path().to_path_buf()),
+        })
+        .expect("paths");
+        let cache = Cache::open(&paths).expect("cache");
+        let lease = CacheLease::shared(
+            &paths,
+            &LeaseWait::new(std::time::Duration::ZERO, CancellationToken::new()),
+        )
+        .expect("lease");
+        let token = CancellationToken::new();
+        let commit = CancelLeaseCommit { cancel: &token, lease: &lease };
+        let pixels = TargetPixels { width: 4, height: 4 };
+        let image = RgbImage::from_pixel(4, 4, image::Rgb([1, 2, 3]));
+        let memo = PrepareMemo::new();
+        cache
+            .publish_with("owned", pixels, &image, &NoFailures, &commit, Some(&memo))
+            .expect("publish");
+        let decodes = std::sync::atomic::AtomicUsize::new(0);
+        let count = |_: &Path| {
+            decodes.fetch_add(1, Ordering::SeqCst);
+        };
+        assert!(cache.lookup_with("owned", pixels, Some(&memo), &count).expect("hit").is_some());
+        assert_eq!(decodes.load(Ordering::SeqCst), 0, "the publication was recorded");
+
+        // The same file seen by a cache of another owner, as when the file's
+        // owner changed: the entry check runs before the memo is consulted.
+        let foreign = Cache {
+            root: cache.root.clone(),
+            owner: cache.owner.saturating_add(1),
+        };
+        let with = foreign.lookup_with("owned", pixels, Some(&memo), &count).expect_err("memo");
+        let without = foreign.lookup("owned", pixels).expect_err("no memo");
+        assert!(matches!(with, CacheError::UnsafeEntry { .. }), "{with:?}");
+        assert_eq!(with.to_string(), without.to_string());
+        assert_eq!(decodes.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
     fn keys_encode_every_component_with_length_prefixes() {
         let path = Path::new("/tmp/wallpaper.jpg");
         let digest = [7_u8; 32];
@@ -528,6 +659,36 @@ mod tests {
         push_field(&mut fields, &0_u32.to_le_bytes());
         push_field(&mut fields, &0_u32.to_le_bytes());
         assert_ne!(key, hex(&Sha256::digest(&fields)));
+    }
+
+    #[test]
+    fn keys_differ_from_the_version_1_keys_for_the_same_inputs() {
+        // Version 1 used the `image` crate's resizer; its entries must stop
+        // matching so they are rebuilt with the current one.
+        let (path, digest, width, height) = (Path::new("/tmp/a.png"), [7_u8; 32], 2560, 1440);
+        let key = cache_key(path, &digest, TargetPixels { width, height }, Effects {
+            radius: 24,
+            blur: 12,
+        });
+        let mut fields = Vec::new();
+        push_field(&mut fields, b"stache.wallpapers.cache.v1");
+        push_field(&mut fields, &1_u32.to_le_bytes());
+        push_field(&mut fields, path.as_os_str().as_bytes());
+        push_field(&mut fields, &digest);
+        push_field(&mut fields, &width.to_le_bytes());
+        push_field(&mut fields, &height.to_le_bytes());
+        push_field(&mut fields, &24_u32.to_le_bytes());
+        push_field(&mut fields, &12_u32.to_le_bytes());
+        let version_1 = hex(&Sha256::digest(&fields));
+        assert_ne!(key, version_1);
+
+        // The same material with the current version reproduces the key, so
+        // the difference comes from the version alone.
+        let mut current = Vec::new();
+        push_field(&mut current, b"stache.wallpapers.cache.v1");
+        push_field(&mut current, &PROCESSING_VERSION.to_le_bytes());
+        current.extend_from_slice(&fields[current.len()..]);
+        assert_eq!(key, hex(&Sha256::digest(&current)));
     }
 
     struct CancelAtPublish<'a> {

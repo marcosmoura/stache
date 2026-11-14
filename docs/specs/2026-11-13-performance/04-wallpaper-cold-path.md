@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 04 — Wallpapers: Fast PNG, parallel prepare, optimised image stack
@@ -30,16 +30,16 @@ Files expected to change: `Cargo.toml` (release profile overrides), `src/crates/
 
 ## Acceptance criteria
 
-- [ ] PF-04-01: The decoded pixels of an output equal the pixels of the same image encoded with `CompressionType::Best`.
-- [ ] PF-04-02: A cache file written with the previous encoder settings for a key is returned as a hit.
-- [ ] PF-04-03: A plan of three displays with three sources prepares with three workers running at once (shown with a hold, not a timer), returns outputs in plan order, and each source is read once.
-- [ ] PF-04-04: A plan of two displays with the same source and different sizes decodes once; a plan of two displays with the same source, size and effects produces one file and returns it for both.
-- [ ] PF-04-05: A failure in the second of three outputs returns that error, leaves no temporary file, and the third output's worker stops at its next boundary. Cancellation during the work returns `Cancelled` and leaves no temporary file.
-- [ ] PF-04-06: A replaced lease or a cancellation observed at the final commit publishes nothing, for every worker.
-- [ ] PF-04-07: No more than `MAX_CONCURRENT_WORKERS` workers run at once for a plan of eight outputs.
-- [ ] PF-04-08: The multi-display harness median is at most half of the before value, and the single-display harness is faster than before. Both numbers are in the feature doc.
-- [ ] PF-04-09: The release binary grew by at most 300 KB.
-- [ ] PF-04-10: `bun run lint`, `bun run format:check` and `bun run test` pass, including the runtime, CLI and app wallpaper suites.
+- [x] PF-04-01: The decoded pixels of an output equal the pixels of the same image encoded with `CompressionType::Best`.
+- [x] PF-04-02: A cache file written with the previous encoder settings for a key is returned as a hit.
+- [x] PF-04-03: A plan of three displays with three sources prepares with three workers running at once (shown with a hold, not a timer), returns outputs in plan order, and each source is read once.
+- [x] PF-04-04: A plan of two displays with the same source and different sizes decodes once; a plan of two displays with the same source, size and effects produces one file and returns it for both.
+- [x] PF-04-05: A failure in the second of three outputs returns that error, leaves no temporary file, and the third output's worker stops at its next boundary. Cancellation during the work returns `Cancelled` and leaves no temporary file.
+- [x] PF-04-06: A replaced lease or a cancellation observed at the final commit publishes nothing, for every worker.
+- [x] PF-04-07: No more than `MAX_CONCURRENT_WORKERS` workers run at once for a plan of eight outputs.
+- [x] PF-04-08: The multi-display harness median is at most half of the before value, and the single-display harness is faster than before. Both numbers are in the feature doc.
+- [x] PF-04-09: The release binary grew by at most 300 KB.
+- [x] PF-04-10: `bun run lint`, `bun run format:check` and `bun run test` pass, including the runtime, CLI and app wallpaper suites.
 
 ## Tests
 
@@ -52,4 +52,7 @@ Files expected to change: `Cargo.toml` (release profile overrides), `src/crates/
 
 - Audit numbers on the user's wallpapers (6016×3900 PNG to 2560×1440, blur 10, radius 20): encode 981 ms at `Best` and 18 ms at `Fast` once the calling crate builds at `opt-level = 3`; resize 424 ms at `"s"` and 275 ms at 3; two pipelines at once ran 1.76 times faster than in sequence, four ran 3.47 times faster.
 - The harnesses use a synthetic gradient JPEG, which compresses far more easily than a photograph, so they understate the encoder gain. That is why PF-04-08 asks for less than the audit measured.
+- Measured on the branch (2026-11-13, Apple M1 Pro, macOS 27.3), once before and once after in the same session with `cargo test -p stache-wallpapers --release measure_cold_processing -- --ignored --nocapture --test-threads=1`: single display, median of three, 701.7 ms to 433.2 ms; three displays, median of three, 4,094 ms to 1,035 ms (25 % of before). Release `stache` binary (`bun run tauri:build -- --no-bundle`): 10,317,440 to 10,598,448 bytes, 281,008 more.
+- The unit of parallel work is the distinct output. Outputs are queued source by source and a source's bytes and decode are released when its last output finishes, so every loaded source has an output in flight and at most `MAX_CONCURRENT_WORKERS` decodes are resident.
+- The worker count is an input of the observed entry point, so the hold tests fix it and do not depend on the machine's cores.
 - For the user to check: `stache wallpaper set --random` on a cold cache, and `stache wallpaper generate-all`.

@@ -404,10 +404,6 @@ pub struct BorderEngine {
     live_seen: Option<LiveStatus>,
     /// The focused window the actor last reported.
     focus: Option<WindowInstance>,
-    /// The one follow-up `Order` of the latest focus change (`above` only,
-    /// timer fallback while live follow is not active): the window and when it
-    /// is due.
-    settle: Option<(WindowInstance, Instant)>,
     /// Window-server reorders of `above` windows (live follow), per window.
     live_reorders: BTreeMap<WindowInstance, LiveReorder>,
     /// Every batch sent, for tests.
@@ -434,11 +430,6 @@ struct LiveReorder {
 pub const LIVE_REORDER_CAP: usize = 4;
 /// The window of [`LIVE_REORDER_CAP`].
 pub const LIVE_REORDER_WINDOW: Duration = Duration::from_secs(1);
-
-/// How long after a focus change (or the raise it caused) an `above` border is
-/// re-ordered once more: the focused application raises its own window
-/// asynchronously, and that raise can land after the first `Order`.
-pub const FOCUS_SETTLE: Duration = Duration::from_millis(80);
 
 impl BorderEngine {
     /// An engine over `route` (which owns the control) for `config`.
@@ -471,7 +462,6 @@ impl BorderEngine {
             follow_grace: FOLLOW_GRACE,
             live_seen: None,
             focus: None,
-            settle: None,
             live_reorders: BTreeMap::new(),
             #[cfg(test)]
             sent: Vec::new(),
@@ -662,9 +652,8 @@ impl BorderEngine {
             .min();
         let collapse =
             self.ledger.values().filter(|t| t.shown).filter_map(|t| t.collapse_until).min();
-        let settle = self.settle.map(|(_, at)| at);
         let reorder = self.live_reorders.values().filter_map(|r| r.pending).min();
-        [ready, holds, ack, collapse, settle, reorder].into_iter().flatten().min()
+        [ready, holds, ack, collapse, reorder].into_iter().flatten().min()
     }
 
     // ---- inputs ------------------------------------------------------------
@@ -778,7 +767,6 @@ impl BorderEngine {
         let refused = self.flush(batch);
         self.after_flush(&refused, &mut shows);
         self.sync_live_targets();
-        self.fire_settle(now);
         self.fire_live_reorders(now);
         count
     }
@@ -854,19 +842,9 @@ impl BorderEngine {
         }
     }
 
-    /// Sends the focus change's single follow-up `Order` once it is due, only
-    /// while that window is still focused.
-    fn fire_settle(&mut self, now: Instant) {
-        let Some((window, at)) = self.settle else { return };
-        if now < at {
-            return;
-        }
-        self.settle = None;
-        if self.focus == Some(window) && self.placement_above(window) {
-            self.reorder(window);
-        }
-    }
-
+    /// Whether `window`'s border is ordered directly above it, and so has to be
+    /// re-ordered when the window is raised. A `Top` border (the focused
+    /// window's, one level higher) cannot be covered and is left alone.
     fn placement_above(&self, window: WindowInstance) -> bool {
         self.model
             .entries
@@ -874,47 +852,16 @@ impl BorderEngine {
             .is_some_and(|entry| entry.appearance.placement == BorderPlacement::Above)
     }
 
-    /// The focused window changed: its border is ordered once now. While live
-    /// follow is active that is all: the window server's reorder notification
-    /// for the application's own (asynchronous) raise re-orders an `above`
-    /// border. Otherwise (timer fallback) an `above` border gets exactly one
-    /// more `Order` after [`FOCUS_SETTLE`] (plus a display frame); raises
-    /// reported for it meanwhile are folded into that follow-up. `below` keeps
-    /// the single `Order`.
+    /// The focused window changed: its border is ordered once now, and that is
+    /// all. The focused window's `above` border is placed one window level up
+    /// by the model ([`BorderPlacement::Top`]), where a later raise of its
+    /// window (a click in it, its application's activation) cannot cover it,
+    /// so nothing is re-ordered afterwards.
     pub fn note_focus(&mut self, now: Instant, window: Option<WindowInstance>) {
         self.now = now;
         self.focus = window;
-        self.settle = None;
-        let Some(window) = window else { return };
-        self.reorder(window);
-        if self.placement_above(window) && !self.live_active() {
-            self.settle = Some((window, now + self.frame_period + FOCUS_SETTLE));
-        }
-    }
-
-    /// A raise of the focused window that changed no Tiling focus (a mouse up
-    /// in it, or its application's activation): an `above` border is
-    /// re-asserted with one `Order` now and one settle `Order`, coalesced with
-    /// any pending settle (the latest event wins). Anything else (not focused,
-    /// `below`, not shown, suspended) sends nothing. Timer fallback only: while
-    /// live follow is active the reorder notification does this, so nothing
-    /// is sent here (a timer `Order` raced the window server's own raise).
-    pub fn note_raise_intent(&mut self, now: Instant, window: WindowInstance) {
-        self.now = now;
-        if self.live_active() || self.focus != Some(window) || !self.placement_above(window) {
-            return;
-        }
-        if self.reorder(window) {
-            self.settle = Some((window, now + self.frame_period + FOCUS_SETTLE));
-        }
-    }
-
-    /// The frontmost application changed to `application`: when it owns the
-    /// focused window, that window's raise is re-asserted
-    /// ([`Self::note_raise_intent`]).
-    pub fn note_activation(&mut self, now: Instant, application: ApplicationId) {
-        if let Some(window) = self.focus.filter(|w| w.application() == application) {
-            self.note_raise_intent(now, window);
+        if let Some(window) = window {
+            self.reorder(window);
         }
     }
 
@@ -981,14 +928,6 @@ impl BorderEngine {
         self.reconcile_route();
         self.fire_live_reorders(now);
         for window in self.route.drain_raised() {
-            // A raise of the focused window while its follow-up is pending is
-            // folded into it, measured from this raise (no `Order` storm).
-            if let Some((pending, _)) = self.settle
-                && pending == window
-            {
-                self.settle = Some((window, self.now + self.frame_period + FOCUS_SETTLE));
-                continue;
-            }
             self.reorder(window);
         }
     }
@@ -1730,6 +1669,8 @@ impl BorderEngine {
         let appearance_changed = tracked.appearance != entry.appearance;
         match (was_collapsed, entry.collapsed) {
             // Part 09: focus left: shrink the look last drawn, hide when due.
+            // It is placed as the entry says: a window that lost the focus is
+            // no longer on top, and must not shrink over the one that took it.
             (false, true) => {
                 tracked.collapse_until = transition_for(&self.config)
                     .and_then(Transition::effective)
@@ -1740,7 +1681,10 @@ impl BorderEngine {
                         OverlayKind::Show {
                             target_cg_id: entry.cg_window_id,
                             frame: overlay_rect(latest),
-                            appearance: tracked.appearance,
+                            appearance: BorderAppearance {
+                                placement: entry.appearance.placement,
+                                ..tracked.appearance
+                            },
                             change: AppearanceChange::Shrink,
                         },
                         epoch,

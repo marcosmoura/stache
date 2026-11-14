@@ -847,7 +847,14 @@ pub struct Teardown {
     terminal: OnceLock<Arc<dyn TerminalDriver>>,
     owners: Mutex<Vec<OwnerRegistration>>,
     driver: Mutex<Option<JoinHandle<()>>>,
+    listeners: Mutex<Vec<RequestListener>>,
 }
+
+/// Called after every recorded stop request, outside the state lock.
+///
+/// It runs on the caller's thread (the main thread inside
+/// `applicationShouldTerminate:`, the signal thread), so it must not block.
+pub type RequestListener = Arc<dyn Fn() + Send + Sync>;
 
 impl fmt::Debug for Teardown {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -880,6 +887,7 @@ impl Teardown {
             terminal: OnceLock::new(),
             owners: Mutex::new(Vec::new()),
             driver: Mutex::new(None),
+            listeners: Mutex::new(Vec::new()),
         })
     }
 
@@ -893,6 +901,14 @@ impl Teardown {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(OwnerRegistration { slot, owner });
+    }
+
+    /// Registers a listener told about every recorded stop request.
+    ///
+    /// It lets a blocked owner wake without polling, whichever path recorded
+    /// the request. The listener must not block.
+    pub fn on_request(&self, listener: RequestListener) {
+        self.listeners.lock().unwrap_or_else(PoisonError::into_inner).push(listener);
     }
 
     /// Installs the one stage driver. A second call is ignored.
@@ -988,6 +1004,10 @@ impl Teardown {
         }
         drop(state);
         self.inner.changed.notify_all();
+        let listeners = self.listeners.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        for listener in &listeners {
+            listener();
+        }
         true
     }
 

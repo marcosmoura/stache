@@ -1,18 +1,22 @@
 //! Decode, cover-resize, effect and PNG encode primitives.
 //!
-//! The order matches the legacy processor: decode, cover resize with Lanczos3,
-//! center crop to the exact target, blur, black rounded corners, then RGB8 PNG
-//! with Best compression and adaptive filtering. Zero effects skip their
-//! stages. Source bytes are borrowed and never rewritten.
+//! The order matches the legacy processor: decode, cover resize and center
+//! crop to the exact target in one step (SIMD Lanczos3 convolution from
+//! `fast_image_resize`, reading only the crop window of the source), blur, black rounded corners, then RGB8 PNG
+//! with Fast compression and adaptive filtering. Zero effects skip their
+//! stages. The compression level changes only the file size, never the
+//! decoded pixels, so it is not part of [`PROCESSING_VERSION`]. Source bytes
+//! are borrowed and never rewritten.
 //!
 //! Codec calls are noninterruptible: cancellation is observed between stages,
-//! never inside `image`'s decode, resize, blur or encode calls. That is the
+//! never inside the decode, resize, blur or encode calls. That is the
 //! honest boundary of a synchronous codec.
 
 use std::fmt;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+use fast_image_resize as fir;
 use image::codecs::png::{CompressionType, FilterType as PngFilterType, PngEncoder};
 use image::{DynamicImage, GenericImageView, ImageFormat, ImageReader, Rgb, RgbImage, imageops};
 
@@ -24,7 +28,7 @@ use crate::selection::TargetPixels;
 ///
 /// Bump this when decoding, resizing, effect or encoding behavior changes so
 /// old cache files stop matching.
-pub const PROCESSING_VERSION: u32 = 1;
+pub const PROCESSING_VERSION: u32 = 2;
 
 /// Blur and rounded-corner settings.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -73,6 +77,11 @@ pub enum ProcessError {
         /// The codec's message.
         message: String,
     },
+    /// The cover resize failed.
+    Resize {
+        /// The resizer's message.
+        message: String,
+    },
     /// Cache validation, lookup or publication failed.
     Cache(CacheError),
     /// The cache lease could not be verified.
@@ -100,6 +109,7 @@ impl fmt::Display for ProcessError {
             Self::Encode { path, message } => {
                 write!(f, "cannot encode {}: {message}", path.display())
             }
+            Self::Resize { message } => write!(f, "cannot resize the wallpaper: {message}"),
             Self::Cache(error) => error.fmt(f),
             Self::Lease(error) => error.fmt(f),
             Self::Cancelled => f.write_str("wallpaper processing was cancelled"),
@@ -163,9 +173,13 @@ pub fn decode(source: &Path, bytes: &[u8]) -> Result<DynamicImage, ProcessError>
 
 /// Cover-resizes with Lanczos3 and center-crops to the exact target.
 ///
+/// RGB8 sources are borrowed; other colour types are converted to RGB8 first.
+/// The result is always RGB8.
+///
 /// # Errors
 /// Returns a resource error when the cover canvas would exceed the internal
-/// bounds instead of allocating it.
+/// bounds instead of allocating it, and [`ProcessError::Resize`] when the
+/// resizer fails.
 pub fn cover_crop(
     image: &DynamicImage,
     target: TargetPixels,
@@ -185,10 +199,80 @@ pub fn cover_crop(
     let scaled_width = scaled_edge(width, scale, target.width)?;
     let scaled_height = scaled_edge(height, scale, target.height)?;
     limits::check_intermediate(scaled_width, scaled_height)?;
-    let resized = image.resize_exact(scaled_width, scaled_height, imageops::FilterType::Lanczos3);
+    // The cover canvas of the old two-step path is never allocated: the
+    // centred crop is mapped back to source coordinates and resized straight
+    // to the target, with the same per-axis scale as an exact resize to the
+    // scaled canvas.
+    let (left, top, box_width, box_height) =
+        cover_box(width, height, scaled_width, scaled_height, target);
+    let converted;
+    let rgb = if let DynamicImage::ImageRgb8(rgb) = image {
+        rgb
+    } else {
+        converted = image.to_rgb8();
+        &converted
+    };
+    let resize_failed = |message: String| ProcessError::Resize { message };
+    // The typed entry point keeps only the RGB8 convolution reachable, so the
+    // other pixel types' code is not linked.
+    let source =
+        fir::images::TypedImageRef::<fir::pixels::U8x3>::from_buffer(width, height, rgb.as_raw())
+            .map_err(|error| resize_failed(error.to_string()))?;
+    let mut buffer = vec![0; target.width as usize * target.height as usize * 3];
+    let mut output = fir::images::TypedImage::<fir::pixels::U8x3>::from_buffer(
+        target.width,
+        target.height,
+        &mut buffer,
+    )
+    .map_err(|error| resize_failed(error.to_string()))?;
+    let options = fir::ResizeOptions::new()
+        .resize_alg(fir::ResizeAlg::Convolution(fir::FilterType::Lanczos3))
+        .crop(left, top, box_width, box_height);
+    fir::Resizer::new()
+        .resize_typed(&source, &mut output, &options)
+        .map_err(|error| resize_failed(error.to_string()))?;
+    RgbImage::from_raw(target.width, target.height, buffer)
+        .map(DynamicImage::ImageRgb8)
+        .ok_or_else(|| resize_failed("the output buffer does not match the target".to_owned()))
+}
+
+/// The centred crop of the `scaled_width`×`scaled_height` cover canvas, mapped
+/// back to source coordinates as `(left, top, width, height)`.
+fn cover_box(
+    width: u32,
+    height: u32,
+    scaled_width: u32,
+    scaled_height: u32,
+    target: TargetPixels,
+) -> (f64, f64, f64, f64) {
     let crop_x = (scaled_width - target.width) / 2;
     let crop_y = (scaled_height - target.height) / 2;
-    Ok(resized.crop_imm(crop_x, crop_y, target.width, target.height))
+    let scale_x = f64::from(width) / f64::from(scaled_width);
+    let scale_y = f64::from(height) / f64::from(scaled_height);
+    let left = f64::from(crop_x) * scale_x;
+    let top = f64::from(crop_y) * scale_y;
+    // On the axis that fits exactly the far edge can round one ulp past the
+    // source, which the resizer rejects, so both edges are clamped to it.
+    let right = (left + f64::from(target.width) * scale_x).min(f64::from(width));
+    let bottom = (top + f64::from(target.height) * scale_y).min(f64::from(height));
+    (
+        left,
+        top,
+        extent(left, right, width),
+        extent(top, bottom, height),
+    )
+}
+
+/// The positive size from `start` to `end` whose `start + size` the resizer
+/// still sees inside `limit`.
+// The loop ends: `start` is below `limit` and each step lowers `size`.
+#[allow(clippy::while_float)]
+fn extent(start: f64, end: f64, limit: u32) -> f64 {
+    let mut size = (end - start).max(f64::MIN_POSITIVE);
+    while start + size > f64::from(limit) {
+        size = size.next_down();
+    }
+    size
 }
 
 fn scaled_edge(source: u32, scale: f64, target: u32) -> Result<u32, ProcessError> {
@@ -203,7 +287,7 @@ fn scaled_edge(source: u32, scale: f64, target: u32) -> Result<u32, ProcessError
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let value = value.trunc() as u32;
     // Floating-point truncation can land one pixel below the target; clamping
-    // up keeps `crop_imm` inside the canvas and never changes a successful
+    // up keeps the crop inside the canvas and never changes a successful
     // cover size by more than that one pixel.
     Ok(value.max(target))
 }
@@ -292,7 +376,7 @@ fn blend_pixel_with_black(image: &mut RgbImage, x: u32, y: u32, factor: f32) {
     }
 }
 
-/// Encodes RGB8 lossless PNG with Best compression and adaptive filtering.
+/// Encodes RGB8 lossless PNG with Fast compression and adaptive filtering.
 ///
 /// # Errors
 /// Returns a typed encode error; the writer is left as the codec left it.
@@ -302,7 +386,7 @@ pub fn encode_png(
     path: &std::path::Path,
 ) -> Result<(), ProcessError> {
     let encoder =
-        PngEncoder::new_with_quality(writer, CompressionType::Best, PngFilterType::Adaptive);
+        PngEncoder::new_with_quality(writer, CompressionType::Fast, PngFilterType::Adaptive);
     image.write_with_encoder(encoder).map_err(|error| ProcessError::Encode {
         path: path.to_path_buf(),
         message: error.to_string(),

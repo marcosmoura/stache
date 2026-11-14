@@ -112,7 +112,7 @@ impl Fixture {
             backend: Arc::new(desktop.clone()),
             clock: Arc::new(SystemRuntimeClock),
             random: Arc::new(SystemRandom),
-            processor: Arc::new(RealProcessor),
+            processor: Arc::new(RealProcessor::host()),
         })
         .expect("wallpaper service")
     }

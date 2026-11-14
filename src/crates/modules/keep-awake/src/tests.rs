@@ -355,8 +355,11 @@ fn a_runtime_release_failure_stays_pending_and_recovers_on_the_timer() {
     assert!(harness.owner.pending().is_empty());
     assert_eq!(harness.backend.release_attempts().len(), attempts + 1);
 
-    // The lock knowledge stays current and another pass is inert.
-    harness.tick();
+    // The lock knowledge stays current and another pass is inert. The
+    // worker is settled with notifications, so the next pass is 30 s away.
+    let calls = harness.probe.calls();
+    harness.settled_tick();
+    wait_until("the settled scheduled pass", || harness.probe.calls() > calls);
     assert_eq!(harness.backend.release_attempts().len(), attempts + 1);
     assert_eq!(harness.runtime().assertion_state, AssertionState::Inactive);
 }
@@ -789,9 +792,10 @@ fn a_locked_validation_probe_discards_the_candidate() {
     assert!(harness.runtime().conditions.is_empty());
     assert!(harness.owner.pending().is_empty());
 
-    // The next pass finds the current lock unlocked and acquires a fresh lease.
+    // The next scheduled pass (30 s: settled with notifications) finds the
+    // current lock unlocked and acquires a fresh lease.
     harness.probe.set(NativeLockState::Unlocked);
-    harness.tick();
+    harness.settled_tick();
     wait_assertion(&harness, AssertionState::Active);
     assert_eq!(harness.backend.created().len(), 6);
 }
@@ -878,9 +882,42 @@ fn a_notification_storm_coalesces_into_bounded_passes() {
 }
 
 #[test]
-fn a_dropped_hint_is_recovered_by_the_two_second_timer() {
+fn a_dropped_hint_is_recovered_by_the_thirty_second_timer_with_notifications() {
     let harness = Harness::locked();
     harness.start().expect("start_all");
+    assert_eq!(
+        harness.runtime().observation,
+        LockObservation::NotificationsAndPolling
+    );
+    let calls = harness.probe.calls();
+    harness.probe.set(NativeLockState::Unlocked);
+    harness.advance(Duration::from_millis(29_999));
+    std::thread::sleep(Duration::from_millis(30));
+    assert_eq!(
+        harness.probe.calls(),
+        calls,
+        "sub-interval time must not reconcile"
+    );
+
+    harness.advance(Duration::from_millis(1));
+    wait_assertion(&harness, AssertionState::Active);
+    assert_eq!(harness.backend.created().len(), 3);
+}
+
+/// A locked harness whose lock observation failed to install.
+fn polling_fallback() -> Harness {
+    let harness = Harness::locked();
+    harness
+        .observation
+        .fail_next_install(LockObservationError::Unavailable("test-only failure".to_owned()));
+    harness.start().expect("observer failure alone succeeds degraded");
+    assert_eq!(harness.runtime().observation, LockObservation::PollingFallback);
+    harness
+}
+
+#[test]
+fn a_lock_change_is_recovered_by_the_two_second_timer_in_polling_fallback() {
+    let harness = polling_fallback();
     let calls = harness.probe.calls();
     harness.probe.set(NativeLockState::Unlocked);
     harness.advance(Duration::from_millis(1_999));
@@ -896,16 +933,126 @@ fn a_dropped_hint_is_recovered_by_the_two_second_timer() {
     assert_eq!(harness.backend.created().len(), 3);
 }
 
+/// Asserts a settled worker with notifications runs no pass at 2 s and one
+/// by 30 s.
+fn assert_settled_interval(harness: &Harness) {
+    let calls = harness.probe.calls();
+    harness.tick();
+    std::thread::sleep(Duration::from_millis(30));
+    assert_eq!(harness.probe.calls(), calls, "a settled worker waits 30 s");
+    harness.advance(Duration::from_secs(28));
+    wait_until("the settled pass at 30 s", || harness.probe.calls() > calls);
+}
+
+#[test]
+fn an_unknown_lock_state_is_retried_at_two_seconds_then_settles_at_thirty() {
+    let harness = Harness::locked();
+    harness.start().expect("start_all");
+    harness.probe.set(NativeLockState::Unknown(
+        LockUnknown::SessionDictionaryUnavailable,
+    ));
+    assert!(harness.deliver());
+    wait_until("the probe failure condition", || {
+        harness.conditions().contains(&KeepAwakeConditionKind::LockProbeFailed)
+    });
+    let calls = harness.probe.calls();
+    harness.tick();
+    wait_until("the retry at 2 s", || harness.probe.calls() > calls);
+
+    harness.probe.set(NativeLockState::Locked);
+    harness.tick();
+    wait_until("the probe answers again", || harness.conditions().is_empty());
+    assert_settled_interval(&harness);
+}
+
+#[test]
+fn a_failed_acquisition_is_retried_at_two_seconds_then_settles_at_thirty() {
+    let harness = Harness::locked();
+    harness.start().expect("start_all");
+    harness.probe.set(NativeLockState::Unlocked);
+    harness.backend.fail_next_create(AssertionKind::Idle, FAILURE_CODE);
+    assert!(harness.deliver());
+    wait_until("the failed acquisition", || {
+        harness.conditions().contains(&KeepAwakeConditionKind::AssertionAcquireFailed)
+    });
+    harness.tick();
+    wait_assertion(&harness, AssertionState::Active);
+    assert_settled_interval(&harness);
+}
+
+#[test]
+fn a_pending_release_is_retried_at_two_seconds_then_settles_at_thirty() {
+    let harness = Harness::new(true);
+    harness.start().expect("start_all");
+    wait_assertion(&harness, AssertionState::Active);
+    harness.backend.fail_release_always(AssertionKind::System, RELEASE_FAILURE_CODE);
+    harness.probe.set(NativeLockState::Locked);
+    assert!(harness.deliver());
+    wait_assertion(&harness, AssertionState::ReleasePending);
+    harness.backend.clear_failures();
+    harness.tick();
+    wait_assertion(&harness, AssertionState::Inactive);
+    assert!(harness.owner.pending().is_empty());
+    assert_settled_interval(&harness);
+}
+
+#[test]
+fn polling_fallback_runs_one_scheduled_pass_every_two_seconds() {
+    let harness = polling_fallback();
+    let calls = harness.probe.calls();
+    for pass in 1..=3 {
+        harness.advance(Duration::from_secs(2));
+        wait_until("the scheduled pass", || harness.probe.calls() == calls + pass);
+    }
+    std::thread::sleep(Duration::from_millis(30));
+    assert_eq!(harness.probe.calls(), calls + 3);
+}
+
 #[test]
 fn sub_interval_fake_time_does_not_reconcile() {
     let harness = Harness::locked();
     harness.start().expect("start_all");
     let calls = harness.probe.calls();
     harness.signals().wait_until_waiting(WAIT);
+    // Two seconds was the old interval; with notifications it no longer is.
+    harness.advance(Duration::from_secs(2));
+    harness.advance(Duration::from_secs(27));
+    std::thread::sleep(Duration::from_millis(30));
+    assert_eq!(harness.probe.calls(), calls);
+    assert_eq!(harness.runtime().assertion_state, AssertionState::Inactive);
+}
+
+#[test]
+fn sub_interval_fake_time_does_not_reconcile_in_polling_fallback() {
+    let harness = polling_fallback();
+    let calls = harness.probe.calls();
+    harness.signals().wait_until_waiting(WAIT);
     harness.advance(Duration::from_secs(1));
     std::thread::sleep(Duration::from_millis(30));
     assert_eq!(harness.probe.calls(), calls);
     assert_eq!(harness.runtime().assertion_state, AssertionState::Inactive);
+}
+
+#[test]
+fn a_hint_runs_a_pass_at_once_in_both_modes() {
+    let notified = Harness::locked();
+    notified.start().expect("start_all");
+    notified.signals().wait_until_waiting(WAIT);
+    let calls = notified.probe.calls();
+    notified.probe.set(NativeLockState::Unlocked);
+    std::thread::sleep(Duration::from_millis(30));
+    assert_eq!(notified.probe.calls(), calls, "no pass before the hint");
+    assert!(notified.deliver());
+    wait_assertion(&notified, AssertionState::Active);
+
+    let polling = polling_fallback();
+    polling.signals().wait_until_waiting(WAIT);
+    let calls = polling.probe.calls();
+    polling.probe.set(NativeLockState::Unlocked);
+    std::thread::sleep(Duration::from_millis(30));
+    assert_eq!(polling.probe.calls(), calls, "no pass before the hint");
+    polling.signals().signal();
+    wait_assertion(&polling, AssertionState::Active);
 }
 
 #[test]

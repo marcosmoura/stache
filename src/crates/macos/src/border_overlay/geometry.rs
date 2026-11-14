@@ -101,7 +101,7 @@ pub fn display_scale_for_frame(frame: OverlayRect, screens: &[OverlayScreen]) ->
 /// same width): native run 1 drew the full width and looked 1.5 times too thick;
 /// native run 2 drew two thirds and looked too thin; the user then chose five
 /// sixths. The remaining sixth lies under the target window for
-/// [`BorderPlacement::Below`] (and is simply not drawn for `Above`).
+/// [`BorderPlacement::Below`] (and is simply not drawn for `Above` and `Top`).
 pub const VISIBLE_FRACTION: f64 = 5.0 / 6.0;
 
 /// Extra points added to the target's corner radius for the ring's edge at
@@ -109,7 +109,8 @@ pub const VISIBLE_FRACTION: f64 = 5.0 / 6.0;
 pub const INNER_RADIUS_ADJUSTMENT: f64 = 1.0;
 
 /// Extra points added to the target's corner radius for the ring's inner edge
-/// with [`BorderPlacement::Above`]: one more than below (user decision, native run 11).
+/// with [`BorderPlacement::Above`] and [`BorderPlacement::Top`]: one more than
+/// below (user decision, native run 11).
 pub const ABOVE_INNER_RADIUS_ADJUSTMENT: f64 = 2.0;
 
 /// Everything a host needs to draw one overlay, in plain data.
@@ -202,7 +203,7 @@ pub fn plan_overlay(
         .min(half_short);
     let adjustment = match appearance.placement {
         BorderPlacement::Below => INNER_RADIUS_ADJUSTMENT,
-        BorderPlacement::Above => ABOVE_INNER_RADIUS_ADJUSTMENT,
+        BorderPlacement::Above | BorderPlacement::Top => ABOVE_INNER_RADIUS_ADJUSTMENT,
     };
     let target_radius = if radius > 0.0 {
         radius + adjustment
@@ -210,7 +211,9 @@ pub fn plan_overlay(
         0.0
     };
     let (inner, inner_radius) = match appearance.placement {
-        BorderPlacement::Above => (local_target, target_radius.min(half_short)),
+        BorderPlacement::Above | BorderPlacement::Top => {
+            (local_target, target_radius.min(half_short))
+        }
         BorderPlacement::Below => {
             let inward = (width - visible_width).min(half_short);
             let inner = OverlayRect::new(

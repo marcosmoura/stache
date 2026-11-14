@@ -9,9 +9,12 @@
 //! Native callbacks are refresh hints only: they increment a signal and wake the
 //! worker. The worker is the only place that probes the lock, acquires or
 //! releases assertions and publishes runtime state. It waits on one module-local
-//! signal with a fixed two-second deadline, so a dropped notification is
-//! recovered by the timer and a notification storm collapses into at most one
-//! extra pass. `stop` invalidates the generation first, wakes that waiter, waits
+//! signal with a deadline: two seconds in polling fallback and after any pass
+//! that left an unknown lock state, a failed acquisition or a pending release (in
+//! both modes), and 30 seconds for a settled worker with lock notifications
+//! installed. A dropped notification is recovered by the timer within 30 seconds
+//! and a notification storm collapses into at most one extra pass. `stop`
+//! invalidates the generation first, wakes that waiter, waits
 //! for any native work the worker already started, then releases owned assertions
 //! and removes observation; the SDK registry joins the worker after `stop`
 //! returns. That wait lasts no longer than the registry's own join, and it means
@@ -69,8 +72,26 @@ use crate::status::{
 /// The worker name visible in thread listings and diagnostics.
 const WORKER_NAME: &str = "keep-awake-reconcile";
 
-/// How long the owned worker waits between scheduled reconciliation passes.
-const RECONCILE_INTERVAL: Duration = Duration::from_secs(2);
+/// How long a settled worker waits between scheduled passes while lock
+/// notifications are installed (`notificationsAndPolling`). The pass is then
+/// only a safety probe for a dropped notification. A pass that left something to
+/// retry is followed by one after [`POLLING_RECONCILE_INTERVAL`] instead.
+const NOTIFIED_RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
+
+/// How long the owned worker waits between scheduled passes without lock
+/// notifications (`pollingFallback`), where the pass is the only lock source,
+/// and after any pass that left an unknown lock state, a failed acquisition or a
+/// pending release, in both modes.
+const POLLING_RECONCILE_INTERVAL: Duration = Duration::from_secs(2);
+
+/// The scheduled interval for a settled worker with or without lock notifications.
+pub const fn reconcile_interval(notifications: bool) -> Duration {
+    if notifications {
+        NOTIFIED_RECONCILE_INTERVAL
+    } else {
+        POLLING_RECONCILE_INTERVAL
+    }
+}
 
 const OBSERVER_UNAVAILABLE: &str =
     "Screen lock notifications are unavailable; Keep Awake is polling instead.";
@@ -604,6 +625,12 @@ struct ReconcileReport {
 }
 
 impl ReconcileReport {
+    /// Whether the pass left an unknown lock state, a failed acquisition or a
+    /// pending release, which the next pass retries after two seconds.
+    const fn needs_retry(&self) -> bool {
+        self.probe_unknown || self.acquire_failure.is_some() || self.release_pending
+    }
+
     /// The initial start error this pass requires, if any.
     fn start_failure(&self) -> Option<String> {
         if self.probe_unknown {
@@ -675,7 +702,7 @@ impl Signals {
     }
 
     /// Coalesces one refresh hint and wakes the worker.
-    fn signal(&self) {
+    pub(crate) fn signal(&self) {
         let mut state = lock(&self.state);
         state.pending = true;
         drop(state);
@@ -800,6 +827,9 @@ fn run_worker(
     cancellation: CancellationToken,
 ) {
     let _unwind = SettleOnUnwind(&generation);
+    let settled = reconcile_interval(observation.is_some());
+    // The worker starts settled: a start whose first pass fails starts no worker.
+    let mut interval = settled;
     loop {
         if !generation.is_live() || cancellation.is_cancelled() {
             break;
@@ -810,7 +840,7 @@ fn run_worker(
             // hint; consume both so one notification cannot cause two passes.
             signals.take_pending();
         } else {
-            match signals.wait(RECONCILE_INTERVAL) {
+            match signals.wait(interval) {
                 Wakeup::Stopped => break,
                 Wakeup::Hint | Wakeup::Deadline => {}
             }
@@ -821,7 +851,12 @@ fn run_worker(
         // A notification that arrives while the pass is running is consumed by
         // the next iteration (the installer coalesces it), so at most one extra
         // pass follows a delivered notification without a sleep loop.
-        let _ = generation.reconcile(observation.as_deref());
+        let report = generation.reconcile(observation.as_deref());
+        interval = if report.needs_retry() {
+            POLLING_RECONCILE_INTERVAL
+        } else {
+            settled
+        };
     }
 }
 

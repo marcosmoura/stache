@@ -39,6 +39,7 @@ Read when navigating the shipped foundation and explicitly planned rewrites.
 | Security hardening (CI, adapter, trust)                                                | [spec](specs/2026-11-11-security-hardening/00-overview.md), [trust](architecture/config.md#trust-model)     |
 | Tray clicks and menu (shipped)                                                         | [features/tray.md](features/tray.md)                                                                        |
 | Tray popover (shell, Overview, settings)                                               | [feature](features/popover.md), [spec](specs/2026-11-13-tray-popover/00-overview.md)                        |
+| Performance pass (input latency, idle polling, wallpapers, Tiling reads)               | [spec](specs/2026-11-13-performance/00-overview.md), [measurements](guides/performance.md)                  |
 
 ## Doc style
 

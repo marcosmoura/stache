@@ -17,19 +17,23 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use stache_macos::applications::LifecycleKind;
-use stache_macos::windows::{ApplicationChange, EventQueue, WindowChange, WindowEventKind};
+use stache_macos::windows::{
+    ApplicationChange, EventQueue, WindowChange, WindowEventKind, WindowInstance,
+};
 use stache_macos::{ApplicationId, DisplayId};
 use stache_sdk::CancellationToken;
 
 mod borders;
 mod diag;
 mod frames;
+mod lanes;
 
 pub use borders::BorderNotes;
 #[cfg(test)]
 pub use borders::ENGINE_FAULT;
 pub use diag::Diag;
 pub use frames::{DRAIN_QUANTUM, DrainOutcome, FRAME_PLAN_DEADLINE, FrameControl, FrameJob};
+pub use lanes::{READ_THREAD_PREFIX, READ_WORKERS};
 
 use crate::animation::{AnimationControl, AnimationJob, AnimationSettings};
 use crate::backend::WindowBackend;
@@ -44,7 +48,7 @@ use crate::workspaces::visibility_requirement;
 
 /// Inputs processed before the loop re-checks cancellation and timers.
 pub const MAX_INPUTS_PER_TURN: usize = 256;
-/// Read-only effects queued for the runner.
+/// Effects queued for the effects thread, and reads queued over every lane.
 pub const RUNNER_CAPACITY: usize = 64;
 /// Wait budget for one backend hop.
 pub const BACKEND_BUDGET: Duration = Duration::from_secs(5);
@@ -212,6 +216,11 @@ impl EffectEnv {
         self.complete(stamp, CompletionResult::Refresh(application, outcome));
     }
 
+    fn snapshot(&self, stamp: Stamp, window: WindowInstance) {
+        let outcome = self.backend.snapshot(window, &self.cancel, Some(Self::deadline()));
+        self.complete(stamp, CompletionResult::Snapshot(window, outcome));
+    }
+
     fn read_focus(&self, stamp: Stamp, application: ApplicationId) {
         let outcome = self.backend.focused_window(
             stamp.epoch,
@@ -240,9 +249,25 @@ impl EffectEnv {
             }
             Effect::Refresh { stamp, application } => self.refresh(stamp, application),
             Effect::ReadFocus { stamp, application } => self.read_focus(stamp, application),
-            Effect::Snapshot { stamp, window } => {
-                let outcome = self.backend.snapshot(window, &self.cancel, Some(Self::deadline()));
-                self.complete(stamp, CompletionResult::Snapshot(window, outcome));
+            Effect::Snapshot { stamp, window } => self.snapshot(stamp, window),
+            // The window server's frame; without one, the snapshot as before.
+            // Only a frame the in-flight write explains; any other (a
+            // fullscreen entry, a user drag) gets the full read at once.
+            Effect::ReadGeometry {
+                stamp,
+                window,
+                cg_window_id,
+                start,
+                target,
+            } => {
+                let frame = (!self.cancel.is_cancelled())
+                    .then(|| self.backend.window_bounds(cg_window_id))
+                    .flatten()
+                    .filter(|frame| crate::state::explained_by_travel(frame, &start, &target));
+                match frame {
+                    Some(frame) => self.complete(stamp, CompletionResult::Geometry(window, frame)),
+                    None => self.snapshot(stamp, window),
+                }
             }
             Effect::Untrack { stamp, application } => {
                 let _ = self.backend.untrack(
@@ -261,6 +286,7 @@ impl EffectEnv {
                 revision,
                 plan_sequence,
                 window,
+                cg_window_id,
                 target,
                 components,
                 from,
@@ -275,6 +301,7 @@ impl EffectEnv {
                         revision,
                         plan_sequence,
                         window,
+                        cg_window_id,
                         from,
                         target,
                         components,
@@ -409,35 +436,105 @@ impl EffectRunner for InlineRunner {
     fn close(&self) {}
 }
 
-/// A bounded queue drained by one worker thread.
+/// The effects thread and the read lanes.
+///
+/// The effects thread drains a bounded queue in submission order; the read
+/// lanes (see [`lanes`]) are drained by [`READ_WORKERS`] workers. Hide, unhide,
+/// activation, focus, frame dispatch, application listing and frame
+/// cancellation go to the effects thread; reads go to their application's
+/// lane.
 pub struct ThreadRunner {
     sender: Mutex<Option<SyncSender<Effect>>>,
     worker: Mutex<Option<JoinHandle<()>>>,
+    pool: lanes::SharedPool,
+    readers: Vec<Mutex<Option<JoinHandle<()>>>>,
+    _cancel_listener: stache_sdk::CancelListener,
 }
 
+/// The effects thread name.
+pub const EFFECTS_THREAD_NAME: &str = "stache-tiling-effects";
+
 impl ThreadRunner {
-    /// Starts the worker with a queue of `capacity` effects.
+    /// Starts the effects worker with a queue of `capacity` effects and the
+    /// read workers with `capacity` queued reads over every lane.
     ///
     /// # Errors
     ///
-    /// The thread could not be spawned.
+    /// A thread could not be spawned (the ones already started are joined).
     pub fn spawn(env: EffectEnv, capacity: usize) -> io::Result<Self> {
+        let pool: lanes::SharedPool = Arc::new(lanes::ReadPool::new(capacity));
+        let mut readers: Vec<Mutex<Option<JoinHandle<()>>>> = Vec::with_capacity(READ_WORKERS);
+        let stop = |pool: &lanes::ReadPool, readers: Vec<Mutex<Option<JoinHandle<()>>>>| {
+            pool.close();
+            for reader in readers {
+                if let Some(handle) = reader.into_inner().unwrap_or_else(PoisonError::into_inner) {
+                    let _ = handle.join();
+                }
+            }
+        };
+        for n in 1..=READ_WORKERS {
+            let worker_pool = Arc::clone(&pool);
+            let worker_env = env.clone();
+            match std::thread::Builder::new()
+                .name(format!("{READ_THREAD_PREFIX}-{n}"))
+                .spawn(move || worker_pool.work(&worker_env))
+            {
+                Ok(handle) => readers.push(Mutex::new(Some(handle))),
+                Err(error) => {
+                    stop(&pool, readers);
+                    return Err(error);
+                }
+            }
+        }
         let (sender, receiver) = sync_channel::<Effect>(capacity.max(1));
-        let worker = std::thread::Builder::new().name("stache-tiling-effects".to_owned()).spawn(
-            move || {
+        let effects_pool = Arc::clone(&pool);
+        let cancel = env.cancel.clone();
+        let worker =
+            std::thread::Builder::new().name(EFFECTS_THREAD_NAME.to_owned()).spawn(move || {
                 while let Ok(effect) = receiver.recv() {
                     if env.cancel.is_cancelled() {
                         env.discard(&effect);
-                        continue;
+                    } else {
+                        env.run(&effect);
                     }
-                    env.run(&effect);
+                    if let Effect::Focus { window, .. } = effect {
+                        effects_pool.focus_finished(window.application());
+                    }
                 }
-            },
-        )?;
+            });
+        let worker = match worker {
+            Ok(worker) => worker,
+            Err(error) => {
+                stop(&pool, readers);
+                return Err(error);
+            }
+        };
+        let listener_pool = Arc::clone(&pool);
+        let cancel_listener = cancel.on_cancel(Arc::new(move || listener_pool.cancelled()));
         Ok(Self {
             sender: Mutex::new(Some(sender)),
             worker: Mutex::new(Some(worker)),
+            pool,
+            readers,
+            _cancel_listener: cancel_listener,
         })
+    }
+
+    /// Reads queued on the lanes and not started.
+    #[cfg(test)]
+    pub(crate) fn queued_reads(&self) -> usize { self.pool.queued() }
+
+    /// Reads started on the lanes so far.
+    #[cfg(test)]
+    pub(crate) fn started_reads(&self) -> usize { self.pool.started() }
+
+    /// Applications with a lane or a focus count.
+    #[cfg(test)]
+    pub(crate) fn lane_entries(&self) -> (usize, usize) { self.pool.tracked_applications() }
+
+    fn close_admission(&self) {
+        drop(self.sender.lock().unwrap_or_else(PoisonError::into_inner).take());
+        self.pool.close();
     }
 }
 
@@ -470,35 +567,64 @@ pub fn join_within(slot: &Mutex<Option<JoinHandle<()>>>, timeout: Duration) -> b
 }
 
 impl ThreadRunner {
-    /// Closes admission and joins the worker if it ends within `timeout`.
+    /// Closes admission and joins the effects worker and every read worker if
+    /// they end within `timeout`, one bound for all of them.
     ///
-    /// A worker stuck in a native send is not detached: its handle stays so a
-    /// later call can join it. `true` when the worker is joined.
+    /// A worker stuck in a native call is not detached: its handle stays so a
+    /// later call can join it. `true` when every worker is joined.
     #[must_use]
     pub fn close_within(&self, timeout: Duration) -> bool {
-        drop(self.sender.lock().unwrap_or_else(PoisonError::into_inner).take());
-        join_within(&self.worker, timeout)
+        self.close_admission();
+        let deadline = Instant::now().checked_add(timeout);
+        let left = || deadline.map_or(timeout, |d| d.saturating_duration_since(Instant::now()));
+        let mut joined = join_within(&self.worker, left());
+        for reader in &self.readers {
+            joined &= join_within(reader, left());
+        }
+        joined
     }
 }
 
 impl EffectRunner for ThreadRunner {
     fn submit(&self, effect: Effect) -> Result<(), RunnerError> {
+        if let Some(application) = lanes::read_application(&effect) {
+            return self.pool.submit(application, effect);
+        }
         let sender = self.sender.lock().unwrap_or_else(PoisonError::into_inner).clone();
         let Some(sender) = sender else {
             return Err(RunnerError::Closed);
         };
-        sender.try_send(effect).map_err(|error| match error {
-            TrySendError::Full(_) => RunnerError::Full,
-            TrySendError::Disconnected(_) => RunnerError::Closed,
+        // Counted before it can run, so a focus read submitted from now on
+        // waits for it; a refused one counts as finished at once.
+        let focus = match effect {
+            Effect::Focus { window, .. } => Some(window.application()),
+            _ => None,
+        };
+        if let Some(application) = focus {
+            self.pool.focus_submitted(application);
+        }
+        sender.try_send(effect).map_err(|error| {
+            if let Some(application) = focus {
+                self.pool.focus_finished(application);
+            }
+            match error {
+                TrySendError::Full(_) => RunnerError::Full,
+                TrySendError::Disconnected(_) => RunnerError::Closed,
+            }
         })
     }
 
     fn close(&self) {
-        let sender = self.sender.lock().unwrap_or_else(PoisonError::into_inner).take();
-        drop(sender);
+        self.close_admission();
         let worker = self.worker.lock().unwrap_or_else(PoisonError::into_inner).take();
         if let Some(worker) = worker {
             let _ = worker.join();
+        }
+        for reader in &self.readers {
+            let handle = reader.lock().unwrap_or_else(PoisonError::into_inner).take();
+            if let Some(handle) = handle {
+                let _ = handle.join();
+            }
         }
     }
 }
@@ -571,6 +697,7 @@ const fn effect_stamp(effect: &Effect) -> Option<Stamp> {
         Effect::Track { stamp, .. }
         | Effect::Refresh { stamp, .. }
         | Effect::Snapshot { stamp, .. }
+        | Effect::ReadGeometry { stamp, .. }
         | Effect::ReadFocus { stamp, .. }
         | Effect::Untrack { stamp, .. }
         | Effect::ListApplications { stamp }
@@ -942,13 +1069,6 @@ impl Engine {
             },
             _ => None,
         };
-        // A raise Tiling did not cause: re-asserted for the focused `above`
-        // border after the borders update (drag.rs still decides the drag).
-        let raise = match &input {
-            Input::Drag(DragSignal::Up { .. }) => Some(None),
-            Input::Activated(application) => Some(Some(*application)),
-            _ => None,
-        };
         let terminated = match &input {
             Input::Lifecycle {
                 kind: LifecycleKind::Terminated,
@@ -978,9 +1098,6 @@ impl Engine {
         // Borders first: an overlay of a window that left the visible workspace
         // is ordered out before this input's frame writes are queued.
         self.update_borders(now);
-        if let (Some(application), Some(side)) = (raise, &mut self.border_side) {
-            side.raise_intent(now, application);
-        }
         self.dispatch(effects);
         if retime {
             self.retime(now);

@@ -235,7 +235,8 @@ impl OverlayHost for NativeHost {
         };
         let ordering = match placement {
             BorderPlacement::Below => NSWindowOrderingMode::Below,
-            BorderPlacement::Above => NSWindowOrderingMode::Above,
+            // `Top` differs only by the level the caller passes.
+            BorderPlacement::Above | BorderPlacement::Top => NSWindowOrderingMode::Above,
         };
         let number = window_number(panel);
         // Ineligible while AppKit re-stacks it; eligible again only when it is

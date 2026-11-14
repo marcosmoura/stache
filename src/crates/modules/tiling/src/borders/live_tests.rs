@@ -631,7 +631,7 @@ fn a_reorder_event_for_an_unbordered_window_orders_nothing() {
 }
 
 #[test]
-fn with_live_follow_active_a_focus_change_orders_once_and_schedules_no_settle() {
+fn with_live_follow_active_a_focus_change_orders_once_and_schedules_nothing() {
     let live = FakeLiveFollow::active();
     let mut rig = Rig::inline();
     rig.engine.set_live_follow(Box::new(live));
@@ -642,26 +642,8 @@ fn with_live_follow_active_a_focus_change_orders_once_and_schedules_no_settle() 
     let before = order_count(&rig);
     rig.engine.note_focus(rig.at(100), Some(w));
     assert_eq!(order_count(&rig) - before, 1);
-    assert_eq!(rig.engine.next_deadline(), None, "no settle timer");
+    assert_eq!(rig.engine.next_deadline(), None, "no timer");
     rig.engine.tick(rig.at(2000));
-    assert_eq!(order_count(&rig) - before, 1);
-}
-
-#[test]
-fn with_live_follow_active_a_click_orders_nothing_until_the_reorder_event() {
-    let (mut rig, live, w) = reorder_rig(BorderPlacement::Above);
-    rig.engine.tick(rig.at(1000));
-    let before = order_count(&rig);
-    // Mouse up and activation inside the focused window: no timer re-order.
-    rig.engine.note_raise_intent(rig.at(1100), w);
-    rig.engine.note_activation(rig.at(1101), w.application());
-    rig.engine.tick(rig.at(1200));
-    assert_eq!(order_count(&rig) - before, 0);
-    assert_eq!(rig.engine.next_deadline(), None);
-    // The window server raised the window over the border: its reorder
-    // notification puts the border back above.
-    live.sink().expect("sink").reorder(w);
-    rig.engine.tick(rig.at(1300));
     assert_eq!(order_count(&rig) - before, 1);
 }
 

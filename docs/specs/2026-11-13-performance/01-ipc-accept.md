@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 01 — SDK: event-driven accept loop
@@ -21,12 +21,12 @@ Files expected to change: `src/crates/sdk/src/ipc/server.rs` and `docs/architect
 
 ## Acceptance criteria
 
-- [ ] PF-01-01: Over 40 sequential round trips against a real server, sent at uneven intervals between 3 ms and 120 ms, the median is below 10 ms. The same holds for a `core.status` request followed at once by a second request on a new connection.
-- [ ] PF-01-02: With no connection for 300 ms the accept loop does not complete a pass (a test-only pass counter stays unchanged).
-- [ ] PF-01-03: After `stop_accepting` the accept thread finishes within 100 ms without a connection arriving.
-- [ ] PF-01-04: Both pipe ends carry close-on-exec and the write end is non-blocking.
-- [ ] PF-01-05: Every existing test in `ipc::server`, `ipc::client` and `ipc::router` passes unchanged in meaning.
-- [ ] PF-01-06: `bun run lint`, `bun run format:check` and `bun run test` pass.
+- [x] PF-01-01: Over 40 sequential round trips against a real server, sent at uneven intervals between 3 ms and 120 ms, the median is below 10 ms. The same holds for a `core.status` request followed at once by a second request on a new connection.
+- [x] PF-01-02: With no connection for 300 ms the accept loop does not complete a pass (a test-only pass counter stays unchanged).
+- [x] PF-01-03: After `stop_accepting` the accept thread finishes within 100 ms without a connection arriving.
+- [x] PF-01-04: Both pipe ends carry close-on-exec and the write end is non-blocking.
+- [x] PF-01-05: Every existing test in `ipc::server`, `ipc::client` and `ipc::router` passes unchanged in meaning.
+- [x] PF-01-06: `bun run lint`, `bun run format:check` and `bun run test` pass.
 
 ## Tests
 
@@ -38,5 +38,8 @@ Files expected to change: `src/crates/sdk/src/ipc/server.rs` and `docs/architect
 ## Notes
 
 - Prototype on a scratch copy of the SDK (2026-11-13): single request median 31.4 ms to 0.68 ms, status plus action median 68 ms to 1.1 ms, p90 102 ms to 1.9 ms; 63 of 63 IPC tests passed.
+- Measured on the branch (2026-11-13) with `round_trips_at_uneven_gaps_are_answered_promptly`, the same test body on both loops: with the 50 ms poll the single request median was 38.6 ms and status plus action 87.7 ms (the test fails); with the `poll(2)` wait 0.69 ms and 0.38 ms.
+- A failing `poll` (anything but `EINTR`) falls back to the stop-wakeable 50 ms wait, for the same reason another `accept` error does.
+- An idle loop makes no pass, so finished connection handles (at most the connection limit) are joined when the next connection or the stop arrives instead of within 50 ms.
 - The Tiling CLI still opens two connections per command. That is a non-goal: after this part the second connection costs well under a millisecond.
 - For the user to check: key bindings for focus, swap and workspace switch respond without the previous lag; `stache tiling query status` still answers.

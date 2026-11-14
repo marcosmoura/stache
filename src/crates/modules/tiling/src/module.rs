@@ -1376,15 +1376,24 @@ impl TilingModule {
 pub const NO_BORDER_OVERLAYS: &str =
     "borders: enabled, but this host composed no border overlays; nothing is drawn";
 
+/// The diagnostic of a host whose window-server bounds read is unavailable:
+/// Tiling reads window geometry through Accessibility, as it always could.
+pub const GEOMETRY_READS_USE_ACCESSIBILITY: &str = "geometry reads: the window server's window \
+     bounds are unavailable, so window positions during animations are read through \
+     Accessibility";
+
 /// The optional-feature diagnostics of an adopted configuration: features not
-/// implemented yet, enabled borders without overlays, and an animation worker
-/// that could not start.
+/// implemented yet, enabled borders without overlays, an animation worker
+/// that could not start, and geometry reads without the window server.
 fn feature_diagnostics(runtime: &TrackingRuntime, config: &TilingConfig) -> Vec<String> {
     let mut features = crate::status::unsupported_features(config);
     if config.borders.enabled && !runtime.has_native_borders() {
         features.push(NO_BORDER_OVERLAYS.to_owned());
     }
     features.extend(runtime.animation_failure());
+    if runtime.window_bounds_missing() {
+        features.push(GEOMETRY_READS_USE_ACCESSIBILITY.to_owned());
+    }
     features
 }
 

@@ -1774,13 +1774,10 @@ fn a_reload_from_below_to_above_reorders_live_overlays() {
     assert_eq!(placements(&rig, 11), vec![BorderPlacement::Below]);
     assert_eq!(placements(&rig, 12), vec![BorderPlacement::Below]);
     rig.engine.configure(&borders(serde_json::json!({"order": "above"})));
-    for cg in [11, 12] {
-        assert_eq!(
-            placements(&rig, cg).last(),
-            Some(&BorderPlacement::Above),
-            "{cg}"
-        );
-    }
+    // The focused window's border goes one level up; the other one sits
+    // directly above its own window.
+    assert_eq!(placements(&rig, 11).last(), Some(&BorderPlacement::Top));
+    assert_eq!(placements(&rig, 12).last(), Some(&BorderPlacement::Above));
     assert_eq!(rig.backend.panels_created(), 2, "re-ordered, not recreated");
 }
 
@@ -2072,184 +2069,46 @@ fn orders(rig: &Rig) -> usize { rig.count(|k| matches!(k, OverlayKind::Order { .
 
 fn hides(rig: &Rig) -> usize { rig.count(|k| matches!(k, OverlayKind::Hide)) }
 
+/// A focus change orders the border of the window that took the focus once,
+/// whatever its placement, and schedules nothing. No timed follow-up exists:
+/// the model places the focused window's `above` border one level up
+/// (`BorderPlacement::Top`), where a later raise of its window cannot cover it.
+/// The recolor of a focus change is a state change, never an `Order`; a raise
+/// Tiling made itself re-orders the window's border once.
 #[test]
-fn an_above_focus_change_orders_once_now_and_once_after_the_settle() {
-    let mut rig = Rig::inline();
-    let e = placed_entry(&rig, 1, 11, BorderPlacement::Above);
-    let w = e.window;
-    show_all(&mut rig, vec![e.clone()]);
-    let before = orders(&rig);
-    let now = rig.at(100);
-    rig.engine.note_focus(now, Some(w));
-    // `Effect::Focus` completed and live follow saw the raise: absorbed.
-    rig.route.note_raised(w);
-    rig.route.note_raised(w);
-    rig.engine.reorder_raised(now);
-    // The focus recolor is a state change, never an `Order`.
-    let mut recolored = e;
-    recolored.focused = true;
-    recolored.appearance.paint = other_appearance().paint;
-    rig.engine.update(now, model(vec![recolored]));
-    assert_eq!(orders(&rig) - before, 1, "one immediate order");
-    let due = rig.engine.next_deadline().expect("a settle deadline");
-    assert!(due > now);
-    rig.engine.tick(due.checked_sub(Duration::from_millis(1)).expect("after t0"));
-    assert_eq!(orders(&rig) - before, 1);
-    rig.engine.tick(due);
-    assert_eq!(orders(&rig) - before, 2, "one settle order");
-    rig.engine.tick(due + Duration::from_secs(1));
-    rig.engine.reorder_raised(due + Duration::from_secs(1));
-    assert_eq!(orders(&rig) - before, 2, "never more than one follow-up");
-    assert_eq!(rig.engine.next_deadline(), None, "no repeat loop");
-    assert_eq!(hides(&rig), 0);
-    assert_eq!(rig.order_outs(), 0);
-}
-
-#[test]
-fn rapid_focus_changes_coalesce_into_one_settle_for_the_last_focus() {
-    let mut rig = Rig::inline();
-    let a = placed_entry(&rig, 1, 11, BorderPlacement::Above);
-    let b = placed_entry(&rig, 2, 12, BorderPlacement::Above);
-    let (wa, wb) = (a.window, b.window);
-    show_all(&mut rig, vec![a, b]);
-    let before = orders(&rig);
-    for (i, w) in [wa, wb, wa, wb, wa].into_iter().enumerate() {
-        let now = rig.at(100 + i as u64 * 5);
+fn a_focus_change_orders_the_focused_border_once_and_schedules_nothing() {
+    for placement in [
+        BorderPlacement::Below,
+        BorderPlacement::Above,
+        BorderPlacement::Top,
+    ] {
+        let mut rig = Rig::inline();
+        let e = placed_entry(&rig, 1, 11, placement);
+        let w = e.window;
+        show_all(&mut rig, vec![e.clone()]);
+        let before = orders(&rig);
+        let now = rig.at(100);
         rig.engine.note_focus(now, Some(w));
+        let mut recolored = e;
+        recolored.focused = true;
+        recolored.appearance.paint = other_appearance().paint;
+        rig.engine.update(now, model(vec![recolored]));
+        assert_eq!(orders(&rig) - before, 1, "{placement:?}: one order");
+        assert_eq!(rig.engine.next_deadline(), None, "{placement:?}");
+        rig.engine.tick(rig.at(2000));
+        assert_eq!(orders(&rig) - before, 1, "{placement:?}: nothing follows");
+
+        // `Effect::Focus` completed: the raise Tiling made is re-ordered once.
         rig.route.note_raised(w);
-        rig.engine.reorder_raised(now);
-        rig.engine.tick(now);
+        rig.engine.reorder_raised(rig.at(2100));
+        assert_eq!(orders(&rig) - before, 2, "{placement:?}");
+
+        // The focus leaving orders nothing.
+        rig.engine.note_focus(rig.at(2200), None);
+        rig.engine.tick(rig.at(4000));
+        assert_eq!(orders(&rig) - before, 2, "{placement:?}");
+        assert_eq!(rig.engine.next_deadline(), None, "{placement:?}");
+        assert_eq!(hides(&rig), 0);
+        assert_eq!(rig.order_outs(), 0);
     }
-    assert_eq!(orders(&rig) - before, 5, "one order per focus change");
-    let due = rig.engine.next_deadline().expect("settle");
-    rig.engine.tick(due);
-    rig.engine.tick(due + Duration::from_secs(1));
-    assert_eq!(orders(&rig) - before, 6, "a single settle order");
-    assert_eq!(hides(&rig), 0);
-}
-
-#[test]
-fn a_settle_is_skipped_when_focus_moved_away() {
-    let mut rig = Rig::inline();
-    let a = placed_entry(&rig, 1, 11, BorderPlacement::Above);
-    let w = a.window;
-    show_all(&mut rig, vec![a]);
-    let before = orders(&rig);
-    rig.engine.note_focus(rig.at(100), Some(w));
-    rig.engine.note_focus(rig.at(101), None);
-    rig.engine.tick(rig.at(2000));
-    assert_eq!(orders(&rig) - before, 1);
-}
-
-#[test]
-fn a_below_focus_change_orders_once_and_schedules_no_settle() {
-    let mut rig = Rig::inline();
-    let e = placed_entry(&rig, 1, 11, BorderPlacement::Below);
-    let w = e.window;
-    show_all(&mut rig, vec![e]);
-    let before = orders(&rig);
-    rig.engine.note_focus(rig.at(100), Some(w));
-    assert_eq!(orders(&rig) - before, 1);
-    assert_eq!(rig.engine.next_deadline(), None);
-    rig.engine.tick(rig.at(2000));
-    assert_eq!(orders(&rig) - before, 1);
-}
-
-#[test]
-fn a_raise_intent_on_the_focused_above_window_orders_now_and_once_after_the_settle() {
-    let mut rig = Rig::inline();
-    let e = placed_entry(&rig, 1, 11, BorderPlacement::Above);
-    let w = e.window;
-    show_all(&mut rig, vec![e]);
-    rig.engine.note_focus(rig.at(100), Some(w));
-    rig.engine.tick(rig.at(2000));
-    assert_eq!(rig.engine.next_deadline(), None);
-    let before = orders(&rig);
-    // A click inside the already-focused window (mouse up): no focus change.
-    let now = rig.at(3000);
-    rig.engine.note_raise_intent(now, w);
-    assert_eq!(orders(&rig) - before, 1, "one immediate order");
-    let due = rig.engine.next_deadline().expect("a settle deadline");
-    rig.engine.tick(due);
-    rig.engine.tick(due + Duration::from_secs(1));
-    assert_eq!(orders(&rig) - before, 2, "one settle order");
-    assert_eq!(rig.engine.next_deadline(), None, "no repeat loop");
-    // A raise intent for a window that is not focused does nothing.
-    let other = rig.window(9, 9);
-    rig.engine.note_raise_intent(rig.at(5000), other);
-    assert_eq!(orders(&rig) - before, 2);
-    assert_eq!(hides(&rig), 0);
-    assert_eq!(rig.order_outs(), 0);
-}
-
-#[test]
-fn a_raise_intent_on_a_below_window_orders_nothing() {
-    let mut rig = Rig::inline();
-    let e = placed_entry(&rig, 1, 11, BorderPlacement::Below);
-    let w = e.window;
-    show_all(&mut rig, vec![e]);
-    rig.engine.note_focus(rig.at(100), Some(w));
-    let before = orders(&rig);
-    rig.engine.note_raise_intent(rig.at(3000), w);
-    rig.engine.note_activation(rig.at(3001), w.application());
-    rig.engine.tick(rig.at(9000));
-    assert_eq!(orders(&rig) - before, 0);
-    assert_eq!(rig.engine.next_deadline(), None);
-}
-
-#[test]
-fn activation_of_the_focused_windows_app_reasserts_once_without_a_focus_change() {
-    let mut rig = Rig::inline();
-    let a = placed_entry(&rig, 1, 11, BorderPlacement::Above);
-    let w = a.window;
-    show_all(&mut rig, vec![a]);
-    rig.engine.note_focus(rig.at(100), Some(w));
-    rig.engine.tick(rig.at(2000));
-    let before = orders(&rig);
-    // Another application's activation does nothing.
-    rig.engine.note_activation(rig.at(3000), app(7));
-    assert_eq!(orders(&rig) - before, 0);
-    rig.engine.note_activation(rig.at(3000), w.application());
-    assert_eq!(orders(&rig) - before, 1);
-    let due = rig.engine.next_deadline().expect("settle");
-    rig.engine.tick(due);
-    rig.engine.tick(due + Duration::from_secs(1));
-    assert_eq!(orders(&rig) - before, 2);
-    assert_eq!(rig.engine.next_deadline(), None);
-}
-
-#[test]
-fn a_burst_of_focus_mouse_up_and_activation_coalesces_into_one_settle() {
-    let mut rig = Rig::inline();
-    let a = placed_entry(&rig, 1, 11, BorderPlacement::Above);
-    let w = a.window;
-    show_all(&mut rig, vec![a]);
-    let before = orders(&rig);
-    rig.engine.note_focus(rig.at(100), Some(w));
-    rig.engine.note_raise_intent(rig.at(110), w);
-    rig.engine.note_activation(rig.at(120), w.application());
-    rig.engine.tick(rig.at(121));
-    assert_eq!(orders(&rig) - before, 3, "one immediate order per event");
-    let due = rig.engine.next_deadline().expect("settle");
-    assert!(due > rig.at(120), "measured from the last event");
-    rig.engine.tick(due);
-    rig.engine.tick(due + Duration::from_secs(1));
-    assert_eq!(orders(&rig) - before, 4, "a single settle order");
-    assert_eq!(rig.engine.next_deadline(), None);
-    assert_eq!(hides(&rig), 0);
-}
-
-#[test]
-fn a_raise_intent_while_suspended_orders_nothing() {
-    let mut rig = Rig::inline();
-    let a = placed_entry(&rig, 1, 11, BorderPlacement::Above);
-    let w = a.window;
-    show_all(&mut rig, vec![a]);
-    rig.engine.note_focus(rig.at(100), Some(w));
-    rig.engine.tick(rig.at(2000));
-    rig.engine.suspend(SuspendReason::MissionControl);
-    let before = orders(&rig);
-    rig.engine.note_raise_intent(rig.at(3000), w);
-    rig.engine.tick(rig.at(9000));
-    assert_eq!(orders(&rig) - before, 0);
 }

@@ -170,6 +170,26 @@ The report compares against the provisional targets without inventing a numeric
 CPU budget: ≈0% idle CPU is labelled against a 1% noise threshold while the raw
 average is always shown. Misses are listed explicitly; targets are not relaxed.
 
+## Idle waits
+
+Loops that exist only to notice a stop block instead of polling, and their stop
+wakes them, so an idle host makes no timed wakeup from them:
+
+- the control socket's accept loop waits in `poll(2)` on the listener and a wake
+  pipe (it polled every 50 ms);
+- the host worker blocks on its command channel, and every teardown request
+  sends it a wake (it polled every 100 ms);
+- the `stache-config` thread blocks in the watcher's wait (it polled every
+  250 ms and the debouncer ticked every 50 ms); `notify`'s FSEvents run-loop
+  thread remains and wakes only on file events;
+- Tiling's reservation watcher waits on the reservation revision with no
+  deadline (it re-checked every 250 ms).
+
+Keep Awake's worker waits 30 s between safety probes once a pass left nothing to
+retry and lock notifications are installed. Retries of an unknown lock state, a
+failed acquisition or a pending release, and every pass in polling fallback,
+stay 2 s apart. Tests count each loop's passes while idle (zero).
+
 ## Tiling runtime bounds
 
 These are deterministic bounds, not measurements (live figures need a per-run
@@ -212,8 +232,21 @@ tracked application, own none. Every shard queue holds at most 64 commands and
 one slow application never delays another's actions or snapshots. The cost of
 one run loop and observer per thread is **unverified**.
 
+Tiling's effects run on two kinds of runner thread, both existing only while
+Tiling runs: one `stache-tiling-effects` thread for hides, unhides, activation,
+focus, frame dispatch and the application list, in submission order (at most 64
+queued), and four `stache-tiling-reads-<n>` threads for reads (`track`,
+`refresh`, snapshot, geometry and focus reads, `untrack`), one queue per
+application and at most 64 reads queued over all of them. An application's reads
+run one at a time in order; at most four reads (of four different applications)
+are in the backend at once, so one application that does not answer holds one
+read thread for its deadline and never delays another application's reads or a
+workspace switch. A queued snapshot or geometry read of a window answers for a
+later one of the same kind. Idle runner threads block on a condition variable or
+a channel and never wake; a stop joins all five under one bound.
+
 Threads an enabled, animating Tiling owns (all others are existing application
-threads): one `stache-tiling-ax-<n>` AX shard per tracked application (at most
+threads): the five effect runner threads above, one `stache-tiling-ax-<n>` AX shard per tracked application (at most
 32), the shared `stache-tiling-ax-overflow` shard for applications beyond that,
 the single `stache-tiling-animation` coordinator, and one CoreVideo-owned
 callback thread per display clock while that display has a running animation.
@@ -222,7 +255,27 @@ the clock callbacks make none. The animation metrics cost the coordinator one
 short lock at the end of each animation (a fixed 64-sample latency array per
 running animation, a book of at most 8 animations for each of at most 64
 applications) and no AX call; status takes the same lock to read. SkyLight
-batching is not used, so no private window-server call or extra thread exists.
+batching is not used, so no private window-server write or extra thread exists.
+
+Reads per animation: while a window's write is in flight, the move echoes of
+Stache's own frames are answered by the window server (`SLSGetWindowBounds`,
+measured once at 67 µs per call, against about ten Accessibility round trips
+for the full snapshot it replaces), the retarget start frame comes from the
+same call, and the settle readback reads `AXPosition` and `AXSize` only. The
+window server answers only frames the in-flight write explains (within the
+range of its start and target frames); any other frame, such as a
+native-fullscreen growth or a user drag, gets the full read at once. So
+the Accessibility calls an application receives during one animation are its
+frame writes (each with its messaging timeout) plus a fixed number per window:
+the `AXWindows` listings of the first and final frames and the settle read.
+In the animation rig (two applications with two windows each, 120 Hz fake
+clock, 5 to 15 ms per write, move echoes on) one layout change cost each
+application 264 Accessibility calls before (242 besides the 22 writes: a full
+snapshot per echo, 8 per window) and 46 after (24 besides the writes: 16
+timeouts, 4 listings, 2 position and 2 size reads), with 44 echoes in both.
+These are call counts from the fake arena, not timings; the native gain is
+**unverified**. Without the private symbols (status `diagnostics`: `geometry
+reads: ...`) every echo reads the full snapshot as before.
 Whether those threads, their wakeups and CPU cost are acceptable is
 **unverified**; the instant fallback (see [Tiling](../features/tiling.md#animation))
 bounds the cost of an application that cannot keep up.
@@ -267,12 +320,13 @@ Deterministic bounds (tested on a fake clock, no real sleeping): a disabled,
 paused, zero-size or panel-less Bar owns **zero** provider threads, timers,
 children and reads. An active Bar owns three worker threads (CPU, battery,
 Wi-Fi), each with one owned schedule: CPU every 2 s after a 250 ms warm-up,
-battery every 30 s while charging and 120 s otherwise, Wi-Fi at most every 5 s.
+battery every 30 s while charging and 120 s otherwise, Wi-Fi every 60 s plus
+`CoreWLAN` change signals (every 5 s when the signal source cannot be installed).
 A sample never overlaps itself and a stall causes one late sample, never a
 catch-up burst. The CPU temperature is a native SMC read (no child process);
 a sample re-reads an all-invalid key group at most 3 more times and repeats the
 last valid value for at most 3 samples. The Wi-Fi `ipconfig` child (1.5 s
-deadline, 256 KiB cap) runs once per Wi-Fi sample by default (SSID path on; `STACHE_BAR_WIFI_SSID_SUMMARY=0` turns it off for diagnostics).
+deadline, 256 KiB cap) runs only when the network may have changed: at start, after an identity signal, on a power or association change and on the 60 s safety sample, so about once per minute when idle instead of 12 times; quality signals read native values only, at most once per 5 s. Without the signal source it runs once per Wi-Fi sample (every 5 s), as before (SSID path on by default; `STACHE_BAR_WIFI_SSID_SUMMARY=0` turns it off for diagnostics).
 
 **Measurement procedure (script ready, run pending; needs separate approval,
 release builds only).** The method is the foundation tool above plus module

@@ -1682,6 +1682,74 @@ fn ordering_on_focus_keeps_the_chosen_placement() {
     }
 }
 
+fn order_levels(rig: &Rig) -> Vec<(BorderPlacement, isize)> {
+    rig.backend
+        .events()
+        .into_iter()
+        .filter_map(|event| match event {
+            FakeEvent::OrderRelative { placement, level, .. } => Some((placement, level)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `Top` is ordered above its target one window level higher, so the target's
+/// own raise cannot cover the ring, and it is drawn exactly like `Above`.
+#[test]
+fn a_top_border_is_ordered_one_level_above_its_target_and_drawn_like_above() {
+    for (placement, raised) in [
+        (BorderPlacement::Below, 0),
+        (BorderPlacement::Above, 0),
+        (BorderPlacement::Top, 1),
+    ] {
+        let rig = Rig::inline();
+        shown(&rig, show_with(placed(4.0, placement)));
+        let _ = rig
+            .control
+            .apply(OverlayBatch::new().with(h(1), OverlayKind::Order { target_cg_id: 10 }));
+        assert_eq!(
+            order_levels(&rig),
+            vec![(placement, raised), (placement, raised)],
+            "the show and a later re-order use the same level"
+        );
+        assert_eq!(
+            placement.panel_level(3),
+            3 + raised,
+            "relative to the target's level"
+        );
+    }
+    for resolved in [Some(20.0), Some(0.0), None] {
+        assert_eq!(
+            plan_for(&placed(6.0, BorderPlacement::Top), resolved),
+            plan_for(&placed(6.0, BorderPlacement::Above), resolved)
+        );
+    }
+}
+
+/// A visible border that gains or loses the top placement (its window took or
+/// lost the focus) is re-ordered at its new level, never ordered out and in.
+#[test]
+fn a_visible_border_changing_to_or_from_top_is_re_ordered_at_its_new_level() {
+    let rig = Rig::inline();
+    shown(&rig, show_with(placed(4.0, BorderPlacement::Above)));
+    shown(&rig, show_with(placed(4.0, BorderPlacement::Top)));
+    shown(&rig, show_with(placed(4.0, BorderPlacement::Top)));
+    shown(&rig, show_with(placed(4.0, BorderPlacement::Above)));
+    assert_eq!(
+        order_levels(&rig),
+        vec![
+            (BorderPlacement::Above, 0),
+            (BorderPlacement::Top, 1),
+            (BorderPlacement::Above, 0)
+        ],
+        "one order per change, none for the unchanged show"
+    );
+    assert!(
+        !rig.backend.events().iter().any(|event| matches!(event, FakeEvent::OrderOut(_))),
+        "never ordered out"
+    );
+}
+
 // ------------------------------------------------- translation-only moves
 
 fn translations(backend: &FakeOverlayBackend) -> Vec<(u64, OverlayPlan)> {

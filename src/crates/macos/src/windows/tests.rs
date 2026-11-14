@@ -1,7 +1,7 @@
 //! Fake-driven proof for the window adapter. No real AX, run loop effect on
 //! other applications, event tap or desktop effect is involved.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
@@ -1743,6 +1743,60 @@ fn a_snapshot_query_revalidates_and_reads_fresh_values() {
     assert_eq!(outcome, SnapshotOutcome::Stale(StaleReason::NotMember));
 }
 
+#[test]
+fn a_frame_only_read_reads_position_and_size_after_the_light_validation() {
+    let mut h = H::new();
+    let (app_el, nodes, tokens) = h.app_with_windows(app(1), 1, 2);
+    h.ax.edit(nodes[0], |n| n.position = Ok(AxPoint { x: 99.0, y: 1.0 }));
+    let window = tokens[0];
+    h.ax.clear_calls();
+    let outcome = h.run(|reply| Command::ReadFrame { window, reply });
+    let FrameReadOutcome::Frame(read) = outcome else {
+        panic!("{outcome:?}")
+    };
+    assert_eq!(
+        read.complete().map(|f| (f.origin.x, f.size.width)),
+        Some((99.0, 300.0))
+    );
+    // Tracked: exactly the timeout, `AXPosition` and `AXSize`; no listing, no
+    // other attribute.
+    assert_eq!(h.ax.calls(), vec![
+        Call::SetTimeout(nodes[0], ELEMENT_TIMEOUT),
+        Call::Position(nodes[0]),
+        Call::Size(nodes[0]),
+    ]);
+    // Suspended: refused without an AX call.
+    h.ax.edit(app_el, |n| n.windows = Ok(vec![nodes[1]]));
+    assert_eq!(
+        h.run(|reply| Command::Snapshot { window, reply }),
+        SnapshotOutcome::Stale(StaleReason::Suspended)
+    );
+    h.ax.clear_calls();
+    assert_eq!(
+        h.run(|reply| Command::ReadFrame { window, reply }),
+        FrameReadOutcome::Stale(StaleReason::Suspended)
+    );
+    assert!(h.ax.calls().is_empty());
+    // Destroyed: refused without an AX call.
+    let other = tokens[1];
+    h.obs.inject(1, AxNotification::ElementDestroyed, nodes[1]);
+    h.turn();
+    h.ax.clear_calls();
+    assert_eq!(
+        h.run(|reply| Command::ReadFrame { window: other, reply }),
+        FrameReadOutcome::Stale(StaleReason::Destroyed)
+    );
+    assert!(h.ax.calls().is_empty());
+    // Wrong epoch: after a stop, a token of the old epoch is refused.
+    assert!(matches!(h.stop(), StopOutcome::Clean { .. }));
+    h.ax.clear_calls();
+    assert_eq!(
+        h.run(|reply| Command::ReadFrame { window, reply }),
+        FrameReadOutcome::Stale(StaleReason::WrongEpoch)
+    );
+    assert!(h.ax.calls().is_empty());
+}
+
 // ---- cleanup, quarantine, epochs ---------------------------------------------------
 
 #[test]
@@ -2578,3 +2632,86 @@ mod lease;
 mod shards;
 mod suspended;
 mod tab_bars;
+
+// ---- event sequence order ---------------------------------------------------
+
+fn numbered(counter: &AtomicU64) -> WindowEvent {
+    WindowEvent {
+        epoch: RuntimeEpoch::new(1),
+        sequence: counter.fetch_add(1, Ordering::SeqCst) + 1,
+        kind: WindowEventKind::CapabilityChanged {
+            capability: Capability::Accessibility,
+            available: true,
+        },
+    }
+}
+
+fn sequences(queue: &EventQueue) -> Vec<u64> {
+    queue.drain().events.iter().map(|event| event.sequence).collect()
+}
+
+/// `make` runs under the queue lock: a drain started while a pusher is inside
+/// `make` cannot finish until that event is queued, so it sees the event. If
+/// `make` ran before the lock was taken, the drain would finish at once and
+/// empty, and a second pusher could queue a later number first.
+#[test]
+fn an_event_is_built_under_the_queue_lock() {
+    let queue = EventQueue::new(16);
+    let counter = Arc::new(AtomicU64::new(0));
+    let (inside_tx, inside_rx) = mpsc::channel();
+    let (drained_tx, drained_rx) = mpsc::channel::<()>();
+    let pusher = {
+        let (queue, counter) = (Arc::clone(&queue), Arc::clone(&counter));
+        thread::spawn(move || {
+            queue.push_with(|| {
+                let event = numbered(&counter);
+                inside_tx.send(()).expect("inside");
+                // The drain below has started by now; it must still be waiting.
+                assert!(
+                    drained_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+                    "a drain finished while the event was being built"
+                );
+                event
+            })
+        })
+    };
+    inside_rx.recv().expect("the pusher is inside make");
+    let drainer = {
+        let queue = Arc::clone(&queue);
+        thread::spawn(move || {
+            let seen = sequences(&queue);
+            // The pusher may have stopped listening already.
+            let _ = drained_tx.send(());
+            seen
+        })
+    };
+    assert!(pusher.join().expect("pusher"));
+    assert_eq!(drainer.join().expect("drainer"), vec![1]);
+}
+
+/// Several threads numbering and queueing at once leave exactly 1..=n, in
+/// order, with nothing dropped.
+#[test]
+fn concurrent_pushers_queue_every_number_once_and_in_order() {
+    const THREADS: u64 = 4;
+    const EACH: u64 = 1000;
+    let queue = EventQueue::new(usize::try_from(THREADS * EACH).expect("capacity"));
+    let counter = Arc::new(AtomicU64::new(0));
+    let pushers: Vec<_> = (0..THREADS)
+        .map(|_| {
+            let (queue, counter) = (Arc::clone(&queue), Arc::clone(&counter));
+            thread::spawn(move || {
+                for _ in 0..EACH {
+                    assert!(queue.push_with(|| numbered(&counter)));
+                }
+            })
+        })
+        .collect();
+    for pusher in pushers {
+        pusher.join().expect("pusher");
+    }
+    let batch = queue.drain();
+    assert_eq!(batch.dropped, 0);
+    let got: Vec<u64> = batch.events.iter().map(|event| event.sequence).collect();
+    assert_eq!(got, (1..=THREADS * EACH).collect::<Vec<_>>());
+}

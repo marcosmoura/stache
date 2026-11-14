@@ -1986,7 +1986,8 @@ mod live {
     //! animation running while a live sample arrives.
 
     use stache_macos::border_overlay::{
-        FakeLiveFollow, FakeSessionControl, FollowTiming, SystemLiveFollow, WindowEventKind as Ev2,
+        BorderPlacement, FakeLiveFollow, FakeSessionControl, FollowTiming, SystemLiveFollow,
+        WindowEventKind as Ev2,
     };
     use stache_macos::windows::SnapshotOutcome;
 
@@ -2483,63 +2484,135 @@ mod live {
         events.iter().filter(|e| matches!(e, Ev::Order(h, _) if *h == handle)).count()
     }
 
-    /// Native run 15: a click inside the already-focused window (no Tiling
-    /// focus change) re-orders its `above` overlay once at the mouse up and
-    /// once after the settle; nothing hides or orders out. The application's
-    /// activation without a focus change re-asserts the same way. `below`
-    /// re-asserts nothing.
+    fn placement_shown(log: &[Ev], handle: OverlayHandle) -> Option<BorderPlacement> {
+        log.iter().rev().find_map(|e| match e {
+            Ev::Show { handle: h, appearance, .. } if *h == handle => Some(appearance.placement),
+            _ => None,
+        })
+    }
+
+    /// The user's report of 2026-11-14: with `order = "above"`, every click
+    /// inside the already-focused window flashed its border. The application
+    /// orders its window front on a click, and a border directly above it
+    /// stayed covered until the next display frame; no re-order could land
+    /// sooner (native run 15's timed `Order` did not, and the private fast
+    /// order was measured to have no effect). The focused window's border is
+    /// therefore one window level up, where its window cannot cover it: a
+    /// click, or the activation of its application, re-orders nothing and
+    /// hides nothing. `below` re-orders nothing either.
     #[test]
-    fn a_click_in_the_focused_window_reorders_its_above_overlay() {
+    fn a_click_in_the_focused_window_cannot_cover_its_above_border() {
         let (mut desk, [w1, w2, _w3]) = Desk::started();
-        let cg1 = Desk::cg(0, 1);
-        let h1 = desk.handle(cg1);
+        let (cg1, cg2) = (Desk::cg(0, 1), Desk::cg(1, 1));
+        let (h1, h2) = (desk.handle(cg1), desk.handle(cg2));
         let tile = tile_of(&desk, w1);
 
         desk.reload(&json!({ "enabled": true, "order": "above" }), 0);
         for _ in 0..10 {
             desk.frame();
         }
+        let log = desk.log();
+        assert_eq!(
+            placement_shown(&log, h1),
+            Some(BorderPlacement::Top),
+            "the focused window's border is one level up"
+        );
+        assert_eq!(
+            placement_shown(&log, h2),
+            Some(BorderPlacement::Above),
+            "every other border stays directly above its own window"
+        );
         // The snapshots the up queues read the windows where they are.
         untouched(&desk, w1, cg1);
-        untouched(&desk, w2, Desk::cg(1, 1));
+        untouched(&desk, w2, cg2);
         desk.mark("click");
         let [down, up] = click_at(tile);
         signal(&desk, down);
         desk.rig.pump();
-        assert_eq!(orders_of(&desk.since("click"), h1), 0, "nothing on the down");
         signal(&desk, up);
         desk.rig.pump();
-        let after = desk.since("click");
-        assert!(
-            after.contains(&Ev::Order(h1, cg1)),
-            "re-ordered at the up: {after:#?}"
-        );
-        assert_eq!(orders_of(&after, h1), 1);
         for _ in 0..10 {
             desk.frame();
         }
-        let after = desk.since("click");
-        assert_eq!(orders_of(&after, h1), 2, "one settle order: {after:#?}");
-        assert!(
-            !after.iter().any(|e| matches!(e, Ev::Hide(_) | Ev::Release(_))),
-            "{after:#?}"
-        );
-
-        desk.mark("activation");
         desk.rig.ingress.submit(Input::Activated(w1.application())).expect("activated");
         desk.rig.pump();
         for _ in 0..10 {
             desk.frame();
         }
-        let after = desk.since("activation");
-        assert_eq!(orders_of(&after, h1), 2, "activation re-asserts: {after:#?}");
+        let after = desk.since("click");
+        assert_eq!(orders_of(&after, h1), 0, "nothing to put back: {after:#?}");
+        assert!(
+            !after
+                .iter()
+                .any(|e| matches!(e, Ev::Show { .. } | Ev::Hide(_) | Ev::Release(_))),
+            "{after:#?}"
+        );
+    }
+
+    /// The top placement follows the focus. With unfocused borders drawn, the
+    /// window that takes the focus goes one level up and the one that lost it
+    /// goes back directly above its own window, in the same turn. With
+    /// `unfocused = false` and a transition the old border leaves the top
+    /// level as it starts to shrink, so it cannot stay over the new window.
+    #[test]
+    fn the_top_placement_moves_with_the_focus() {
+        let (mut desk, [w1, w2, _w3]) = Desk::started();
+        let (cg1, cg2) = (Desk::cg(0, 1), Desk::cg(1, 1));
+        let (h1, h2) = (desk.handle(cg1), desk.handle(cg2));
+        desk.reload(&json!({ "enabled": true, "order": "above" }), 0);
+        for _ in 0..10 {
+            desk.frame();
+        }
+        desk.mark("focus");
+        desk.focus(w2);
+        for _ in 0..10 {
+            desk.frame();
+        }
+        let after = desk.since("focus");
+        assert_eq!(placement_shown(&after, h2), Some(BorderPlacement::Top));
+        assert_eq!(placement_shown(&after, h1), Some(BorderPlacement::Above));
         assert!(!after.iter().any(|e| matches!(e, Ev::Hide(_) | Ev::Release(_))));
+
+        desk.reload(
+            &json!({
+                "enabled": true,
+                "order": "above",
+                "unfocused": false,
+                "transition": { "duration": 200 },
+            }),
+            0,
+        );
+        for _ in 0..10 {
+            desk.frame();
+        }
+        desk.mark("collapse");
+        desk.focus(w1);
+        desk.frame();
+        let after = desk.since("collapse");
+        let placed = |cg: u32, shrinking: bool| {
+            after.iter().rev().find_map(|e| match e {
+                Ev::Show {
+                    cg: shown, change, appearance, ..
+                } if *shown == cg && (*change == AppearanceChange::Shrink) == shrinking => {
+                    Some(appearance.placement)
+                }
+                _ => None,
+            })
+        };
+        assert_eq!(
+            placed(cg2, true),
+            Some(BorderPlacement::Above),
+            "the shrinking border left the top level: {after:#?}"
+        );
+        assert_eq!(placed(cg1, false), Some(BorderPlacement::Top), "{after:#?}");
     }
 
     /// With live follow active the timers are gone: a focus change orders the
-    /// new focus once (no settle), a click or an activation inside the focused
-    /// window orders nothing, and the window server's reorder notification for
-    /// the window (its own raise) puts the `above` border back on top, once.
+    /// new focus once (no settle), and a click or an activation inside the
+    /// focused window orders nothing. The focused window's border is one level
+    /// up and needs no re-order at all; the window server's reorder
+    /// notification for any other window (its own raise) puts that window's
+    /// `above` border back on top, once.
     #[test]
     fn with_live_follow_active_above_is_kept_by_the_reorder_event_not_timers() {
         let live = FakeLiveFollow::active();
@@ -2580,6 +2653,8 @@ mod live {
         let after = desk.since("click");
         assert_eq!(orders_of(&after, h1), 0, "no timer re-order: {after:#?}");
 
+        // The focused window's border is one level up: a re-stack of its
+        // window cannot cover it and nothing is ordered.
         desk.mark("reorder");
         live.sink().expect("sink").reorder(w1);
         desk.rig.pump();
@@ -2587,8 +2662,19 @@ mod live {
             desk.frame();
         }
         let after = desk.since("reorder");
-        assert_eq!(orders_of(&after, h1), 1, "restored above once: {after:#?}");
-        assert!(after.contains(&Ev::Order(h1, cg1)));
+        assert_eq!(orders_of(&after, h1), 0, "nothing to restore: {after:#?}");
+
+        // Another window sits directly under its `above` border: when the
+        // window server re-stacks it, the border is put back on top, once.
+        desk.mark("reorder-unfocused");
+        live.sink().expect("sink").reorder(w2);
+        desk.rig.pump();
+        for _ in 0..10 {
+            desk.frame();
+        }
+        let after = desk.since("reorder-unfocused");
+        assert_eq!(orders_of(&after, h2), 1, "restored above once: {after:#?}");
+        assert!(after.contains(&Ev::Order(h2, cg2)));
         assert!(!after.iter().any(|e| matches!(e, Ev::Hide(_) | Ev::Release(_))));
     }
 }

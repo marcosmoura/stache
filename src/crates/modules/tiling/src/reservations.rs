@@ -35,7 +35,8 @@ use crate::events::Ingress;
 use crate::geometry::Insets;
 use crate::state::Input;
 
-/// The longest the watcher sleeps before it re-checks cancellation.
+/// The longest [`ReservationWatcher::wait_primed`] sleeps per slice when its
+/// timeout is unbounded. The watcher loop itself waits without a deadline.
 pub const WATCH_QUANTUM: Duration = Duration::from_millis(250);
 /// The most reservation entries one hint carries (the SDK caps owners at 64).
 pub const MAX_HOST_DISPLAYS: usize = 256;
@@ -268,7 +269,9 @@ impl ReservationWatcher {
                     revision
                 };
                 loop {
-                    match source.wait_for_change(seen, WATCH_QUANTUM, &token) {
+                    // No deadline: the token wakes the wait, so nothing ticks
+                    // while the reservations stay unchanged.
+                    match source.wait_for_change(seen, Duration::MAX, &token) {
                         ScreenReservationWait::Changed(snapshot) => {
                             seen = snapshot.revision;
                             let hint = HostReservations::from_snapshot(&snapshot, &projection);
@@ -473,7 +476,7 @@ mod tests {
             timeout: Duration,
             cancel: &CancellationToken,
         ) -> ScreenReservationWait {
-            let deadline = Instant::now() + timeout;
+            let deadline = Instant::now().checked_add(timeout);
             let mut state = self.state.lock().expect("script");
             loop {
                 if cancel.is_cancelled() {
@@ -485,7 +488,8 @@ mod tests {
                 if state.current.revision != seen {
                     return ScreenReservationWait::Changed(Arc::clone(&state.current));
                 }
-                let left = deadline.saturating_duration_since(Instant::now());
+                let left =
+                    deadline.map_or(Duration::MAX, |d| d.saturating_duration_since(Instant::now()));
                 if left.is_zero() {
                     return ScreenReservationWait::TimedOut;
                 }
@@ -655,5 +659,88 @@ mod tests {
             thread.as_ref().is_some_and(JoinHandle::is_finished).then_some(())
         });
         assert!(watcher.stop(Duration::from_secs(2)));
+    }
+
+    /// Counts calls and wakes only on a publication or on cancellation.
+    #[derive(Default)]
+    struct Counting {
+        state: Mutex<(u64, usize)>,
+        changed: Condvar,
+        wakes: Mutex<Vec<stache_sdk::CancelListener>>,
+    }
+
+    impl Counting {
+        fn calls(&self) -> usize { self.state.lock().expect("state").1 }
+
+        fn publish(&self, revision: u64) {
+            self.state.lock().expect("state").0 = revision;
+            self.changed.notify_all();
+        }
+    }
+
+    impl ReservationSource for Arc<Counting> {
+        fn read(&self) -> Arc<ScreenReservationSnapshot> {
+            Arc::new(snapshot(self.state.lock().expect("state").0, 0, &[]))
+        }
+
+        fn wait_for_change(
+            &self,
+            seen: u64,
+            timeout: Duration,
+            cancel: &CancellationToken,
+        ) -> ScreenReservationWait {
+            assert!(
+                Instant::now().checked_add(timeout).is_none(),
+                "the watcher must wait without a deadline, got {timeout:?}"
+            );
+            let me = Self::clone(self);
+            let guard = cancel.on_cancel(Arc::new(move || {
+                let _lock = me.state.lock().expect("state");
+                me.changed.notify_all();
+            }));
+            self.wakes.lock().expect("wakes").push(guard);
+            let mut state = self.state.lock().expect("state");
+            state.1 += 1;
+            loop {
+                if cancel.is_cancelled() {
+                    return ScreenReservationWait::Cancelled;
+                }
+                if state.0 != seen {
+                    return ScreenReservationWait::Changed(Arc::new(snapshot(state.0, 0, &[])));
+                }
+                state = self.changed.wait(state).unwrap_or_else(PoisonError::into_inner);
+            }
+        }
+    }
+
+    #[test]
+    fn one_unbounded_wait_stays_outstanding_until_a_change_or_stop() {
+        let source = Arc::new(Counting::default());
+        source.publish(1);
+        let ingress = new_ingress();
+        let watcher = ReservationWatcher::spawn(
+            Arc::new(Arc::clone(&source)),
+            projection(),
+            Arc::clone(&ingress),
+        )
+        .expect("spawn");
+        assert!(watcher.wait_primed(Duration::from_secs(5)));
+        wait_for(|| (source.calls() == 1).then_some(()));
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(source.calls(), 1, "the idle wait returned and was re-entered");
+
+        source.publish(2);
+        let hints = wait_for(|| {
+            let got: Vec<_> = drain(&ingress).into_iter().filter(|h| h.revision == 2).collect();
+            (!got.is_empty()).then_some(got)
+        });
+        assert_eq!(hints.len(), 1);
+        wait_for(|| (source.calls() == 2).then_some(()));
+
+        let hop = Duration::from_millis(100);
+        let started = Instant::now();
+        assert!(watcher.stop(hop), "stop joins within its hop");
+        assert!(started.elapsed() < hop + Duration::from_millis(50));
+        assert_eq!(source.calls(), 2);
     }
 }

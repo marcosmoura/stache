@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 06 — Wallpapers: host memo of validated outputs and source digests
@@ -23,14 +23,14 @@ Files expected to change: `src/crates/modules/wallpapers/src/{cache.rs, source.r
 
 ## Acceptance criteria
 
-- [ ] PF-06-01: Preparing the same plan twice through `RealProcessor` reads no source and decodes no output the second time (the counters show hits; a read hook and a decode hook show zero calls).
-- [ ] PF-06-02: A cache file replaced by a corrupt file of the same length whose modification time is set back is not served: it is detected and rebuilt.
-- [ ] PF-06-03: A cache file replaced by a link, by a file of another owner or by a directory is refused exactly as without a memo.
-- [ ] PF-06-04: A source rewritten with different bytes of the same length and the same modification time produces a different key and a new output.
-- [ ] PF-06-05: A source removed after its digest was recorded fails with the same typed error as today.
-- [ ] PF-06-06: With 300 distinct outputs each map holds at most 256 entries and the least recently used were evicted.
-- [ ] PF-06-07: The standalone `set`, `list` and `generate-all` paths construct no memo and their tests pass unchanged.
-- [ ] PF-06-08: `bun run lint`, `bun run format:check` and `bun run test` pass.
+- [x] PF-06-01: Preparing the same plan twice through `RealProcessor` reads no source and decodes no output the second time (the counters show hits; a read hook and a decode hook show zero calls).
+- [x] PF-06-02: A cache file replaced by a corrupt file of the same length whose modification time is set back is not served: it is detected and rebuilt.
+- [x] PF-06-03: A cache file replaced by a link, by a file of another owner or by a directory is refused exactly as without a memo.
+- [x] PF-06-04: A source rewritten with different bytes of the same length and the same modification time produces a different key and a new output.
+- [x] PF-06-05: A source removed after its digest was recorded fails with the same typed error as today.
+- [x] PF-06-06: With 300 distinct outputs each map holds at most 256 entries and the least recently used were evicted.
+- [x] PF-06-07: The standalone `set`, `list` and `generate-all` paths construct no memo and their tests pass unchanged.
+- [x] PF-06-08: `bun run lint`, `bun run format:check` and `bun run test` pass.
 
 ## Tests
 
@@ -41,4 +41,7 @@ Files expected to change: `src/crates/modules/wallpapers/src/{cache.rs, source.r
 ## Notes
 
 - Audit numbers: a cache hit costs 1–8 ms for the source read and hash plus 11–25 ms for the PNG decode per display, 25–65 ms for the user's two displays in sequence. After this part it is a few metadata calls.
+- Measured on the branch (2026-11-14, release, `measure_warm_plan_with_and_without_memo`, fifteen runs each interleaved in one run): an already cached two-display plan (a 6000×4000 source at 2560×1440 and 1920×1200) takes a median of 20.5 ms without the memo and 0.25 ms with it.
+- `RealProcessor::host()` owns the memo and is what `ServiceConfig::production` builds; `RealProcessor::default()` has none and is what the standalone CLI environment builds.
+- An output published by this process is recorded only when the final file is the validated temporary's inode with the same length and modification time (the rename moves the change time).
 - The change time cannot be set by a normal write or by `utimes`, so a same-length rewrite with a restored modification time still changes the fingerprint. Writing through the raw device would not; nothing in the previous contract defended against that either once the file is handed to the system.

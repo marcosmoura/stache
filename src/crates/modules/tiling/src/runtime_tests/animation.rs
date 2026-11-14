@@ -43,12 +43,34 @@ struct Batch {
     frames: Vec<(WindowInstance, FrameStage)>,
 }
 
+/// What the spy saw, in one order across every kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Seen {
+    /// A frame of a submitted batch, with its stage.
+    Frame(WindowInstance, FrameStage),
+    /// A queued snapshot read.
+    Snapshot(WindowInstance),
+    /// A blocking snapshot read.
+    FullSnapshot(WindowInstance),
+    /// A frame-only read.
+    FrameRead(WindowInstance),
+    /// A re-listing of an application (a reconciliation, not a geometry read).
+    Refresh(ApplicationId),
+}
+
 /// The production backend with a recorder in front of the frame and snapshot
 /// submissions.
 struct Spy {
     inner: SystemWindowBackend,
     batches: Mutex<Vec<Batch>>,
+    /// Queued (non-blocking) snapshot reads.
     snapshots: Mutex<Vec<WindowInstance>>,
+    /// Blocking snapshot reads (the actor's geometry, title and focus reads).
+    full_snapshots: Mutex<Vec<WindowInstance>>,
+    /// Frame-only reads (settle and retarget without bounds).
+    frame_reads: Mutex<Vec<WindowInstance>>,
+    /// Every frame and read in one order.
+    seen: Mutex<Vec<Seen>>,
 }
 
 impl Spy {
@@ -63,6 +85,22 @@ impl Spy {
 
     fn snapshot_reads(&self, window: WindowInstance) -> usize {
         lock(&self.snapshots).iter().filter(|w| **w == window).count()
+    }
+
+    fn full_snapshot_reads(&self, window: WindowInstance) -> usize {
+        lock(&self.full_snapshots).iter().filter(|w| **w == window).count()
+    }
+
+    fn frame_reads(&self, window: WindowInstance) -> usize {
+        lock(&self.frame_reads).iter().filter(|w| **w == window).count()
+    }
+
+    fn seen(&self) -> Vec<Seen> { lock(&self.seen).clone() }
+
+    /// The settle and retarget reads queued for a window: frame-only reads,
+    /// plus any queued snapshot.
+    fn queued_reads(&self, window: WindowInstance) -> usize {
+        self.snapshot_reads(window) + self.frame_reads(window)
     }
 }
 
@@ -102,6 +140,7 @@ impl WindowBackend for Spy {
         cancel: CancellationToken,
         deadline: Option<Instant>,
     ) -> TrackOutcome {
+        lock(&self.seen).push(Seen::Refresh(application));
         self.inner.refresh(epoch, application, cancel, deadline)
     }
 
@@ -131,6 +170,8 @@ impl WindowBackend for Spy {
         cancel: &CancellationToken,
         deadline: Option<Instant>,
     ) -> SnapshotOutcome {
+        lock(&self.full_snapshots).push(window);
+        lock(&self.seen).push(Seen::FullSnapshot(window));
         self.inner.snapshot(window, cancel, deadline)
     }
 
@@ -164,6 +205,8 @@ impl WindowBackend for Spy {
             application,
             frames: batch.iter().map(|(r, _)| (r.issuance.window(), r.stage)).collect(),
         });
+        lock(&self.seen)
+            .extend(batch.iter().map(|(r, _)| Seen::Frame(r.issuance.window(), r.stage)));
         self.inner.submit_frames(application, batch)
     }
 
@@ -173,8 +216,25 @@ impl WindowBackend for Spy {
         reply: Box<dyn FnOnce(SnapshotOutcome) + Send>,
     ) -> Result<(), DispatchError> {
         lock(&self.snapshots).push(window);
+        lock(&self.seen).push(Seen::Snapshot(window));
         self.inner.submit_snapshot(window, reply)
     }
+
+    fn submit_frame_read(
+        &self,
+        window: WindowInstance,
+        reply: Box<dyn FnOnce(stache_macos::windows::FrameReadOutcome) + Send>,
+    ) -> Result<(), DispatchError> {
+        lock(&self.frame_reads).push(window);
+        lock(&self.seen).push(Seen::FrameRead(window));
+        self.inner.submit_frame_read(window, reply)
+    }
+
+    fn window_bounds(&self, cg_window_id: u32) -> Option<Rect> {
+        self.inner.window_bounds(cg_window_id)
+    }
+
+    fn window_bounds_missing(&self) -> bool { self.inner.window_bounds_missing() }
 
     fn application_hidden(
         &self,
@@ -260,6 +320,8 @@ struct World {
     clocks: FakeFrameClockFactory,
     /// The actor's clock; ticks are fired at its time.
     clock: Arc<dyn crate::actor::Clock>,
+    /// The fake window server, when the bounds symbols are present.
+    server: Option<Arc<stache_macos::windows::FakeWindowBounds>>,
 }
 
 fn window_node(ax: &FakeWindowAx, cg: u32) -> NodeId {
@@ -277,6 +339,26 @@ fn window_node(ax: &FakeWindowAx, cg: u32) -> NodeId {
     node.bools.insert(BoolAttribute::Minimized, Ok(false));
     node.bools.insert(BoolAttribute::FullScreen, Ok(false));
     ax.add_node(node)
+}
+
+/// The fake window server: answers a window's bounds by `CGWindowID` from the
+/// same node the fake AX arena moves (no AX call is logged), so a bounds frame
+/// is the frame the rig last wrote.
+fn window_server(
+    ax: &FakeWindowAx,
+    windows: Vec<(u32, NodeId)>,
+) -> Arc<stache_macos::windows::FakeWindowBounds> {
+    let ax = ax.clone();
+    Arc::new(stache_macos::windows::FakeWindowBounds::new(move |cg| {
+        let node = windows.iter().find(|(id, _)| *id == cg)?.1;
+        let mut found = None;
+        ax.edit(node, |n| {
+            if let (Ok(p), Ok(s)) = (n.position, n.size) {
+                found = Some(stache_macos::ax::AxFrame { origin: p, size: s });
+            }
+        });
+        found
+    }))
 }
 
 fn config(outer: u32, workspaces: &serde_json::Value) -> Arc<TilingConfig> {
@@ -311,6 +393,7 @@ impl World {
             one_display(),
             &[],
             None,
+            true,
         )
     }
 
@@ -329,6 +412,7 @@ impl World {
             one_display(),
             eui,
             None,
+            true,
         )
     }
 
@@ -340,9 +424,19 @@ impl World {
         clocks: FakeFrameClockFactory,
         layout: DisplayLayout,
     ) -> Self {
-        Self::boot_with(counts, config, counts.iter().sum(), clocks, layout, &[], None)
+        Self::boot_with(
+            counts,
+            config,
+            counts.iter().sum(),
+            clocks,
+            layout,
+            &[],
+            None,
+            true,
+        )
     }
 
+    #[allow(clippy::too_many_arguments)] // the one rig builder every variant calls
     fn boot_with(
         counts: &[usize],
         config: Arc<TilingConfig>,
@@ -351,15 +445,19 @@ impl World {
         layout: DisplayLayout,
         eui: &[Result<bool, AxError>],
         extras: Option<(Arc<dyn crate::actor::Clock>, stache_sdk::ScopedLogger)>,
+        bounds: bool,
     ) -> Self {
         let ax = FakeWindowAx::new();
         let mut applications = Vec::new();
+        let mut windows = Vec::new();
         let mut cg = 100;
         for (index, count) in counts.iter().enumerate() {
             let nodes: Vec<NodeId> = (0..*count)
                 .map(|_| {
                     cg += 1;
-                    window_node(&ax, cg)
+                    let node = window_node(&ax, cg);
+                    windows.push((cg, node));
+                    node
                 })
                 .collect();
             let element = ax.add_node(FakeNode {
@@ -384,10 +482,18 @@ impl World {
             RunLoopDriver::new,
         )
         .expect("spawn");
+        let inner = SystemWindowBackend::from_adapter(adapter, false);
+        let server = bounds.then(|| window_server(&ax, windows));
         let spy = Arc::new(Spy {
-            inner: SystemWindowBackend::from_adapter(adapter, false),
+            inner: match &server {
+                Some(server) => inner.with_bounds(Arc::clone(server) as _),
+                None => inner,
+            },
             batches: Mutex::new(Vec::new()),
             snapshots: Mutex::new(Vec::new()),
+            full_snapshots: Mutex::new(Vec::new()),
+            frame_reads: Mutex::new(Vec::new()),
+            seen: Mutex::new(Vec::new()),
         });
         let directory = Arc::new(FakeAppDirectory::default());
         *directory.apps.lock().expect("apps") =
@@ -427,6 +533,7 @@ impl World {
             visible,
             clocks,
             clock,
+            server,
         };
         world.wait_settled("the first layout");
         world
@@ -544,7 +651,7 @@ fn several_applications_animate_a_layout_change_in_per_application_batches() {
         world.spy.frames_of(0).iter().all(|(_, _, stage)| *stage == FrameStage::Direct),
         "the first layout is written directly"
     );
-    let reads_before: usize = before.keys().map(|w| world.spy.snapshot_reads(*w)).sum();
+    let reads_before: usize = before.keys().map(|w| world.spy.queued_reads(*w)).sum();
 
     world.reload(one_workspace(200));
     wait_until("the animation", || {
@@ -606,7 +713,7 @@ fn several_applications_animate_a_layout_change_in_per_application_batches() {
             "intermediate frames, not one jump: {stages:?}"
         );
         assert_eq!(
-            world.spy.snapshot_reads(token),
+            world.spy.queued_reads(token),
             1 + reads_before / before.len().max(1),
             "intermediate frames read nothing back; the final settles with one read"
         );
@@ -684,8 +791,8 @@ fn an_animation_interrupted_and_sent_back_ends_at_the_original_frame() {
         // running; a frame the shard refused as `RevisionChanged` ends it first.
         let lower = usize::from(!resize_only);
         // The settle read follows the final write by 50 ms.
-        wait_until("the settle read", || world.spy.snapshot_reads(token) >= lower);
-        let reads = world.spy.snapshot_reads(token);
+        wait_until("the settle read", || world.spy.queued_reads(token) >= lower);
+        let reads = world.spy.queued_reads(token);
         assert!(reads <= 3, "reads: {reads} {stages:?}");
     }
     assert_eq!(world.runtime.outstanding_frames(), 0);
@@ -775,7 +882,7 @@ fn a_workspace_switch_moves_windows_with_direct_writes_only() {
         .applications
         .iter()
         .flat_map(|a| a.nodes.iter())
-        .map(|n| world.spy.snapshot_reads(world.token(*n)))
+        .map(|n| world.spy.queued_reads(world.token(*n)))
         .sum();
 
     // Back and forth; a workspace whose windows already sit on their targets
@@ -807,7 +914,7 @@ fn a_workspace_switch_moves_windows_with_direct_writes_only() {
         .applications
         .iter()
         .flat_map(|a| a.nodes.iter())
-        .map(|n| world.spy.snapshot_reads(world.token(*n)))
+        .map(|n| world.spy.queued_reads(world.token(*n)))
         .sum();
     assert_eq!(
         after, reads,
@@ -1934,6 +2041,7 @@ fn a_fallback_is_listed_logged_and_ends_after_its_cool_down() {
         one_display(),
         &[],
         Some((Arc::clone(&clock) as Arc<dyn crate::actor::Clock>, logger)),
+        true,
     );
     let slow = Arc::new(AtomicBool::new(true));
     let gate = Arc::clone(&slow);
@@ -1975,4 +2083,567 @@ fn a_fallback_is_listed_logged_and_ends_after_its_cool_down() {
     assert!(
         log.has("animation: App 1 (com.test.app1) animates resizes again (its cool-down passed): ")
     );
+}
+
+// ------------------------------------------------- in-flight geometry reads
+
+/// While it holds a gate, every rig write stalls in its shard until released.
+type HoldSlot = Arc<Mutex<Option<Arc<Gate>>>>;
+
+/// The write latency of the in-flight rig, cycled per application: 5 to 15 ms.
+const LATENCIES_MS: [u64; 4] = [5, 10, 15, 10];
+
+impl World {
+    /// Two applications with two windows each on one 120 Hz display paced by
+    /// a fake clock, with or without the window-server bounds.
+    fn in_flight(bounds: bool) -> Self {
+        Self::boot_with(
+            &[2, 2],
+            one_workspace(0),
+            4,
+            FakeFrameClockFactory::new(),
+            DisplayLayout::new(vec![display(1, true, Some(120.0), 0.0)]),
+            &[],
+            None,
+            bounds,
+        )
+    }
+
+    /// Every native write of a window takes 5 to 15 ms on its application's
+    /// shard (so writes are serialized per application) and then notifies
+    /// `AXWindowMoved`, like a real application echoing Stache's own frames.
+    /// Returns the number of echoes sent so far and a slot that, while it
+    /// holds a gate, stalls every later write in its shard until released.
+    fn echo_moves_slowly(&self) -> (Arc<AtomicUsize>, HoldSlot) {
+        let owners: Vec<(NodeId, i32)> = self
+            .applications
+            .iter()
+            .flat_map(|a| a.nodes.iter().map(|n| (*n, a.info.pid)))
+            .collect();
+        let observers = self.observers.clone();
+        let echoes = Arc::new(AtomicUsize::new(0));
+        let sent = Arc::clone(&echoes);
+        let turns: Arc<Mutex<BTreeMap<i32, usize>>> = Arc::default();
+        let slot: HoldSlot = Arc::default();
+        let held = Arc::clone(&slot);
+        self.ax.on_node_write(move |node| {
+            if let Some((_, pid)) = owners.iter().find(|(n, _)| *n == node) {
+                let gate = lock(&held).clone();
+                if let Some(gate) = gate {
+                    gate.pass();
+                }
+                let turn = *lock(&turns).entry(*pid).and_modify(|t| *t += 1).or_insert(1);
+                std::thread::sleep(Duration::from_millis(LATENCIES_MS[turn % LATENCIES_MS.len()]));
+                observers.inject(*pid, stache_macos::ax::AxNotification::WindowMoved, node);
+                sent.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        (echoes, slot)
+    }
+
+    /// Fires the 120 Hz clock until `done`, sampling every window's observed
+    /// frame after each tick.
+    fn drive_120(
+        &self,
+        what: &str,
+        samples: &mut Vec<BTreeMap<WindowInstance, Rect>>,
+        done: impl Fn(&Self) -> bool,
+    ) {
+        wait_until(what, || {
+            self.clocks.fire(D1, Instant::now());
+            // About one 120 Hz period, sampled every millisecond.
+            for _ in 0..8 {
+                std::thread::sleep(Duration::from_millis(1));
+                samples.push(
+                    self.runtime
+                        .snapshot()
+                        .frames
+                        .iter()
+                        .filter_map(|f| f.actual.map(|actual| (f.window, actual)))
+                        .collect(),
+                );
+            }
+            done(self)
+        });
+    }
+
+    /// The fake AX calls to the windows and the element of application `index`
+    /// since call `from`: (frame writes, every other call).
+    fn ax_calls_of(&self, index: usize, from: usize) -> (usize, usize, Vec<Call>) {
+        let application = &self.applications[index];
+        let mine = |node: &NodeId| *node == application.element || application.nodes.contains(node);
+        let calls: Vec<Call> = self.ax.calls()[from..]
+            .iter()
+            .filter(|call| match call {
+                Call::SetTimeout(n, _)
+                | Call::Position(n)
+                | Call::Size(n)
+                | Call::SetPosition(n, _)
+                | Call::SetSize(n, _)
+                | Call::IsSettable(n, _)
+                | Call::Bool(n, _)
+                | Call::String(n, _)
+                | Call::Windows(n, _, _)
+                | Call::Children(n, _)
+                | Call::Tabs(n, _)
+                | Call::TabSelected(n)
+                | Call::WindowId(n)
+                | Call::Raise(n)
+                | Call::SetHidden(n, _)
+                | Call::EnhancedUi(n)
+                | Call::SetEnhancedUi(n, _) => mine(n),
+                Call::Observe(..) | Call::Unobserve(..) => false,
+            })
+            .cloned()
+            .collect();
+        let writes = calls
+            .iter()
+            .filter(|c| matches!(c, Call::SetPosition(..) | Call::SetSize(..)))
+            .count();
+        (writes, calls.len() - writes, calls)
+    }
+
+    /// Whether `window` took an observed frame differing from both its start
+    /// and its target in any sample.
+    fn passed_through(
+        samples: &[BTreeMap<WindowInstance, Rect>],
+        window: WindowInstance,
+        start: Rect,
+        target: Rect,
+    ) -> bool {
+        samples
+            .iter()
+            .filter_map(|sample| sample.get(&window))
+            .any(|frame| *frame != start && *frame != target)
+    }
+}
+
+/// The index of the first frame of `window` that starts a write (a first or
+/// a direct frame) at or after `from`.
+fn first_frame(seen: &[Seen], window: WindowInstance, from: usize) -> Option<usize> {
+    seen.iter()
+        .enumerate()
+        .skip(from)
+        .find(|(_, s)| {
+            matches!(s, Seen::Frame(w, FrameStage::First | FrameStage::Direct) if *w == window)
+        })
+        .map(|(i, _)| i)
+}
+
+fn is_snapshot_of(seen: &Seen, window: WindowInstance) -> bool {
+    matches!(seen, Seen::Snapshot(w) | Seen::FullSnapshot(w) if *w == window)
+}
+
+/// One layout change in the in-flight rig: every window animates, its
+/// observed frame moves through the animation, and the reads are answered by
+/// the window server (`bounds`) or by Accessibility (without). Returns the
+/// per-application Accessibility calls of the animation.
+fn one_layout_change(bounds: bool) -> Vec<AxCount> {
+    let mut world = World::in_flight(bounds);
+    assert_eq!(world.runtime.window_bounds_missing(), !bounds);
+    let (echoes, _) = world.echo_moves_slowly();
+    let before = world.desired();
+    let windows: Vec<WindowInstance> = before.keys().copied().collect();
+    let seen_base = world.spy.seen().len();
+    let calls_base = world.ax.calls().len();
+    let echoes_base = echoes.load(Ordering::SeqCst);
+    let reads_base: BTreeMap<_, _> =
+        windows.iter().map(|w| (*w, world.spy.frame_reads(*w))).collect();
+
+    world.reload(one_workspace(200));
+    world.wait_replanned(&before);
+    let after = world.desired();
+    let mut samples = Vec::new();
+    world.drive_120("the layout change", &mut samples, |w| {
+        w.is_settled() && w.clocks.live() == 0
+    });
+
+    let seen = world.spy.seen();
+    let mut passed = 0;
+    let mut late: BTreeMap<ApplicationId, usize> = BTreeMap::new();
+    for window in &windows {
+        let first = first_frame(&seen, *window, seen_base).expect("the window animated");
+        let settle = seen
+            .iter()
+            .enumerate()
+            .skip(first)
+            .find(|(_, s)| **s == Seen::FrameRead(*window))
+            .map(|(i, _)| i)
+            .expect("the settle read is frame-only");
+        let snapshots = seen[first..settle].iter().filter(|s| is_snapshot_of(s, *window)).count();
+        // An echo that arrives once the attempt settled reads the snapshot,
+        // as for any window Stache is not moving.
+        *late.entry(window.application()).or_default() +=
+            seen[settle..].iter().filter(|s| is_snapshot_of(s, *window)).count();
+        if bounds {
+            assert_eq!(
+                snapshots, 0,
+                "no snapshot read between the first frame and the settle"
+            );
+        } else {
+            assert!(snapshots >= 1, "without bounds every echo reads a snapshot");
+        }
+        assert_eq!(
+            world.spy.frame_reads(*window) - reads_base[window],
+            1,
+            "exactly one frame-only read: the settle"
+        );
+        let moved = World::passed_through(&samples, *window, before[window], after[window]);
+        passed += usize::from(moved);
+        if bounds {
+            assert!(
+                moved,
+                "the observed frame moved through the animation: {window:?}"
+            );
+        }
+        assert_eq!(
+            world.frame_of_token(*window),
+            after[window],
+            "it ends on its target"
+        );
+    }
+    // Without the bounds every echo waits for a blocking snapshot on the one
+    // effect thread behind the application's own writes, so a late window's
+    // first echo read can land after its motion (the previous behaviour).
+    assert!(passed >= 1, "an observed frame moved through the animation");
+    let report = world.runtime.animation().report();
+    assert!(report.fallbacks.is_empty(), "no instant fallback: {report:?}");
+    // Both applications' shards emit echoes at once; their events still reach
+    // the actor in sequence order, so no gap is read as a lost event.
+    assert_eq!(world.runtime.ingress().stats().sequence_gaps, 0);
+
+    let echoes = echoes.load(Ordering::SeqCst) - echoes_base;
+    (0..world.applications.len())
+        .map(|index| {
+            let (writes, _, calls) = world.ax_calls_of(index, calls_base);
+            let count = |wanted: fn(&Call) -> bool| calls.iter().filter(|c| wanted(c)).count();
+            AxCount {
+                writes,
+                timeouts: count(|c| matches!(c, Call::SetTimeout(..))),
+                listings: count(|c| matches!(c, Call::Windows(..))),
+                positions: count(|c| matches!(c, Call::Position(..))),
+                sizes: count(|c| matches!(c, Call::Size(..))),
+                snapshot_reads: count(|c| {
+                    matches!(
+                        c,
+                        Call::String(..)
+                            | Call::Bool(..)
+                            | Call::WindowId(..)
+                            | Call::IsSettable(..)
+                    )
+                }),
+                refreshes: world.spy.seen()[seen_base..]
+                    .iter()
+                    .filter(|s| **s == Seen::Refresh(world.applications[index].info.application))
+                    .count(),
+                late_snapshots: late
+                    .get(&world.applications[index].info.application)
+                    .copied()
+                    .unwrap_or(0),
+                // Echoes are not per application; the rig counts them all.
+                echoes,
+            }
+        })
+        .collect()
+}
+
+impl World {
+    /// Makes every shard take a turn (a resolve visits each), so a
+    /// notification injected from the test thread is drained.
+    fn wake_shards(&self) {
+        let _ = self.spy.resolve_window_id(u32::MAX, &CancellationToken::new(), None);
+    }
+
+    fn frame_of_token(&self, window: WindowInstance) -> Rect {
+        let node = self
+            .applications
+            .iter()
+            .flat_map(|a| a.nodes.iter())
+            .copied()
+            .find(|n| self.token(*n) == window)
+            .expect("a node");
+        self.frame_of(node)
+    }
+}
+
+/// PF-07-01, PF-07-02 and PF-07-07: while Stache moves a window, its echoes
+/// are answered by the window server, its observed frame still follows the
+/// motion, and the Accessibility calls to an application are its frame writes
+/// plus a fixed number per window, whatever the number of echoes.
+#[test]
+fn in_flight_echoes_read_the_window_server_and_the_accessibility_calls_do_not_grow_with_them() {
+    let counts = one_layout_change(true);
+    for (index, count) in counts.iter().enumerate() {
+        eprintln!("bounds: application {index}: {count:?}");
+        assert!(count.writes >= 4, "the application animated: {count:?}");
+        // Fixed per window: the first and final frames' membership listings
+        // and the settle read's timeout, `AXPosition` and `AXSize`. On a busy
+        // machine an echo can be read only once its window settled; it is then
+        // an ordinary snapshot (a listing, a timeout, position, size and the
+        // snapshot attributes), at most one per window.
+        let late = count.late_snapshots;
+        assert!(late <= 2, "{count:?}");
+        // Nothing re-lists the application during the animation.
+        assert_eq!(count.refreshes, 0, "{count:?}");
+        // Each written frame sets the messaging timeout once before its
+        // position and size writes.
+        assert!(count.timeouts <= count.writes + 2 + late, "{count:?}");
+        assert!(count.listings <= 2 * 2 + late, "{count:?}");
+        assert_eq!((count.positions, count.sizes), (2 + late, 2 + late), "{count:?}");
+        // No snapshot attribute is read while the windows move, so nothing
+        // follows the echoes.
+        assert!(count.snapshot_reads <= late * 7, "{count:?}");
+        // The application's own echoes (about half of the rig's) outnumber
+        // its fixed reads, which therefore cannot be one per echo.
+        assert!(count.echoes / 2 > 2 * 2 + 2 * 3, "{count:?}");
+    }
+}
+
+/// The Accessibility calls one application received during one animation.
+#[derive(Clone, Copy, Debug, Default)]
+struct AxCount {
+    /// `AXPosition` and `AXSize` writes.
+    writes: usize,
+    /// Messaging timeouts set.
+    timeouts: usize,
+    /// `AXWindows` listings.
+    listings: usize,
+    /// `AXPosition` reads.
+    positions: usize,
+    /// `AXSize` reads.
+    sizes: usize,
+    /// Attribute reads only a full snapshot makes (title, role, flags, id,
+    /// settable), summed.
+    snapshot_reads: usize,
+    /// Snapshot reads after a window's settle read (late echoes of a window
+    /// no longer in flight).
+    late_snapshots: usize,
+    /// Re-listings of the application (a reconciliation).
+    refreshes: usize,
+    /// Echoes the rig sent during the animation (both applications).
+    echoes: usize,
+}
+
+/// PF-07-04 (first half): without the bounds the same layout change still
+/// moves the observed frame through the animation, with a snapshot per echo.
+#[test]
+fn without_bounds_echoes_read_snapshots_and_the_observed_frame_still_follows() {
+    let counts = one_layout_change(false);
+    for (index, count) in counts.iter().enumerate() {
+        eprintln!("no bounds: application {index}: {count:?}");
+        // The previous pattern: a snapshot per echo, so the snapshot reads
+        // follow the echoes.
+        assert!(count.snapshot_reads > 0 && count.listings > 2 * 2, "{count:?}");
+    }
+}
+
+/// An A, B, A plan: the return animates, starts from where the window is
+/// (from the window server with `bounds`, else from a frame-only read) and
+/// ends exactly on A. With the bounds the plan reverses while the
+/// applications' shards are stalled in a write, so the running jobs are
+/// retargeted (not ended first) and a read of the application could not be
+/// answered until they resume. Without them the retarget needs a frame-only
+/// read of the application, which a stalled shard cannot answer, so the plan
+/// reverses unstalled; that read itself is pinned in
+/// `animation::pipeline_tests`.
+#[allow(clippy::too_many_lines)] // one scenario: out, stall, reverse, back, verify
+fn reversed_in_flight(bounds: bool) {
+    let world = World::in_flight(bounds);
+    let (_, hold) = world.echo_moves_slowly();
+    let a = world.desired();
+    let windows: Vec<WindowInstance> = a.keys().copied().collect();
+    // Layout intents keep the configuration revision, so a running job is
+    // retargeted rather than ended by a revision change.
+    let layout = |layout| {
+        world
+            .runtime
+            .ingress()
+            .submit(Input::Intent(crate::intent::Intent::SetLayout(layout)))
+            .expect("intent");
+    };
+    let batch_base = world.spy.batches().len();
+    layout(crate::config::LayoutType::Monocle);
+    world.wait_replanned(&a);
+    let b = world.desired();
+    let mut samples = Vec::new();
+    // In flight: a window seen between A and B whose job has not sent its
+    // final frame yet.
+    world.drive_120("a window between A and B", &mut samples, |w| {
+        let finals: Vec<WindowInstance> = w.spy.batches()[batch_base..]
+            .iter()
+            .flat_map(|batch| batch.frames.clone())
+            .filter(|(_, stage)| *stage == FrameStage::Final)
+            .map(|(window, _)| window)
+            .collect();
+        w.runtime.snapshot().frames.iter().any(|f| {
+            f.in_flight
+                && !finals.contains(&f.window)
+                && f.actual.is_some_and(|actual| actual != a[&f.window] && actual != b[&f.window])
+        })
+    });
+    // With the bounds, stall the shards in their next write; then reverse.
+    let gate = Arc::new(Gate::default());
+    if bounds {
+        *lock(&hold) = Some(Arc::clone(&gate));
+        wait_until("a shard stalled in a write", || gate.entered() >= 1);
+        // Both shards, unless one has nothing left to write.
+        let until = Instant::now() + Duration::from_millis(300);
+        while gate.entered() < 2 && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+    let seen_base = world.spy.seen().len();
+    layout(crate::config::LayoutType::Dwindle);
+    wait_until("the reversed plan", || world.desired() == a);
+    let returns = |seen: &[Seen]| -> Vec<WindowInstance> {
+        windows
+            .iter()
+            .copied()
+            .filter(|w| first_frame(seen, *w, seen_base).is_some())
+            .collect()
+    };
+    if bounds {
+        // The window server answers at once: the return's first frames are
+        // queued while every shard is still stalled, and nothing waits on
+        // the application: a read stuck on a stalled shard holds only that
+        // application's read lane.
+        wait_until("every return started while stalled", || {
+            returns(&world.spy.seen()).len() == windows.len()
+        });
+        assert!(!lock(&gate.state).1, "still stalled");
+        let seen = world.spy.seen();
+        assert!(
+            !seen[seen_base..].iter().any(|s| matches!(s, Seen::Refresh(_))),
+            "nothing re-lists an application"
+        );
+        for window in returns(&seen) {
+            let first = first_frame(&seen, window, seen_base).expect("started");
+            assert!(
+                !seen[seen_base..first].contains(&Seen::FrameRead(window)),
+                "no read of the application before the return"
+            );
+        }
+    }
+    *lock(&hold) = None;
+    gate.release();
+    world.drive_120("back at A", &mut samples, |w| {
+        w.is_settled() && w.clocks.live() == 0
+    });
+
+    let seen = world.spy.seen();
+    for window in &windows {
+        assert_eq!(world.frame_of_token(*window), a[window], "back at A, exactly");
+        let status = world
+            .runtime
+            .snapshot()
+            .frames
+            .iter()
+            .find(|f| f.window == *window)
+            .cloned()
+            .expect("status");
+        assert!(
+            matches!(status.outcome, Some(crate::OperationOutcome::Applied { .. })),
+            "the latest plan (A) is reported applied: {status:?}"
+        );
+        let first = first_frame(&seen, *window, seen_base).expect("written back");
+        let read_first = seen[seen_base..first].contains(&Seen::FrameRead(*window));
+        if bounds {
+            assert!(!read_first, "the return starts from the window server");
+        }
+        let stages: Vec<FrameStage> = seen[seen_base..]
+            .iter()
+            .filter_map(|s| match s {
+                Seen::Frame(w, stage) if w == window => Some(*stage),
+                _ => None,
+            })
+            .collect();
+        if bounds || read_first {
+            assert_eq!(
+                stages.last(),
+                Some(&FrameStage::Final),
+                "the return animated: {stages:?}"
+            );
+        } else {
+            // Without the bounds a window whose observed frame still read A
+            // when the plan reversed has no travel to animate: it is written
+            // directly (the previous behaviour, as in the A, B, A test above).
+            assert!(
+                matches!(stages.last(), Some(FrameStage::Final | FrameStage::Direct)),
+                "{stages:?}"
+            );
+        }
+    }
+    assert!(world.runtime.animation().report().fallbacks.is_empty());
+    assert_eq!(world.runtime.outstanding_frames(), 0);
+}
+
+/// PF-07-03.
+#[test]
+fn a_plan_reversed_in_flight_starts_from_the_window_server_and_ends_on_a() {
+    reversed_in_flight(true);
+}
+
+/// PF-07-04 (second half).
+#[test]
+fn without_bounds_a_plan_reversed_in_flight_retargets_with_a_frame_only_read() {
+    reversed_in_flight(false);
+}
+
+/// PF-07-06: a user move, and an entry into native fullscreen, of a window
+/// with no write in flight still read the whole snapshot and update the
+/// fullscreen flag, with the bounds available.
+#[test]
+fn a_user_move_and_a_fullscreen_entry_without_a_write_in_flight_read_the_snapshot() {
+    let world = World::in_flight(true);
+    let node = world.nodes(0)[0];
+    let window = world.token(node);
+    let pid = world.applications[0].info.pid;
+    let full_before = world.spy.full_snapshot_reads(window);
+    let seen_base = world.spy.seen().len();
+    assert!(world.server.is_some(), "bounds available");
+
+    world.ax.edit(node, |n| n.position = Ok(AxPoint { x: 333.0, y: 444.0 }));
+    world.observers.inject(pid, stache_macos::ax::AxNotification::WindowMoved, node);
+    world.wake_shards();
+    wait_until("the user move is read", || {
+        world.clocks.fire(D1, Instant::now());
+        std::thread::sleep(Duration::from_millis(2));
+        world.spy.full_snapshot_reads(window) > full_before
+    });
+
+    // Tiling puts the window back in its slot; the fullscreen entry comes
+    // once that write settled, so no write is in flight.
+    let mut samples = Vec::new();
+    world.drive_120("the window is back in its slot", &mut samples, |w| {
+        w.is_settled() && w.clocks.live() == 0
+    });
+    let full_before = world.spy.full_snapshot_reads(window);
+    world.ax.edit(node, |n| {
+        n.position = Ok(AxPoint { x: 0.0, y: 0.0 });
+        n.size = Ok(AxSize { width: 1920.0, height: 1080.0 });
+        n.bools.insert(BoolAttribute::FullScreen, Ok(true));
+    });
+    world
+        .observers
+        .inject(pid, stache_macos::ax::AxNotification::WindowResized, node);
+    world.wake_shards();
+    wait_until("the fullscreen flag", || {
+        world.clocks.fire(D1, Instant::now());
+        std::thread::sleep(Duration::from_millis(2));
+        world
+            .runtime
+            .snapshot()
+            .windows
+            .iter()
+            .any(|w| w.token == window && w.observed.fullscreen)
+    });
+    assert!(world.spy.full_snapshot_reads(window) > full_before);
+    // The first read of each notification was the whole snapshot (a write
+    // back to the slot may follow, and its own echoes may use the bounds).
+    let reads: Vec<Seen> = world.spy.seen()[seen_base..]
+        .iter()
+        .filter(|s| matches!(s, Seen::Snapshot(w) | Seen::FullSnapshot(w) | Seen::FrameRead(w) if *w == window))
+        .copied()
+        .collect();
+    assert_eq!(reads.first(), Some(&Seen::FullSnapshot(window)), "{reads:?}");
 }

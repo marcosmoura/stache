@@ -6,14 +6,14 @@ use std::io;
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
 use std::process::ExitStatus;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use stache_macos::system::testing::{FakeBattery, FakeCpuUsage, FakeSmc, FakeWifi, Script};
 use stache_macos::system::{
     BatteryPowerState, BatteryReadout, InterfaceName, SystemReadError, WifiInterfaceReading,
-    WifiPower,
+    WifiPower, WifiSignalSink,
 };
 use stache_sdk::CancellationToken;
 use stache_sdk::commands::{
@@ -22,7 +22,9 @@ use stache_sdk::commands::{
 
 use super::battery::{BatterySampler, percentage};
 use super::cpu::CpuSampler;
-use super::wifi::{WifiSampler, native_reading, parse_summary, sanitize_ssid};
+use super::wifi::{
+    SIGNALS_UNAVAILABLE, SignalState, WifiSampler, native_reading, parse_summary, sanitize_ssid,
+};
 use super::*;
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -671,12 +673,16 @@ impl Sampler for Recording {
     fn first_delay(&self) -> Duration { self.inner.first_delay() }
 
     fn sample(&mut self, cancel: &CancellationToken) -> Sampled {
+        self.sample_for(Trigger::periodic(), cancel)
+    }
+
+    fn sample_for(&mut self, trigger: Trigger, cancel: &CancellationToken) -> Sampled {
         lock(&self.starts).push(self.clock.now());
         if let Some(during) = &self.during {
             during();
         }
         self.clock.advance(self.takes);
-        self.inner.sample(cancel)
+        self.inner.sample_for(trigger, cancel)
     }
 
     fn period(&self) -> Duration { self.inner.period() }
@@ -707,6 +713,7 @@ fn schedule(
         stop,
         wakeup,
         min_gap: WIFI_MIN_GAP,
+        quality_gap: WIFI_PERIOD,
         publish: Arc::new(move |_, _, _| {
             count.fetch_add(1, Ordering::SeqCst);
         }),
@@ -789,7 +796,7 @@ fn a_wifi_signal_storm_coalesces_into_one_extra_sample_after_the_minimum_gap() {
     // A thousand signals arrive while the first sample runs.
     let during: Box<dyn Fn() + Send> = Box::new(move || {
         for _ in 0..1000 {
-            storm.notify();
+            storm.notify(WifiSignalKind::Identity);
         }
     });
     let (starts, _) = schedule(
@@ -823,7 +830,7 @@ fn a_signal_during_the_wait_wakes_the_schedule_early_once() {
     let signal = Arc::clone(&wakeup);
     rig.clock.at(secs(2.0), move || {
         for _ in 0..50 {
-            signal.notify();
+            signal.notify(WifiSignalKind::Identity);
         }
     });
     let sampler = Box::new(WifiSampler::new(&rig.parts));
@@ -853,6 +860,329 @@ fn schedule_math_is_pure() {
         signalled_due(secs(3.0), Some(secs(1.0)), WIFI_MIN_GAP),
         secs(3.0)
     );
+}
+
+// ------------------------------------------------------- Wi-Fi signals
+
+/// A scripted change-signal source: keeps the subscriber so tests can fire
+/// signals, and records when its guard is dropped.
+#[derive(Default)]
+struct FakeSignals {
+    fail: bool,
+    sink: Mutex<Option<WifiSignalSink>>,
+    watches: AtomicUsize,
+    dropped: Arc<AtomicBool>,
+}
+
+struct FakeGuard(Arc<AtomicBool>);
+
+impl Drop for FakeGuard {
+    fn drop(&mut self) { self.0.store(true, Ordering::SeqCst); }
+}
+
+impl WifiSignals for FakeSignals {
+    fn watch(&self, notify: WifiSignalSink) -> Result<Box<dyn Send>, String> {
+        self.watches.fetch_add(1, Ordering::SeqCst);
+        if self.fail {
+            return Err("monitoring refused".to_owned());
+        }
+        *lock(&self.sink) = Some(notify);
+        Ok(Box::new(FakeGuard(Arc::clone(&self.dropped))))
+    }
+}
+
+impl FakeSignals {
+    fn fire(&self, kind: WifiSignalKind) {
+        let sink = lock(&self.sink).clone();
+        if let Some(sink) = sink {
+            sink(kind);
+        }
+    }
+
+    /// Fires `count` signals of `kind` at `when`.
+    fn at(self: &Arc<Self>, rig: &Rig, when: Duration, kind: WifiSignalKind, count: usize) {
+        let signals = Arc::clone(self);
+        rig.clock.at(when, move || {
+            for _ in 0..count {
+                signals.fire(kind);
+            }
+        });
+    }
+}
+
+/// One publication of the Wi-Fi worker.
+#[derive(Debug)]
+struct Published {
+    at: Duration,
+    reading: WifiReading,
+    diagnostic: Option<String>,
+    /// `ipconfig` children spawned so far.
+    children: usize,
+}
+
+/// A gated rig connected to network `A` on `en0`.
+fn connected() -> Rig {
+    let mut rig = rig();
+    gated(&mut rig);
+    rig.wifi.set(Ok(vec![iface("en0", WifiPower::On, Some(-60))]));
+    rig.factory.text("ipconfig", "InterfaceType : WiFi\nSSID : A\n");
+    rig
+}
+
+/// Runs the Wi-Fi worker (subscription included) on the fake clock until
+/// `window`, as `ProviderMonitor` runs it.
+fn wifi_run(rig: &Rig, signals: Option<&Arc<FakeSignals>>, window: Duration) -> Vec<Published> {
+    let published = Arc::new(Mutex::new(Vec::new()));
+    let stop = CancellationToken::new();
+    {
+        let stop = stop.clone();
+        rig.clock.at(window, move || stop.cancel());
+    }
+    let env = WorkerEnv {
+        clock: Arc::clone(&rig.parts.clock),
+        stop,
+        wakeup: Some(Arc::new(Wakeup::default())),
+        min_gap: WIFI_MIN_GAP,
+        quality_gap: WIFI_PERIOD,
+        publish: {
+            let published = Arc::clone(&published);
+            let clock = Arc::clone(&rig.clock);
+            let factory = Arc::clone(&rig.factory);
+            Arc::new(move |_, update, diagnostic| {
+                lock(&published).push(Published {
+                    at: clock.now(),
+                    reading: wifi_of(update),
+                    diagnostic,
+                    children: factory.specs().len(),
+                });
+            })
+        },
+    };
+    let signals = signals.map(|signals| Arc::clone(signals) as Arc<dyn WifiSignals>);
+    run_wifi_worker(WifiSampler::new(&rig.parts), signals.as_ref(), &env);
+    std::mem::take(&mut *lock(&published))
+}
+
+fn times(published: &[Published]) -> Vec<Duration> {
+    published.iter().map(|publication| publication.at).collect()
+}
+
+#[test]
+fn with_signals_and_none_delivered_ipconfig_runs_once_per_minute() {
+    let rig = connected();
+    let signals = Arc::new(FakeSignals::default());
+    let published = wifi_run(&rig, Some(&signals), secs(600.0));
+    let expected: Vec<Duration> = (0..10).map(|minute| secs(f64::from(minute) * 60.0)).collect();
+    assert_eq!(times(&published), expected);
+    assert_eq!(
+        rig.factory.specs().len(),
+        10,
+        "one ipconfig at start and per 60 s"
+    );
+    assert!(published.iter().all(|publication| {
+        publication.reading.network_name.as_deref() == Some("A") && publication.diagnostic.is_none()
+    }));
+    assert_eq!(signals.watches.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn without_a_signal_source_ipconfig_runs_every_five_seconds_as_before() {
+    // The baseline the signals are measured against: 12 children per minute.
+    let rig = connected();
+    let published = wifi_run(&rig, None, secs(600.0));
+    assert_eq!(published.len(), 120);
+    assert_eq!(rig.factory.specs().len(), 120);
+    assert!(published.iter().all(|publication| publication.diagnostic.is_none()));
+}
+
+#[test]
+fn an_identity_signal_runs_ipconfig_once_within_the_minimum_gap_and_a_storm_once() {
+    let rig = connected();
+    let signals = Arc::new(FakeSignals::default());
+    signals.at(&rig, secs(10.0), WifiSignalKind::Identity, 1);
+    signals.at(&rig, secs(20.0), WifiSignalKind::Identity, 1000);
+    // Inside the minimum gap of the storm's sample: waits for the gap.
+    signals.at(&rig, secs(20.1), WifiSignalKind::Identity, 1);
+    let published = wifi_run(&rig, Some(&signals), secs(30.0));
+    assert_eq!(times(&published), [0.0, 10.0, 20.0, 20.5].map(secs));
+    let children: Vec<usize> = published.iter().map(|publication| publication.children).collect();
+    assert_eq!(children, [1, 2, 3, 4], "one ipconfig per identity sample");
+}
+
+#[test]
+fn a_quality_storm_for_a_minute_samples_natively_at_most_every_five_seconds() {
+    let rig = connected();
+    let signals = Arc::new(FakeSignals::default());
+    for tenth in 10..590 {
+        signals.at(&rig, secs(f64::from(tenth) / 10.0), WifiSignalKind::Quality, 1);
+    }
+    let wifi = Arc::clone(&rig.wifi);
+    rig.clock.at(secs(30.0), move || {
+        wifi.set(Ok(vec![iface("en0", WifiPower::On, Some(-70))]));
+    });
+    let published = wifi_run(&rig, Some(&signals), secs(59.5));
+    let at = times(&published);
+    assert_eq!(at[0], Duration::ZERO);
+    assert!(
+        at.windows(2).all(|pair| pair[1].saturating_sub(pair[0]) >= WIFI_PERIOD),
+        "{at:?}"
+    );
+    assert!(at.len() <= 12, "{at:?}");
+    assert_eq!(
+        rig.factory.specs().len(),
+        1,
+        "only the first sample runs ipconfig"
+    );
+    let last = published.last().expect("samples");
+    assert_eq!(last.reading, WifiReading {
+        status: WifiStatus::Connected,
+        network_name: Some("A".to_owned()),
+        signal_strength: Some(-70),
+    });
+}
+
+#[test]
+fn losing_the_association_without_a_signal_runs_ipconfig_and_clears_the_name() {
+    let rig = connected();
+    let mut sampler = WifiSampler::new(&rig.parts);
+    sampler.set_signals(SignalState::Installed);
+    let cancel = CancellationToken::new();
+    let quality = Trigger {
+        quality: true,
+        ..Trigger::default()
+    };
+    let first = wifi_of(done(sampler.sample_for(Trigger::periodic(), &cancel)).0);
+    assert_eq!(first.network_name.as_deref(), Some("A"));
+    // Same native state, no identity signal: no child.
+    for trigger in [quality, Trigger::default()] {
+        let again = wifi_of(done(sampler.sample_for(trigger, &cancel)).0);
+        assert_eq!(again, first);
+    }
+    assert_eq!(rig.factory.specs().len(), 1);
+    // Associated to not associated, with no signal.
+    rig.wifi.set(Ok(vec![iface("en0", WifiPower::On, None)]));
+    rig.factory.text("ipconfig", "InterfaceType : WiFi\n");
+    let lost = wifi_of(done(sampler.sample_for(Trigger::default(), &cancel)).0);
+    assert_eq!(rig.factory.specs().len(), 2, "the state change runs ipconfig");
+    assert_eq!(lost, WifiReading {
+        status: WifiStatus::Disconnected,
+        network_name: None,
+        signal_strength: None,
+    });
+}
+
+#[test]
+fn an_unavailable_source_keeps_the_five_second_cadence_and_reports_it_once() {
+    let rig = connected();
+    let signals = Arc::new(FakeSignals {
+        fail: true,
+        ..FakeSignals::default()
+    });
+    let published = wifi_run(&rig, Some(&signals), secs(30.0));
+    assert_eq!(times(&published), [0.0, 5.0, 10.0, 15.0, 20.0, 25.0].map(secs));
+    assert_eq!(
+        rig.factory.specs().len(),
+        6,
+        "one ipconfig per 5 s, as without signals"
+    );
+    for publication in &published {
+        assert_eq!(publication.reading.network_name.as_deref(), Some("A"));
+        let diagnostic = publication.diagnostic.as_deref().unwrap_or_default();
+        assert_eq!(
+            diagnostic.matches(SIGNALS_UNAVAILABLE).count(),
+            1,
+            "{diagnostic:?}"
+        );
+    }
+}
+
+#[test]
+fn a_stopped_worker_samples_nothing_more_and_drops_the_subscription() {
+    let rig = connected();
+    let signals = Arc::new(FakeSignals::default());
+    // A quality signal at 1 s is due at 5 s; the stop at 3 s comes first.
+    signals.at(&rig, secs(1.0), WifiSignalKind::Quality, 1);
+    let published = wifi_run(&rig, Some(&signals), secs(3.0));
+    assert_eq!(times(&published), [Duration::ZERO]);
+    assert!(
+        signals.dropped.load(Ordering::SeqCst),
+        "the guard ends with the worker"
+    );
+    // Signals after the stop reach nobody: no sample, no child.
+    signals.fire(WifiSignalKind::Identity);
+    rig.clock.advance(secs(120.0));
+    assert_eq!(rig.factory.specs().len(), 1);
+}
+
+#[test]
+fn the_bar_follows_a_network_switch_and_the_radio_turning_off() {
+    let rig = connected();
+    let signals = Arc::new(FakeSignals::default());
+    {
+        let factory = Arc::clone(&rig.factory);
+        let signals = Arc::clone(&signals);
+        rig.clock.at(secs(10.0), move || {
+            factory.text("ipconfig", "InterfaceType : WiFi\nSSID : B\n");
+            signals.fire(WifiSignalKind::Identity);
+        });
+    }
+    {
+        let factory = Arc::clone(&rig.factory);
+        let wifi = Arc::clone(&rig.wifi);
+        let signals = Arc::clone(&signals);
+        rig.clock.at(secs(20.0), move || {
+            wifi.set(Ok(vec![iface("en0", WifiPower::Off, None)]));
+            factory.text("ipconfig", "InterfaceType : WiFi\n");
+            signals.fire(WifiSignalKind::Identity);
+        });
+    }
+    let published = wifi_run(&rig, Some(&signals), secs(30.0));
+    let readings: Vec<(Duration, WifiStatus, Option<&str>)> = published
+        .iter()
+        .map(|publication| {
+            (
+                publication.at,
+                publication.reading.status,
+                publication.reading.network_name.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(readings, [
+        (secs(0.0), WifiStatus::Connected, Some("A")),
+        (secs(10.0), WifiStatus::Connected, Some("B")),
+        (secs(20.0), WifiStatus::Off, None),
+    ]);
+}
+
+#[test]
+fn a_lost_source_samples_at_once_then_polls_every_five_seconds_with_the_condition() {
+    let rig = connected();
+    let signals = Arc::new(FakeSignals::default());
+    signals.at(&rig, secs(0.2), WifiSignalKind::Lost, 1);
+    // Later signals only follow the existing gap rules.
+    signals.at(&rig, secs(7.0), WifiSignalKind::Quality, 50);
+    signals.at(&rig, secs(12.0), WifiSignalKind::Identity, 50);
+    let published = wifi_run(&rig, Some(&signals), secs(30.0));
+    assert_eq!(
+        times(&published),
+        [0.0, 0.5, 5.5, 10.5, 12.0, 17.0, 22.0, 27.0].map(secs)
+    );
+    let children: Vec<usize> = published.iter().map(|publication| publication.children).collect();
+    assert_eq!(
+        children,
+        (1..=8).collect::<Vec<_>>(),
+        "every sample after the loss runs ipconfig"
+    );
+    assert_eq!(published[0].diagnostic, None);
+    for publication in &published[1..] {
+        let diagnostic = publication.diagnostic.as_deref().unwrap_or_default();
+        assert_eq!(
+            diagnostic.matches(SIGNALS_UNAVAILABLE).count(),
+            1,
+            "{diagnostic:?}"
+        );
+        assert_eq!(publication.reading.network_name.as_deref(), Some("A"));
+    }
 }
 
 #[allow(dead_code)]

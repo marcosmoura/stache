@@ -569,6 +569,11 @@ impl TrackingRuntime {
     #[must_use]
     pub fn animation_failure(&self) -> Option<String> { self.animation.spawn_failure() }
 
+    /// Whether the backend cannot read window bounds from the window server,
+    /// so geometry reads use Accessibility.
+    #[must_use]
+    pub fn window_bounds_missing(&self) -> bool { self.backend.window_bounds_missing() }
+
     /// Why some display is paced by the deadline timer instead of a frame
     /// clock, if any is.
     #[must_use]

@@ -42,9 +42,6 @@ pub(super) struct BorderSide {
     enabled: bool,
     /// The focused window last seen, to re-order on a focus change.
     last_focus: Option<WindowInstance>,
-    /// When an `update` last re-ordered for a focus change: a raise intent of
-    /// the same turn (same `now`) adds no second immediate `Order`.
-    focus_changed_at: Option<Instant>,
     lifecycle: Arc<BorderLifecycle>,
     /// The borders were enabled at least once: overlays may exist.
     engaged: bool,
@@ -79,7 +76,6 @@ impl BorderSide {
             seen: None,
             enabled: false,
             last_focus: None,
-            focus_changed_at: None,
             lifecycle,
             engaged: false,
             released: false,
@@ -200,27 +196,9 @@ impl BorderSide {
             side.engine.reorder_raised(now);
             let focus = state.focus.window;
             if focus != side.last_focus {
-                side.focus_changed_at = Some(now);
                 side.last_focus = focus;
-                // One `Order` now, plus one settle `Order` for `above`.
+                // One `Order` for the border of the window that took the focus.
                 side.engine.note_focus(now, focus);
-            }
-        });
-    }
-
-    /// Re-asserts the focused `above` border after a raise Tiling did not
-    /// cause: a mouse up (`application` is `None`) or the activation of
-    /// `application`. Call after [`Self::update`] for the same input; a turn
-    /// whose focus changed already ordered it.
-    pub(super) fn raise_intent(&mut self, now: Instant, application: Option<ApplicationId>) {
-        self.guarded((), |side| {
-            if !side.enabled || side.focus_changed_at == Some(now) {
-                return;
-            }
-            let Some(focus) = side.last_focus else { return };
-            match application {
-                None => side.engine.note_raise_intent(now, focus),
-                Some(application) => side.engine.note_activation(now, application),
             }
         });
     }

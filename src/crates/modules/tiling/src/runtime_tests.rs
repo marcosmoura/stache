@@ -895,6 +895,20 @@ impl WindowBackend for GateBackend {
         self.inner.submit_snapshot(window, reply)
     }
 
+    fn submit_frame_read(
+        &self,
+        window: WindowInstance,
+        reply: Box<dyn FnOnce(stache_macos::windows::FrameReadOutcome) + Send>,
+    ) -> Result<(), DispatchError> {
+        self.inner.submit_frame_read(window, reply)
+    }
+
+    fn window_bounds(&self, cg_window_id: u32) -> Option<crate::geometry::Rect> {
+        self.inner.window_bounds(cg_window_id)
+    }
+
+    fn window_bounds_missing(&self) -> bool { self.inner.window_bounds_missing() }
+
     fn application_hidden(
         &self,
         request: stache_macos::windows::HiddenRequest,
@@ -1055,13 +1069,14 @@ fn mailbox_saturation_is_a_visible_failure_not_success() {
     options.runner_capacity = 2;
     let apps: Vec<_> = (1..=30).map(|n| info(n, "com.x", "X")).collect();
     let (runtime, _feed, _) = launch(&backend, apps, &options);
-    // One track is parked in the worker, two are queued; the rest are refused.
+    // One track per read worker is parked in the backend, two are queued; the
+    // rest are refused.
     wait_until("refusals recorded", || {
         let snap = runtime.snapshot();
         snap.failed_apps.len() >= 20 && snap.diagnostics.enumeration_failures >= 20
     });
     assert_ne!(runtime.snapshot().phase, Phase::Incomplete);
-    assert!(backend.entered.load(Ordering::SeqCst) <= 3);
+    assert!(backend.entered.load(Ordering::SeqCst) <= crate::actor::READ_WORKERS);
     runtime.shutdown();
 }
 
@@ -1568,6 +1583,7 @@ mod animation;
 mod borders;
 mod drag;
 mod frames;
+mod lanes;
 mod scenarios;
 mod tabs;
 mod visibility;

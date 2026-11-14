@@ -21,12 +21,14 @@ use std::time::Instant;
 use stache_macos::ApplicationId;
 use stache_macos::windows::{
     ActionRequest, AdapterId, AdapterOptions, CleanupReport, CloseOutcome, DispatchError,
-    EventQueue, FocusOutcome, FrameReplyFn, FrameRequest, GenerationCell, HiddenOutcome,
-    HiddenRequest, InstallError, InstallRequest, LeaseRestoreOutcome, NotIssuedReason,
-    RuntimeEpoch, SnapshotOutcome, SpawnError, StopOutcome, TrackOutcome, TrackRequest,
-    WindowActionOutcome, WindowAdapter, WindowInstance,
+    EventQueue, FocusOutcome, FrameReadOutcome, FrameReplyFn, FrameRequest, GenerationCell,
+    HiddenOutcome, HiddenRequest, InstallError, InstallRequest, LeaseRestoreOutcome,
+    NotIssuedReason, RuntimeEpoch, SnapshotOutcome, SpawnError, StopOutcome, TrackOutcome,
+    TrackRequest, WindowActionOutcome, WindowAdapter, WindowBounds, WindowInstance,
 };
 use stache_sdk::CancellationToken;
+
+use crate::geometry::Rect;
 
 /// The prefix of the Tiling AX shard thread names.
 ///
@@ -164,6 +166,29 @@ pub trait WindowBackend: Send + Sync {
         reply: Box<dyn FnOnce(SnapshotOutcome) + Send>,
     ) -> Result<(), DispatchError>;
 
+    /// Queues a frame-only read (`AXPosition` and `AXSize` after the light
+    /// validation) without waiting. The reply runs once, on the backend's
+    /// thread or inline; it never runs on `Err`.
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError`]: nothing was queued and the reply will not run.
+    fn submit_frame_read(
+        &self,
+        window: WindowInstance,
+        reply: Box<dyn FnOnce(FrameReadOutcome) + Send>,
+    ) -> Result<(), DispatchError>;
+
+    /// A window's frame from the window server by `CGWindowID`, without an
+    /// Accessibility call. Only for a window with an in-flight write and an
+    /// animation's retarget; it never decides an outcome, a minimum size or
+    /// a fullscreen state. `None` (the default) means "ask Accessibility".
+    fn window_bounds(&self, _cg_window_id: u32) -> Option<Rect> { None }
+
+    /// Whether the window-server bounds read is unavailable (its symbols are
+    /// missing), so every geometry read uses Accessibility. Diagnostic only.
+    fn window_bounds_missing(&self) -> bool { false }
+
     /// Reads or writes the `AXHidden` of one tracked application on the owner
     /// thread: the fallback when the public hide or unhide returned `false`.
     /// A write is authorized by the request's own one-shot issuance, not the
@@ -210,6 +235,7 @@ pub trait WindowBackend: Send + Sync {
 pub struct SystemWindowBackend {
     adapter: WindowAdapter,
     read_tabs: bool,
+    bounds: Arc<dyn WindowBounds>,
 }
 
 impl SystemWindowBackend {
@@ -224,6 +250,7 @@ impl SystemWindowBackend {
             .map(|adapter| Self {
                 adapter,
                 read_tabs: options.read_tabs,
+                bounds: Arc::new(stache_macos::windows::SystemWindowBounds::system()),
             })
             .map_err(BackendError::Spawn)
     }
@@ -232,10 +259,22 @@ impl SystemWindowBackend {
 #[cfg(any(test, feature = "testing"))]
 impl SystemWindowBackend {
     /// Wraps an adapter built over a fake system, so tests drive the real
-    /// owner `Core` through the production backend path.
+    /// owner `Core` through the production backend path. It reads no window
+    /// bounds (as with missing symbols) until [`Self::with_bounds`].
     #[must_use]
-    pub const fn from_adapter(adapter: WindowAdapter, read_tabs: bool) -> Self {
-        Self { adapter, read_tabs }
+    pub fn from_adapter(adapter: WindowAdapter, read_tabs: bool) -> Self {
+        Self {
+            adapter,
+            read_tabs,
+            bounds: Arc::new(stache_macos::windows::MissingWindowBounds),
+        }
+    }
+
+    /// Reads window bounds through `bounds` (a fake window server).
+    #[must_use]
+    pub fn with_bounds(mut self, bounds: Arc<dyn WindowBounds>) -> Self {
+        self.bounds = bounds;
+        self
     }
 }
 
@@ -348,6 +387,27 @@ impl WindowBackend for SystemWindowBackend {
     ) -> Result<(), DispatchError> {
         self.adapter.submit_snapshot(window, reply)
     }
+
+    fn submit_frame_read(
+        &self,
+        window: WindowInstance,
+        reply: Box<dyn FnOnce(FrameReadOutcome) + Send>,
+    ) -> Result<(), DispatchError> {
+        self.adapter.submit_frame_read(window, reply)
+    }
+
+    fn window_bounds(&self, cg_window_id: u32) -> Option<Rect> {
+        self.bounds.bounds(cg_window_id).map(|frame| {
+            Rect::new(
+                frame.origin.x,
+                frame.origin.y,
+                frame.size.width,
+                frame.size.height,
+            )
+        })
+    }
+
+    fn window_bounds_missing(&self) -> bool { !self.bounds.available() }
 
     fn application_hidden(
         &self,
@@ -580,6 +640,24 @@ impl WindowBackend for LazySystemBackend {
             .map_or(Err(DispatchError::Closed), |b| b.submit_snapshot(window, reply))
     }
 
+    fn submit_frame_read(
+        &self,
+        window: WindowInstance,
+        reply: Box<dyn FnOnce(FrameReadOutcome) + Send>,
+    ) -> Result<(), DispatchError> {
+        self.existing().map_or(Err(DispatchError::Closed), |b| {
+            b.submit_frame_read(window, reply)
+        })
+    }
+
+    fn window_bounds(&self, cg_window_id: u32) -> Option<Rect> {
+        self.existing()?.window_bounds(cg_window_id)
+    }
+
+    fn window_bounds_missing(&self) -> bool {
+        self.existing().is_some_and(|b| b.window_bounds_missing())
+    }
+
     fn application_hidden(
         &self,
         request: HiddenRequest,
@@ -667,6 +745,10 @@ pub enum FakeBackendCall {
     FocusedWindow(ApplicationId),
     /// `snapshot` of a window.
     Snapshot(WindowInstance),
+    /// A frame-only read of a window.
+    FrameRead(WindowInstance),
+    /// A window-server bounds read by `CGWindowID`.
+    Bounds(u32),
     /// `resolve_window_id`.
     Resolve(u32),
     /// An action request (queued or blocking).
@@ -697,10 +779,10 @@ mod fake {
 
     use super::{
         ActionRequest, AdapterId, ApplicationId, Arc, CancellationToken, CleanupReport,
-        CloseOutcome, DispatchError, EventQueue, FakeBackendCall, FrameReplyFn, FrameRequest,
-        GenerationCell, HiddenOutcome, HiddenRequest, InstallError, Instant, LeaseRestoreOutcome,
-        NotIssuedReason, RuntimeEpoch, SnapshotOutcome, StopOutcome, TrackOutcome,
-        WindowActionOutcome, WindowBackend, WindowInstance,
+        CloseOutcome, DispatchError, EventQueue, FakeBackendCall, FrameReadOutcome, FrameReplyFn,
+        FrameRequest, GenerationCell, HiddenOutcome, HiddenRequest, InstallError, Instant,
+        LeaseRestoreOutcome, NotIssuedReason, RuntimeEpoch, SnapshotOutcome, StopOutcome,
+        TrackOutcome, WindowActionOutcome, WindowBackend, WindowInstance,
     };
     use crate::geometry::Rect;
 
@@ -732,8 +814,6 @@ mod fake {
         pub frames: Vec<(WindowInstance, u64, FrameStage)>,
     }
 
-    type DeferredSnapshot = (SnapshotOutcome, Box<dyn FnOnce(SnapshotOutcome) + Send>);
-
     struct Parked {
         reply: FrameReplyFn,
         outcome: WindowActionOutcome,
@@ -746,11 +826,15 @@ mod fake {
         order: VecDeque<WindowInstance>,
         /// The send the shard is blocked inside (a held write).
         parked: Option<Parked>,
-        /// Snapshot answers queued behind the blocked send.
-        deferred: Vec<DeferredSnapshot>,
+        /// Snapshot and frame-read answers queued behind the blocked send.
+        deferred: Vec<Deferred>,
     }
 
     #[derive(Default)]
+    #[allow(
+        clippy::struct_excessive_bools,
+        reason = "independent scripted switches of the fake"
+    )]
     struct State {
         calls: Vec<FakeBackendCall>,
         sink: Option<Arc<EventQueue>>,
@@ -783,6 +867,21 @@ mod fake {
         dropped: usize,
         /// The last frame each window was echoed at.
         echoed: HashMap<WindowInstance, Rect>,
+        /// Which window the fake window server answers bounds for, by id.
+        bounds: HashMap<u32, WindowInstance>,
+        /// The bounds symbols are missing.
+        bounds_missing: bool,
+        /// Holds every read of one application (`hold_reads_of`).
+        read_holds: HashMap<ApplicationId, Arc<SendHold>>,
+        /// Holds every read of every application (`hold_reads`).
+        read_hold: Option<Arc<SendHold>>,
+        /// Reads inside the backend right now, and the most ever at once.
+        reads_in_flight: usize,
+        reads_high_water: usize,
+        /// A raise makes the raised window the application's focused one.
+        raise_focuses: bool,
+        /// Holds the `AXHidden` calls of one application.
+        hidden_holds: HashMap<ApplicationId, Arc<SendHold>>,
     }
 
     #[derive(Default)]
@@ -936,9 +1035,7 @@ mod fake {
                         continue;
                     }
                     let Some(window) = shard.order.pop_front() else {
-                        for (outcome, reply) in std::mem::take(&mut shard.deferred) {
-                            run.push(Box::new(move || reply(outcome)));
-                        }
+                        run.append(&mut shard.deferred);
                         break;
                     };
                     let Some((request, reply)) = shard.pending.remove(&window) else {
@@ -1061,6 +1158,69 @@ mod fake {
             ))
         }
 
+        /// Records a read of `application` and returns the hold it must pass,
+        /// counting it in flight until [`Self::end_read`].
+        fn begin_read(
+            st: &mut State,
+            application: Option<ApplicationId>,
+            call: FakeBackendCall,
+        ) -> Option<Arc<SendHold>> {
+            st.calls.push(call);
+            st.reads_in_flight += 1;
+            st.reads_high_water = st.reads_high_water.max(st.reads_in_flight);
+            application
+                .and_then(|application| st.read_holds.get(&application).cloned())
+                .or_else(|| st.read_hold.clone())
+        }
+
+        /// Passes the read's hold (outside the state lock) and ends the read.
+        fn pass_read(&self, hold: Option<Arc<SendHold>>) {
+            if let Some(hold) = hold {
+                hold.pass();
+            }
+            self.state().reads_in_flight -= 1;
+        }
+
+        /// Holds every read of one application (`track`, `refresh`,
+        /// `focused_window`, `untrack`, `snapshot`, `window_bounds`) inside the
+        /// backend until released, like an application that does not answer.
+        /// The call is recorded before it is held.
+        #[must_use]
+        pub fn hold_reads_of(&self, application: ApplicationId) -> Arc<SendHold> {
+            let hold = Arc::new(SendHold::default());
+            self.state().read_holds.insert(application, Arc::clone(&hold));
+            hold
+        }
+
+        /// Holds every read of every application without its own read hold.
+        #[must_use]
+        pub fn hold_reads(&self) -> Arc<SendHold> {
+            let hold = Arc::new(SendHold::default());
+            self.state().read_hold = Some(Arc::clone(&hold));
+            hold
+        }
+
+        /// Holds every `AXHidden` call of one application (the hide fallback)
+        /// inside the backend until released.
+        #[must_use]
+        pub fn hold_hidden_of(&self, application: ApplicationId) -> Arc<SendHold> {
+            let hold = Arc::new(SendHold::default());
+            self.state().hidden_holds.insert(application, Arc::clone(&hold));
+            hold
+        }
+
+        /// The most reads that were inside the backend at once.
+        #[must_use]
+        pub fn reads_high_water(&self) -> usize { self.state().reads_high_water }
+
+        /// Reads inside the backend right now.
+        #[must_use]
+        pub fn reads_in_flight(&self) -> usize { self.state().reads_in_flight }
+
+        /// Makes a raise (after its held send, if any) report the raised window
+        /// as its application's focused one, like the system does.
+        pub fn script_raise_focuses(&self, focuses: bool) { self.state().raise_focuses = focuses; }
+
         /// Holds the sends of one application only, like its shard stalled in a
         /// native call. Later frames for it wait in its mailbox and replace each
         /// other; other applications are unaffected.
@@ -1117,6 +1277,28 @@ mod fake {
                 .iter()
                 .filter(|call| **call == FakeBackendCall::Snapshot(window))
                 .count()
+        }
+
+        /// How many frame-only reads were requested for a window.
+        #[must_use]
+        pub fn frame_reads(&self, window: WindowInstance) -> usize {
+            self.state()
+                .calls
+                .iter()
+                .filter(|call| **call == FakeBackendCall::FrameRead(window))
+                .count()
+        }
+
+        /// The fake window server answers bounds for `cg_window_id` with the
+        /// last frame echoed for `window`.
+        pub fn script_bounds(&self, cg_window_id: u32, window: WindowInstance) {
+            self.state().bounds.insert(cg_window_id, window);
+        }
+
+        /// Declares the bounds symbols missing (default present but
+        /// unscripted, which answers nothing).
+        pub fn script_bounds_missing(&self, missing: bool) {
+            self.state().bounds_missing = missing;
         }
 
         /// Every call so far, in order.
@@ -1330,8 +1512,13 @@ mod fake {
             _cancel: CancellationToken,
             _deadline: Option<Instant>,
         ) -> TrackOutcome {
+            let hold = Self::begin_read(
+                &mut self.state(),
+                Some(application),
+                FakeBackendCall::Track(application, pid),
+            );
+            self.pass_read(hold);
             let mut state = self.state();
-            state.calls.push(FakeBackendCall::Track(application, pid));
             if let Some(outcome) =
                 state.track_outcomes.get_mut(&application).and_then(VecDeque::pop_front)
             {
@@ -1347,9 +1534,13 @@ mod fake {
             _cancel: CancellationToken,
             _deadline: Option<Instant>,
         ) -> TrackOutcome {
-            let mut state = self.state();
-            state.calls.push(FakeBackendCall::Refresh(application));
-            state.track_outcome.take().unwrap_or(TrackOutcome::Tracking)
+            let hold = Self::begin_read(
+                &mut self.state(),
+                Some(application),
+                FakeBackendCall::Refresh(application),
+            );
+            self.pass_read(hold);
+            self.state().track_outcome.take().unwrap_or(TrackOutcome::Tracking)
         }
 
         fn focused_window(
@@ -1359,9 +1550,13 @@ mod fake {
             _cancel: &CancellationToken,
             _deadline: Option<Instant>,
         ) -> FocusOutcome {
-            let mut state = self.state();
-            state.calls.push(FakeBackendCall::FocusedWindow(application));
-            state
+            let hold = Self::begin_read(
+                &mut self.state(),
+                Some(application),
+                FakeBackendCall::FocusedWindow(application),
+            );
+            self.pass_read(hold);
+            self.state()
                 .focused
                 .get(&application)
                 .copied()
@@ -1375,7 +1570,12 @@ mod fake {
             _cancel: &CancellationToken,
             _deadline: Option<Instant>,
         ) -> StopOutcome {
-            self.state().calls.push(FakeBackendCall::Untrack(application));
+            let hold = Self::begin_read(
+                &mut self.state(),
+                Some(application),
+                FakeBackendCall::Untrack(application),
+            );
+            self.pass_read(hold);
             StopOutcome::Clean { applications: 1 }
         }
 
@@ -1385,9 +1585,13 @@ mod fake {
             _cancel: &CancellationToken,
             _deadline: Option<Instant>,
         ) -> SnapshotOutcome {
-            let mut state = self.state();
-            state.calls.push(FakeBackendCall::Snapshot(window));
-            state.snapshots.get(&window).cloned().unwrap_or(SnapshotOutcome::Stale(
+            let hold = Self::begin_read(
+                &mut self.state(),
+                Some(window.application()),
+                FakeBackendCall::Snapshot(window),
+            );
+            self.pass_read(hold);
+            self.state().snapshots.get(&window).cloned().unwrap_or(SnapshotOutcome::Stale(
                 stache_macos::windows::StaleReason::UnknownWindow,
             ))
         }
@@ -1440,6 +1644,11 @@ mod fake {
             };
             if let Some(hold) = hold {
                 hold.pass();
+            }
+            let mut state = self.state();
+            if state.raise_focuses && matches!(request.action, WindowAction::Raise) {
+                let window = request.issuance.window();
+                state.focused.insert(window.application(), window);
             }
             outcome
         }
@@ -1528,7 +1737,7 @@ mod fake {
                 ));
                 let shard = st.shards.entry(window.application()).or_default();
                 if shard.parked.is_some() {
-                    shard.deferred.push((outcome, reply));
+                    shard.deferred.push(Box::new(move || reply(outcome)));
                     return Ok(());
                 }
                 outcome
@@ -1536,6 +1745,67 @@ mod fake {
             reply(outcome);
             Ok(())
         }
+
+        /// Answers from the scripted snapshot's frame, else (when echoing) the
+        /// last echoed frame, else a stale token; queued behind a held send
+        /// like a snapshot.
+        #[allow(clippy::significant_drop_tightening)] // one lock covers the lookup
+        fn submit_frame_read(
+            &self,
+            window: WindowInstance,
+            reply: Box<dyn FnOnce(FrameReadOutcome) + Send>,
+        ) -> Result<(), DispatchError> {
+            let outcome = {
+                let mut st = self.state();
+                st.calls.push(FakeBackendCall::FrameRead(window));
+                if let Some(error) = st.dispatch_error.take() {
+                    return Err(error);
+                }
+                let stale =
+                    FrameReadOutcome::Stale(stache_macos::windows::StaleReason::UnknownWindow);
+                let outcome = match st.snapshots.get(&window) {
+                    Some(SnapshotOutcome::Snapshot(snapshot)) => {
+                        FrameReadOutcome::Frame(snapshot.frame)
+                    }
+                    Some(SnapshotOutcome::Stale(reason)) => FrameReadOutcome::Stale(*reason),
+                    Some(_) => stale,
+                    None => match st.echoed.get(&window) {
+                        Some(frame) if st.echo_frames => {
+                            FrameReadOutcome::Frame(echo_snapshot(window, *frame).frame)
+                        }
+                        _ => stale,
+                    },
+                };
+                let shard = st.shards.entry(window.application()).or_default();
+                if shard.parked.is_some() {
+                    shard.deferred.push(Box::new(move || reply(outcome)));
+                    return Ok(());
+                }
+                outcome
+            };
+            reply(outcome);
+            Ok(())
+        }
+
+        /// The echoed frame of the window scripted for the id (the window
+        /// server sees what the fake wrote); nothing when unscripted or when
+        /// the symbols are scripted missing.
+        fn window_bounds(&self, cg_window_id: u32) -> Option<Rect> {
+            let mut st = self.state();
+            let application = st.bounds.get(&cg_window_id).map(WindowInstance::application);
+            let hold =
+                Self::begin_read(&mut st, application, FakeBackendCall::Bounds(cg_window_id));
+            drop(st);
+            self.pass_read(hold);
+            let st = self.state();
+            if st.bounds_missing {
+                return None;
+            }
+            let window = st.bounds.get(&cg_window_id)?;
+            st.echoed.get(window).copied()
+        }
+
+        fn window_bounds_missing(&self) -> bool { self.state().bounds_missing }
 
         fn application_hidden(
             &self,
@@ -1548,7 +1818,11 @@ mod fake {
                 .calls
                 .push(FakeBackendCall::Hidden(request.application, request.operation));
             let scripted = state.hidden_outcomes.pop_front();
+            let hold = state.hidden_holds.get(&request.application).cloned();
             drop(state);
+            if let Some(hold) = hold {
+                hold.pass();
+            }
             // A scripted write models the owner committing the one-shot send.
             let Some(outcome) = scripted else {
                 return HiddenOutcome::Stale(stache_macos::windows::StaleReason::ApplicationGone);

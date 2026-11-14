@@ -27,7 +27,7 @@ use crate::workspaces::{AppVisibility, VisibilityRequirement};
 
 // ---------------------------------------------------------------- pure ledger
 
-fn entry(application: ApplicationId, needed: bool, externally_hidden: bool) -> AppVisibility {
+pub fn entry(application: ApplicationId, needed: bool, externally_hidden: bool) -> AppVisibility {
     AppVisibility {
         application,
         needed_by: if needed {
@@ -51,7 +51,7 @@ fn entry(application: ApplicationId, needed: bool, externally_hidden: bool) -> A
     }
 }
 
-fn requirement(entries: Vec<AppVisibility>) -> VisibilityRequirement {
+pub fn requirement(entries: Vec<AppVisibility>) -> VisibilityRequirement {
     VisibilityRequirement {
         finder_held: false,
         settled: false,

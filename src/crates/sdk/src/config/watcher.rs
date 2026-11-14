@@ -1,5 +1,9 @@
 //! Debounced watcher for the configuration directory.
 //!
+//! It uses `notify`'s recommended backend directly and debounces on the
+//! caller's thread: a batch is reported once the directory was quiet for
+//! [`DEBOUNCE`], or [`MAX_BATCH_DELAY`] after its first event at the latest.
+//!
 //! The watcher observes the directory itself (never individual files) so an
 //! editor that saves through a temporary file and a rename is handled the same
 //! way as an in-place write. It only reports which catalog file changed; the
@@ -7,12 +11,15 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
+#[cfg(test)]
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::time::{Duration, Instant};
 use std::{fmt, fs};
 
-use notify_debouncer_full::notify::RecursiveMode;
-use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::config::ConfigCatalog;
 use crate::config::diagnostics::ConfigFileId;
@@ -21,8 +28,33 @@ use crate::config::paths::ConfigPaths;
 /// Debounce window required by the configuration contract.
 pub const DEBOUNCE: Duration = Duration::from_millis(200);
 
-type InnerDebouncer =
-    Debouncer<notify_debouncer_full::notify::RecommendedWatcher, RecommendedCache>;
+/// The longest a continuous stream of events can postpone one report.
+pub const MAX_BATCH_DELAY: Duration = Duration::from_secs(2);
+
+/// One message on the watcher's channel: a backend event or a stop request.
+enum Message {
+    Event(notify::Result<notify::Event>),
+    Stop,
+}
+
+/// Wakes a blocked [`ConfigWatcher::wait`] from another thread.
+///
+/// It only sends on an in-process channel; it never calls into the backend.
+#[derive(Clone)]
+pub struct WatchStop {
+    sender: Sender<Message>,
+}
+
+impl WatchStop {
+    /// Ends the watcher's current (or next) blocking wait.
+    pub fn stop(&self) { let _ = self.sender.send(Message::Stop); }
+}
+
+impl fmt::Debug for WatchStop {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WatchStop").finish_non_exhaustive()
+    }
+}
 
 /// The catalog files affected by one debounced batch.
 ///
@@ -50,7 +82,7 @@ pub enum WatchError {
     NoExistingAncestor(PathBuf),
     /// The watcher backend refused to watch a path.
     Backend(String),
-    /// The debouncer thread is gone.
+    /// The backend's event channel is gone.
     Stopped,
 }
 
@@ -72,13 +104,39 @@ impl fmt::Display for WatchError {
 
 impl std::error::Error for WatchError {}
 
+/// Events collected since the first one of a batch that is not reported yet.
+struct Pending {
+    first: Instant,
+    last: Instant,
+    paths: Vec<PathBuf>,
+}
+
+impl Pending {
+    /// When the batch is due: quiet for [`DEBOUNCE`], capped at [`MAX_BATCH_DELAY`].
+    fn due(&self) -> Instant { (self.last + DEBOUNCE).min(self.first + MAX_BATCH_DELAY) }
+}
+
+/// What one collection step ended with.
+enum Collected {
+    Changes(ChangeSet),
+    Timeout,
+    Stopped,
+}
+
 /// Watches the configuration directory and pulls debounced changes.
+///
+/// The quiet-period wait runs on the caller's thread: nothing ticks while the
+/// directory is quiet, and only the backend's own event thread runs.
 pub struct ConfigWatcher {
-    debouncer: InnerDebouncer,
-    receiver: Receiver<DebounceEventResult>,
+    watcher: RecommendedWatcher,
+    receiver: Receiver<Message>,
+    stop: Sender<Message>,
+    pending: Option<Pending>,
     directory: PathBuf,
     watched: PathBuf,
     files: BTreeMap<String, ConfigFileId>,
+    #[cfg(test)]
+    passes: Arc<AtomicUsize>,
 }
 
 impl ConfigWatcher {
@@ -108,15 +166,22 @@ impl ConfigWatcher {
             .map(|id| (ConfigFileId::module(id).file_name(), ConfigFileId::module(id)))
             .collect();
         let (sender, receiver) = channel();
-        let mut debouncer = new_debouncer(DEBOUNCE, None, sender)
-            .map_err(|error| WatchError::Backend(error.to_string()))?;
-        watch(&mut debouncer, &anchor)?;
+        let events = sender.clone();
+        let mut watcher = notify::recommended_watcher(move |event| {
+            let _ = events.send(Message::Event(event));
+        })
+        .map_err(|error| WatchError::Backend(error.to_string()))?;
+        watch(&mut watcher, &anchor)?;
         Ok(Self {
-            debouncer,
+            watcher,
             receiver,
+            stop: sender,
+            pending: None,
             directory,
             watched: anchor,
             files,
+            #[cfg(test)]
+            passes: Arc::new(AtomicUsize::new(0)),
         })
     }
 
@@ -124,44 +189,95 @@ impl ConfigWatcher {
     #[must_use]
     pub fn directory(&self) -> &Path { &self.directory }
 
+    /// A handle that ends a blocked [`ConfigWatcher::wait`] from another thread.
+    #[must_use]
+    pub fn stop_handle(&self) -> WatchStop { WatchStop { sender: self.stop.clone() } }
+
+    /// Blocks without a deadline until one debounced batch is ready.
+    ///
+    /// Returns `None` when [`WatchStop::stop`] was called. A batch that was
+    /// still collecting when the stop arrived is dropped.
+    ///
+    /// # Errors
+    /// Returns [`WatchError::Backend`] when the backend reports a failure.
+    pub fn wait(&mut self) -> Result<Option<ChangeSet>, WatchError> {
+        match self.collect(None)? {
+            Collected::Changes(changes) => Ok(Some(changes)),
+            Collected::Timeout | Collected::Stopped => Ok(None),
+        }
+    }
+
     /// Waits up to `timeout` for one debounced batch.
     ///
     /// Returns `None` when no relevant event arrived. Unrelated events observed
     /// while watching an ancestor are skipped without consuming the caller's
-    /// timeout early.
+    /// timeout early. A stop request also returns `None`.
     ///
     /// # Errors
-    /// Returns [`WatchError::Stopped`] when the debouncer thread is gone.
+    /// Returns [`WatchError::Stopped`] when the backend's channel is gone.
     pub fn next(&mut self, timeout: Duration) -> Result<Option<ChangeSet>, WatchError> {
-        let deadline = Instant::now() + timeout;
+        match self.collect(Some(Instant::now() + timeout))? {
+            Collected::Changes(changes) => Ok(Some(changes)),
+            Collected::Timeout | Collected::Stopped => Ok(None),
+        }
+    }
+
+    /// Collects events until a batch is due, the caller's deadline passes or a
+    /// stop arrives. Without a pending batch and without a deadline it blocks
+    /// with no timeout.
+    fn collect(&mut self, deadline: Option<Instant>) -> Result<Collected, WatchError> {
         loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Ok(None);
-            }
-            match self.receiver.recv_timeout(remaining) {
-                Ok(Ok(events)) => {
-                    let mut changes = ChangeSet::default();
-                    for event in events {
-                        for path in &event.paths {
-                            self.classify(path, &mut changes);
-                        }
-                    }
-                    self.reanchor(&mut changes)?;
-                    if !changes.is_empty() {
-                        return Ok(Some(changes));
-                    }
+            let due = self.pending.as_ref().map(Pending::due);
+            let wake = match (due, deadline) {
+                (Some(due), Some(deadline)) => Some(due.min(deadline)),
+                (due, deadline) => due.or(deadline),
+            };
+            let received = match wake {
+                None => self.receiver.recv().map_err(|_| RecvTimeoutError::Disconnected),
+                Some(wake) => {
+                    self.receiver.recv_timeout(wake.saturating_duration_since(Instant::now()))
                 }
-                Ok(Err(errors)) => {
-                    let message =
-                        errors.iter().map(ToString::to_string).collect::<Vec<_>>().join("; ");
-                    return Err(WatchError::Backend(message));
+            };
+            #[cfg(test)]
+            self.passes.fetch_add(1, Ordering::Relaxed);
+            match received {
+                Ok(Message::Stop) => return Ok(Collected::Stopped),
+                Ok(Message::Event(Err(error))) => {
+                    return Err(WatchError::Backend(error.to_string()));
                 }
-                Err(RecvTimeoutError::Timeout) => return Ok(None),
+                Ok(Message::Event(Ok(event))) => {
+                    let now = Instant::now();
+                    let pending = self.pending.get_or_insert_with(|| Pending {
+                        first: now,
+                        last: now,
+                        paths: Vec::new(),
+                    });
+                    pending.last = now;
+                    pending.paths.extend(event.paths);
+                }
                 Err(RecvTimeoutError::Disconnected) => return Err(WatchError::Stopped),
+                Err(RecvTimeoutError::Timeout) => {}
+            }
+            let now = Instant::now();
+            if let Some(pending) = self.pending.take_if(|pending| pending.due() <= now) {
+                let mut changes = ChangeSet::default();
+                for path in &pending.paths {
+                    self.classify(path, &mut changes);
+                }
+                self.reanchor(&mut changes)?;
+                if !changes.is_empty() {
+                    return Ok(Collected::Changes(changes));
+                }
+            }
+            if deadline.is_some_and(|deadline| deadline <= now) {
+                return Ok(Collected::Timeout);
             }
         }
     }
+
+    /// The number of completed wait passes. Test-only introspection.
+    #[cfg(test)]
+    fn pass_counter(&self) -> Arc<AtomicUsize> { Arc::clone(&self.passes) }
 
     fn classify(&self, path: &Path, changes: &mut ChangeSet) {
         if path == self.directory {
@@ -192,18 +308,18 @@ impl ConfigWatcher {
     }
 
     fn move_watch(&mut self, target: PathBuf, changes: &mut ChangeSet) -> Result<(), WatchError> {
-        watch(&mut self.debouncer, &target)?;
+        watch(&mut self.watcher, &target)?;
         // The old anchor may already be gone; a failed removal must not turn a
         // usable watch into an error.
-        let _ = self.debouncer.unwatch(&self.watched);
+        let _ = self.watcher.unwatch(&self.watched);
         self.watched = target;
         changes.rescan = true;
         Ok(())
     }
 }
 
-fn watch(debouncer: &mut InnerDebouncer, path: &Path) -> Result<(), WatchError> {
-    debouncer
+fn watch(watcher: &mut RecommendedWatcher, path: &Path) -> Result<(), WatchError> {
+    watcher
         .watch(path, RecursiveMode::NonRecursive)
         .map_err(|error| WatchError::Backend(format!("{}: {error}", path.display())))
 }
@@ -330,5 +446,102 @@ mod tests {
         fs::remove_file(&file).expect("remove");
         let changes = watcher.next(Duration::from_secs(5)).expect("watch").expect("change");
         assert!(changes.files.contains(&ConfigFileId::module(ModuleId::new("sample"))));
+    }
+
+    #[test]
+    fn a_burst_of_writes_yields_one_batch() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let paths = directory(&root);
+        fs::create_dir_all(paths.directory()).expect("create config dir");
+        let mut watcher = ConfigWatcher::new(&paths, &catalog()).expect("watcher");
+        let file = paths.module_file(ModuleId::new("sample"));
+
+        for index in 0..5 {
+            fs::write(&file, format!("{{ \"enabled\": {} }}", index % 2 == 0)).expect("write");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let changes = watcher.next(Duration::from_secs(5)).expect("watch").expect("change");
+        assert!(changes.files.contains(&ConfigFileId::module(ModuleId::new("sample"))));
+        assert!(
+            watcher.next(Duration::from_millis(500)).expect("quiet").is_none(),
+            "one burst inside the debounce window must be one batch"
+        );
+    }
+
+    #[test]
+    fn a_directory_that_disappears_and_returns_reports_a_rescan() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let paths = directory(&root);
+        fs::create_dir_all(paths.directory()).expect("create config dir");
+        let mut watcher = ConfigWatcher::new(&paths, &catalog()).expect("watcher");
+
+        fs::remove_dir(paths.directory()).expect("remove config dir");
+        let gone = watcher.next(Duration::from_secs(5)).expect("watch").expect("change");
+        assert!(gone.rescan, "removal must rescan: {gone:?}");
+
+        fs::create_dir_all(paths.directory()).expect("recreate config dir");
+        let back = watcher.next(Duration::from_secs(5)).expect("watch").expect("change");
+        assert!(back.rescan, "return must rescan: {back:?}");
+    }
+
+    #[test]
+    fn a_continuous_stream_cannot_postpone_a_batch_past_two_seconds() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let paths = directory(&root);
+        fs::create_dir_all(paths.directory()).expect("create config dir");
+        let mut watcher = ConfigWatcher::new(&paths, &catalog()).expect("watcher");
+        let file = paths.module_file(ModuleId::new("sample"));
+
+        let writer = std::thread::spawn(move || {
+            let end = Instant::now() + Duration::from_secs(5);
+            let mut index = 0_u32;
+            while Instant::now() < end {
+                fs::write(&file, format!("# {index}\n")).expect("write");
+                index += 1;
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        });
+        let started = Instant::now();
+        let first = watcher.next(Duration::from_secs(5)).expect("watch");
+        let first_after = started.elapsed();
+        assert!(first.is_some(), "the stream produced no batch");
+        // 2 s cap plus slack for backend latency on a busy machine.
+        assert!(
+            first_after < MAX_BATCH_DELAY + Duration::from_millis(800),
+            "first batch after {first_after:?}"
+        );
+        let second = watcher.next(Duration::from_secs(4)).expect("watch");
+        assert!(second.is_some(), "the stream produced no further batch");
+        writer.join().expect("writer");
+    }
+
+    #[test]
+    fn a_quiet_directory_completes_no_pass_and_stop_ends_the_wait() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let paths = directory(&root);
+        fs::create_dir_all(paths.directory()).expect("create config dir");
+        let mut watcher = ConfigWatcher::new(&paths, &catalog()).expect("watcher");
+        // FSEvents may still report the directory's creation just after the
+        // watch starts; that is file activity, so let it drain first.
+        while watcher.next(Duration::from_millis(300)).expect("settle").is_some() {}
+        let passes = watcher.pass_counter();
+        let settled = passes.load(Ordering::Relaxed);
+        let stop = watcher.stop_handle();
+        let (done, finished) = std::sync::mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            let result = watcher.wait().map(|changes| changes.is_none());
+            let _ = done.send(Instant::now());
+            result
+        });
+
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(passes.load(Ordering::Relaxed), settled, "the idle wait woke up");
+
+        let stopped = Instant::now();
+        stop.stop();
+        let returned = finished.recv_timeout(Duration::from_secs(1)).expect("wait returned");
+        assert!(returned.duration_since(stopped) < Duration::from_millis(100));
+        assert!(waiter.join().expect("waiter").expect("no backend error"));
+        assert_eq!(passes.load(Ordering::Relaxed), settled + 1);
     }
 }

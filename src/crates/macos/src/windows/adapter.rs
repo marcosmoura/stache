@@ -50,9 +50,10 @@ use std::time::{Duration, Instant};
 use stache_sdk::CancellationToken;
 
 use super::commands::{
-    ActionRequest, CleanupReport, CloseOutcome, Command, FocusOutcome, FrameReplyFn, FrameRequest,
-    HiddenOutcome, HiddenRequest, InstallError, InstallRequest, LeaseRestoreOutcome, Reply,
-    Resolution, SnapshotOutcome, StopOutcome, TrackOutcome, TrackRequest, WindowAction,
+    ActionRequest, CleanupReport, CloseOutcome, Command, FocusOutcome, FrameReadOutcome,
+    FrameReplyFn, FrameRequest, HiddenOutcome, HiddenRequest, InstallError, InstallRequest,
+    LeaseRestoreOutcome, Reply, Resolution, SnapshotOutcome, StopOutcome, TrackOutcome,
+    TrackRequest, WindowAction,
 };
 use super::core::{Core, EpochCounters};
 use super::driver::{Driver, RunLoopDriver, Wakeup};
@@ -1063,6 +1064,32 @@ impl WindowAdapter {
             Route::Closed => Err(DispatchError::Closed),
             Route::Unrouted(unrouted) => {
                 reply(SnapshotOutcome::Stale(unrouted.stale_reason(window)));
+                Ok(())
+            }
+        }
+    }
+
+    /// Queues a frame-only read (`AXPosition` and `AXSize` after the light
+    /// validation, no `AXWindows` listing) without waiting, with the routing
+    /// of [`Self::submit_snapshot`]: `reply` runs on the shard thread, or
+    /// inline with the typed stale outcome when no shard hosts the
+    /// application. On `Err` nothing was queued.
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError`].
+    pub fn submit_frame_read(
+        &self,
+        window: WindowInstance,
+        reply: impl FnOnce(FrameReadOutcome) + Send + 'static,
+    ) -> Result<(), DispatchError> {
+        match self.route(window.application()) {
+            Route::Shard(shard) => {
+                shard.submit(Command::ReadFrame { window, reply: Box::new(reply) })
+            }
+            Route::Closed => Err(DispatchError::Closed),
+            Route::Unrouted(unrouted) => {
+                reply(FrameReadOutcome::Stale(unrouted.stale_reason(window)));
                 Ok(())
             }
         }

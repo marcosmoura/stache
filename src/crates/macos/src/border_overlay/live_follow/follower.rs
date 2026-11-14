@@ -40,9 +40,11 @@
 //!   sink's `reorder` is still called after it (the main-thread `Order` stays
 //!   authoritative). A missing symbol or refused call disables the fast path
 //!   for the run (reported once); `NotShown` (the main thread's record) is not
-//!   an error.
-//! * `Hide`, `Unhide` and `Close` are **unverified and not acted on**
-//!   (native run 2: the candidate hide event fired after nearly every show).
+//!   an error. Measured natively on 2026-11-14, the private call does not
+//!   move the panel (see [`super::skylight`]); the main-thread `Order` is what
+//!   re-stacks it.
+//! * `Hide`, `Unhide` and `Close` are **not acted on** (native run 2: the
+//!   event then taken for the hide fired after nearly every show).
 //!   Each has its own flag in [`FollowTiming`], off by default, so a later
 //!   verified run can enable it alone.
 //! * Raw events ([`FollowCore::on_raw`]) only go to [`FollowSink::raw_events`]. Tiling's own destroy path releases the

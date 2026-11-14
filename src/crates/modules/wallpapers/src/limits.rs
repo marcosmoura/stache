@@ -15,6 +15,7 @@
 //! | [`MAX_INTERMEDIATE_PIXELS`] | 100 MP | Bounds the cover-resize canvas before it is allocated. |
 //! | [`MAX_INTERMEDIATE_DIMENSION`] | 65,536 | Bounds one edge of that canvas. |
 //! | [`MAX_BLUR_RADIUS`] | 4,096 | A blur beyond this cannot be distinguished on any supported panel. Corner radii are capped to half the smaller target edge instead. |
+//! | [`MAX_CONCURRENT_WORKERS`] | 4 | Processing threads for one plan or batch. Each worker holds at most one decoded source, so neither path keeps more than four decodes resident. |
 
 use std::fmt;
 use std::path::Path;
@@ -43,7 +44,8 @@ pub const MAX_INTERMEDIATE_DIMENSION: u32 = 65_536;
 /// Maximum accepted blur or rounded-corner radius in pixels.
 pub const MAX_BLUR_RADIUS: u32 = 4_096;
 
-/// Maximum number of scoped processing threads for one batch.
+/// Maximum number of scoped processing threads for one plan or batch, and so
+/// the maximum number of decoded sources resident at once.
 pub const MAX_CONCURRENT_WORKERS: usize = 4;
 
 /// An input exceeded an internal resource bound.

@@ -4,6 +4,7 @@
 
 use std::time::Duration;
 
+use super::testing::FakeEvent;
 use super::tests::{BLUE, Rig, appearance, h};
 use super::*;
 
@@ -46,7 +47,12 @@ fn close(a: f64, b: f64) -> bool { (a - b).abs() < EPS }
 /// width.
 #[test]
 fn the_ring_scales_from_the_target_edge_for_both_placements() {
-    for placement in [BorderPlacement::Below, BorderPlacement::Above] {
+    // `Top` is drawn like `Above`; only its window level differs.
+    for placement in [
+        BorderPlacement::Below,
+        BorderPlacement::Above,
+        BorderPlacement::Top,
+    ] {
         let look = look(6.0, BorderPaint::Solid(BLUE), placement);
         let (full, one) = ring(&look, 1.0);
         assert_eq!(one, full.layer_spec().ring_shape(), "{placement:?}");
@@ -68,7 +74,9 @@ fn the_ring_scales_from_the_target_edge_for_both_placements() {
         match placement {
             // Half of the hidden sixth lies under the window.
             BorderPlacement::Below => assert!(close(half.inner.x, visible + 0.5)),
-            BorderPlacement::Above => assert!(close(half.inner.x, visible)),
+            BorderPlacement::Above | BorderPlacement::Top => {
+                assert!(close(half.inner.x, visible));
+            }
         }
     }
 }
@@ -187,6 +195,55 @@ fn a_grow_starts_at_zero_and_a_shrink_ends_at_zero_with_the_panel_ordered_in() {
     rig.backend.advance_media_time(10.0);
     assert_eq!(rig.backend.event_count(), events);
     assert_eq!(rig.executor.queued(), 0);
+}
+
+/// A border that shrinks because its window lost the focus leaves the top
+/// level before it shrinks: it is re-ordered directly above its own window, so
+/// it cannot stay over the window that took the focus. A shrink that keeps its
+/// placement orders nothing.
+#[test]
+fn a_shrinking_border_leaves_the_top_level_first() {
+    let top = look(6.0, BorderPaint::Solid(BLUE), BorderPlacement::Top);
+    let above = look(6.0, BorderPaint::Solid(BLUE), BorderPlacement::Above);
+    let lost_focus = rig(Some(fade(200)));
+    put(&lost_focus, top, AppearanceChange::Grow);
+    lost_focus.backend.set_media_time(1.0);
+    let before = lost_focus.backend.event_count();
+    put(&lost_focus, above, AppearanceChange::Shrink);
+    let events = lost_focus.backend.events()[before..].to_vec();
+    let ordered = events
+        .iter()
+        .position(|event| {
+            matches!(event, FakeEvent::OrderRelative {
+                target: 10,
+                level: 0,
+                placement: BorderPlacement::Above,
+                ..
+            })
+        })
+        .expect("re-ordered at its own window's level");
+    let shrinks = events
+        .iter()
+        .position(|event| matches!(event, FakeEvent::AddAnimation { .. }))
+        .expect("the shrink");
+    assert!(ordered < shrinks, "lowered before it shrinks: {events:?}");
+    assert!(lost_focus.backend.is_ordered_in(1));
+    assert_eq!(
+        width_track(&lost_focus).map(|(_, to, _)| to),
+        Some(ring(&above, 0.0).1)
+    );
+
+    let unchanged = rig(Some(fade(200)));
+    put(&unchanged, above, AppearanceChange::Grow);
+    unchanged.backend.set_media_time(1.0);
+    let before = unchanged.backend.event_count();
+    put(&unchanged, above, AppearanceChange::Shrink);
+    assert!(
+        !unchanged.backend.events()[before..]
+            .iter()
+            .any(|event| matches!(event, FakeEvent::OrderRelative { .. })),
+        "the same placement is not re-ordered"
+    );
 }
 
 /// TB-09-02: an interrupted change starts from the presented width, computed

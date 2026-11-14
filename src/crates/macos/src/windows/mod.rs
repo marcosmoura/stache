@@ -59,6 +59,7 @@
 //! activation.
 
 mod adapter;
+mod bounds;
 mod commands;
 mod core;
 mod driver;
@@ -82,11 +83,14 @@ pub use adapter::{
     AdapterOptions, MAX_APPLICATION_SHARDS, OWNER_QUEUE_BOUND, ShardStats, SpawnError,
     WindowAdapter, hop_wait,
 };
+#[cfg(any(test, feature = "testing"))]
+pub use bounds::FakeWindowBounds;
+pub use bounds::{MissingWindowBounds, SystemWindowBounds, WindowBounds};
 pub use commands::{
-    ActionRequest, CleanupReport, CloseOutcome, FocusOutcome, FrameAck, FrameReply, FrameReplyFn,
-    FrameRequest, FrameStage, HiddenOperation, HiddenOutcome, HiddenRequest, InstallError,
-    InstallRequest, LeaseReport, LeaseRestoreOutcome, SnapshotOutcome, StopOutcome, TrackOutcome,
-    TrackRequest, WindowAction,
+    ActionRequest, CleanupReport, CloseOutcome, FocusOutcome, FrameAck, FrameReadOutcome,
+    FrameReply, FrameReplyFn, FrameRequest, FrameStage, HiddenOperation, HiddenOutcome,
+    HiddenRequest, InstallError, InstallRequest, LeaseReport, LeaseRestoreOutcome, SnapshotOutcome,
+    StopOutcome, TrackOutcome, TrackRequest, WindowAction,
 };
 pub use driver::{Driver, RunLoopDriver, Waker};
 pub use events::{

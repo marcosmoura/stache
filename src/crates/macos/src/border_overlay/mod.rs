@@ -84,7 +84,7 @@ mod motion;
 pub mod native;
 mod owners;
 pub mod panel_registry;
-mod private_skylight;
+pub(crate) mod private_skylight;
 pub mod space_sources;
 pub mod spaces;
 #[cfg(any(test, feature = "testing"))]
@@ -258,6 +258,26 @@ pub enum BorderPlacement {
     Below,
     /// Directly above the target, entirely outside its frame.
     Above,
+    /// Drawn like `Above`, one window level higher: above every window of the
+    /// target's level, so the target's own raise can never cover the ring.
+    ///
+    /// An application orders its window front on a click, which puts it over
+    /// an `Above` panel until the panel is re-ordered at the next display
+    /// frame (a visible flash, measured natively on 2026-11-14). Tiling uses
+    /// this placement for the focused window, which is the one being raised.
+    Top,
+}
+
+impl BorderPlacement {
+    /// The window level of a panel placed this way over a target at
+    /// `target_level`.
+    #[must_use]
+    pub const fn panel_level(self, target_level: isize) -> isize {
+        match self {
+            Self::Below | Self::Above => target_level,
+            Self::Top => target_level + 1,
+        }
+    }
 }
 
 /// Plain appearance of one overlay.

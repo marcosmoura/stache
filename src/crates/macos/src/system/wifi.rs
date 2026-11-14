@@ -17,6 +17,10 @@
 //! private Apple80211 API. The SSID is not read here at all; it comes only from
 //! the gated `ipconfig getsummary` compatibility path owned by `stache-bar`.
 //!
+//! The change signal ([`super::wifi_events`]) uses only the `CWWiFiClient`
+//! event-monitoring calls, which carry no such note either; its module lists
+//! them.
+//!
 //! The header documents the contract; whether macOS 26 shows a prompt for these
 //! three reads is **unverified on hardware** until the approved live run.
 

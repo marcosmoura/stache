@@ -321,7 +321,7 @@ fn process_item(
     Ok(outputs)
 }
 
-fn worker_count() -> usize {
+pub fn worker_count() -> usize {
     worker_count_for(std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get))
 }
 

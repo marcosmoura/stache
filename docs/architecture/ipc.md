@@ -400,14 +400,23 @@ The server owns the runtime directory and its socket:
   foreign inode is a successful removal; a real removal error on the owned inode
   is reported as a failed `socket` acknowledgement instead of being dropped.
 
-The accept loop is non-blocking and shares a stop flag with a slot gate. At most
+The accept loop is non-blocking and shares a stop flag with a slot gate. When no
+connection is pending it waits in `poll(2)` on the listener and on the read end
+of a close-on-exec wake pipe the gate owns, with no timeout, so a connection is
+accepted as soon as it arrives and an idle server makes no timed wakeup. A stop
+sets the flag and writes one byte to the non-blocking write end, which ends the
+wait at once; a full pipe already holds a wake byte, so that write cannot fail
+the stop. Another `accept` error, or a failing `poll`, waits 50 ms or until stop
+before retrying, so a persistent error cannot spin. At most
 8 connections are served at once; excess connections wait in the kernel backlog.
 Each connection has a five-second total read deadline and write timeout, and a
 request may not exceed 64 KiB before its newline. Over-long, empty, incomplete
 and timed-out requests are closed or answered with a typed error; none panic.
 Finished handlers publish their thread ID to a bounded completion channel before
 releasing capacity. Reaping joins only those IDs, never an arbitrary active
-handler; retained handles remain within the connection limit.
+handler; retained handles remain within the connection limit. The loop reaps on
+every pass, and an idle loop makes none, so finished handles within that limit
+are joined when the next connection or the stop arrives.
 In unwinding (debug and test) builds a drop guard releases capacity on a panic and
 a handler panic becomes a `Handler` wire error; the release build aborts the
 process instead, and the client sees the connection close

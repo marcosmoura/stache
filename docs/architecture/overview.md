@@ -226,7 +226,10 @@ idempotent off-main coordinator. A request only records a deadline: the first se
 total and the cause, and a later one shortens it to 250 ms from that request without ever passing
 the total. A dedicated `stache-teardown` thread stores exactly one outcome (`Clean`, `Partial` or
 `Uncertain`) in memory, makes one bounded record attempt through a non-blocking channel, using
-50 ms reserved inside that total, and dispatches one terminal action. The coordinator runs the
+50 ms reserved inside that total, and dispatches one terminal action. The host worker blocks on its
+command channel with no timeout; every recorded request (whichever path made it, including AppKit's
+`begin_terminate`) notifies a coordinator request listener that sends the worker a wake, after
+which queued non-teardown work is dropped. The coordinator runs the
 ordered stages itself rather than the host worker: close factory admission and wake
 factory-owned host-service waits, invalidate every module and native handle
 without waiting on the lifecycle or a slot lock, reap the config watcher, permission ticker,
@@ -465,7 +468,21 @@ fake-proven only; construction starts nothing and sends no AX message.
   the park, and `core_foundation::CFRunLoop` is already `Send + Sync`, so no unsafe `Send` impl is
   needed). The idle owner parks with no timeout; there is no polling timer. While enumeration or
   queued commands remain it polls with a zero timeout (the re-post). A `Driver` trait abstracts the
-  park so tests drive the owner deterministically.
+  park so tests drive the owner deterministically. Besides the gated actions and frames, the
+  read commands are `Snapshot` (a full revalidation with an `AXWindows` listing, then every snapshot
+  attribute) and `ReadFrame` (`submit_frame_read`: `AXPosition` and `AXSize` only, after the light
+  check intermediate frames use: adapter, epoch, application, held serial, not suspended; no
+  listing). Both are submitted without waiting with the same routing.
+- **Window-server bounds (private API).** `stache-macos` `windows/bounds.rs` reads a window's frame
+  by `CGWindowID` with `SLSGetWindowBounds` on `SLSMainConnectionID`, resolved by runtime lookup
+  through the shared `border_overlay::private_skylight` resolver (the same symbol borders' live
+  follow reads; nothing is linked or declared twice). Signatures are assumed (`CGError
+  SLSGetWindowBounds(int, uint32_t, CGRect *)`, global top-left points); measured once at 67 µs and
+  equal to the public bounds for 8 of 8 windows. Its only callers are Tiling's echo read of a window
+  with an in-flight write and its animation retarget read; it never decides an outcome, a minimum
+  size or a fullscreen state. A missing symbol, a refused call or an empty rectangle answers
+  nothing and the Accessibility path runs as before (`WindowBounds`, `SystemWindowBounds`,
+  `MissingWindowBounds`, and a test `FakeWindowBounds`).
 - **Identity.** `WindowInstance = (adapter, runtime epoch, exact ApplicationId, serial)`; the serial is
   never reused. Before every action the owner revalidates adapter, epoch, application instance,
   retained element and current `AXWindows` membership. A destroy notification invalidates the token
@@ -521,13 +538,17 @@ fake-proven only; construction starts nothing and sends no AX message.
   The coordinator shares only an `AnimationShared` with the actor and status: the metrics book
   (written at job end) and the fallback set, each behind a short lock never held across a call-out.
   Every write goes through the `LiveSink` and the existing `FrameControl` gate; there is no second
-  write path and no SkyLight call.
+  write path and no SkyLight write, transform or transaction. The settle read is a frame-only
+  `ReadFrame`; the retarget read asks the window-server bounds first (the only private call) and
+  falls back to a `ReadFrame`.
 - **Tiling read-only actor (slice 04).** `stache-tiling` adds a single-writer actor thread
-  (`stache-tiling-actor`) and a bounded read-effect worker thread, both started only by the
+  (`stache-tiling-actor`), a bounded effects thread and four read threads (one queue per
+  application, see [Tiling](../features/tiling.md)), all started only by the
   internal `TrackingRuntime` harness, which nothing constructs or registers. The actor owns the pure
   state, drains the backend `EventQueue` and a bounded mailbox, and publishes immutable
-  `Arc<TilingSnapshot>` values; native reads run on the effect worker (calling only the backend's
-  `track`, `refresh`, `untrack` and `snapshot`) and return as tagged completions. It never waits on the
+  `Arc<TilingSnapshot>` values; native reads run on the read threads (calling only the backend's
+  `track`, `refresh`, `untrack` and `snapshot`, plus the window-server bounds for a window whose
+  write is in flight) and return as tagged completions. It never waits on the
   main thread, calls `act`, or mutates a window, and it adds no SDK, IPC or CLI surface.
 - **Bar module (parts 03-08).** `stache-bar` holds the `BarModule`/`BarRuntime` (`module.rs`,
   `runtime.rs`), the pure primary-display frame math (`window.rs`), the typed `BarRuntimeStatus`

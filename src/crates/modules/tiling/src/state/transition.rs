@@ -96,7 +96,7 @@ fn apply(state: &mut TilingState, input: Input, fx: &mut Vec<Effect>) {
             let Some(stamp) = state.stamp else { return };
             for token in tokens {
                 if state.windows.contains_key(&token) {
-                    fx.push(Effect::Snapshot { stamp, window: token });
+                    fx.push(geometry_read(state, stamp, token));
                 }
             }
         }
@@ -652,12 +652,38 @@ fn window_change(
         }
         WindowChange::Moved | WindowChange::Resized => {
             if state.windows.contains_key(&token) {
-                fx.push(Effect::Snapshot { stamp, window: token });
+                fx.push(geometry_read(state, stamp, token));
             }
         }
         // Main-window changes carry no state, but a tab switch changes the main
         // window: with tab reads on, re-read that one window.
         WindowChange::Main => reconcile_tabs(state, stamp, token, fx),
+    }
+}
+
+/// The read a geometry sample of a tracked window asks for. While Stache's own
+/// write for it is in flight, the frame alone from the window server
+/// ([`Effect::ReadGeometry`]); otherwise, or without a known window id, a full
+/// snapshot.
+fn geometry_read(state: &TilingState, stamp: Stamp, token: WindowInstance) -> Effect {
+    let attempt = state
+        .frames
+        .records
+        .get(&token)
+        .and_then(|record| record.attempt.as_ref())
+        .filter(|attempt| attempt.in_flight());
+    match (
+        state.windows.get(&token).and_then(|window| window.cg_window_id),
+        attempt,
+    ) {
+        (Some(cg_window_id), Some(attempt)) => Effect::ReadGeometry {
+            stamp,
+            window: token,
+            cg_window_id,
+            start: attempt.from,
+            target: attempt.target,
+        },
+        _ => Effect::Snapshot { stamp, window: token },
     }
 }
 
@@ -1564,6 +1590,19 @@ fn completion(state: &mut TilingState, result: CompletionResult) {
             // A drag waits for one fresh read per captured window, whatever it said.
             drag::on_read(state, token);
         }
+        // The window server's frame of a window Stache is moving: the observed
+        // frame only, through the echo guard. It never decides a minimum size,
+        // a flag, an exclusion, a tab or a slot.
+        CompletionResult::Geometry(token, frame) => {
+            if let Some(window) = state.windows.get(&token)
+                && !window.suspended
+                && !frames::absorb_echo(state, token, Some(frame))
+                && let Some(window) = state.windows.get_mut(&token)
+            {
+                window.observed.frame = Some(frame);
+            }
+            drag::on_read(state, token);
+        }
         CompletionResult::Frame {
             window,
             plan_sequence,
@@ -1603,7 +1642,7 @@ fn rejected(state: &mut TilingState, effect: &Effect) {
             state.pending_focus.inflight.remove(&application);
             state.diagnostics.snapshot_refusals += 1;
         }
-        Effect::Snapshot { window, .. } => {
+        Effect::Snapshot { window, .. } | Effect::ReadGeometry { window, .. } => {
             state.diagnostics.snapshot_refusals += 1;
             // The read will never come: the gesture decides with what it knows.
             drag::on_read(state, window);

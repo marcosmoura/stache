@@ -56,3 +56,45 @@ panic = "abort"
 rustflags = ["-Cdebuginfo=0"]
 strip = true
 trim-paths = "all"
+
+# The wallpaper cold path (decode, resize, blur, PNG encode, hashing) builds at
+# opt-level 3; everything else stays size-optimised. `stache-wallpapers` is in
+# the list because the generic encode path is monomorphised in that crate.
+[profile.release.package.stache-wallpapers]
+opt-level = 3
+
+[profile.release.package.image]
+opt-level = 3
+
+[profile.release.package.fast_image_resize]
+opt-level = 3
+
+[profile.release.package.png]
+opt-level = 3
+
+[profile.release.package.fdeflate]
+opt-level = 3
+
+[profile.release.package.flate2]
+opt-level = 3
+
+[profile.release.package.miniz_oxide]
+opt-level = 3
+
+[profile.release.package.zune-jpeg]
+opt-level = 3
+
+[profile.release.package.zune-core]
+opt-level = 3
+
+[profile.release.package.image-webp]
+opt-level = 3
+
+[profile.release.package.simd-adler32]
+opt-level = 3
+
+[profile.release.package.crc32fast]
+opt-level = 3
+
+[profile.release.package.sha2]
+opt-level = 3

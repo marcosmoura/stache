@@ -11,6 +11,7 @@ categories = ["config"]
 
 [dependencies]
 clap = "4.6.7"
+fast_image_resize = { version = "5.5.0", default-features = false }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
 schemars = "1.2.3"
 serde = { version = "1.0.229", features = ["derive"] }

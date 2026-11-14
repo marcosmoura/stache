@@ -36,4 +36,4 @@ pub use store::{
     ReloadOutcome, inspect_paths,
 };
 pub use trust::{TrustReason, TrustWarning, current_owner, inspect_catalog_trust, inspect_trust};
-pub use watcher::{ChangeSet, ConfigWatcher, WatchError};
+pub use watcher::{ChangeSet, ConfigWatcher, WatchError, WatchStop};

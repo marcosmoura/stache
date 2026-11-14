@@ -529,7 +529,7 @@ fn wallpapers_service(
         backend,
         clock: Arc::new(SystemRuntimeClock),
         random: Arc::new(SystemRandom),
-        processor: Arc::new(RealProcessor),
+        processor: Arc::new(RealProcessor::host()),
     })
     .expect("wallpaper service")
 }
@@ -3979,7 +3979,7 @@ impl Processor for FirstCallBlocks {
                 let _ = release.recv();
             }
         }
-        RealProcessor.prepare(plan, paths, cancel)
+        RealProcessor::default().prepare(plan, paths, cancel)
     }
 }
 
@@ -4078,7 +4078,7 @@ impl Processor for SlowProcessor {
         cancel: &stache_sdk::CancellationToken,
     ) -> Result<stache_wallpapers::Prepared, stache_wallpapers::PrepareError> {
         self.clock.advance(self.by);
-        RealProcessor.prepare(plan, paths, cancel)
+        RealProcessor::default().prepare(plan, paths, cancel)
     }
 }
 
@@ -4191,7 +4191,7 @@ fn cli_cold_job_beyond_five_seconds_succeeds_over_the_real_socket() {
 #[test]
 fn cli_deadline_passing_during_native_issuance_is_not_reported_as_a_clean_success() {
     let (code, out, err, local, desktop) = cli_set_with_fake_time(|clock, desktop| {
-        let processor: Arc<dyn Processor> = Arc::new(RealProcessor);
+        let processor: Arc<dyn Processor> = Arc::new(RealProcessor::host());
         let backend: Arc<dyn GuardedDesktopBackend> = Arc::new(ClockAdvancingDesktop {
             inner: desktop.clone(),
             clock: Arc::clone(clock),

@@ -353,8 +353,16 @@ impl EventQueue {
     }
 
     /// Queues an event. Returns whether it was kept.
-    pub fn push(&self, event: WindowEvent) -> bool {
+    pub fn push(&self, event: WindowEvent) -> bool { self.push_with(|| event) }
+
+    /// Queues the event `make` builds, calling it while the queue lock is held
+    /// (even when the queue is full and the event is dropped). An event that
+    /// takes its sequence number inside `make` is therefore queued in sequence
+    /// order however many threads push at once, so a gap means a dropped
+    /// event. `make` must not touch this queue. Returns whether it was kept.
+    pub fn push_with(&self, make: impl FnOnce() -> WindowEvent) -> bool {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let event = make();
         let (kept, was_empty) = if state.events.len() >= self.capacity {
             state.dropped += 1;
             (false, false)

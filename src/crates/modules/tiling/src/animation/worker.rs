@@ -63,6 +63,9 @@ pub struct AnimationJob {
     pub plan_sequence: u64,
     /// The exact window.
     pub window: WindowInstance,
+    /// Its `CGWindowID`, when known: a retarget reads the start frame from
+    /// the window server by it.
+    pub cg_window_id: Option<u32>,
     /// The frame the planner believed the window had.
     pub from: Rect,
     /// The desired final frame.

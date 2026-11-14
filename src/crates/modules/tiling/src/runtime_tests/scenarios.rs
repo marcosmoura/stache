@@ -33,7 +33,7 @@ const ZOOM: usize = 7;
 const FINDER: usize = 8;
 const DEVICE_HUB: usize = 9;
 
-const APPS: [(&str, &str); 10] = [
+pub(super) const APPS: [(&str, &str); 10] = [
     ("com.mitchellh.ghostty", "Ghostty"),
     ("com.microsoft.VSCode", "Code"),
     ("com.spotify.client", "Spotify"),
@@ -65,7 +65,7 @@ enum Delivery {
     Never,
 }
 
-fn user_config(animations: bool) -> Arc<TilingConfig> {
+pub(super) fn user_config(animations: bool) -> Arc<TilingConfig> {
     Arc::new(
         serde_json::from_value(json!({
             "enabled": true,
@@ -173,8 +173,12 @@ struct Desktop {
     bare: Vec<usize>,
     /// The visibility control the runner and the actor share.
     vis: Arc<VisibilityControl>,
+    /// The application actions the runner executes with.
+    actions: Arc<crate::visibility::ApplicationActions>,
     /// Exact activation requests already turned into activations.
     activations_seen: usize,
+    /// The fake window server answers bounds for every window by its id.
+    bounds: bool,
 }
 
 /// The order the startup inputs reach the actor in (see [`Desktop::boot_in`]).
@@ -233,7 +237,7 @@ impl Desktop {
             cancel: CancellationToken::new(),
             frames: Arc::clone(&rig.frames),
             visibility: Arc::clone(&vis),
-            actions: Some(actions),
+            actions: Some(Arc::clone(&actions)),
             animation: Arc::clone(&rig.animation),
             borders: None,
         };
@@ -275,7 +279,9 @@ impl Desktop {
             last_app_kept: false,
             bare: Vec::new(),
             vis: Arc::clone(&vis),
+            actions,
             activations_seen: 0,
+            bounds: false,
         };
         if let Some(hook) = BOOT_HOOK.take() {
             hook(&mut desktop);
@@ -416,6 +422,11 @@ impl Desktop {
             self.rig.backend.script_focused(self.ids[app], token);
         }
         let snapshot = self.snapshot_of(token, title, subrole, size);
+        if self.bounds
+            && let Some(cg) = snapshot.cg_window_id
+        {
+            self.rig.backend.script_bounds(cg, token);
+        }
         self.rig.push(WindowEventKind::Snapshot { snapshot, origin });
         self.rig.pump();
         token
@@ -912,6 +923,137 @@ fn the_frontmost_app_at_startup_is_the_focused_window_and_its_workspace_is_visib
     assert!(desk.written(code), "the visible workspace was laid out");
 }
 
+/// Stache's own focus of Code's window on `coding` runs on the effects thread
+/// of a real [`crate::ThreadRunner`]: it activates Code, then raises the
+/// window. Code's activation queues a focus read; until the raise, the system
+/// still reports Code's window on `misc`. The read waits for the raise, reports
+/// the raised window and the switch stays; the window it would have read
+/// earlier would have switched the workspace back.
+#[test]
+#[allow(clippy::too_many_lines, reason = "one linear scenario")]
+fn a_focus_read_after_stache_s_own_focus_reads_the_raised_window_and_the_switch_stays() {
+    use stache_macos::windows::FocusOutcome;
+
+    use crate::state::CompletionResult;
+    let mut desk = Desktop::boot(Delivery::Immediate, CODE);
+    let code = desk.token(CODE, 2);
+    let notes = desk.window_with(
+        CODE,
+        "notes",
+        "AXStandardWindow",
+        (1200.0, 800.0),
+        SnapshotOrigin::Created,
+    );
+    desk.send_window(notes, "misc");
+    desk.focus_workspace("misc");
+    desk.focus_workspace("coding");
+    desk.submit(Input::Activated(desk.ids[CODE]));
+    desk.settle();
+    assert_eq!(desk.visible_workspace(), "coding");
+    assert_eq!(desk.snap().focus.window, Some(code));
+
+    // Before the raise lands, the system reports the window on `misc`.
+    desk.app_focuses(CODE, notes);
+    desk.rig.backend.script_raise_focuses(true);
+    let ingress = Arc::new(Ingress::new(Pipeline::new()));
+    let env = EffectEnv {
+        backend: Arc::clone(&desk.rig.backend) as Arc<dyn WindowBackend>,
+        directory: Arc::new(FakeAppDirectory::default()),
+        ingress: Arc::clone(&ingress),
+        cancel: CancellationToken::new(),
+        frames: Arc::clone(&desk.rig.frames),
+        visibility: Arc::clone(&desk.vis),
+        actions: Some(Arc::clone(&desk.actions)),
+        animation: Arc::clone(&desk.rig.animation),
+        borders: None,
+    };
+    let runner = crate::ThreadRunner::spawn(env, crate::RUNNER_CAPACITY).expect("runner");
+    let stamp = desk.rig.feed.stamp;
+    let reads_before = desk
+        .rig
+        .backend
+        .calls()
+        .iter()
+        .filter(|c| **c == FakeBackendCall::FocusedWindow(desk.ids[CODE]))
+        .count();
+    let raise = desk.rig.backend.hold_sends();
+    let activations = desk.native.backend.exact_activation_requests().len();
+    desk.vis.note_focus_dispatched();
+    runner.submit(Effect::Focus { stamp, window: code }).expect("focus");
+    assert!(
+        raise.wait_entered(1, Duration::from_secs(10)),
+        "held between activation and raise"
+    );
+    assert_eq!(
+        desk.native.backend.exact_activation_requests().len(),
+        activations + 1
+    );
+    runner
+        .submit(Effect::ReadFocus {
+            stamp,
+            application: desk.ids[CODE],
+        })
+        .expect("read");
+    // Another application's read runs meanwhile; Code's waits for the raise.
+    let spotify = desk.token(SPOTIFY, 3);
+    runner.submit(Effect::Snapshot { stamp, window: spotify }).expect("snapshot");
+    let taken = std::sync::Mutex::new(Vec::new());
+    let completions = || {
+        let inputs = ingress.with(|pipeline| pipeline.take(usize::MAX));
+        let mut taken = taken.lock().expect("taken");
+        taken.extend(inputs.into_iter().filter_map(|input| match input {
+            Input::Completion { result, .. } => Some(result),
+            _ => None,
+        }));
+        taken.clone()
+    };
+    wait_until("the other application's read", || {
+        completions()
+            .iter()
+            .any(|c| matches!(c, CompletionResult::Snapshot(w, _) if *w == spotify))
+    });
+    let reads = |desk: &Desktop| {
+        desk.rig
+            .backend
+            .calls()
+            .iter()
+            .filter(|c| **c == FakeBackendCall::FocusedWindow(desk.ids[CODE]))
+            .count()
+    };
+    assert_eq!(reads(&desk), reads_before, "the focus read has not started");
+    raise.release();
+    wait_until("Code's focus read", || {
+        completions().iter().any(|c| matches!(c, CompletionResult::Focus(..)))
+    });
+    assert!(runner.close_within(Duration::from_secs(5)));
+    let read = completions()
+        .into_iter()
+        .find_map(|c| match c {
+            CompletionResult::Focus(application, outcome) => Some((application, outcome)),
+            _ => None,
+        })
+        .expect("focus completion");
+    assert_eq!(
+        read,
+        (desk.ids[CODE], FocusOutcome::Resolved(code)),
+        "the raised window"
+    );
+
+    // The real transition folds the read: the switch stays.
+    desk.submit(Input::Completion {
+        stamp,
+        result: CompletionResult::Focus(read.0, read.1),
+    });
+    assert_eq!(desk.visible_workspace(), "coding");
+    assert_eq!(desk.snap().focus.window, Some(code));
+    // The read the single thread's order prevented would have switched back.
+    desk.submit(Input::Completion {
+        stamp,
+        result: CompletionResult::Focus(desk.ids[CODE], FocusOutcome::Resolved(notes)),
+    });
+    assert_eq!(desk.visible_workspace(), "misc", "why the read must wait");
+}
+
 #[test]
 fn cmd_tab_between_apps_on_different_workspaces_switches_and_hides() {
     let mut desk = Desktop::boot(Delivery::Immediate, GHOSTTY);
@@ -1362,6 +1504,99 @@ fn layout_changes_inside_a_visible_workspace_still_animate_when_enabled() {
         writes.iter().all(|write| write.window == ghostty || write.window == hub),
         "{writes:?}"
     );
+}
+
+/// The user's setup with animations, the layout changed back and forth while
+/// animations run: with or without the window-server bounds it ends on the
+/// same frames. Returns every window's desired and observed frame.
+fn users_setup_final_layout(bounds: bool) -> Vec<(u64, Option<Rect>, Option<Rect>)> {
+    if bounds {
+        BOOT_HOOK.set(Some(|desk: &mut Desktop| desk.bounds = true));
+    } else {
+        BOOT_HOOK.set(Some(|desk: &mut Desktop| {
+            desk.rig.backend.script_bounds_missing(true);
+        }));
+    }
+    let (mut desk, _, _) = split_desktop(Delivery::Immediate);
+    desk.rig
+        .animation
+        .configure(&crate::config::AnimationConfig {
+            enabled: true,
+            ..crate::config::AnimationConfig::default()
+        })
+        .expect("the animation worker");
+    // A new plan retargets a job the worker already runs, reading where the
+    // window is (from the window server with the bounds, else a frame-only
+    // read); a job still in the worker's mailbox is replaced without a read.
+    // So the first change runs with every send held (its jobs cannot end) and
+    // the second waits until the worker took its jobs: it is certain to
+    // retarget them.
+    let retarget_reads = |desk: &Desktop| {
+        desk.rig
+            .calls()
+            .iter()
+            .filter(|c| matches!(c, FakeBackendCall::Bounds(_) | FakeBackendCall::FrameRead(_)))
+            .count()
+    };
+    let held = desk.rig.backend.hold_sends();
+    let since = desk.mark();
+    desk.submit(Input::Intent(Intent::SetLayout(LayoutType::Monocle)));
+    desk.settle();
+    assert!(
+        desk.writes_since(since).iter().any(|write| write.animate),
+        "the change animates"
+    );
+    wait_until("the worker took the jobs", || {
+        desk.rig.animation.pending_jobs() == 0
+    });
+    // Dwindle, not straight back to Master: the held windows still read the
+    // Master frames, which a direct write would restore without a job.
+    let reads = retarget_reads(&desk);
+    let since = desk.mark();
+    desk.submit(Input::Intent(Intent::SetLayout(LayoutType::Dwindle)));
+    desk.settle();
+    assert!(
+        desk.writes_since(since).iter().any(|write| write.animate),
+        "the second change animates"
+    );
+    wait_until("a running job retargeted", || retarget_reads(&desk) > reads);
+    held.release();
+    for layout in [LayoutType::Monocle, LayoutType::Master] {
+        desk.submit(Input::Intent(Intent::SetLayout(layout)));
+        desk.settle();
+    }
+    wait_until("every animation settled", || {
+        desk.settle();
+        std::thread::sleep(Duration::from_millis(2));
+        desk.rig
+            .snap()
+            .frames
+            .iter()
+            .all(|f| !f.in_flight && (f.desired.is_none() || f.actual == f.desired))
+    });
+    // Each run has its own adapter: windows are compared by serial.
+    let frames = desk
+        .rig
+        .snap()
+        .frames
+        .iter()
+        .map(|f| (f.window.serial(), f.desired, f.actual))
+        .collect();
+    if bounds {
+        assert!(
+            desk.rig.calls().iter().any(|c| matches!(c, FakeBackendCall::Bounds(_))),
+            "the window server was asked"
+        );
+    }
+    frames
+}
+
+#[test]
+fn the_users_setup_ends_on_the_same_layout_with_and_without_window_server_bounds() {
+    let with = users_setup_final_layout(true);
+    let without = users_setup_final_layout(false);
+    assert!(with.iter().any(|(_, desired, _)| desired.is_some()));
+    assert_eq!(with, without);
 }
 
 #[test]

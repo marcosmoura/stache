@@ -185,6 +185,21 @@ impl FrameBook {
     }
 }
 
+/// Whether `frame` lies within the range `start` and `target` span, every
+/// component (x, y, width, height) within the frame tolerance: a frame an
+/// in-flight write from `start` to `target` explains (eased progress is clamped
+/// to 0-1 and a spring never passes its target).
+#[must_use]
+pub fn explained_by_travel(frame: &Rect, start: &Rect, target: &Rect) -> bool {
+    let within = |value: f64, a: f64, b: f64| {
+        value >= a.min(b) - INFERENCE_TOLERANCE && value <= a.max(b) + INFERENCE_TOLERANCE
+    };
+    within(frame.x, start.x, target.x)
+        && within(frame.y, start.y, target.y)
+        && within(frame.width, start.width, target.width)
+        && within(frame.height, start.height, target.height)
+}
+
 fn near(a: f64, b: f64) -> bool { (a - b).abs() <= INFERENCE_TOLERANCE }
 
 fn near_rect(a: &Rect, b: &Rect) -> bool {
@@ -690,6 +705,7 @@ pub(super) fn plan_and_issue(state: &mut TilingState, fx: &mut Vec<Effect>) {
             revision,
             plan_sequence,
             window: *token,
+            cg_window_id: state.windows.get(token).and_then(|window| window.cg_window_id),
             target: *target,
             components: wanted,
             from: actual,

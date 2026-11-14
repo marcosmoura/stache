@@ -33,6 +33,7 @@ mod cache;
 pub mod cli;
 mod config;
 mod limits;
+mod memo;
 mod processing;
 mod runtime;
 mod selection;
@@ -54,6 +55,7 @@ pub use limits::{
     MAX_INTERMEDIATE_DIMENSION, MAX_INTERMEDIATE_PIXELS, MAX_SOURCE_BYTES, MAX_TARGET_DIMENSION,
     MAX_TARGET_PIXELS, ResourceError,
 };
+pub use memo::{MemoCounts, PrepareMemo};
 pub use processing::{Effects, PROCESSING_VERSION, ProcessError};
 pub use runtime::{
     Processor, RandomSource, RealProcessor, RuntimeClock, ServiceConfig, ServiceError,

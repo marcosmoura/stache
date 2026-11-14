@@ -197,6 +197,11 @@ fn event_ids_map_to_kinds_and_unknown_ids_to_nothing() {
     assert_eq!(kind_of_event(1), None);
     let ids: std::collections::BTreeSet<u32> = WINDOW_EVENTS.iter().map(|(id, _)| *id).collect();
     assert_eq!(ids.len(), WINDOW_EVENTS.len(), "candidate ids are distinct");
+    // Seen natively (2026-11-14): 808 re-stacks, 815 is the order-in and 816
+    // the order-out. The last two were first assumed the other way round.
+    assert_eq!(kind_of_event(808), Some(WindowEventKind::Reorder));
+    assert_eq!(kind_of_event(815), Some(WindowEventKind::Unhide));
+    assert_eq!(kind_of_event(816), Some(WindowEventKind::Hide));
 }
 
 #[test]

@@ -123,8 +123,13 @@ Unknown suppresses acquisition and attempts release of any held lease; absence
 of the key is an answer, not a query failure. The two
 `com.apple.screenIsLocked`/`Unlocked` notifications are coalesced, droppable
 refresh hints; a callback never supplies the lock state. While active, one
-owned cancellation-wakeable reconciliation deadline probes at most two seconds
-apart, so dropped hints still converge. Notification registration success does
+owned cancellation-wakeable reconciliation deadline schedules the next pass.
+Retries of an unknown lock state, a failed acquisition and a pending release
+stay two seconds apart in both modes, and `pollingFallback` probes every two
+seconds. Only a settled worker (its last pass left nothing to retry) with
+notifications installed (`notificationsAndPolling`) waits 30 seconds, so a
+dropped lock notification is corrected within 30 seconds. A delivered hint runs
+a pass at once in both modes. Notification registration success does
 not prove delivery.
 
 `observation` reports `inactive`, `notificationsAndPolling` or
@@ -201,8 +206,10 @@ release and reports `lockProbeFailed`. An acquisition failure ends in `inactive`
 only when rollback confirms every owned ID released; while rollback is in
 progress or unresolved the runtime stays `releasePending`, adding
 `assertionReleaseFailed` only on actual rollback failure. Retry happens on
-scheduled reconciliation, resume or the next lifecycle cleanup, never a tight
-loop.
+scheduled reconciliation (two seconds after a pass that left an unknown lock
+state, a failed acquisition or a pending release, in both modes; only a settled
+worker with notifications waits 30 seconds), resume or the next lifecycle
+cleanup, never a tight loop.
 
 Runtime degradation does not require an SDK lifecycle change: `Running`
 describes resource ownership, not successful prevention. An initial required

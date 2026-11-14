@@ -14,6 +14,20 @@
 //!    diagnostic off-switch; with the gate off no `ipconfig` child is ever
 //!    spawned and the name is `None`.
 //!
+//! # Change signals and `ipconfig` cadence
+//!
+//! With [`CoreWlanSignals`] installed (`CoreWLAN` event monitoring, see
+//! `stache_macos::system::wifi_events`), the sampler keeps the last `ipconfig`
+//! summary of each interface and runs `ipconfig` only when there is no
+//! summary yet, after an identity signal (power, SSID, link, or the Wi-Fi
+//! daemon connection was interrupted or invalidated), when the native power or
+//! association state differs from the one the summary was taken under, and on
+//! the periodic safety sample. Otherwise it publishes the native reading with
+//! the kept name (the native RSSI first, as it is the fresher value). When the
+//! source cannot be installed, or is lost (its connection to the Wi-Fi daemon
+//! was invalidated), every sample runs `ipconfig`, as without signals, and the
+//! condition is reported.
+//!
 //! # Status
 //!
 //! The status keeps the legacy meaning of `Unknown` (nothing known; the
@@ -44,11 +58,16 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use stache_macos::system::{InterfaceName, WifiBackend, WifiInterfaceReading, WifiPower};
+use stache_macos::system::{
+    InterfaceName, WifiBackend, WifiEventMonitor, WifiInterfaceReading, WifiPower, WifiSignalSink,
+};
 use stache_sdk::CancellationToken;
 use stache_sdk::commands::{CaptureLimits, CaptureOutcome, CommandExecutor, PreparedCommand};
 
-use super::{ProviderKind, ProviderParts, ProviderUpdate, Sampled, Sampler, WifiReading};
+use super::{
+    ProviderKind, ProviderParts, ProviderUpdate, Sampled, Sampler, Trigger, WIFI_SAFETY_PERIOD,
+    WifiReading,
+};
 
 /// The diagnostic off-switch of the SSID summary path. Only the exact value `0`
 /// turns it off; any other value, or none, leaves it on.
@@ -102,11 +121,48 @@ impl SsidGate {
 /// itself runs on the provider worker.
 pub trait WifiSignals: Send + Sync {
     /// Subscribes `notify` (cheap and non-blocking) until the returned guard is
-    /// dropped.
+    /// dropped. Each call carries the signal's kind.
     ///
     /// # Errors
-    /// Why the subscription failed; the schedule then polls only.
-    fn watch(&self, notify: Arc<dyn Fn() + Send + Sync>) -> Result<Box<dyn Send>, String>;
+    /// Why the subscription failed; the schedule then polls as without signals.
+    fn watch(&self, notify: WifiSignalSink) -> Result<Box<dyn Send>, String>;
+}
+
+/// The production signal source: `CoreWLAN` event monitoring on a client
+/// Stache owns.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CoreWlanSignals;
+
+impl WifiSignals for CoreWlanSignals {
+    fn watch(&self, notify: WifiSignalSink) -> Result<Box<dyn Send>, String> {
+        WifiEventMonitor::start(notify)
+            .map(|monitor| Box::new(monitor) as Box<dyn Send>)
+            .map_err(|error| error.to_string())
+    }
+}
+
+/// The status line while the change signal is unavailable.
+pub const SIGNALS_UNAVAILABLE: &str =
+    "Wi-Fi change notifications are unavailable, so Wi-Fi is checked every 5 seconds";
+
+/// Whether the change signal is in use.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SignalState {
+    /// No source is configured: poll, silently.
+    #[default]
+    None,
+    /// The source is installed: sample on signals and every safety period.
+    Installed,
+    /// The source could not be installed, or was lost: poll and report it.
+    Unavailable,
+}
+
+/// One kept `ipconfig` summary and the native state it was taken under.
+struct Kept {
+    name: InterfaceName,
+    power: WifiPower,
+    associated: bool,
+    summary: IpconfigSummary,
 }
 
 /// What `ipconfig getsummary` said about one interface.
@@ -258,6 +314,8 @@ pub struct WifiSampler {
     gate: SsidGate,
     limits: CaptureLimits,
     period: Duration,
+    signals: SignalState,
+    kept: Vec<Kept>,
 }
 
 impl WifiSampler {
@@ -271,7 +329,39 @@ impl WifiSampler {
             gate: parts.ssid,
             limits: parts.limits(),
             period: parts.timing.wifi,
+            signals: SignalState::None,
+            kept: Vec::new(),
         }
+    }
+
+    /// Records whether the change signal is in use.
+    pub const fn set_signals(&mut self, signals: SignalState) { self.signals = signals; }
+
+    fn diagnostic(&self, mut notes: Vec<String>) -> Option<String> {
+        if self.signals == SignalState::Unavailable {
+            notes.push(SIGNALS_UNAVAILABLE.to_owned());
+        }
+        (!notes.is_empty()).then(|| notes.join("; "))
+    }
+
+    /// Today's result from the kept summaries, without `ipconfig`: `None` when
+    /// an interface has no summary taken under its current native state.
+    fn reading_from_kept(&self, interfaces: &[WifiInterfaceReading]) -> Option<WifiReading> {
+        for interface in interfaces {
+            let kept = self.kept.iter().find(|kept| {
+                kept.name == interface.name
+                    && kept.power == interface.power
+                    && kept.associated == interface.rssi.is_some()
+            })?;
+            if kept.summary.is_wifi && kept.summary.ssid.is_some() {
+                return Some(WifiReading {
+                    status: WifiStatus::Connected,
+                    network_name: kept.summary.ssid.clone(),
+                    signal_strength: interface.rssi.or(kept.summary.signal_strength),
+                });
+            }
+        }
+        Some(native_reading(interfaces))
     }
 }
 
@@ -279,14 +369,32 @@ impl Sampler for WifiSampler {
     fn kind(&self) -> ProviderKind { ProviderKind::Wifi }
 
     fn sample(&mut self, cancel: &CancellationToken) -> Sampled {
+        self.sample_for(Trigger::periodic(), cancel)
+    }
+
+    fn sample_for(&mut self, trigger: Trigger, cancel: &CancellationToken) -> Sampled {
+        // A lost source ends the signal mode: poll as without signals from now.
+        if trigger.lost && self.signals == SignalState::Installed {
+            self.signals = SignalState::Unavailable;
+        }
         let Ok(interfaces) = self.backend.interfaces() else {
             return Sampled::Done {
                 update: Some(ProviderUpdate::Wifi(WifiReading::unknown())),
-                diagnostic: Some("the Wi-Fi interfaces could not be read".to_owned()),
+                diagnostic: self
+                    .diagnostic(vec!["the Wi-Fi interfaces could not be read".to_owned()]),
             };
         };
         let mut notes: Vec<String> = Vec::new();
         if self.gate == SsidGate::On {
+            let refresh =
+                self.signals != SignalState::Installed || trigger.periodic || trigger.identity;
+            if !refresh && let Some(reading) = self.reading_from_kept(&interfaces) {
+                return Sampled::Done {
+                    update: Some(ProviderUpdate::Wifi(reading)),
+                    diagnostic: self.diagnostic(notes),
+                };
+            }
+            self.kept.clear();
             for interface in &interfaces {
                 match run_summary(
                     &self.executor,
@@ -298,14 +406,22 @@ impl Sampler for WifiSampler {
                     SummaryOutcome::Cancelled => return Sampled::Cancelled,
                     SummaryOutcome::Failed(reason) => notes.push(reason),
                     SummaryOutcome::Summary(summary) => {
-                        if summary.is_wifi && summary.ssid.is_some() {
+                        let hit = summary.is_wifi && summary.ssid.is_some();
+                        let reading = hit.then(|| WifiReading {
+                            status: WifiStatus::Connected,
+                            network_name: summary.ssid.clone(),
+                            signal_strength: summary.signal_strength.or(interface.rssi),
+                        });
+                        self.kept.push(Kept {
+                            name: interface.name.clone(),
+                            power: interface.power,
+                            associated: interface.rssi.is_some(),
+                            summary,
+                        });
+                        if let Some(reading) = reading {
                             return Sampled::Done {
-                                update: Some(ProviderUpdate::Wifi(WifiReading {
-                                    status: WifiStatus::Connected,
-                                    network_name: summary.ssid,
-                                    signal_strength: summary.signal_strength.or(interface.rssi),
-                                })),
-                                diagnostic: (!notes.is_empty()).then(|| notes.join("; ")),
+                                update: Some(ProviderUpdate::Wifi(reading)),
+                                diagnostic: self.diagnostic(notes),
                             };
                         }
                     }
@@ -314,9 +430,15 @@ impl Sampler for WifiSampler {
         }
         Sampled::Done {
             update: Some(ProviderUpdate::Wifi(native_reading(&interfaces))),
-            diagnostic: (!notes.is_empty()).then(|| notes.join("; ")),
+            diagnostic: self.diagnostic(notes),
         }
     }
 
-    fn period(&self) -> Duration { self.period }
+    fn period(&self) -> Duration {
+        if self.signals == SignalState::Installed {
+            WIFI_SAFETY_PERIOD
+        } else {
+            self.period
+        }
+    }
 }

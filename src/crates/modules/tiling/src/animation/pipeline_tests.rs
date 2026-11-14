@@ -16,7 +16,7 @@ use super::coordinator_tests::{Completed, Driver};
 use super::tests::{BOTH, FROM, PERIOD, TO, app, job, written};
 use super::*;
 use crate::actor::{FrameControl, ManualClock};
-use crate::backend::{FakeWindowBackend, WindowBackend};
+use crate::backend::{FakeBackendCall, FakeWindowBackend, WindowBackend};
 use crate::config::EasingType;
 use crate::events::{GeometryCoalescer, Ingress, Pipeline};
 use crate::geometry::Rect;
@@ -123,11 +123,16 @@ impl Pipe {
         WindowInstance::for_testing(self.backend.adapter(), self.epoch, app(application), serial)
     }
 
+    /// The `CGWindowID` the jobs of `window` carry.
+    fn cg_of(window: WindowInstance) -> u32 { 500 + u32::try_from(window.serial()).unwrap_or(0) }
+
     /// A job for `window`, registered with the issuance ledger as the actor does
     /// at dispatch.
     fn start(&mut self, window: WindowInstance, plan: u64, from: Rect, target: Rect) {
         let mut j = job(plan, from, target, EasingType::Linear);
         j.window = window;
+        // The window server answers only for an id a test scripts.
+        j.cg_window_id = Some(Self::cg_of(window));
         j.stamp = Stamp { epoch: self.epoch, registry: 1 };
         self.frames.note_dispatched(window, plan);
         self.driver.admit(j);
@@ -213,10 +218,11 @@ fn intermediate_frames_do_no_readback_and_the_final_does_exactly_one() {
     assert!(sent[1..sent.len() - 1].iter().all(|s| s.stage == FrameStage::Intermediate));
     assert!(sent.iter().all(|s| s.stage != FrameStage::Direct));
     assert_eq!(
-        pipe.backend.snapshot_reads(window),
+        pipe.backend.frame_reads(window),
         1,
-        "one settle readback, nothing else"
+        "one settle readback (frame only), nothing else"
     );
+    assert_eq!(pipe.backend.snapshot_reads(window), 0, "never a full snapshot");
     let done = pipe.completed();
     assert_eq!(done.len(), 1);
     assert_eq!(
@@ -236,13 +242,11 @@ fn a_retarget_through_the_shard_does_exactly_one_extra_readback() {
     }
     let back = Rect::new(0.0, 300.0, 100.0, 100.0);
     pipe.start(window, 2, FROM, back);
-    assert_eq!(pipe.backend.snapshot_reads(window), 1, "the retarget read");
+    // No window-server bounds here: the retarget reads the frame only.
+    assert_eq!(pipe.backend.frame_reads(window), 1, "the retarget read");
     pipe.run(200);
-    assert_eq!(
-        pipe.backend.snapshot_reads(window),
-        2,
-        "plus the one settle read"
-    );
+    assert_eq!(pipe.backend.frame_reads(window), 2, "plus the one settle read");
+    assert_eq!(pipe.backend.snapshot_reads(window), 0, "never a full snapshot");
     let done = pipe.completed();
     assert_eq!(done.iter().map(|(plan, ..)| *plan).collect::<Vec<_>>(), vec![
         1, 2
@@ -255,6 +259,35 @@ fn a_retarget_through_the_shard_does_exactly_one_extra_readback() {
     assert_eq!(
         classify_frame(window, 2, back, BOTH, &done[1].1).actual(),
         Some(back)
+    );
+}
+
+#[test]
+fn a_retarget_starts_from_the_window_server_without_a_read_of_the_application() {
+    let mut pipe = Pipe::new();
+    let window = pipe.window(1, 1);
+    pipe.backend.seed_window_frame(window, FROM);
+    pipe.backend.script_bounds(Pipe::cg_of(window), window);
+    pipe.start(window, 1, FROM, TO);
+    for _ in 0..5 {
+        pipe.step();
+    }
+    let back = Rect::new(0.0, 300.0, 100.0, 100.0);
+    pipe.start(window, 2, FROM, back);
+    assert_eq!(
+        pipe.backend.frame_reads(window),
+        0,
+        "answered by the window server"
+    );
+    assert!(pipe.backend.calls().contains(&FakeBackendCall::Bounds(Pipe::cg_of(window))));
+    pipe.run(200);
+    assert_eq!(pipe.backend.frame_reads(window), 1, "only the settle read");
+    assert_eq!(pipe.backend.snapshot_reads(window), 0);
+    let done = pipe.completed();
+    assert_eq!(
+        classify_frame(window, 2, back, BOTH, &done.last().expect("done").1).actual(),
+        Some(back),
+        "the settle read, not the window server, decides the outcome"
     );
 }
 
@@ -274,6 +307,7 @@ fn a_partially_applied_frame_ends_the_job_without_a_final_snap() {
         ..
     }));
     assert_eq!(pipe.backend.snapshot_reads(window), 0);
+    assert_eq!(pipe.backend.frame_reads(window), 0);
     assert_eq!(pipe.frames.outstanding(), 0);
 }
 

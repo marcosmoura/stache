@@ -151,7 +151,7 @@ impl Harness {
             backend,
             clock,
             random,
-            Arc::new(RealProcessor),
+            Arc::new(RealProcessor::host()),
         )
     }
 
@@ -587,7 +587,7 @@ fn a_service_without_a_typed_watch_reports_no_accepted_configuration() {
         backend: Arc::new(desktop),
         clock: ManualClock::new(),
         random: ScriptedRandom::new(Vec::new()),
-        processor: Arc::new(RealProcessor),
+        processor: Arc::new(RealProcessor::host()),
     })
     .expect("service");
     let outcome = service.set(&WallpapersSetParams {
@@ -622,6 +622,105 @@ fn random_all_draws_independently_for_each_display() {
     let colors: Vec<[u8; 3]> =
         calls.iter().map(|call| read_rgb8(&call.image).get_pixel(0, 0).0).collect();
     assert_eq!(colors, vec![[255, 0, 0], [0, 255, 0]]);
+}
+
+#[test]
+fn random_all_on_three_displays_prepares_cold_then_reuses_the_warm_cache() {
+    use std::os::unix::fs::MetadataExt;
+
+    let harness = Harness::new(
+        WallpapersConfig {
+            list: vec!["a.png".to_owned(), "b.png".to_owned(), "c.png".to_owned()],
+            ..WallpapersConfig::default()
+        },
+        snapshot(vec![
+            entry(1, 16.0, 16.0, 1.0),
+            entry(2, 24.0, 12.0, 1.0),
+            entry(3, 10.0, 10.0, 2.0),
+        ]),
+    );
+    harness.png("config/a.png", [255, 0, 0]);
+    harness.png("config/b.png", [0, 255, 0]);
+    harness.png("config/c.png", [0, 0, 255]);
+    let cache_entries = || {
+        let mut entries: Vec<(PathBuf, u64, i64, i64)> =
+            fs::read_dir(harness.env.wallpaper_cache()).map_or_default(|entries| {
+                entries
+                    .map(|entry| {
+                        let path = entry.expect("entry").path();
+                        let metadata = fs::metadata(&path).expect("metadata");
+                        (path, metadata.ino(), metadata.mtime(), metadata.mtime_nsec())
+                    })
+                    .collect()
+            });
+        entries.sort();
+        entries
+    };
+    let colors_and_sizes = |calls: &[stache_macos::FakeSetCall]| -> Vec<([u8; 3], (u32, u32))> {
+        calls
+            .iter()
+            .map(|call| {
+                let image = read_rgb8(&call.image);
+                (image.get_pixel(0, 0).0, image.dimensions())
+            })
+            .collect()
+    };
+
+    // Cold cache: three distinct images, prepared together.
+    *lock(&harness.random.draws) = [0, 1, 2].into();
+    let outcome = harness
+        .service
+        .set(&harness.params(WallpaperSelection::Random, WallpaperScreen::All));
+    assert!(outcome.is_full_success(), "{outcome:?}");
+    assert_eq!(outcome.applied, vec![1, 2, 3]);
+    assert_eq!(colors_and_sizes(&harness.desktop.calls()), vec![
+        ([255, 0, 0], (16, 16)),
+        ([0, 255, 0], (24, 12)),
+        ([0, 0, 255], (20, 20)),
+    ]);
+    let cold = cache_entries();
+    assert_eq!(cold.len(), 3, "{cold:?}");
+
+    // Warm cache: the same draws are a hit for every output; no file is
+    // produced and the existing files are untouched.
+    *lock(&harness.random.draws) = [0, 1, 2].into();
+    let outcome = harness
+        .service
+        .set(&harness.params(WallpaperSelection::Random, WallpaperScreen::All));
+    assert!(outcome.is_full_success(), "{outcome:?}");
+    let calls = harness.desktop.calls();
+    assert_eq!(calls.len(), 6);
+    assert_eq!(colors_and_sizes(&calls[3..]), colors_and_sizes(&calls[..3]));
+    assert_eq!(cache_entries(), cold, "a warm set writes no cache file");
+
+    // A source rewritten in place with its modification time restored is not
+    // served from the host's memo: the third set produces a new file.
+    let source = harness.env.path("config/a.png");
+    let modified = fs::metadata(&source).expect("metadata").modified().expect("mtime");
+    harness.png("config/a.png", [255, 255, 0]);
+    fs::File::options()
+        .write(true)
+        .open(&source)
+        .expect("open")
+        .set_modified(modified)
+        .expect("restore mtime");
+    *lock(&harness.random.draws) = [0, 1, 2].into();
+    let outcome = harness
+        .service
+        .set(&harness.params(WallpaperSelection::Random, WallpaperScreen::All));
+    assert!(outcome.is_full_success(), "{outcome:?}");
+    let calls = harness.desktop.calls();
+    assert_eq!(colors_and_sizes(&calls[6..]), vec![
+        ([255, 255, 0], (16, 16)),
+        ([0, 255, 0], (24, 12)),
+        ([0, 0, 255], (20, 20)),
+    ]);
+    let third = cache_entries();
+    assert_eq!(third.len(), 4, "{third:?}");
+    assert!(
+        cold.iter().all(|entry| third.contains(entry)),
+        "the other files are untouched"
+    );
 }
 
 #[test]
@@ -1323,7 +1422,7 @@ fn slow_harness(
         backend,
         Arc::clone(&clock),
         ScriptedRandom::new(Vec::new()),
-        Arc::new(RealProcessor),
+        Arc::new(RealProcessor::host()),
     );
     (harness, clock)
 }
@@ -1542,7 +1641,7 @@ fn a_malformed_initial_file_reports_no_accepted_config_until_a_later_fix() {
         backend: Arc::new(desktop.clone()),
         clock: ManualClock::new(),
         random: ScriptedRandom::new(Vec::new()),
-        processor: Arc::new(RealProcessor),
+        processor: Arc::new(RealProcessor::host()),
     })
     .expect("service");
     let registry = Arc::new(Registry::new(
@@ -1668,7 +1767,7 @@ impl Processor for BlockingProcessor {
         if let Some(clock) = &self.clock {
             clock.advance(self.advance);
         }
-        RealProcessor.prepare(plan, paths, cancel)
+        RealProcessor::default().prepare(plan, paths, cancel)
     }
 }
 

@@ -104,7 +104,7 @@ impl Processor for CountingProcessor {
             .lock()
             .unwrap()
             .extend(plan.iter().map(|planned| planned.source.clone()));
-        RealProcessor.prepare(plan, paths, cancel)
+        RealProcessor::default().prepare(plan, paths, cancel)
     }
 }
 

@@ -23,12 +23,19 @@
 //! - Minimum need: notifications for move, resize, reorder, hide, unhide and
 //!   close of the bordered windows, and one bounds read per window per tick.
 //! - Fast reorder (optional, not part of the registration): `SLSOrderWindow`,
-//!   looked up lazily on the first fast reorder. **Not observed to resolve on
-//!   macOS 26 and its signature is unverified** (see
+//!   looked up lazily on the first fast reorder, signature assumed (see
 //!   [`SkyLightWindowNotify::order_above`]). Public equivalent: `AppKit`'s
 //!   `orderWindow:relativeTo:`, main thread only, which is the slower path the
-//!   fast reorder shortens. A missing symbol or a non-zero result disables the
-//!   fast path for the run (one diagnostic); the main-thread `Order` stays.
+//!   fast reorder was meant to shorten. A missing symbol or a non-zero result
+//!   disables the fast path for the run (one diagnostic); the main-thread
+//!   `Order` stays. **Measured natively on 2026-11-14: the call returns 0 and
+//!   the window server posts a reorder notification for the panel, but the
+//!   panel does not move above its target** (with the border itself, and in a
+//!   two-process test with an `AppKit` panel: 25 calls, the panel under its
+//!   target after every one). Only the main-thread `Order` re-stacks the
+//!   panel, at the next display frame. This is why the focused window's
+//!   `above` border is placed one window level higher instead
+//!   ([`crate::border_overlay::BorderPlacement::Top`]).
 //!
 //! # Signatures: assumptions (none observed)
 //!
@@ -48,12 +55,25 @@
 //!   unwatched), nothing moves wrongly, and the Tiling fallback hides the border
 //!   while the window moves.
 //!
-//! # Event ids: assumptions
+//! # Event ids: assumptions and what a native probe saw
 //!
-//! The constants below are **candidates, unverified until the part 06 native
-//! check**: neither the numbers, nor whether `Hide`/`Unhide` mean "ordered
-//! out/in" or "application hidden/unhidden", nor the thread the callback runs
-//! on are known.
+//! The constants below started as **candidates**. A read-only native probe
+//! (2026-11-14: a second process registered for ids 800..=830 on its own
+//! connection and timed them against the on-screen window list) saw these:
+//!
+//! - **808** for a window that was re-stacked: the first notification of a
+//!   click in a window, and the panel after `SLSOrderWindow`.
+//! - **815** for a window that was ordered in: the panel when it was shown and
+//!   after `AppKit`'s `orderWindow:relativeTo:`, and a visible window its
+//!   application orders front. A click in a window posts 808 and, with it or a
+//!   few milliseconds later, 815; it is from the 815 on that the window is
+//!   above an `above` panel.
+//! - **816** for a window that was ordered out: the panel when it was hidden,
+//!   and an application's windows when Tiling hid it.
+//! - **807** for the panel shown at a new size.
+//!
+//! 815 and 816 were first assumed the other way round. The probe did not
+//! exercise the move and close ids or the thread the callback runs on.
 
 use std::ffi::{c_int, c_void};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -64,14 +84,16 @@ use crate::border_overlay::private_skylight::{SkyLightSymbols, system_lookup};
 
 /// Candidate event id: a window moved. **Unverified until the part 06 native check.**
 pub const EVENT_WINDOW_MOVE: u32 = 806;
-/// Candidate event id: a window was resized. **Unverified until the part 06 native check.**
+/// Event id: a window was resized (seen for the panel shown at a new size).
 pub const EVENT_WINDOW_RESIZE: u32 = 807;
-/// Candidate event id: a window was re-ordered. **Unverified until the part 06 native check.**
+/// Event id: a window was re-stacked (seen on a click and after `SLSOrderWindow`).
 pub const EVENT_WINDOW_REORDER: u32 = 808;
-/// Candidate event id: a window was hidden. **Unverified until the part 06 native check.**
-pub const EVENT_WINDOW_HIDE: u32 = 815;
-/// Candidate event id: a window was unhidden. **Unverified until the part 06 native check.**
-pub const EVENT_WINDOW_UNHIDE: u32 = 816;
+/// Event id: a window was ordered out (seen for a hidden panel and for the
+/// windows of an application Tiling hid).
+pub const EVENT_WINDOW_HIDE: u32 = 816;
+/// Event id: a window was ordered in. Also posted when an application orders
+/// an already visible window front (seen on a click).
+pub const EVENT_WINDOW_UNHIDE: u32 = 815;
 /// Candidate event id: a window was destroyed. **Unverified until the part 06 native check.**
 pub const EVENT_WINDOW_CLOSE: u32 = 804;
 
@@ -86,7 +108,7 @@ pub const WINDOW_EVENTS: [(u32, WindowEventKind); 6] = [
 ];
 
 const SYM_REQUEST: &std::ffi::CStr = c"SLSRequestNotificationsForWindows";
-const SYM_BOUNDS: &std::ffi::CStr = c"SLSGetWindowBounds";
+pub(crate) const SYM_BOUNDS: &std::ffi::CStr = c"SLSGetWindowBounds";
 /// The private order call of the fast reorder (see [`SkyLightWindowNotify::order_above`]).
 pub const SYM_ORDER: &std::ffi::CStr = c"SLSOrderWindow";
 /// `SLSOrderWindow` mode: directly above the relative window (assumed `1`,
@@ -95,17 +117,17 @@ pub const SYM_ORDER: &std::ffi::CStr = c"SLSOrderWindow";
 pub const ORDER_ABOVE: c_int = 1;
 
 type RequestFn = unsafe extern "C" fn(c_int, *const u32, c_int) -> c_int;
-type BoundsFn = unsafe extern "C" fn(c_int, u32, *mut CgRect) -> c_int;
+pub(crate) type BoundsFn = unsafe extern "C" fn(c_int, u32, *mut CgRect) -> c_int;
 type OrderFn = unsafe extern "C" fn(c_int, u32, c_int, u32) -> c_int;
 
 /// `CGRect` as the window server writes it (`CGFloat` is `f64` on 64-bit).
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
-struct CgRect {
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
+pub(crate) struct CgRect {
+    pub(crate) x: f64,
+    pub(crate) y: f64,
+    pub(crate) width: f64,
+    pub(crate) height: f64,
 }
 
 /// Extra candidate ids registered **for logging only** (unverified).
@@ -286,6 +308,10 @@ impl SkyLightWindowNotify {
     /// `CGError SLSOrderWindow(int connection, uint32_t window, int mode,
     /// uint32_t relative_to_window)` with mode above = 1, below = -1, out = 0;
     /// a window of another connection is accepted as `relative_to_window`.
+    ///
+    /// Measured natively on 2026-11-14: the call is accepted (0, and a reorder
+    /// notification for the panel follows) but the panel stays where it was
+    /// (see the module documentation).
     pub fn order_above(&mut self, panel: u32, target: u32) -> FastOrderResult {
         let Some(connection) = self.connection else {
             return FastOrderResult::Missing("SLSMainConnectionID");

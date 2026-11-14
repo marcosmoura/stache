@@ -11,11 +11,12 @@
 //! display period, coalesced into one batch per tick. The clock stops after
 //! [`QUIET`] without events; idle owns no clock.
 //!
-//! Move and resize events act, and so does the reorder candidate (forwarded to
+//! Move and resize events act, and so does the reorder event (forwarded to
 //! the sink, which re-orders only an `above` border; see Tiling's engine). The
-//! hide, unhide and close candidates stay **unverified and are not acted on**
-//! (native run 2: the candidate hide event fired after nearly every show and
-//! hid the border); each has its own flag in [`FollowTiming`], off by default,
+//! hide, unhide and close events are **not acted on** (native run 2: the event
+//! then taken for the hide fired after nearly every show and hid the border,
+//! which fits the hide and unhide ids having been swapped then; see
+//! [`skylight`]); each has its own flag in [`FollowTiming`], off by default,
 //! for a later verified run.
 //!
 //! Every raw private event of a watched window (its id, including the
@@ -112,14 +113,13 @@ pub enum WindowEventKind {
     Move,
     /// The window was resized.
     Resize,
-    /// The window was re-ordered in the window server's stack (candidate id,
-    /// unverified; forwarded to the sink, which re-orders `above` borders).
+    /// The window was re-ordered in the window server's stack (forwarded to
+    /// the sink, which re-orders `above` borders).
     Reorder,
-    /// The window was ordered out or hidden (candidate id, unverified, not acted
-    /// on: it fired after nearly every show in native run 2).
+    /// The window was ordered out or hidden (not acted on).
     Hide,
-    /// The window was ordered back in or unhidden (candidate id, unverified, not
-    /// acted on).
+    /// The window was ordered in or unhidden; also posted when its application
+    /// orders the visible window front (not acted on).
     Unhide,
     /// The window was destroyed (candidate id, unverified, not acted on).
     Close,

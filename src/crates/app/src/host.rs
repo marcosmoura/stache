@@ -16,7 +16,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -1245,6 +1245,9 @@ pub struct HostHandle {
     status: Arc<Mutex<HostStatus>>,
     teardown: Arc<Teardown>,
     finished: Arc<Finished>,
+    /// Completed worker-loop passes. Test-only introspection.
+    #[cfg(test)]
+    passes: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 struct Finished {
@@ -1502,6 +1505,12 @@ impl SessionControl for HostHandle {
 #[must_use]
 pub fn new_host(teardown: Arc<Teardown>) -> (HostHandle, HostDriver) {
     let (sender, receiver) = mpsc::channel();
+    // The worker blocks on its channel, so every recorded stop request (any
+    // `request`, the AppKit `begin_terminate`) must deliver a wake.
+    let wake = sender.clone();
+    teardown.on_request(Arc::new(move || {
+        let _ = wake.send(HostCommand::Shutdown);
+    }));
     let handle = HostHandle {
         sender,
         session_slot: Arc::new(AtomicBool::new(false)),
@@ -1511,6 +1520,8 @@ pub fn new_host(teardown: Arc<Teardown>) -> (HostHandle, HostDriver) {
             done: Mutex::new(false),
             signal: Condvar::new(),
         }),
+        #[cfg(test)]
+        passes: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
     (handle.clone(), HostDriver {
         receiver,
@@ -2141,11 +2152,13 @@ impl Runner {
             if self.handle.shutdown_requested() {
                 break;
             }
-            let command = match receiver.recv_timeout(Duration::from_millis(100)) {
-                Ok(command) => command,
-                Err(RecvTimeoutError::Timeout) => continue,
-                Err(RecvTimeoutError::Disconnected) => break,
+            // Blocks without a deadline: every teardown request sends a wake
+            // through the coordinator's request listener.
+            let Ok(command) = receiver.recv() else {
+                break;
             };
+            #[cfg(test)]
+            self.handle.passes.fetch_add(1, Ordering::Relaxed);
             // Once shutdown is requested, queued non-teardown work is dropped
             // instead of started.
             if self.handle.shutdown_requested() {
@@ -2315,14 +2328,18 @@ impl Runner {
         let stop = CancellationToken::new();
         let worker_stop = stop.clone();
         let sender = self.handle.sender.clone();
+        // Cancelling the job wakes the blocked wait through the watcher's own
+        // channel; no native call runs on the cancelling thread.
+        let wake = watcher.stop_handle();
         let thread = thread::Builder::new()
             .name("stache-config".to_owned())
             .spawn(move || {
+                let _listener = worker_stop.on_cancel(Arc::new(move || wake.stop()));
                 loop {
                     if worker_stop.is_cancelled() {
                         break;
                     }
-                    match watcher.next(Duration::from_millis(250)) {
+                    match watcher.wait() {
                         Ok(Some(changes)) => {
                             if sender.send(HostCommand::ConfigChanges(changes)).is_err() {
                                 break;
@@ -3028,6 +3045,26 @@ mod tests {
         )
     }
 
+    /// Services over fakes with one permission polling period.
+    fn quiet_services(permissions: Arc<dyn PermissionProvider>, poll: Duration) -> HostServices {
+        HostServices {
+            logger: Arc::new(DiscardLogger),
+            log_filter: Arc::new(LogFilter::default()),
+            events: Arc::new(EventBus::new()),
+            main_thread: Arc::new(NoMainThread),
+            permissions,
+            windows: Arc::new(NoWindows),
+            commands: Arc::new(NoCommands),
+            poll: PermissionPoll {
+                waiting: poll,
+                backoff_start: poll,
+                backoff_max: poll,
+            },
+            baseline: Vec::new(),
+            settings: Arc::new(crate::access::UnavailableSettings),
+        }
+    }
+
     pub(super) fn runner_over(
         root: &Path,
         factories: ModuleFactories,
@@ -3046,22 +3083,7 @@ mod tests {
             catalog,
             factories,
         };
-        let services = HostServices {
-            logger: Arc::new(DiscardLogger),
-            log_filter: Arc::new(LogFilter::default()),
-            events: Arc::new(EventBus::new()),
-            main_thread: Arc::new(NoMainThread),
-            permissions: Arc::clone(&permissions),
-            windows: Arc::new(NoWindows),
-            commands: Arc::new(NoCommands),
-            poll: PermissionPoll {
-                waiting: Duration::from_millis(1),
-                backoff_start: Duration::from_millis(1),
-                backoff_max: Duration::from_millis(1),
-            },
-            baseline: Vec::new(),
-            settings: Arc::new(crate::access::UnavailableSettings),
-        };
+        let services = quiet_services(Arc::clone(&permissions), Duration::from_millis(1));
         let mut registry = Registry::new(
             Arc::new(DiscardLogger),
             Arc::new(EventBus::new()),
@@ -3084,6 +3106,99 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
         );
         (runner, driver.receiver)
+    }
+
+    /// Starts the real host worker over fakes, with permission polling slow
+    /// enough that no tick lands during a test, and waits until it is ready.
+    fn started_worker(root: &Path) -> (HostHandle, Arc<Teardown>) {
+        let teardown = quiet_teardown();
+        let (handle, driver) = new_host(Arc::clone(&teardown));
+        let app = AppPaths::resolve(&AppEnvironment {
+            home: Some(root.to_path_buf()),
+            temporary: Some(root.to_path_buf()),
+        })
+        .expect("app paths");
+        let settings = HostSettings {
+            app,
+            config: ConfigPaths::new(root.join("config")),
+            catalog: ConfigCatalog::new(),
+            factories: ModuleFactories::new(),
+        };
+        driver
+            .start(
+                settings,
+                quiet_services(Arc::new(AllowAll), Duration::from_secs(3600)),
+                Arc::new(QuietUi),
+            )
+            .expect("start host");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !handle.status().ready {
+            assert!(Instant::now() < deadline, "the host never became ready");
+            thread::sleep(Duration::from_millis(5));
+        }
+        (handle, teardown)
+    }
+
+    /// Asserts the idle worker completes no pass, then that `request` ends the
+    /// loop within 100 ms, and finally lets the coordinator clean up.
+    fn assert_wakes_on(request: impl FnOnce(&HostHandle, &Teardown)) {
+        let root = tempfile::tempdir().expect("root");
+        let (handle, teardown) = started_worker(root.path());
+        // Startup may still deliver its own completions; let them settle.
+        thread::sleep(Duration::from_millis(100));
+        let settled = handle.passes.load(Ordering::SeqCst);
+        thread::sleep(Duration::from_millis(500));
+        assert_eq!(
+            handle.passes.load(Ordering::SeqCst),
+            settled,
+            "the idle worker loop woke up"
+        );
+
+        let requested = Instant::now();
+        request(&handle, &teardown);
+        assert!(
+            handle.wait_for_exit(Duration::from_secs(2)),
+            "the loop never ended"
+        );
+        let elapsed = requested.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(100),
+            "the loop ended after {elapsed:?}"
+        );
+
+        teardown.start().expect("start the coordinator");
+        let _ = teardown.wait_for_outcome(Duration::from_secs(10));
+    }
+
+    #[test]
+    fn the_worker_loop_wakes_on_request_shutdown() {
+        // Tray quit, the `quit_app` binding, the signal bridge and smoke runs.
+        assert_wakes_on(|handle, _| handle.request_shutdown());
+    }
+
+    #[test]
+    fn the_worker_loop_wakes_on_the_tauri_exit_request() {
+        assert_wakes_on(|handle, _| handle.request_shutdown_with_code(Some(3)));
+    }
+
+    #[test]
+    fn the_worker_loop_wakes_on_request_restart() {
+        assert_wakes_on(|handle, _| handle.request_restart());
+    }
+
+    #[test]
+    fn the_worker_loop_wakes_on_the_appkit_terminate_path() {
+        assert_wakes_on(|_, teardown| {
+            assert_eq!(
+                teardown.begin_terminate(),
+                crate::shutdown::TeardownAnswer::Later
+            );
+        });
+    }
+
+    #[test]
+    fn the_worker_loop_wakes_on_a_direct_coordinator_request() {
+        assert_wakes_on(|_, teardown| teardown.request(TeardownCause::Request, None));
     }
 
     /// Counts requests over a status that tests change between refreshes.
@@ -5195,6 +5310,81 @@ mod tests {
     }
 
     const TI_ON: &str = "enabled = true\n";
+
+    /// End to end over the real worker, watcher and coordinator: an edit to
+    /// `tiling.toml` reaches the blocked config thread and is applied, and a
+    /// teardown request still ends everything `Clean`.
+    #[test]
+    fn a_tiling_edit_reloads_through_the_blocking_waits_and_teardown_is_clean() {
+        let root = tempfile::tempdir().expect("root");
+        let config = ConfigPaths::new(root.path().join("config"));
+        std::fs::create_dir_all(config.directory()).expect("config directory");
+        std::fs::write(config.module_file(TilingConfig::ID), TI_ON).expect("write");
+        let backend = Arc::new(FakeWindowBackend::default());
+        let display = stache_macos::FakeDisplayBackend::new(ti_layout());
+        let mut parts = TilingParts::new(
+            Arc::clone(&backend) as Arc<dyn stache_tiling::WindowBackend>,
+            Arc::new(NoApps),
+            DisplayProjection::new(crate::display::sdk_display_id),
+            "",
+        );
+        parts.displays = Some(stache_macos::DisplayControl::new(
+            Arc::new(InlineMain),
+            Arc::new(display),
+        ));
+        parts.timing.hop = Duration::from_millis(60);
+        parts.timing.poll = Duration::from_millis(5);
+        let mut factories = ModuleFactories::new();
+        factories.entries.push(Arc::new(TilingFactory::new(TilingRuntime::new(parts))));
+        let app = AppPaths::resolve(&AppEnvironment {
+            home: Some(root.path().to_path_buf()),
+            temporary: Some(root.path().to_path_buf()),
+        })
+        .expect("app paths");
+        let settings = HostSettings {
+            app,
+            config: config.clone(),
+            catalog: crate::catalog::catalog().expect("catalog"),
+            factories,
+        };
+        let teardown = quiet_teardown();
+        let (handle, driver) = new_host(Arc::clone(&teardown));
+        driver
+            .start(
+                settings,
+                quiet_services(Arc::new(AllowAll), Duration::from_secs(3600)),
+                Arc::new(QuietUi),
+            )
+            .expect("start host");
+        teardown.start().expect("start the coordinator");
+        let tiling = |handle: &HostHandle| {
+            handle.status().modules.into_iter().find(|module| module.id == "tiling")
+        };
+        ti_wait("ready", || handle.status().ready);
+        let revision = tiling(&handle).expect("tiling module").revision;
+
+        std::fs::write(
+            config.module_file(TilingConfig::ID),
+            "enabled = true\ndefault_layout = \"floating\"\n",
+        )
+        .expect("edit");
+        ti_wait("the watcher applied the edit", || {
+            tiling(&handle).is_some_and(|view| view.revision != revision)
+        });
+        assert!(tiling(&handle).expect("tiling module").diagnostic.is_none());
+
+        handle.request_shutdown();
+        assert!(
+            handle.wait_for_exit(Duration::from_secs(5)),
+            "the worker never ended"
+        );
+        let outcome = teardown.wait_for_outcome(Duration::from_secs(10)).expect("outcome");
+        assert_eq!(
+            outcome.result,
+            crate::shutdown::TeardownResult::Clean,
+            "{outcome}"
+        );
+    }
 
     fn ti_wait(what: &str, mut condition: impl FnMut() -> bool) {
         let deadline = Instant::now() + Duration::from_secs(10);

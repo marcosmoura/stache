@@ -40,6 +40,7 @@ pub use drag::{DragOutcome, DragRecord, DragReport, DragState};
 pub use frames::{
     AttemptStatus, Binding, FrameAttempt, FrameBook, FrameRecord, FrameStatus,
     MAX_EXTERNAL_ATTEMPTS, MAX_IN_FLIGHT_FRAMES, MAX_INFERENCES, NoFrameReason,
+    explained_by_travel,
 };
 pub use transition::transition;
 
@@ -49,6 +50,8 @@ mod animation_tests;
 mod drag_tests;
 #[cfg(test)]
 mod frame_tests;
+#[cfg(test)]
+mod geometry_tests;
 #[cfg(test)]
 mod inactive_tests;
 #[cfg(test)]
@@ -204,6 +207,9 @@ pub enum CompletionResult {
     Refresh(ApplicationId, TrackOutcome),
     /// A snapshot read returned.
     Snapshot(WindowInstance, SnapshotOutcome),
+    /// The window server's frame of a window with an in-flight write
+    /// (answers [`Effect::ReadGeometry`]).
+    Geometry(WindowInstance, Rect),
     /// An application's focused-window read returned. A resolved window was
     /// already reported as a window event; the outcome is diagnostic.
     Focus(ApplicationId, FocusOutcome),
@@ -323,6 +329,23 @@ pub enum Effect {
         /// Window.
         window: WindowInstance,
     },
+    /// Read the frame of a window whose frame write is in flight from the
+    /// window server. Without an answer the runner reads a snapshot instead
+    /// and completes as [`CompletionResult::Snapshot`].
+    ReadGeometry {
+        /// Registry.
+        stamp: Stamp,
+        /// Window.
+        window: WindowInstance,
+        /// Its `CGWindowID`.
+        cg_window_id: u32,
+        /// The in-flight attempt's start frame.
+        start: Rect,
+        /// The in-flight attempt's target frame. A window-server frame outside
+        /// the range the start and target span is not explained by the write:
+        /// the runner reads the snapshot instead.
+        target: Rect,
+    },
     /// Stop observing a terminated application.
     Untrack {
         /// Registry.
@@ -355,6 +378,9 @@ pub enum Effect {
         plan_sequence: u64,
         /// The exact window.
         window: WindowInstance,
+        /// Its `CGWindowID`, when known: the retarget read of an animation asks
+        /// the window server for the frame by it.
+        cg_window_id: Option<u32>,
         /// The desired frame.
         target: Rect,
         /// The components to write.

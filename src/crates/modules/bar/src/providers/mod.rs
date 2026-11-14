@@ -26,11 +26,14 @@
 //! | -------- | --------------------------------------------------- |
 //! | CPU      | 2 s, first sample after a 250 ms warm-up            |
 //! | Battery  | 30 s while charging, 120 s otherwise                |
-//! | Wi-Fi    | at most 5 s, earlier on a coalesced native signal   |
+//! | Wi-Fi    | 60 s with change signals, earlier on a signal; 5 s without |
 //!
-//! A Wi-Fi change signal ([`WifiSignals`]) only sets one pending flag
-//! ([`Wakeup`]); a storm is one extra sample, and consecutive samples are at
-//! least [`ProviderTiming::wifi_min_gap`] apart.
+//! A Wi-Fi change signal ([`WifiSignals`]) only sets one pending flag per kind
+//! ([`Wakeup`]); a storm is one extra sample. An identity signal samples at
+//! least [`ProviderTiming::wifi_min_gap`] after the previous start, a quality
+//! signal at least [`ProviderTiming::wifi`] after it. A quality-only sample
+//! does not move the periodic (safety) sample. When the signal source cannot
+//! be installed, Wi-Fi samples every [`ProviderTiming::wifi`] as without one.
 //!
 //! # Publication
 //!
@@ -61,6 +64,7 @@ pub use media::{
 };
 use serde::{Deserialize, Serialize};
 use specta::Type;
+pub use stache_macos::system::WifiSignalKind;
 use stache_macos::system::{
     BatteryBackend, CpuUsageBackend, SmcBackend, SmcCpuTemperature, SystemBattery, SystemCpuUsage,
     SystemWifi, WifiBackend,
@@ -69,7 +73,7 @@ use stache_sdk::CancellationToken;
 use stache_sdk::commands::{
     CaptureLimits, Clock, CommandEnvironment, CommandExecutor, SystemClock,
 };
-pub use wifi::{SSID_GATE_ENV, SsidGate, WifiSignals, WifiStatus};
+pub use wifi::{CoreWlanSignals, SSID_GATE_ENV, SsidGate, WifiSignals, WifiStatus};
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -88,6 +92,8 @@ pub const BATTERY_IDLE_PERIOD: Duration = Duration::from_secs(120);
 pub const WIFI_PERIOD: Duration = Duration::from_secs(5);
 /// The least time between two Wi-Fi samples, however many signals arrive.
 pub const WIFI_MIN_GAP: Duration = Duration::from_millis(500);
+/// The Wi-Fi safety sample period while change signals are installed.
+pub const WIFI_SAFETY_PERIOD: Duration = Duration::from_secs(60);
 /// The deadline of the one child process (`ipconfig getsummary`).
 pub const TOOL_DEADLINE: Duration = Duration::from_millis(1500);
 /// The longest a monitor is joined at stop.
@@ -206,6 +212,39 @@ pub enum Sampled {
     },
 }
 
+/// Why a sample runs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent causes that can coincide"
+)]
+pub struct Trigger {
+    /// The periodic schedule fell due.
+    pub periodic: bool,
+    /// An identity signal arrived since the previous sample.
+    pub identity: bool,
+    /// A quality signal arrived since the previous sample.
+    pub quality: bool,
+    /// The signal source was lost since the previous sample.
+    pub lost: bool,
+}
+
+impl Trigger {
+    /// A plain periodic sample.
+    #[must_use]
+    pub const fn periodic() -> Self {
+        Self {
+            periodic: true,
+            identity: false,
+            quality: false,
+            lost: false,
+        }
+    }
+
+    /// Only quality signals caused this sample.
+    const fn quality_only(self) -> bool { self.quality && !self.identity && !self.periodic }
+}
+
 /// One provider's sampling.
 pub trait Sampler: Send {
     /// Which provider.
@@ -216,6 +255,11 @@ pub trait Sampler: Send {
     fn first_delay(&self) -> Duration { Duration::ZERO }
     /// Takes one sample. Must honor `cancel`.
     fn sample(&mut self, cancel: &CancellationToken) -> Sampled;
+    /// Takes one sample for `trigger`. Providers without signals ignore it.
+    fn sample_for(&mut self, trigger: Trigger, cancel: &CancellationToken) -> Sampled {
+        let _ = trigger;
+        self.sample(cancel)
+    }
     /// The period that follows the sample just taken.
     fn period(&self) -> Duration;
 }
@@ -300,7 +344,7 @@ pub struct ProviderParts {
 
 impl ProviderParts {
     /// The production parts: real readers, a real executor and clock, the SSID
-    /// gate off, and no native Wi-Fi signal (the 5 s poll covers it).
+    /// gate from the environment, and the `CoreWLAN` Wi-Fi change signal.
     #[must_use]
     pub fn system() -> Self {
         let clock: Arc<dyn Clock> = Arc::new(SystemClock::default());
@@ -318,7 +362,7 @@ impl ProviderParts {
             clock,
             ipconfig: std::path::PathBuf::from(IPCONFIG_PATH),
             ssid: SsidGate::from_environment(),
-            signals: None,
+            signals: Some(Arc::new(CoreWlanSignals)),
             timing: ProviderTiming::default(),
             media: None,
         }
@@ -340,26 +384,46 @@ impl ProviderParts {
     }
 }
 
-/// Coalesces native change signals into one pending flag and wakes the
-/// schedule's current wait.
+/// Coalesces native change signals into one pending flag per kind and wakes
+/// the schedule's current wait.
 #[derive(Default)]
 pub struct Wakeup {
     state: Mutex<WakeState>,
 }
 
+/// The signal kinds pending since they were last consumed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Pending {
+    identity: bool,
+    quality: bool,
+    lost: bool,
+}
+
+impl Pending {
+    const fn any(self) -> bool { self.identity || self.quality }
+}
+
 #[derive(Default)]
 struct WakeState {
-    pending: bool,
+    pending: Pending,
     current: Option<CancellationToken>,
 }
 
 impl Wakeup {
-    /// Records a signal and wakes the current wait. Cheap, never blocks on a
-    /// sample: a burst is one pending flag.
-    pub fn notify(&self) {
+    /// Records a signal of `kind` and wakes the current wait. Cheap, never
+    /// blocks on a sample: a burst is one pending flag per kind.
+    pub fn notify(&self, kind: WifiSignalKind) {
         let current = {
             let mut state = lock(&self.state);
-            state.pending = true;
+            match kind {
+                WifiSignalKind::Identity => state.pending.identity = true,
+                WifiSignalKind::Quality => state.pending.quality = true,
+                // A lost source also wakes and refreshes like an identity signal.
+                WifiSignalKind::Lost => {
+                    state.pending.identity = true;
+                    state.pending.lost = true;
+                }
+            }
             state.current.take()
         };
         if let Some(token) = current {
@@ -367,19 +431,19 @@ impl Wakeup {
         }
     }
 
-    /// Registers `token` as the wait to wake. `true` when a signal was already
-    /// pending (it is consumed and the wait must not start).
-    fn arm(&self, token: &CancellationToken) -> bool {
+    /// Registers `token` as the wait to wake. Returns the signals already
+    /// pending (consumed); when any, the wait must not start.
+    fn arm(&self, token: &CancellationToken) -> Pending {
         let mut state = lock(&self.state);
-        if std::mem::take(&mut state.pending) {
-            return true;
+        let pending = std::mem::take(&mut state.pending);
+        if !pending.any() {
+            state.current = Some(token.clone());
         }
-        state.current = Some(token.clone());
-        false
+        pending
     }
 
-    /// Unregisters the wait and consumes a pending signal.
-    fn take(&self) -> bool {
+    /// Unregisters the wait and consumes the pending signals.
+    fn take(&self) -> Pending {
         let mut state = lock(&self.state);
         state.current = None;
         std::mem::take(&mut state.pending)
@@ -398,8 +462,10 @@ pub struct WorkerEnv {
     pub stop: CancellationToken,
     /// The coalescing wake, for providers with change signals.
     pub wakeup: Option<Arc<Wakeup>>,
-    /// Least time between two signalled samples.
+    /// Least time between an identity-signalled sample and the previous one.
     pub min_gap: Duration,
+    /// Least time between a quality-signalled sample and the previous one.
+    pub quality_gap: Duration,
     /// Where results go.
     pub publish: PublishSample,
 }
@@ -408,8 +474,18 @@ pub struct WorkerEnv {
 pub fn run_provider(mut sampler: Box<dyn Sampler>, env: &WorkerEnv) {
     let kind = sampler.kind();
     sampler.prime();
-    let mut due = env.clock.now() + sampler.first_delay();
+    let mut periodic = env.clock.now() + sampler.first_delay();
+    let mut signalled: Option<Duration> = None;
+    let mut pending = Pending::default();
     let mut last_started: Option<Duration> = None;
+    let signal_due = |arrived: Pending, now: Duration, last: Option<Duration>| {
+        let gap = if arrived.identity {
+            env.min_gap
+        } else {
+            env.quality_gap
+        };
+        signalled_due(now, last, gap)
+    };
     loop {
         // Wait for the schedule, a stop or a coalesced signal.
         loop {
@@ -417,6 +493,7 @@ pub fn run_provider(mut sampler: Box<dyn Sampler>, env: &WorkerEnv) {
                 return;
             }
             let now = env.clock.now();
+            let due = signalled.map_or(periodic, |at| at.min(periodic));
             if now >= due {
                 break;
             }
@@ -425,13 +502,24 @@ pub fn run_provider(mut sampler: Box<dyn Sampler>, env: &WorkerEnv) {
                 let wait = wait.clone();
                 env.stop.on_cancel(Arc::new(move || wait.cancel()))
             };
-            if env.wakeup.as_ref().is_some_and(|wakeup| wakeup.arm(&wait)) {
-                due = due.min(signalled_due(now, last_started, env.min_gap));
+            let arrived =
+                env.wakeup.as_ref().map_or_else(Pending::default, |wakeup| wakeup.arm(&wait));
+            if arrived.any() {
+                pending.identity |= arrived.identity;
+                pending.quality |= arrived.quality;
+                pending.lost |= arrived.lost;
+                let at = signal_due(arrived, now, last_started);
+                signalled = Some(signalled.map_or(at, |old| old.min(at)));
                 continue;
             }
             env.clock.wait(Some(&wait), due.saturating_sub(now));
-            if env.wakeup.as_ref().is_some_and(|wakeup| wakeup.take()) && !env.stop.is_cancelled() {
-                due = due.min(signalled_due(env.clock.now(), last_started, env.min_gap));
+            let arrived = env.wakeup.as_ref().map_or_else(Pending::default, |wakeup| wakeup.take());
+            if arrived.any() && !env.stop.is_cancelled() {
+                pending.identity |= arrived.identity;
+                pending.quality |= arrived.quality;
+                pending.lost |= arrived.lost;
+                let at = signal_due(arrived, env.clock.now(), last_started);
+                signalled = Some(signalled.map_or(at, |old| old.min(at)));
             }
         }
         if env.stop.is_cancelled() {
@@ -439,7 +527,15 @@ pub fn run_provider(mut sampler: Box<dyn Sampler>, env: &WorkerEnv) {
         }
         let started = env.clock.now();
         last_started = Some(started);
-        match sampler.sample(&env.stop) {
+        let trigger = Trigger {
+            periodic: started >= periodic,
+            identity: pending.identity,
+            quality: pending.quality,
+            lost: pending.lost,
+        };
+        pending = Pending::default();
+        signalled = None;
+        match sampler.sample_for(trigger, &env.stop) {
             Sampled::Cancelled => return,
             Sampled::Done { update, diagnostic } => {
                 if env.stop.is_cancelled() {
@@ -448,10 +544,40 @@ pub fn run_provider(mut sampler: Box<dyn Sampler>, env: &WorkerEnv) {
                 (env.publish)(kind, update, diagnostic);
             }
         }
-        let finished = env.clock.now();
-        due = next_due(started, finished, sampler.period());
+        // A quality-only sample leaves the periodic (safety) sample in place.
+        if !trigger.quality_only() {
+            let finished = env.clock.now();
+            periodic = next_due(started, finished, sampler.period());
+        }
     }
 }
+
+/// Runs the Wi-Fi worker: subscribes `signals` on this thread, runs the
+/// schedule, and ends the subscription when the schedule stops.
+pub fn run_wifi_worker(
+    mut sampler: wifi::WifiSampler,
+    signals: Option<&Arc<dyn WifiSignals>>,
+    env: &WorkerEnv,
+) {
+    let subscription = match (signals, env.wakeup.as_ref()) {
+        (Some(signals), Some(wakeup)) => {
+            let wake = Arc::clone(wakeup);
+            if let Ok(guard) = signals.watch(Arc::new(move |kind| wake.notify(kind))) {
+                sampler.set_signals(wifi::SignalState::Installed);
+                Some(guard)
+            } else {
+                sampler.set_signals(wifi::SignalState::Unavailable);
+                None
+            }
+        }
+        _ => None,
+    };
+    run_provider(Box::new(sampler), env);
+    drop(subscription);
+}
+
+/// One provider worker's body.
+type Worker = Box<dyn FnOnce(&WorkerEnv) + Send>;
 
 /// The running providers of one Bar run with a panel.
 pub struct ProviderMonitor {
@@ -478,32 +604,38 @@ impl ProviderMonitor {
             threads: Mutex::new(Vec::new()),
             media: parts.media.as_ref().map(|media| Arc::clone(&media.executor)),
         };
-        let wakeup = Arc::new(Wakeup::default());
-        let samplers: [Box<dyn Sampler>; 3] = [
-            Box::new(cpu::CpuSampler::new(parts)),
-            Box::new(battery::BatterySampler::new(parts)),
-            Box::new(wifi::WifiSampler::new(parts)),
+        let cpu = cpu::CpuSampler::new(parts);
+        let battery = battery::BatterySampler::new(parts);
+        let wifi = wifi::WifiSampler::new(parts);
+        let signals = parts.signals.clone();
+        let workers: [(ProviderKind, Worker); 3] = [
+            (
+                ProviderKind::Cpu,
+                Box::new(move |env| run_provider(Box::new(cpu), env)),
+            ),
+            (
+                ProviderKind::Battery,
+                Box::new(move |env| run_provider(Box::new(battery), env)),
+            ),
+            // Native signals are subscribed on the worker, off the caller's
+            // thread, and dropped when it exits.
+            (
+                ProviderKind::Wifi,
+                Box::new(move |env| run_wifi_worker(wifi, signals.as_ref(), env)),
+            ),
         ];
-        for sampler in samplers {
-            let kind = sampler.kind();
+        for (kind, run) in workers {
             let env = WorkerEnv {
                 clock: Arc::clone(&parts.clock),
                 stop: monitor.stop.clone(),
-                wakeup: (kind == ProviderKind::Wifi).then(|| Arc::clone(&wakeup)),
+                wakeup: (kind == ProviderKind::Wifi).then(|| Arc::new(Wakeup::default())),
                 min_gap: parts.timing.wifi_min_gap,
+                quality_gap: parts.timing.wifi,
                 publish: Arc::clone(publish),
             };
-            let signals = (kind == ProviderKind::Wifi).then(|| parts.signals.clone()).flatten();
-            let spawned =
-                std::thread::Builder::new().name(kind.thread_name().to_owned()).spawn(move || {
-                    // Native signals are subscribed on the worker, off the
-                    // caller's thread, and dropped when it exits.
-                    let _subscription = signals.and_then(|signals| {
-                        let wake = Arc::clone(env.wakeup.as_ref()?);
-                        signals.watch(Arc::new(move || wake.notify())).ok()
-                    });
-                    run_provider(sampler, &env);
-                });
+            let spawned = std::thread::Builder::new()
+                .name(kind.thread_name().to_owned())
+                .spawn(move || run(&env));
             match spawned {
                 Ok(handle) => lock(&monitor.threads).push(handle),
                 Err(error) => {

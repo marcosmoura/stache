@@ -708,3 +708,29 @@ fn growth_to_the_usable_area_teaches_no_minimum() {
     world.observe(window, MONOCLE);
     assert_eq!(world.inferred(0), None);
 }
+
+/// A window-server frame never decides a minimum size: the same grown frame
+/// that a snapshot learns from teaches nothing when it arrives as a geometry
+/// sample.
+#[test]
+fn a_window_server_frame_teaches_no_minimum_while_a_snapshot_still_does() {
+    let grown = Rect::new(14.0, 14.0, 1100.0, 1172.0);
+
+    let mut world = settled_grid();
+    let window = world.windows[0];
+    let stamp = world.feed.stamp;
+    world.apply(Input::Completion {
+        stamp,
+        result: CompletionResult::Geometry(window, grown),
+    });
+    assert_eq!(world.state.windows[&window].observed.frame, Some(grown));
+    assert_eq!(world.inferred(0), None, "no minimum from the window server");
+
+    let mut world = settled_grid();
+    let window = world.windows[0];
+    world.observe(window, grown);
+    assert!(
+        world.inferred(0).is_some_and(|s| (s.width - 1100.0).abs() < 1.0),
+        "the same frame in a snapshot is learned"
+    );
+}

@@ -241,6 +241,7 @@ fn a_full_coordinator_falls_back_to_one_direct_write() {
                 revision: 1,
                 plan_sequence: serial,
                 window,
+                cg_window_id: None,
                 from,
                 target: TARGET,
                 components,
@@ -258,6 +259,7 @@ fn a_full_coordinator_falls_back_to_one_direct_write() {
         revision: 1,
         plan_sequence: 99,
         window: overflow,
+        cg_window_id: None,
         target: TARGET,
         components,
         from,
@@ -601,4 +603,192 @@ fn stale_and_unscripted_outcomes_are_typed_not_applied() {
     });
     assert_eq!(live.runtime.snapshot().diagnostics.frames_applied, 0);
     live.runtime.shutdown();
+}
+
+// ------------------------------------------------------------ geometry reads
+
+use crate::animation::AnimationControl;
+use crate::state::{CompletionResult, Effect, Stamp};
+
+/// An effect environment over the fake backend; completions land in the
+/// returned ingress.
+fn geometry_env(
+    backend: &Arc<FakeWindowBackend>,
+    cancel: CancellationToken,
+) -> (EffectEnv, Arc<Ingress>) {
+    let ingress = Arc::new(Ingress::new(Pipeline::with_bounds(
+        64,
+        crate::events::COMPLETION_CAPACITY,
+        GeometryCoalescer::default(),
+    )));
+    let gate = Arc::new(GenerationCell::new());
+    let clock = Arc::new(ManualClock::default());
+    let frames = Arc::new(FrameControl::new(
+        gate,
+        Arc::clone(&clock) as Arc<dyn crate::actor::Clock>,
+    ));
+    let animation = Arc::new(AnimationControl::live(
+        Arc::clone(backend) as Arc<dyn WindowBackend>,
+        Arc::clone(&ingress),
+        Arc::clone(&frames),
+        clock as Arc<dyn crate::actor::Clock>,
+        Arc::new(stache_macos::FakeFrameClockFactory::failing("timer"))
+            as Arc<dyn stache_macos::FrameClockFactory>,
+        cancel.clone(),
+    ));
+    let env = EffectEnv {
+        backend: Arc::clone(backend) as Arc<dyn WindowBackend>,
+        directory: Arc::new(FakeAppDirectory::default()) as Arc<dyn AppDirectory>,
+        ingress: Arc::clone(&ingress),
+        cancel,
+        frames,
+        visibility: Arc::new(crate::VisibilityControl::new()),
+        actions: None,
+        animation,
+        borders: None,
+    };
+    (env, ingress)
+}
+
+fn completions(ingress: &Ingress) -> Vec<CompletionResult> {
+    ingress
+        .with(|pipeline| pipeline.take(64))
+        .into_iter()
+        .filter_map(|input| match input {
+            Input::Completion { result, .. } => Some(result),
+            _ => None,
+        })
+        .collect()
+}
+
+fn geometry_effect(backend: &FakeWindowBackend) -> (Effect, WindowInstance) {
+    let epoch = RuntimeEpoch::for_testing(1);
+    let window = WindowInstance::for_testing(backend.adapter(), epoch, app(1), 1);
+    let effect = Effect::ReadGeometry {
+        stamp: Stamp { epoch, registry: 1 },
+        window,
+        cg_window_id: 41,
+        start: Rect::new(0.0, 25.0, 960.0, 1055.0),
+        target: TARGET,
+    };
+    (effect, window)
+}
+
+#[test]
+fn a_geometry_read_answers_from_the_window_server_without_an_accessibility_read() {
+    let backend = Arc::new(FakeWindowBackend::default());
+    let (effect, window) = geometry_effect(&backend);
+    backend.script_echo_frames(true);
+    backend.seed_window_frame(window, TARGET);
+    backend.script_bounds(41, window);
+    let (env, ingress) = geometry_env(&backend, CancellationToken::new());
+    env.run(&effect);
+    assert_eq!(completions(&ingress), vec![CompletionResult::Geometry(
+        window, TARGET
+    )]);
+    assert_eq!(backend.calls(), vec![FakeBackendCall::Bounds(41)]);
+    assert_eq!(backend.snapshot_reads(window), 0);
+}
+
+#[test]
+fn a_geometry_read_without_bounds_reads_the_snapshot_as_before() {
+    let backend = Arc::new(FakeWindowBackend::default());
+    let (effect, window) = geometry_effect(&backend);
+    backend.script_bounds_missing(true);
+    let (env, ingress) = geometry_env(&backend, CancellationToken::new());
+    env.run(&effect);
+    assert_eq!(completions(&ingress), vec![CompletionResult::Snapshot(
+        window,
+        SnapshotOutcome::Stale(StaleReason::UnknownWindow)
+    )]);
+    assert_eq!(backend.calls(), vec![
+        FakeBackendCall::Bounds(41),
+        FakeBackendCall::Snapshot(window)
+    ]);
+}
+
+#[test]
+fn a_cancelled_geometry_read_skips_the_window_server_and_takes_the_snapshot_path() {
+    let backend = Arc::new(FakeWindowBackend::default());
+    let (effect, window) = geometry_effect(&backend);
+    backend.script_echo_frames(true);
+    backend.seed_window_frame(window, TARGET);
+    backend.script_bounds(41, window);
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    let (env, ingress) = geometry_env(&backend, cancel);
+    env.run(&effect);
+    assert!(matches!(
+        completions(&ingress).as_slice(),
+        [CompletionResult::Snapshot(w, _)] if *w == window
+    ));
+    assert_eq!(backend.calls(), vec![FakeBackendCall::Snapshot(window)]);
+}
+
+#[test]
+fn a_window_server_frame_the_write_does_not_explain_reads_the_snapshot() {
+    let backend = Arc::new(FakeWindowBackend::default());
+    let (effect, window) = geometry_effect(&backend);
+    backend.script_echo_frames(true);
+    // Larger than both the start and the target: a fullscreen entry.
+    backend.seed_window_frame(window, Rect::new(0.0, 0.0, 1920.0, 1080.0));
+    backend.script_bounds(41, window);
+    let (env, ingress) = geometry_env(&backend, CancellationToken::new());
+    env.run(&effect);
+    assert!(matches!(
+        completions(&ingress).as_slice(),
+        [CompletionResult::Snapshot(w, _)] if *w == window
+    ));
+    assert_eq!(backend.calls(), vec![
+        FakeBackendCall::Bounds(41),
+        FakeBackendCall::Snapshot(window)
+    ]);
+}
+
+/// PF-07-10: while a write is in flight, an echo whose window-server frame the
+/// write explains reads nothing more, while a native-fullscreen growth (larger
+/// than both the start and the target) is read in full at once and takes the
+/// window out of the layout.
+#[test]
+fn a_fullscreen_entry_during_an_in_flight_write_is_read_in_full_at_once() {
+    let (mut rig, window) = Rig::framed();
+    rig.backend.script_echo_frames(true);
+    let hold = rig.backend.hold_application(app(1));
+    rig.authorize();
+    let record = rig.snap().frames.iter().find(|f| f.window == window).cloned().expect("record");
+    assert!(record.in_flight, "the write is held in flight");
+    rig.backend.script_bounds(1, window);
+    let snapshots = |rig: &Rig| rig.backend.snapshot_reads(window);
+    let resized = |rig: &mut Rig| {
+        rig.push(WindowEventKind::Window {
+            window,
+            change: WindowChange::Resized,
+        });
+        rig.pump();
+        rig.clock.advance(Duration::from_millis(20));
+        rig.pump();
+    };
+
+    // Between the start (10, 10, 800, 600) and the target: explained.
+    rig.backend.seed_window_frame(window, Rect::new(5.0, 18.0, 1300.0, 800.0));
+    let before = snapshots(&rig);
+    resized(&mut rig);
+    assert_eq!(snapshots(&rig), before, "an explained echo reads no snapshot");
+    assert_eq!(
+        rig.snap().window(window).expect("window").observed.frame,
+        Some(Rect::new(5.0, 18.0, 1300.0, 800.0))
+    );
+
+    // Native fullscreen: larger than both the start and the target.
+    let full = Rect::new(0.0, 0.0, 1920.0, 1080.0);
+    rig.backend.seed_window_frame(window, full);
+    let mut shot = snapshot(window, "w", 1);
+    shot.frame = read(full);
+    shot.fullscreen = AxReading::Value(true);
+    rig.backend.script_snapshot(window, SnapshotOutcome::Snapshot(Box::new(shot)));
+    resized(&mut rig);
+    assert_eq!(snapshots(&rig), before + 1, "read in full at once");
+    assert!(rig.snap().window(window).expect("window").observed.fullscreen);
+    hold.release();
+    rig.pump();
 }

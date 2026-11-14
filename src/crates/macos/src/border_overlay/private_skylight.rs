@@ -129,6 +129,10 @@ impl SkyLightSymbols {
         }
     }
 
+    /// Whether `SLSMainConnectionID` resolved (calls nothing).
+    #[must_use]
+    pub const fn has_main_connection(&self) -> bool { self.main_connection.is_some() }
+
     /// The process's main `SkyLight` connection id, when the symbol resolved.
     #[must_use]
     pub fn connection(&self) -> Option<c_int> {

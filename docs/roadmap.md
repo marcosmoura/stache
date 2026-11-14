@@ -1,7 +1,7 @@
 # Runtime rewrite roadmap
 
 Read when checking what is finished, awaiting integration, specified or still planned.
-Snapshot: **2026-11-13**. Here, **finished/shipped means merged into `main`**, not a
+Snapshot: **2026-11-14**. Here, **finished/shipped means merged into `main`**, not a
 packaged public release. Only ad-hoc and self-signed local builds exist; no release
 artifact has shipped.
 
@@ -33,6 +33,7 @@ artifact has shipped.
 | Finished                   | [TOML configuration](specs/2026-11-09-toml-config/00-overview.md)                    | 3/3 done on `main`                  | Per-module TOML files, schemas and `config migrate`; see [config](architecture/config.md).                                                                                                                                                                                                                                                                                                                                                 |
 | Finished                   | [Tray popover](specs/2026-11-13-tray-popover/00-overview.md)                         | 5/5 done on `main`                  | Popover replaces the tray menu: Overview, schema-driven settings editor with human copy, native look; the Test Window is removed. Native behaviour awaits the user's check; see [feature](features/popover.md).                                                                                                                                                                                                                            |
 | Finished                   | [Security hardening](specs/2026-11-11-security-hardening/00-overview.md)             | 5/5 done                            | Closes the 2026-11-11 audit: SHA-pinned CI with a read-only token and lock guards, the media adapter vendored from a pinned bottle, config trust warnings, truthful panic docs. Quality is green; CI leaves the real-time Tiling animation tests to local runs.                                                                                                                                                                            |
+| Finished                   | [Performance pass](specs/2026-11-13-performance/00-overview.md)                      | 8/8 parts done on `main`            | Event-driven control socket and idle waits, Wi-Fi change signals, a faster cold and cached wallpaper path, window-server reads during animations and per-application read lanes. Native behaviour is unverified; each part's notes list what to check.                                                                                                                                                                                     |
 
 Foundation also includes the owned [module SDK](architecture/sdk.md),
 [typed configuration and reload](architecture/config.md), [socket IPC and standalone CLI](architecture/ipc.md),

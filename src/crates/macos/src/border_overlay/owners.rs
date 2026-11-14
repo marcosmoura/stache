@@ -48,7 +48,8 @@ pub trait OverlayHost {
     /// size, no layer. Only for a plan that differs from the configured one in
     /// the frame origin alone.
     fn translate(&mut self, panel: &mut Self::Panel, plan: &OverlayPlan);
-    /// Orders the panel directly below or above the target, per `placement`.
+    /// Orders the panel directly below or above the target, per `placement`,
+    /// at `level` (the panel's level: [`BorderPlacement::panel_level`]).
     fn order_relative(
         &mut self,
         panel: &mut Self::Panel,
@@ -346,8 +347,8 @@ impl<H: OverlayHost> OverlayOwners<H> {
                         }
                         // `orderWindow:relativeTo:` on a visible panel only:
                         // never ordered out and in (no visible hide).
-                        let level = self.host.window_level(target_cg_id);
                         let placement = live.appearance.placement;
+                        let level = placement.panel_level(self.host.window_level(target_cg_id));
                         self.host.order_relative(
                             &mut live.panel,
                             target_cg_id,
@@ -426,7 +427,7 @@ impl<H: OverlayHost> OverlayOwners<H> {
             });
         }
         let resolved = self.host.resolved_corner_radius(target);
-        let level = self.host.window_level(target);
+        let level = appearance.placement.panel_level(self.host.window_level(target));
         let transition = self.transition;
         let Some(live) = self.live.get_mut(&handle) else { return };
         let was_visible = live.visible;
@@ -438,11 +439,11 @@ impl<H: OverlayHost> OverlayOwners<H> {
             0.0
         };
         if change == AppearanceChange::Shrink {
-            live.target = target;
-            live.frame = frame;
-            live.appearance = appearance;
-            live.resolved_radius = resolved;
-            Self::shrink(&mut self.host, live, width_fade, presented_width, now);
+            let replaced = live.appearance.placement != appearance.placement;
+            (live.target, live.frame) = (target, frame);
+            (live.appearance, live.resolved_radius) = (appearance, resolved);
+            let lowered = replaced.then_some((level, ordering));
+            Self::shrink(&mut self.host, live, lowered, width_fade, presented_width, now);
             report.summary.shown += 1;
             return;
         }
@@ -745,9 +746,15 @@ impl<H: OverlayHost> OverlayOwners<H> {
     /// engine's `Hide` (or any `HideAll`, `Hide` or `Release`, which still
     /// orders it out at once). No callback observes the end. Without a
     /// transition, a hidden overlay, or nothing to draw, it hides at once.
+    ///
+    /// `lowered` is the panel's new level and the ordering mode when the
+    /// shrink also changes the placement: a border that lost the top placement
+    /// with the focus is re-ordered directly above its own window before it
+    /// shrinks, so it cannot stay over the window that took the focus.
     fn shrink(
         host: &mut H,
         live: &mut Live<H::Panel>,
+        lowered: Option<(isize, OrderingMode)>,
         width_fade: Option<(Duration, super::OverlayEasing)>,
         presented: f64,
         now: f64,
@@ -761,6 +768,10 @@ impl<H: OverlayHost> OverlayOwners<H> {
             live.visible = false;
             return;
         };
+        if let Some((level, ordering)) = lowered {
+            let placement = live.appearance.placement;
+            host.order_relative(&mut live.panel, live.target, level, ordering, placement);
+        }
         Self::clear_fades(host, live);
         Self::clear_width(host, live);
         if Self::place(host, live).is_none() {

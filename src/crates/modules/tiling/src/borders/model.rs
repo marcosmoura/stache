@@ -36,6 +36,12 @@
 //! installed on the focused border; a `once` or `loop` rotation on every border
 //! whose active state carries it ([`motion_to_install`]).
 //!
+//! With `order = "above"` the focused window's border is placed
+//! [`BorderPlacement::Top`], one window level higher, and every other border
+//! `Above` (a collapsed one included: its window lost the focus). The focused
+//! window is the one its application raises on a click, and a border directly
+//! above it would be covered until the next display frame.
+//!
 //! # Reserved: parked windows
 //!
 //! The snapshot-animation spec parks a window in a display corner during its
@@ -45,7 +51,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use stache_macos::border_overlay::{BorderAppearance, Transition};
+use stache_macos::border_overlay::{BorderAppearance, BorderPlacement, Transition};
 use stache_macos::windows::WindowInstance;
 use stache_macos::{ApplicationId, DisplayId};
 
@@ -98,7 +104,8 @@ pub struct BorderEntry {
     pub owner_pid: i32,
     /// Part 09: an unfocused window kept only so its border can shrink, because
     /// `unfocused = false` and a transition is set ([`collapses_on_blur`]). It
-    /// never shows a border; `appearance` is the look it would have focused.
+    /// never shows a border; `appearance` is the look it would have focused,
+    /// placed over its own window only (never [`BorderPlacement::Top`]).
     pub collapsed: bool,
 }
 
@@ -178,7 +185,11 @@ fn entry_appearance(
     focus: FocusInput,
     width: u32,
 ) -> Option<(BorderAppearance, bool)> {
-    if let Some(appearance) = appearance_for(config, focused, focus, width) {
+    if let Some(mut appearance) = appearance_for(config, focused, focus, width) {
+        // See the module documentation: only the window that has the focus.
+        if focused && appearance.placement == BorderPlacement::Above {
+            appearance.placement = BorderPlacement::Top;
+        }
         return Some((appearance, false));
     }
     if focused || !collapses_on_blur(config) {
@@ -556,6 +567,71 @@ mod tests {
         assert_eq!(model.entries[&tokens[1]].appearance.paint, solid("#aabbcc"));
         assert_eq!(model.entries[&tokens[0]].appearance.paint, solid("#445566"));
         assert!(model.entries.values().all(|e| (e.appearance.width - 2.0).abs() < f64::EPSILON));
+    }
+
+    /// With `order = "above"` only the window that has the focus is placed on
+    /// top (one window level higher): its application raises it on a click, and
+    /// a border directly above it was covered until the next display frame.
+    /// Every other border, a collapsed one included, stays directly above its
+    /// own window, and `below` is never raised.
+    #[test]
+    fn with_order_above_only_the_focused_window_is_placed_on_top() {
+        let placements = |state: &TilingState, config: &BordersConfig| -> Vec<BorderPlacement> {
+            border_model(state, config)
+                .entries
+                .values()
+                .map(|e| e.appearance.placement)
+                .collect()
+        };
+        let above = config(serde_json::json!({"order": "above"}));
+        let (mut state, _feed, tokens) = fixture(2);
+        state.focus.window = Some(tokens[0]);
+        assert_eq!(placements(&state, &above), [
+            BorderPlacement::Top,
+            BorderPlacement::Above
+        ]);
+        // The focus moves, and the top placement with it.
+        state.focus.window = Some(tokens[1]);
+        assert_eq!(placements(&state, &above), [
+            BorderPlacement::Above,
+            BorderPlacement::Top
+        ]);
+
+        // A window that lost the focus and only shrinks is not on top.
+        let collapsing = config(serde_json::json!({
+            "order": "above",
+            "unfocused": false,
+            "transition": {"duration": 200},
+        }));
+        let model = border_model(&state, &collapsing);
+        assert!(model.entries[&tokens[0]].collapsed);
+        assert_eq!(
+            model.entries[&tokens[0]].appearance.placement,
+            BorderPlacement::Above
+        );
+        assert_eq!(
+            model.entries[&tokens[1]].appearance.placement,
+            BorderPlacement::Top
+        );
+
+        // Nobody focused, or `below`: nothing is raised.
+        state.focus.window = None;
+        assert_eq!(placements(&state, &above), [BorderPlacement::Above; 2]);
+        state.focus.window = Some(tokens[0]);
+        let below = config(serde_json::json!({"order": "below"}));
+        assert_eq!(placements(&state, &below), [BorderPlacement::Below; 2]);
+
+        // A reload recomputes it in place.
+        let mut model = border_model(&state, &below);
+        model.reappearance(&above);
+        assert_eq!(
+            model.entries[&tokens[0]].appearance.placement,
+            BorderPlacement::Top
+        );
+        assert_eq!(
+            model.entries[&tokens[1]].appearance.placement,
+            BorderPlacement::Above
+        );
     }
 
     #[test]

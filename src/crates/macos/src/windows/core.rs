@@ -33,10 +33,10 @@ use std::time::{Duration, Instant};
 use stache_sdk::CancellationToken;
 
 use super::commands::{
-    ActionRequest, CleanupReport, CloseOutcome, Command, FocusOutcome, FrameAck, FrameReply,
-    FrameRequest, FrameStage, HiddenOperation, HiddenOutcome, HiddenRequest, InstallError,
-    InstallRequest, LeaseReport, Reply, Resolution, SnapshotOutcome, StopOutcome, TrackOutcome,
-    TrackRequest, WindowAction,
+    ActionRequest, CleanupReport, CloseOutcome, Command, FocusOutcome, FrameAck, FrameReadOutcome,
+    FrameReply, FrameRequest, FrameStage, HiddenOperation, HiddenOutcome, HiddenRequest,
+    InstallError, InstallRequest, LeaseReport, Reply, Resolution, SnapshotOutcome, StopOutcome,
+    TrackOutcome, TrackRequest, WindowAction,
 };
 use super::events::{
     ApplicationChange, Capability, EnhancedUiNote, EnumerationAbort, EventQueue, SnapshotOrigin,
@@ -309,10 +309,11 @@ struct Runtime<S: WindowSystem> {
 
 impl<S: WindowSystem> Runtime<S> {
     fn emit(&self, kind: WindowEventKind) {
-        let sequence = self.counters.sequence.fetch_add(1, Ordering::SeqCst) + 1;
-        let _ = self.queue.push(WindowEvent {
+        // The number is taken under the queue lock, so shards sharing the
+        // counter queue their events in sequence order.
+        let _ = self.queue.push_with(|| WindowEvent {
             epoch: self.epoch,
-            sequence,
+            sequence: self.counters.sequence.fetch_add(1, Ordering::SeqCst) + 1,
             kind,
         });
     }
@@ -774,6 +775,7 @@ impl<S: WindowSystem> Core<S> {
             Command::Act { request, reply } => answer(reply, self.act(&request)),
             Command::Hidden { request, reply } => answer(reply, self.application_hidden(&request)),
             Command::Snapshot { window, reply } => answer(reply, self.snapshot(window)),
+            Command::ReadFrame { window, reply } => answer(reply, self.frame_only(window)),
             #[cfg(test)]
             Command::Resolve { cg_window_id, reply } => {
                 answer(reply, self.resolve(cg_window_id));
@@ -1346,6 +1348,23 @@ impl<S: WindowSystem> Core<S> {
                 )))
             }
         }
+    }
+
+    /// `AXPosition` and `AXSize` of one tracked window after the light
+    /// validation: no `AXWindows` listing, no other attribute.
+    fn frame_only(&self, window: WindowInstance) -> FrameReadOutcome {
+        let index = match self.validate_light(window) {
+            Ok(index) => index,
+            Err(Invalid::Stale(reason)) => return FrameReadOutcome::Stale(reason),
+            Err(Invalid::Unverified(_)) => {
+                return FrameReadOutcome::Stale(StaleReason::UnknownWindow);
+            }
+        };
+        let Some(app) = self.runtime.as_ref().and_then(|rt| rt.apps.get(&window.application()))
+        else {
+            return FrameReadOutcome::Stale(StaleReason::ApplicationGone);
+        };
+        FrameReadOutcome::Frame(read_frame(self.system.ax(), &app.windows[index].element))
     }
 
     #[cfg(test)]
