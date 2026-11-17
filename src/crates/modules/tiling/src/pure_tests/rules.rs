@@ -271,6 +271,16 @@ fn management_exclusions_and_their_order() {
         check(input("com.pip.app", "Player", "", Some(PIP_SUBROLE))),
         Some(ManagementExclusion::PictureInPicture)
     );
+    // The live Finder panel: title and subrole are both "Quick Look".
+    assert_eq!(
+        check(input(
+            "com.apple.finder",
+            "Finder",
+            "Quick Look",
+            Some("Quick Look")
+        )),
+        Some(ManagementExclusion::QuickLook)
+    );
     assert_eq!(
         check(input("com.example.ignored", "Ig", "", None)),
         Some(ManagementExclusion::IgnoreRule { index: 1 })

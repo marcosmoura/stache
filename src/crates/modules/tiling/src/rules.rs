@@ -218,6 +218,11 @@ pub const SKIP_TILING_APP_NAMES: &[&str] = &[
 /// AX subrole of Picture-in-Picture windows.
 pub const PIP_SUBROLE: &str = "AXFloatingWindow";
 
+/// AX subrole of the Quick Look preview panel (space bar in Finder). The
+/// panel belongs to the application that opened it, so only the subrole
+/// tells it apart.
+pub const QUICK_LOOK_SUBROLE: &str = "Quick Look";
+
 /// Why a window is never managed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ManagementExclusion {
@@ -229,6 +234,8 @@ pub enum ManagementExclusion {
     SystemAppName,
     /// A Picture-in-Picture window.
     PictureInPicture,
+    /// A Quick Look preview panel.
+    QuickLook,
     /// A Finder "Get Info" window (legacy popup exclusion).
     FinderInfo,
     /// A sheet, drawer or `AXUnknown` panel: attached or popup-like.
@@ -285,6 +292,7 @@ impl ManagementExclusion {
             Self::SystemBundle => "system component (bundle id)",
             Self::SystemAppName => "system component (name)",
             Self::PictureInPicture => "picture-in-picture",
+            Self::QuickLook => "quick look preview",
             Self::FinderInfo => "finder info window",
             Self::NonStandardSubrole => "sheet, drawer or unknown-subrole panel",
             Self::DialogTooSmall => "dialog below 400x300",
@@ -314,8 +322,8 @@ pub fn adoption_exclusion(
 
 /// Returns why a window must never be managed, or `None` if it may be.
 ///
-/// Order: self, system bundle, system name, Picture-in-Picture, then global
-/// ignore rules. `self_bundle_id` is Stache's own bundle id (empty disables the
+/// Order: self, system bundle, system name, Picture-in-Picture, Quick Look,
+/// then global ignore rules. `self_bundle_id` is Stache's own bundle id (empty disables the
 /// self check).
 #[must_use]
 pub fn management_exclusion(
@@ -335,6 +343,9 @@ pub fn management_exclusion(
     }
     if is_pip_window(input.subrole) {
         return Some(ManagementExclusion::PictureInPicture);
+    }
+    if input.subrole == Some(QUICK_LOOK_SUBROLE) {
+        return Some(ManagementExclusion::QuickLook);
     }
     if bundle.eq_ignore_ascii_case("com.apple.finder") && input.metadata.title.ends_with(" Info") {
         return Some(ManagementExclusion::FinderInfo);
