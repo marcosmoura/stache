@@ -1440,6 +1440,63 @@ fn slow_returned_callback_inhibits_future_delivery() {
     assert_eq!(recorder.count(), 1);
 }
 
+/// A passive observer whose callback advances the clock by `by` per event.
+struct SlowWatcher {
+    clock: Arc<FakeClock>,
+    by: Mutex<Duration>,
+    seen: AtomicUsize,
+}
+
+impl InputObserver for SlowWatcher {
+    fn on_event(&self, _event: &InputEvent) {
+        self.seen.fetch_add(1, Ordering::SeqCst);
+        self.clock.advance(*self.by.lock().unwrap_or_else(PoisonError::into_inner));
+    }
+}
+
+/// One slow passive callback (a preempted tap thread, a contended lock) must
+/// not silence an observer for the rest of the run; only a streak does.
+#[test]
+fn a_slow_passive_callback_is_counted_but_only_a_streak_inerts_the_observer() {
+    let rig = rig();
+    let slow = CALLBACK_SOFT_TARGET + Duration::from_micros(1);
+    let watcher = Arc::new(SlowWatcher {
+        clock: Arc::clone(&rig.clock),
+        by: Mutex::new(slow),
+        seen: AtomicUsize::new(0),
+    });
+    let sub = rig
+        .service
+        .subscribe_observer(
+            ObserverSpec { filter: any_key() },
+            Arc::clone(&watcher) as Arc<dyn InputObserver>,
+            &live(),
+        )
+        .expect("subscribe observer");
+    let pass = |raw| rig.service.dispatch(TapKind::ListenOnly, raw);
+    for _ in 1..OBSERVER_SLOW_STREAK {
+        let _ = pass(down(A));
+    }
+    assert_eq!(sub.inert_reason(), None, "a short streak keeps delivering");
+    // A callback within the target resets the streak.
+    *watcher.by.lock().unwrap_or_else(PoisonError::into_inner) = Duration::ZERO;
+    let _ = pass(down(A));
+    *watcher.by.lock().unwrap_or_else(PoisonError::into_inner) = slow;
+    for _ in 1..OBSERVER_SLOW_STREAK {
+        let _ = pass(down(A));
+    }
+    assert_eq!(sub.inert_reason(), None);
+    let _ = pass(down(A));
+    assert_eq!(sub.inert_reason(), Some(InertReason::Slow));
+    let seen = watcher.seen.load(Ordering::SeqCst);
+    let _ = pass(down(A));
+    assert_eq!(watcher.seen.load(Ordering::SeqCst), seen, "inert: no delivery");
+    assert_eq!(
+        rig.service.counters().slow_callbacks,
+        u64::from(OBSERVER_SLOW_STREAK) * 2 - 1
+    );
+}
+
 #[test]
 fn callback_at_exactly_the_target_is_not_slow() {
     let rig = rig();

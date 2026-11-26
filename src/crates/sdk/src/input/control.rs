@@ -27,6 +27,14 @@ pub const CONTROL_QUEUE_CAPACITY: usize = 256;
 /// cannot preempt a callback.
 pub const CALLBACK_SOFT_TARGET: Duration = Duration::from_millis(1);
 
+/// Consecutive slow callbacks after which a passive observer becomes inert.
+///
+/// A handler becomes inert on its first slow callback (it holds up input); an
+/// observer cannot, and one preemption of the tap thread or one contended lock
+/// must not silence it for the rest of the run. Any callback within the target
+/// resets the streak.
+pub const OBSERVER_SLOW_STREAK: u32 = 8;
+
 /// Bound on explicit cleanup or re-enable retries per failure episode.
 pub const MAX_RETRY_ATTEMPTS: u32 = 3;
 

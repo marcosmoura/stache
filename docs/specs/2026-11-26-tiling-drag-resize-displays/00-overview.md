@@ -44,11 +44,12 @@ Code facts:
 
 ## Parts
 
-| Part                         | Summary                                                                      | Status |
-| ---------------------------- | ---------------------------------------------------------------------------- | ------ |
-| [01](01-drag-commit.md)      | Drag health in status; reproduce and fix gestures that leave windows dropped | draft  |
-| [02](02-edge-resize.md)      | Edge-aware mouse resize for split, dwindle, master (with stack) and grid     | draft  |
-| [03](03-display-relayout.md) | Display changes replan and write every workspace, hidden ones included       | draft  |
+| Part                          | Summary                                                                                    | Status |
+| ----------------------------- | ------------------------------------------------------------------------------------------ | ------ |
+| [01](01-drag-commit.md)       | Drag health in status; reproduce and fix gestures that leave windows dropped               | done   |
+| [02](02-edge-resize.md)       | Edge-aware mouse resize for split, dwindle, master (with stack) and grid                   | done   |
+| [03](03-display-relayout.md)  | Display changes replan and write every workspace, hidden ones included                     | done   |
+| [04](04-gesture-detection.md) | Start gestures from window geometry while a button is held (legacy model); live tap health | done   |
 
 ## Affected docs
 

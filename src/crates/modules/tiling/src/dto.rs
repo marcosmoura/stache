@@ -416,6 +416,68 @@ pub struct StatusDto {
     /// absent from older answers).
     #[serde(default)]
     pub animation_fallbacks: Vec<StatusAnimationFallbackDto>,
+    /// Passive drag health (additive: absent from older answers).
+    #[serde(default)]
+    pub drag: StatusDragDto,
+}
+
+/// Passive drag: whether it runs, gesture counts by outcome and the last one.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StatusDragDto {
+    /// The listen-only mouse observer is running.
+    pub available: bool,
+    /// Why it is not running, when it is not.
+    pub unavailable_reason: Option<String>,
+    /// The live state of the listen-only tap (`ready`, `disabled by macOS,
+    /// re-enabling`, `re-enable failed after <n> attempts (...)`, `absent`,
+    /// `observer inert (...)`); null when no observer runs.
+    pub tap: Option<String>,
+    /// A gesture is in progress (planning waits for it).
+    pub active: bool,
+    /// Gestures captured since start.
+    pub gestures: u64,
+    /// Gestures started by a window's move or resize while a button was held.
+    pub from_geometry: u64,
+    /// Gestures started at a mouse down from the tap.
+    pub from_down: u64,
+    /// Mouse downs the tap delivered.
+    pub downs: u64,
+    /// Mouse ups the tap delivered.
+    pub ups: u64,
+    /// Gestures ended by the button state because the tap missed the up.
+    pub released_by_state: u64,
+    /// Lost observations (overflow, tap discontinuity, timeout, ...).
+    pub lost: u64,
+    /// Gestures that swapped two tiles.
+    pub swaps: u64,
+    /// Gestures that resized a tile.
+    pub resizes: u64,
+    /// Gestures that returned the windows to their tiles.
+    pub snap_backs: u64,
+    /// Gestures whose tiles changed before the commit (plain relayout).
+    pub stale: u64,
+    /// Gestures cancelled by a lost observation.
+    pub cancelled: u64,
+    /// Mouse downs that started no gesture.
+    pub ignored: u64,
+    /// The latest finished gesture.
+    pub last: Option<StatusDragLastDto>,
+}
+
+/// How the latest gesture ended.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StatusDragLastDto {
+    /// `swapped`, `resized`, `snappedBack`, `stale` or `cancelled`.
+    pub outcome: String,
+    /// Why it was cancelled (`overflow`, `discontinuity`, `malformed`,
+    /// `permissionLost`, `timeout`, `stopped`).
+    pub cause: Option<String>,
+    /// Pointer travel between the down and the up, in whole points.
+    pub travel: u64,
+    /// How long the button was held, in milliseconds.
+    pub held_ms: u64,
 }
 
 // ---------------------------------------------------------- operation result

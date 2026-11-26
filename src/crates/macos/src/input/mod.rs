@@ -110,6 +110,19 @@ impl MacInputBackend {
     pub fn join(&self, timeout: Duration) -> bool { self.owner.join(timeout) }
 }
 
+/// Whether mouse `button` (0 left, 1 right, 2 and up other) is physically held
+/// right now, from `CGEventSourceButtonState` over the combined session state.
+///
+/// It needs no permission and no event tap, so it answers even when the
+/// listen-only tap is disabled or delivers nothing.
+#[must_use]
+pub fn mouse_button_held(button: u32) -> bool {
+    objc2_core_graphics::CGEventSource::button_state(
+        objc2_core_graphics::CGEventSourceStateID::CombinedSessionState,
+        objc2_core_graphics::CGMouseButton(button),
+    )
+}
+
 impl InputBackend for MacInputBackend {
     fn submit(&self, request: ControlRequest) -> Result<(), ControlRejected> {
         self.owner.submit(request)

@@ -453,3 +453,56 @@ fn arrival_wakes_the_waiter() {
     ingress.submit(Input::Activated(app(1))).expect("submit");
     assert_eq!(waiter.join().expect("waiter"), Wake::Work);
 }
+
+/// The drag callback never waits for the mailbox lock: while the actor holds
+/// it, signals are staged and later admitted in order; more than the drag lane
+/// holds is one lost observation.
+#[test]
+fn a_drag_signal_never_waits_for_a_busy_mailbox() {
+    use crate::drag::{DRAG_QUEUE_CAPACITY, DragSignal};
+    let ingress = Arc::new(Ingress::new(Pipeline::new()));
+    ingress.with(|_| {
+        let ingress = Arc::clone(&ingress);
+        // Joined while the lock is held: a blocking submit would deadlock.
+        std::thread::spawn(move || ingress.submit_drag(Input::Drag(DragSignal::Released)))
+            .join()
+            .expect("callback");
+    });
+    assert_eq!(ingress.stats().drag_accepted, 1);
+    ingress.with(|_| {
+        let ingress = Arc::clone(&ingress);
+        std::thread::spawn(move || {
+            for _ in 0..=DRAG_QUEUE_CAPACITY {
+                ingress.submit_drag(Input::Drag(DragSignal::Released));
+            }
+        })
+        .join()
+        .expect("callback");
+    });
+    assert_eq!(ingress.stats().drag_dropped, 1);
+}
+
+/// A drag signal staged while another holder had the lock wakes a sleeping
+/// actor promptly, not at some unrelated later wake.
+#[test]
+fn a_staged_drag_signal_wakes_the_sleeping_actor() {
+    use crate::drag::DragSignal;
+    let ingress = Arc::new(Ingress::new(Pipeline::new()));
+    let waiter = {
+        let ingress = Arc::clone(&ingress);
+        std::thread::spawn(move || ingress.wait(Some(Instant::now() + Duration::from_secs(10))))
+    };
+    std::thread::sleep(ms(20));
+    let started = Instant::now();
+    let callback = ingress.with(|_| {
+        let ingress = Arc::clone(&ingress);
+        let callback =
+            std::thread::spawn(move || ingress.submit_drag(Input::Drag(DragSignal::Released)));
+        std::thread::sleep(ms(20));
+        callback
+    });
+    assert_eq!(waiter.join().expect("waiter"), Wake::Work);
+    callback.join().expect("callback");
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert_eq!(ingress.stats().drag_accepted, 1);
+}

@@ -111,6 +111,9 @@ pub struct TrackingOptions {
     pub frame_clocks: Option<Arc<dyn stache_macos::FrameClockFactory>>,
     /// This generation's `tilingState` publisher. `None` publishes nothing.
     pub published: Option<stache_sdk::StatePublisher<crate::published::TilingPublishedState>>,
+    /// Whether a mouse button is physically held (see
+    /// [`crate::actor::Engine::set_button_state`]). `None` reads nothing.
+    pub buttons: Option<Arc<dyn crate::drag::ButtonState>>,
 }
 
 impl std::fmt::Debug for TrackingOptions {
@@ -144,6 +147,7 @@ impl TrackingOptions {
             logger: None,
             frame_clocks: None,
             published: None,
+            buttons: None,
         }
     }
 
@@ -395,6 +399,9 @@ impl TrackingRuntime {
             clock,
         );
         engine.set_frame_control(Arc::clone(&frames));
+        if let Some(buttons) = &options.buttons {
+            engine.set_button_state(Arc::clone(buttons));
+        }
         engine.set_animation_control(Arc::clone(&animation));
         engine.set_visibility_control(Arc::clone(&visibility));
         engine.set_logger(options.logger.clone(), origin);

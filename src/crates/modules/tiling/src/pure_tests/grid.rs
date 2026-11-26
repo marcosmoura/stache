@@ -138,6 +138,39 @@ fn grid_inner_gaps_and_custom_ratios() {
 }
 
 #[test]
+fn spanning_shapes_honour_every_lattice_boundary() {
+    // Five windows: column boundaries 0.25 (master) and 0.75, row boundary 0.4.
+    let p = plan_for(LayoutType::Grid, &entries(5), LANDSCAPE, Gaps::ZERO, &[
+        0.25, 0.75, 0.4,
+    ]);
+    assert_rect(frame(&p.frames, 1), 0.0, 0.0, 480.0, 1080.0);
+    assert_rect(frame(&p.frames, 2), 480.0, 0.0, 960.0, 432.0);
+    assert_rect(frame(&p.frames, 3), 1440.0, 0.0, 480.0, 432.0);
+    assert_rect(frame(&p.frames, 5), 1440.0, 432.0, 480.0, 648.0);
+    // A lone master share keeps equal stack lanes after it.
+    let p = plan_for(LayoutType::Grid, &entries(5), LANDSCAPE, Gaps::ZERO, &[0.4]);
+    assert_rect(frame(&p.frames, 2), 768.0, 0.0, 576.0, 540.0);
+    // A stack boundary left behind the master share falls back to equal lanes.
+    let p = plan_for(LayoutType::Grid, &entries(5), LANDSCAPE, Gaps::ZERO, &[
+        0.5, 0.3, 0.5,
+    ]);
+    assert_rect(frame(&p.frames, 2), 960.0, 0.0, 480.0, 540.0);
+}
+
+#[test]
+fn portrait_ten_shares_its_lattice_with_the_uneven_last_row() {
+    // 4x3: master spans rows 0-2 of column 0; the last row has three cells,
+    // the first under the master, on the same column and row boundaries.
+    let p = plan_for(LayoutType::Grid, &entries(10), PORTRAIT, Gaps::ZERO, &[
+        0.5, 0.75, 0.25, 0.5, 0.875,
+    ]);
+    assert_rect(frame(&p.frames, 1), 0.0, 0.0, 540.0, 1680.0);
+    assert_rect(frame(&p.frames, 2), 540.0, 0.0, 270.0, 480.0);
+    assert_rect(frame(&p.frames, 8), 0.0, 1680.0, 540.0, 240.0);
+    assert_rect(frame(&p.frames, 10), 810.0, 1680.0, 270.0, 240.0);
+}
+
+#[test]
 fn counts_zero_through_ten_tile_everyone_without_overflow() {
     for count in 0..=10_u32 {
         let p = grid(count);

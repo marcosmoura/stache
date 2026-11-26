@@ -582,6 +582,31 @@ fn the_status_query_answers_the_phase_and_takes_no_filters() {
         "{status}"
     );
     assert!(status["trackedWindows"].is_array() && status["excludedWindows"].is_array());
+    // The drag section (additive keys).
+    let drag = &status["drag"];
+    assert!(
+        drag["available"].is_boolean() && drag["active"].is_boolean(),
+        "{status}"
+    );
+    for counter in [
+        "gestures",
+        "swaps",
+        "resizes",
+        "snapBacks",
+        "stale",
+        "cancelled",
+        "ignored",
+        "fromGeometry",
+        "fromDown",
+        "downs",
+        "ups",
+        "releasedByState",
+        "lost",
+    ] {
+        assert!(drag[counter].is_u64(), "{counter}: {status}");
+    }
+    assert!(drag.get("unavailableReason").is_some() && drag.get("last").is_some());
+    assert!(drag.get("tap").is_some(), "{status}");
     let (kind, _) = rig.err("query", json!({"kind": "status", "screen": "main"}));
     assert_eq!(kind, HandlerErrorKind::InvalidParams);
 }

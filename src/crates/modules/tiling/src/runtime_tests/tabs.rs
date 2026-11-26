@@ -931,7 +931,7 @@ fn suspended_windows_are_not_listed_as_windows_in_the_status() {
     tabs.suspend(single);
     let fresh = tabs.token(FINDER);
     tabs.created(fresh, bar(7, 2), slot);
-    let status = crate::ipc::status(&tabs.rig.snap());
+    let status = crate::ipc::status(&tabs.rig.snap(), None, None);
     assert_eq!(status.suspended_windows, 1);
     assert_eq!(status.windows, 2);
     assert_eq!(status.tracked_windows.len(), 2);

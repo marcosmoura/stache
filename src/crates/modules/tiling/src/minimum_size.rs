@@ -739,8 +739,13 @@ pub fn infer_minimum(
 /// Per-workspace runtime ratio overrides and their reset semantics.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RatioState {
-    /// Cumulative (Split), per-node (Dwindle) or layout-specific (Grid) ratios.
+    /// Cumulative (Split), per-node (Dwindle), lattice boundaries (Grid) or
+    /// stack boundaries (Master) ratios.
     pub split_ratios: Vec<f64>,
+    /// How many tiles `split_ratios` were written for. Grid and Master ratios
+    /// written for another count are ignored, so a tile count change resets
+    /// them.
+    pub tiles: usize,
     /// User master-ratio override; `None` uses the configured percentage.
     pub master_ratio: Option<f64>,
 }
@@ -762,8 +767,15 @@ impl RatioState {
             return Change::Unchanged;
         }
         self.split_ratios.clear();
+        self.tiles = 0;
         self.master_ratio = None;
         Change::Changed
+    }
+
+    /// Stores `ratios` written for `tiles` tiles.
+    pub fn set_split(&mut self, ratios: Vec<f64>, tiles: usize) {
+        self.split_ratios = ratios;
+        self.tiles = tiles;
     }
 
     /// Balances the workspace: clears every ratio override. It is a no-op only
@@ -774,6 +786,7 @@ impl RatioState {
             return Change::Unchanged;
         }
         self.split_ratios.clear();
+        self.tiles = 0;
         self.master_ratio = None;
         Change::Changed
     }
@@ -781,14 +794,18 @@ impl RatioState {
     /// The ratios to lay out `count` windows with. For the split layouts, stale
     /// cumulative boundaries (wrong length after a membership change, or not
     /// strictly increasing) are ignored in favour of an equal split without
-    /// mutating the stored value.
+    /// mutating the stored value; Grid and Master ratios written for another
+    /// tile count are ignored the same way.
     #[must_use]
     pub fn effective_split_ratios(&self, layout: LayoutType, count: usize) -> &[f64] {
         let split = matches!(
             layout,
             LayoutType::Split | LayoutType::SplitHorizontal | LayoutType::SplitVertical
         );
-        if split && !has_valid_cumulative_ratios(&self.split_ratios, count) {
+        let counted = matches!(layout, LayoutType::Grid | LayoutType::Master);
+        if (split && !has_valid_cumulative_ratios(&self.split_ratios, count))
+            || (counted && self.tiles != count)
+        {
             &[]
         } else {
             &self.split_ratios

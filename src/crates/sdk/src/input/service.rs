@@ -617,6 +617,7 @@ impl InputService {
             filter: spec.filter,
             observer,
             health: Health::default(),
+            slow_streak: std::sync::atomic::AtomicU32::new(0),
         });
         control.observers.push(Arc::clone(&entry));
         self.publish(&control);

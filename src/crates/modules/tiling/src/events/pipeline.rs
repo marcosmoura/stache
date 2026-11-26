@@ -303,14 +303,20 @@ impl Pipeline {
         }
     }
 
+    /// A drag signal was dropped: everything queued is void and the actor
+    /// sees one lost observation.
+    pub(crate) fn note_drag_overflow(&mut self) {
+        self.stats.drag_dropped += 1;
+        self.drag.clear();
+        self.drag_overflow = true;
+    }
+
     fn admit_drag(&mut self, input: Input) {
         if self.drag.len() >= DRAG_CAPACITY {
             // Drop the new signal and void everything queued: a down or up is
             // missing, so none of it can be trusted. The actor sees one lost
             // observation. Nothing is invented or replayed.
-            self.stats.drag_dropped += 1;
-            self.drag.clear();
-            self.drag_overflow = true;
+            self.note_drag_overflow();
         } else {
             self.drag.push_back(input);
             self.stats.drag_accepted += 1;

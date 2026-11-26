@@ -758,7 +758,8 @@ extend the registry contract narrowly instead of weakening `reconfigure`.
   Carbon delivery is an unmeasured gate of Keybindings part 03.
 - **Limits.** The macOS HID tap carries no per-keyboard identity, so a press is a
   key or button plus an epoch. The 1 ms callback target is soft and measured after
-  the callback returns (the subscriber then becomes inert); arbitrary code cannot
+  the callback returns (a handler then becomes inert; a passive observer only after
+  `OBSERVER_SLOW_STREAK` (8) slow callbacks in a row, any callback within the target resetting the streak); arbitrary code cannot
   be preempted. Panics are contained with `catch_unwind` only in unwind-enabled
   builds; the release profile uses `panic = "abort"`, so production callbacks must
   be audited, bounded and non-panicking. Locks on the tap path are `try_lock` only

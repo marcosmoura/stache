@@ -500,6 +500,7 @@ impl World {
             applications.iter().map(|a| a.info.clone()).collect();
         let mut options = TrackingOptions::new("");
         options.frame_clocks = Some(Arc::new(clocks.clone()));
+        options.buttons = gestures::BOOT_BUTTONS.with(|slot| slot.borrow_mut().take());
         let clock = match extras {
             Some((clock, logger)) => {
                 options.logger = Some(logger);
@@ -2052,7 +2053,7 @@ fn a_fallback_is_listed_logged_and_ends_after_its_cool_down() {
     });
     world.change_layout(200);
     world.change_layout(0);
-    let status = crate::ipc::status(&world.runtime.snapshot());
+    let status = crate::ipc::status(&world.runtime.snapshot(), None, None);
     let [entry] = status.animation_fallbacks.as_slice() else {
         panic!("one fallback listed: {status:?}");
     };
@@ -2078,7 +2079,7 @@ fn a_fallback_is_listed_logged_and_ends_after_its_cool_down() {
         world.stages_of(0, base).iter().any(|s| *s != FrameStage::Direct),
         "the next resize animates again"
     );
-    let status = crate::ipc::status(&world.runtime.snapshot());
+    let status = crate::ipc::status(&world.runtime.snapshot(), None, None);
     assert!(status.animation_fallbacks.is_empty(), "{status:?}");
     assert!(
         log.has("animation: App 1 (com.test.app1) animates resizes again (its cool-down passed): ")
@@ -2647,3 +2648,6 @@ fn a_user_move_and_a_fullscreen_entry_without_a_write_in_flight_read_the_snapsho
         .collect();
     assert_eq!(reads.first(), Some(&Seen::FullSnapshot(window)), "{reads:?}");
 }
+
+mod displays;
+mod gestures;

@@ -48,7 +48,8 @@ pub use context_snapshot::{
 pub use control::{
     ACKNOWLEDGEMENT_BUDGET, AckSignal, CALLBACK_SOFT_TARGET, CANCELLATION_QUANTUM,
     CONTROL_QUEUE_CAPACITY, ControlAction, ControlQueue, ControlRejected, ControlRequest,
-    FailureCause, InputBackend, InputClock, MAX_RETRY_ATTEMPTS, NativeError, SystemClock, TapKind,
+    FailureCause, InputBackend, InputClock, MAX_RETRY_ATTEMPTS, NativeError, OBSERVER_SLOW_STREAK,
+    SystemClock, TapKind,
 };
 pub use diagnostics::{DIAGNOSTIC_CAPACITY, InputCounters, InputDiagnostic};
 pub use event::{

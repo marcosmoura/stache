@@ -485,6 +485,54 @@ pub fn status(status: &StatusDto, ansi: bool) -> String {
     if let Some(intent) = &status.last_intent {
         let _ = writeln!(out, "last intent: {}", printable(intent));
     }
+    let drag = &status.drag;
+    match &drag.unavailable_reason {
+        Some(reason) => {
+            let _ = writeln!(out, "drag: unavailable: {}", printable(reason));
+        }
+        None => {
+            let _ = writeln!(
+                out,
+                "drag: available{}",
+                if drag.active {
+                    ", gesture in progress"
+                } else {
+                    ""
+                }
+            );
+        }
+    }
+    let _ = writeln!(
+        out,
+        "drag gestures: {}   swaps: {}   resizes: {}   snap-backs: {}   stale: {}   cancelled: \
+         {}   ignored downs: {}",
+        drag.gestures,
+        drag.swaps,
+        drag.resizes,
+        drag.snap_backs,
+        drag.stale,
+        drag.cancelled,
+        drag.ignored
+    );
+    if let Some(tap) = &drag.tap {
+        let _ = writeln!(out, "drag tap: {}", printable(tap));
+    }
+    let _ = writeln!(
+        out,
+        "drag started from geometry: {}   from a down: {}   downs: {}   ups: {}   released by \
+         button state: {}   lost observations: {}",
+        drag.from_geometry, drag.from_down, drag.downs, drag.ups, drag.released_by_state, drag.lost
+    );
+    if let Some(last) = &drag.last {
+        let _ = writeln!(
+            out,
+            "last drag: {}{} after {} points in {} ms",
+            last.outcome,
+            last.cause.as_ref().map_or_else(String::new, |cause| format!(" ({cause})")),
+            last.travel,
+            last.held_ms
+        );
+    }
     let _ = writeln!(
         out,
         "frame attempts: {}   enumeration failures: {}",

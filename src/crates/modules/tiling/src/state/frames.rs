@@ -130,6 +130,14 @@ pub struct FrameRecord {
     /// The target the one corrective size-only write was already sent for:
     /// at most one per target, so a refused size is never fought.
     pub size_checked: Option<Rect>,
+    /// The range of frames the user's last gesture moved the window through
+    /// (its baseline at the down and its frame at the end). A read inside it,
+    /// even one arriving after the gesture ended, is the user's geometry and
+    /// never an inferred minimum. Replaced by the next gesture; cleared by the
+    /// first target that differs from the post-gesture plan's.
+    pub user_span: Option<(Rect, Rect)>,
+    /// The first target planned after the gesture that set `user_span`.
+    pub user_span_plan: Option<Rect>,
 }
 
 /// A native display presence a host reservation was last accepted for.
@@ -174,6 +182,12 @@ pub struct FrameBook {
     /// leaves the set when it is written, found already at its target, or has
     /// no frame to write (a floating window).
     pub revealed: BTreeSet<WindowInstance>,
+    /// Workspaces a display change marked for planning while hidden (connect,
+    /// disconnect, resolution, arrangement, visible frame or host
+    /// reservation). A hidden workspace leaves the set once none of its
+    /// writes is in flight or waiting for a slot; a visible one is planned
+    /// anyway.
+    pub relayout: BTreeSet<WorkspaceId>,
 }
 
 impl FrameBook {
@@ -202,7 +216,7 @@ pub fn explained_by_travel(frame: &Rect, start: &Rect, target: &Rect) -> bool {
 
 fn near(a: f64, b: f64) -> bool { (a - b).abs() <= INFERENCE_TOLERANCE }
 
-fn near_rect(a: &Rect, b: &Rect) -> bool {
+pub(super) fn near_rect(a: &Rect, b: &Rect) -> bool {
     near(a.x, b.x) && near(a.y, b.y) && near(a.width, b.width) && near(a.height, b.height)
 }
 
@@ -322,7 +336,15 @@ pub(super) fn apply_reservations(state: &mut TilingState, host: HostReservations
     if before != resolutions(state) {
         let live: Vec<DisplayId> = state.screens.iter().map(|screen| screen.id).collect();
         state.frames.bindings.retain(|id, _| live.contains(id));
+        note_display_change(state);
     }
+}
+
+/// A display change: every workspace, visible or hidden, is planned against
+/// its current display and its eligible windows written right away, so no
+/// window keeps a frame from the previous arrangement.
+pub(super) fn note_display_change(state: &mut TilingState) {
+    state.frames.relayout = state.workspaces.iter().map(|workspace| workspace.id).collect();
 }
 
 fn desired_frames(state: &mut TilingState) -> BTreeMap<WindowInstance, Rect> {
@@ -337,7 +359,12 @@ fn desired_frames(state: &mut TilingState) -> BTreeMap<WindowInstance, Rect> {
     let mut usable: BTreeMap<DisplayId, Result<(Rect, Gaps), NoFrameReason>> = BTreeMap::new();
     let mut no_frame = BTreeMap::new();
     let mut desired = BTreeMap::new();
-    for workspace in state.workspaces.iter().filter(|workspace| workspace.visible) {
+    let relayout = &state.frames.relayout;
+    for workspace in state
+        .workspaces
+        .iter()
+        .filter(|workspace| workspace.visible || relayout.contains(&workspace.id))
+    {
         let entry = usable
             .entry(workspace.screen)
             .or_insert_with(|| usable_for(&inputs, &mut state.frames.bindings, workspace.screen));
@@ -390,7 +417,7 @@ fn desired_frames(state: &mut TilingState) -> BTreeMap<WindowInstance, Rect> {
             let ids: Vec<WindowInstance> = frames.iter().map(|(token, _)| *token).collect();
             let defaults = default_ratios(workspace.layout, ids.len());
             let user = workspace.ratios.effective_split_ratios(workspace.layout, ids.len());
-            let ratios = if !user.is_empty() && user.len() == defaults.len() {
+            let ratios = if !user.is_empty() && (grid || user.len() == defaults.len()) {
                 user.to_vec()
             } else {
                 defaults
@@ -537,7 +564,8 @@ fn note_revealed(state: &mut TilingState) {
     state.frames.last_visible = visible;
 }
 
-/// Plans the visible workspaces and issues the changed, eligible frames.
+/// Plans the visible workspaces (and, after a display change, the hidden ones
+/// still marked) and issues the changed, eligible frames.
 #[allow(clippy::too_many_lines)] // one linear planning pass over the desired frames
 pub(super) fn plan_and_issue(state: &mut TilingState, fx: &mut Vec<Effect>) {
     state.frames.no_frame.clear();
@@ -554,6 +582,15 @@ pub(super) fn plan_and_issue(state: &mut TilingState, fx: &mut Vec<Effect>) {
     // tracked or reconciled) are laid out around but never written.
     let unsettled = state.unsettled_apps();
     note_revealed(state);
+    // Windows of hidden workspaces a display change marked: written directly,
+    // never animated, and even while Stache holds their application hidden (a
+    // frame write never shows, activates, focuses or raises it).
+    let background: BTreeMap<WindowInstance, WorkspaceId> = state
+        .workspaces
+        .iter()
+        .filter(|workspace| !workspace.visible && state.frames.relayout.contains(&workspace.id))
+        .flat_map(|workspace| workspace.order.iter().map(|token| (*token, workspace.id)))
+        .collect();
     let desired = desired_frames(state);
     // A revealed window with no frame to write (a floating window, a Grid
     // extra) is never "written or found at its target": it waits for nothing.
@@ -585,8 +622,24 @@ pub(super) fn plan_and_issue(state: &mut TilingState, fx: &mut Vec<Effect>) {
     }
 
     let mut round: Option<u64> = None;
+    let mut limited = false;
     for (token, target) in &desired {
+        // The user's span outlives the gesture's own plan and its late echoes,
+        // but not a later, different target: a refusal then is the window's.
+        if let Some(record) = state.frames.records.get_mut(token)
+            && record.user_span.is_some()
+        {
+            match record.user_span_plan {
+                None => record.user_span_plan = Some(*target),
+                Some(plan) if !near_rect(&plan, target) => {
+                    record.user_span = None;
+                    record.user_span_plan = None;
+                }
+                Some(_) => {}
+            }
+        }
         if state.frames.in_flight() >= MAX_IN_FLIGHT_FRAMES {
+            limited = true;
             break;
         }
         if unsettled.as_ref().is_none_or(|apps| apps.contains(&token.application())) {
@@ -595,7 +648,12 @@ pub(super) fn plan_and_issue(state: &mut TilingState, fx: &mut Vec<Effect>) {
         // The layout keeps the slot of a window whose application Stache hid
         // (it is being shown again), but nothing can be written to it until it
         // reads visible. Its siblings are already planned around its slot.
-        if state.windows.get(token).is_some_and(|window| window.observed.hidden) {
+        // A hidden workspace's window of an application Stache itself holds
+        // hidden is written in place, without showing it.
+        if state.windows.get(token).is_some_and(|window| window.observed.hidden)
+            && !(background.contains_key(token)
+                && state.owned_hidden.contains(&token.application()))
+        {
             continue;
         }
         // A window whose destroy is held back (its native tab group is
@@ -681,6 +739,7 @@ pub(super) fn plan_and_issue(state: &mut TilingState, fx: &mut Vec<Effect>) {
         let kind = crate::animation::MotionKind::of(wanted.size);
         let animate = !corrective
             && !state.frames.revealed.remove(token)
+            && !background.contains_key(token)
             && !state.animation_fallback.contains(&(token.application(), kind))
             && animations
                 .as_ref()
@@ -715,6 +774,22 @@ pub(super) fn plan_and_issue(state: &mut TilingState, fx: &mut Vec<Effect>) {
             cross_display,
         });
     }
+    // A marked hidden workspace stays marked while a write of it is in flight
+    // (its completion plans again) or waits for a slot.
+    if !limited {
+        let records = &state.frames.records;
+        let waiting: BTreeSet<WorkspaceId> = background
+            .iter()
+            .filter(|(token, _)| {
+                records
+                    .get(token)
+                    .and_then(|record| record.attempt.as_ref())
+                    .is_some_and(FrameAttempt::in_flight)
+            })
+            .map(|(_, workspace)| *workspace)
+            .collect();
+        state.frames.relayout.retain(|workspace| waiting.contains(workspace));
+    }
     // A one-shot frame whose attempt already settled is spent.
     let records = &state.frames.records;
     state.frames.pinned.retain(|token, pin| {
@@ -747,6 +822,7 @@ pub(super) fn set_enabled(state: &mut TilingState, enabled: bool, fx: &mut Vec<E
         state.frames.no_frame.clear();
         state.frames.revealed.clear();
         state.frames.last_visible.clear();
+        state.frames.relayout.clear();
     }
 }
 
@@ -780,6 +856,26 @@ pub(super) fn force_deviating(state: &mut TilingState, tokens: &[WindowInstance]
             let record = state.frames.records.entry(*token).or_default();
             record.forced = true;
             record.externals = 0;
+        }
+    }
+}
+
+/// A gesture ended: each window's geometry between its baseline and its frame
+/// now is the user's (see [`FrameRecord::user_span`]).
+pub(super) fn note_user_span(state: &mut TilingState, spans: &[(WindowInstance, Rect, Rect)]) {
+    for (token, from, to) in spans {
+        let record = state.frames.records.entry(*token).or_default();
+        record.user_span = Some((*from, *to));
+        record.user_span_plan = None;
+    }
+}
+
+/// A gesture began on these windows: a leftover settle-echo budget of an
+/// earlier animation must not swallow the user's frames as echoes.
+pub(super) fn clear_settle_echoes(state: &mut TilingState, tokens: &[WindowInstance]) {
+    for token in tokens {
+        if let Some(record) = state.frames.records.get_mut(token) {
+            record.settle_echoes = 0;
         }
     }
 }
@@ -843,24 +939,29 @@ pub(super) fn reset(state: &mut TilingState) {
     state.frames.pinned.clear();
     state.frames.revealed.clear();
     state.frames.last_visible.clear();
+    state.frames.relayout.clear();
     state.frames.desired.clear();
     state.frames.no_frame.clear();
 }
 
 /// Records the acknowledgement of a frame write. Only the attempt of exactly
 /// this window, plan and revision can be settled.
+///
+/// With a mouse button held and no gesture, a readback whose position is off
+/// the write's own path (from its start to its target) is the user's frame:
+/// the gesture starts first. A readback on that path whose size alone differs
+/// is the window refusing or snapping the write (a minimum, a terminal grid),
+/// not the user: the button may be held for anything (a text selection). While
+/// a gesture holds the window, a readback off the path teaches no minimum and
+/// moves no baseline.
 pub(super) fn complete(
     state: &mut TilingState,
     window: WindowInstance,
-    plan_sequence: u64,
-    revision: u64,
+    (plan_sequence, revision): (u64, u64),
     outcome: &WindowActionOutcome,
+    fx: &mut Vec<Effect>,
 ) {
-    let Some(record) = state.frames.records.get_mut(&window) else {
-        state.diagnostics.stale_frame_acks += 1;
-        return;
-    };
-    let Some(attempt) = record.attempt.as_mut() else {
+    let Some(attempt) = state.frames.records.get(&window).and_then(|r| r.attempt.as_ref()) else {
         state.diagnostics.stale_frame_acks += 1;
         return;
     };
@@ -872,6 +973,29 @@ pub(super) fn complete(
         return;
     }
     let result = classify_frame(window, plan_sequence, attempt.target, attempt.wanted, outcome);
+    let off_path = result
+        .actual()
+        .filter(|actual| !explained_by_travel(actual, &attempt.from, &attempt.target));
+    let moved_off_path = off_path.filter(|actual| {
+        let position = Rect::new(actual.x, actual.y, attempt.target.width, attempt.target.height);
+        !explained_by_travel(&position, &attempt.from, &attempt.target)
+    });
+    if moved_off_path.is_some() {
+        super::drag::observe(state, window, moved_off_path, fx);
+    }
+    // While a gesture holds this window, a readback off the write's path is
+    // not our motion (the user's frame, or the window refusing it): it
+    // neither teaches a minimum nor moves the gesture's baseline.
+    let users = off_path.is_some()
+        && state
+            .drag
+            .gesture
+            .as_ref()
+            .is_some_and(|gesture| gesture.windows.iter().any(|w| w.token == window));
+    let Some(record) = state.frames.records.get_mut(&window) else {
+        return;
+    };
+    let Some(attempt) = record.attempt.as_mut() else { return };
     match &result {
         OperationOutcome::Applied { .. } => state.diagnostics.frames_applied += 1,
         OperationOutcome::Partial { .. } => state.diagnostics.frames_partial += 1,
@@ -884,6 +1008,7 @@ pub(super) fn complete(
     }
     let actual = result.actual();
     if attempt.wanted.size
+        && !users
         && let Some(actual) = actual
         && let Some(inferred) = infer_minimum(
             &attempt.target,
@@ -921,8 +1046,11 @@ pub(super) fn complete(
         // The readback is the confirmed actual frame, whatever was asked for.
         observed.observed.frame = Some(actual);
         // Our own write is the new baseline of a gesture in progress, so its
-        // echo can never look like the user moving the window.
-        super::drag::rebase(&mut state.drag, window, actual);
+        // echo can never look like the user moving the window. A readback off
+        // the write's path during a gesture is not ours.
+        if !users {
+            super::drag::rebase(&mut state.drag, window, actual);
+        }
     }
 }
 
@@ -953,6 +1081,13 @@ pub(super) fn observe_growth(state: &mut TilingState, token: WindowInstance, fra
     let Some(record) = state.frames.records.get_mut(&token) else {
         return;
     };
+    // A late notification or read of the user's own move or resize.
+    if record
+        .user_span
+        .is_some_and(|(from, to)| explained_by_travel(&frame, &from, &to))
+    {
+        return;
+    }
     let Some(attempt) = record.attempt.as_ref() else {
         return;
     };
@@ -975,6 +1110,33 @@ pub(super) fn observe_growth(state: &mut TilingState, token: WindowInstance, fra
     }
 }
 
+/// Whether [`absorb_echo`] would absorb `frame` (consumes nothing).
+pub(super) fn is_echo(state: &TilingState, token: WindowInstance, frame: Option<Rect>) -> bool {
+    let Some(frame) = frame else { return false };
+    let Some(record) = state.frames.records.get(&token) else {
+        return false;
+    };
+    record.attempt.as_ref().is_some_and(|attempt| {
+        record.settle_echoes > 0 && !attempt.in_flight() && !near_rect(&frame, &attempt.actual())
+    })
+}
+
+/// Whether `frame` is a late echo of our own settled animation: one
+/// [`absorb_echo`] would absorb that also lies on that animation's path. A
+/// frame off the path is not our motion, whatever the echo budget says.
+pub(super) fn is_settle_echo(
+    state: &TilingState,
+    token: WindowInstance,
+    frame: Option<Rect>,
+) -> bool {
+    is_echo(state, token, frame)
+        && frame
+            .zip(state.frames.records.get(&token).and_then(|r| r.attempt.as_ref()))
+            .is_some_and(|(frame, attempt)| {
+                attempt.animated && explained_by_travel(&frame, &attempt.from, &attempt.target)
+            })
+}
+
 /// Whether a read of `token` is a leftover echo of an animation that settled:
 /// its frame differs from the settled one while the bounded echo budget lasts.
 /// The caller then keeps the confirmed frame instead of the intermediate one.
@@ -983,17 +1145,12 @@ pub(super) fn absorb_echo(
     token: WindowInstance,
     frame: Option<Rect>,
 ) -> bool {
-    let Some(frame) = frame else { return false };
-    let Some(record) = state.frames.records.get_mut(&token) else {
-        return false;
-    };
-    let Some(attempt) = record.attempt.as_ref() else {
-        return false;
-    };
-    if record.settle_echoes == 0 || attempt.in_flight() || near_rect(&frame, &attempt.actual()) {
+    if !is_echo(state, token, frame) {
         return false;
     }
-    record.settle_echoes -= 1;
+    if let Some(record) = state.frames.records.get_mut(&token) {
+        record.settle_echoes -= 1;
+    }
     state.diagnostics.animation_echoes_ignored += 1;
     true
 }

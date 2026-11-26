@@ -303,10 +303,12 @@ fn the_status_query_and_a_response_far_over_one_read_chunk_work_through_the_real
     let table = stage.run(&["tiling", "query", "status"]);
     ok(&table);
     assert!(table.out.contains("phase: "), "{}", table.out);
+    assert!(table.out.contains("drag gestures: "), "{}", table.out);
     let json = stage.run(&["tiling", "query", "--json", "status"]);
     ok(&json);
     let parsed: Value = serde_json::from_str(&json.out).expect("one JSON object");
     assert!(parsed["phase"].is_string() && parsed["trackedWindows"].is_array());
+    assert!(parsed["drag"]["available"].is_boolean() && parsed["drag"]["snapBacks"].is_u64());
     // Sixty windows: well over the 4 KiB the client reads at a time. macOS
     // refuses to change a socket timeout once the host closed its end, which
     // used to fail every such answer with `Invalid argument`.

@@ -403,6 +403,31 @@ fn the_status_table_names_every_reason_nothing_happens() {
         excluded_windows: Vec::new(),
         frame_attempts: 5,
         enumeration_failures: 1,
+        drag: crate::dto::StatusDragDto {
+            available: true,
+            unavailable_reason: None,
+            tap: Some("ready".to_owned()),
+            active: false,
+            gestures: 4,
+            from_geometry: 3,
+            from_down: 1,
+            downs: 2,
+            ups: 1,
+            released_by_state: 1,
+            lost: 0,
+            swaps: 1,
+            resizes: 1,
+            snap_backs: 2,
+            stale: 0,
+            cancelled: 0,
+            ignored: 3,
+            last: Some(crate::dto::StatusDragLastDto {
+                outcome: "snappedBack".to_owned(),
+                cause: None,
+                travel: 144,
+                held_ms: 420,
+            }),
+        },
     };
     let table = render::status(&status, false);
     for expected in [
@@ -414,7 +439,47 @@ fn the_status_table_names_every_reason_nothing_happens() {
         "no animation for resizes: WhatsApp (net.whatsapp.WhatsApp): writes fewer than 15 frames \
          per second in 2 of its last 3 layout changes; animates again after 42s",
         "no animation for moves: Zed (dev.zed.Zed): turns Enhanced UI back on; for this run",
+        "drag: available\n",
+        "drag gestures: 4   swaps: 1   resizes: 1   snap-backs: 2   stale: 0   cancelled: 0   \
+         ignored downs: 3",
+        "drag tap: ready\n",
+        "drag started from geometry: 3   from a down: 1   downs: 2   ups: 1   released by button \
+         state: 1   lost observations: 0",
+        "last drag: snappedBack after 144 points in 420 ms",
     ] {
         assert!(table.contains(expected), "{expected}\n{table}");
     }
+}
+
+#[test]
+fn the_status_table_says_why_drag_is_unavailable() {
+    let drag = crate::dto::StatusDragDto {
+        unavailable_reason: Some("drag is unavailable: Input Monitoring may be missing".to_owned()),
+        cancelled: 1,
+        last: Some(crate::dto::StatusDragLastDto {
+            outcome: "cancelled".to_owned(),
+            cause: Some("timeout".to_owned()),
+            travel: 0,
+            held_ms: 0,
+        }),
+        ..crate::dto::StatusDragDto::default()
+    };
+    let status: crate::dto::StatusDto = serde_json::from_value(serde_json::json!({
+        "phase": "complete", "healthy": true, "faults": [], "layoutActive": true,
+        "configRevision": 1, "planSequence": 1, "apps": 0, "trackedApps": 0, "windows": 0,
+        "suspendedWindows": 0, "failedApps": [], "truncatedApps": [], "unconfirmedApps": 0,
+        "inflightApps": 0, "noFrame": [], "hiddenApps": [], "lastIntent": null,
+        "trackedWindows": [], "excludedWindows": [], "frameAttempts": 0,
+        "enumerationFailures": 0, "drag": drag,
+    }))
+    .expect("status");
+    let table = render::status(&status, false);
+    assert!(
+        table.contains("drag: unavailable: drag is unavailable: Input Monitoring may be missing"),
+        "{table}"
+    );
+    assert!(
+        table.contains("last drag: cancelled (timeout) after 0 points in 0 ms"),
+        "{table}"
+    );
 }

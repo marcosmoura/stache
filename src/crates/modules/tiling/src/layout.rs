@@ -18,7 +18,8 @@ pub use dispatch::{LayoutRequest, master_ratio, plan_layout};
 pub use dwindle::{is_split_horizontal as is_dwindle_split_horizontal, layout as dwindle_layout};
 pub use gaps::{GapDisplay, Gaps};
 pub use grid::{
-    MAX_GRID_TILES, layout as grid_layout, regular_dimensions as regular_grid_dimensions,
+    MAX_GRID_TILES, layout as grid_layout, ratio_axes as grid_ratio_axes,
+    regular_dimensions as regular_grid_dimensions, resolved_ratios as grid_resolved_ratios,
 };
 pub use master::clamp_ratio as clamp_master_ratio;
 pub use ordering::{insert_window, insertion_index, swap_windows};

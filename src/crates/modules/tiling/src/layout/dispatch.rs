@@ -23,7 +23,8 @@ pub struct LayoutRequest<'a, K> {
     /// Master position.
     pub master_position: MasterPosition,
     /// Runtime ratios: cumulative for the split layouts, per-node for Dwindle,
-    /// layout-specific for Grid.
+    /// the lattice boundaries for Grid and the stack boundaries (relative to
+    /// the stack) for Master.
     pub ratios: &'a [f64],
 }
 
@@ -140,9 +141,13 @@ fn compute_frames<K: Copy>(
         LayoutType::Split | LayoutType::SplitVertical | LayoutType::SplitHorizontal => {
             split::layout(request.layout, ids, usable, gaps, request.ratios)
         }
-        LayoutType::Master => {
-            master::layout(ids, usable, request.master_ratio, gaps, request.master_position)
-        }
+        LayoutType::Master => master::layout(
+            ids,
+            usable,
+            (request.master_ratio, request.ratios),
+            gaps,
+            request.master_position,
+        ),
         LayoutType::Grid => grid::layout(ids, usable, gaps, request.ratios),
     };
     if frames.iter().all(|(_, frame)| frame.has_area()) {

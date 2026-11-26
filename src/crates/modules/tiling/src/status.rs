@@ -78,6 +78,8 @@ struct Shared {
     display: Mutex<Option<String>>,
     /// Why the passive drag observer is not running, if it is not.
     drag: Mutex<Option<String>>,
+    /// The live listen-only tap state of the running drag observer.
+    drag_tap: Mutex<Option<DragTapSource>>,
     /// Ambiguous records retained past a stop.
     retained: Mutex<Vec<String>>,
     /// Which displays animate on the timer instead of a frame clock, read live.
@@ -90,6 +92,10 @@ struct Shared {
 
 /// Where the live animation pacing notes come from.
 pub type PacingSource = Box<dyn Fn() -> Vec<String> + Send + Sync>;
+
+/// Where the live listen-only tap state comes from: `(delivering,
+/// description)`, `None` once the observer is gone.
+pub type DragTapSource = Box<dyn Fn() -> Option<(bool, String)> + Send + Sync>;
 
 /// Where the live instant-fallback set and animation metrics come from.
 pub type AnimationSource = Box<dyn Fn() -> crate::animation::AnimationReport + Send + Sync>;
@@ -366,6 +372,21 @@ impl TilingStatusSource {
     /// alone is degraded; ordinary tiling stays healthy.
     pub(crate) fn drag_failure(&self, failure: Option<String>) {
         *self.shared.drag.lock().unwrap_or_else(PoisonError::into_inner) = failure;
+    }
+
+    /// Sets (or clears) the live source of the listen-only tap state.
+    pub(crate) fn set_drag_tap_source(&self, source: Option<DragTapSource>) {
+        *self.shared.drag_tap.lock().unwrap_or_else(PoisonError::into_inner) = source;
+    }
+
+    /// The live listen-only tap state: `(delivering, description)`.
+    pub(crate) fn drag_tap(&self) -> Option<(bool, String)> {
+        self.shared.drag_tap.lock().unwrap_or_else(PoisonError::into_inner).as_ref()?()
+    }
+
+    /// Why the passive drag observer is not running, if it is not.
+    pub(crate) fn drag_unavailable(&self) -> Option<String> {
+        self.shared.drag.lock().unwrap_or_else(PoisonError::into_inner).clone()
     }
 
     /// Replaces the retained ambiguous records (the caller merges and prunes).

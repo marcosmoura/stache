@@ -2,7 +2,8 @@
 
 use std::sync::{Arc, Mutex, PoisonError};
 
-use super::service::{InputError, InputService, Subscription, SubscriptionInner};
+use super::control::TapKind;
+use super::service::{InputError, InputService, Subscription, SubscriptionInner, TapStatus};
 use super::subscribers::{HandlerSpec, InputHandler, InputObserver, ObserverSpec};
 use crate::module::ModuleId;
 use crate::threading::CancellationToken;
@@ -56,6 +57,10 @@ impl InputCapability {
     /// Whether a native input owner is attached to the host.
     #[must_use]
     pub fn is_available(&self) -> bool { self.session.service.is_available() }
+
+    /// The live lifecycle state of one shared tap (read only).
+    #[must_use]
+    pub fn tap_status(&self, tap: TapKind) -> TapStatus { self.session.service.tap_status(tap) }
 
     /// Subscribes a suppressing handler.
     ///

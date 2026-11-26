@@ -184,6 +184,9 @@ pub struct TilingParts {
     /// borders then move only from
     /// Tiling's own frame observations.
     pub live_follow: Option<stache_macos::border_overlay::LiveFollowFactory>,
+    /// Whether a mouse button is physically held. `None` reads nothing: a
+    /// gesture then starts only at the listen-only tap's down.
+    pub buttons: Option<Arc<dyn crate::drag::ButtonState>>,
 }
 
 impl TilingParts {
@@ -210,6 +213,7 @@ impl TilingParts {
             space_events: None,
             space_confirm: None,
             live_follow: None,
+            buttons: None,
         }
     }
 }
@@ -1017,6 +1021,7 @@ impl Module for TilingModule {
             options.space_confirm.clone_from(&parts.space_confirm);
             options.live_follow.clone_from(&parts.live_follow);
         }
+        options.buttons.clone_from(&parts.buttons);
         options.logger = Some(ctx.logger().clone());
         *lock(&inner.logger) = Some(ctx.logger().clone());
         options.published = ctx.state_publisher().ok();
@@ -1254,7 +1259,14 @@ impl Module for TilingModule {
         // Stage 9: the passive drag observer. Optional: it cannot fail the
         // start, and ordinary tiling never depends on it.
         let drag = match DragFeed::subscribe(ctx.input(), Arc::clone(runtime.ingress())) {
-            Ok(feed) => Some(Arc::new(feed)),
+            Ok(feed) => {
+                let feed = Arc::new(feed);
+                let weak = Arc::downgrade(&feed);
+                inner.status.set_drag_tap_source(Some(Box::new(move || {
+                    weak.upgrade().map(|feed| feed.tap_health())
+                })));
+                Some(feed)
+            }
             Err(unavailable) => {
                 inner.status.drag_failure(Some(unavailable.to_string()));
                 // A closed mailbox means the actor is gone; nothing to tell

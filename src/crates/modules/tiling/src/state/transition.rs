@@ -103,7 +103,7 @@ fn apply(state: &mut TilingState, input: Input, fx: &mut Vec<Effect>) {
         Input::Unconfirmed(scope, cause) => mark(state, scope, cause),
         Input::Completion { stamp, result } => {
             if state.stamp == Some(stamp) {
-                completion(state, result);
+                completion(state, result, fx);
             } else {
                 state.diagnostics.stale_completions += 1;
             }
@@ -528,6 +528,10 @@ fn window_event(state: &mut TilingState, event: WindowEvent, fx: &mut Vec<Effect
     state.last_event_sequence = state.last_event_sequence.max(event.sequence);
     match event.kind {
         WindowEventKind::Snapshot { snapshot, origin } => {
+            if state.windows.contains_key(&snapshot.window) {
+                let frame = observed_from(&snapshot, false).frame;
+                drag::observe(state, snapshot.window, frame, fx);
+            }
             ingest(state, &snapshot, Some(origin), Some(event.sequence));
             if origin == SnapshotOrigin::Created {
                 request_settle(state, snapshot.window.application());
@@ -652,6 +656,8 @@ fn window_change(
         }
         WindowChange::Moved | WindowChange::Resized => {
             if state.windows.contains_key(&token) {
+                // A held button makes this the user's gesture before any plan.
+                drag::observe(state, token, None, fx);
                 fx.push(geometry_read(state, stamp, token));
             }
         }
@@ -1527,7 +1533,7 @@ fn track_failed(state: &mut TilingState, application: ApplicationId, outcome: Tr
     }
 }
 
-fn completion(state: &mut TilingState, result: CompletionResult) {
+fn completion(state: &mut TilingState, result: CompletionResult, fx: &mut Vec<Effect>) {
     match result {
         CompletionResult::Track(application, outcome) => match outcome {
             TrackOutcome::Tracking => {
@@ -1576,6 +1582,10 @@ fn completion(state: &mut TilingState, result: CompletionResult) {
                     // Stamped with the latest event sequence so a later scan can
                     // repair this window if its destroy was missed.
                     let sequence = state.last_event_sequence;
+                    if state.windows.contains_key(&token) {
+                        let frame = observed_from(&snapshot, false).frame;
+                        drag::observe(state, token, frame, fx);
+                    }
                     ingest(state, &snapshot, None, Some(sequence));
                 }
                 // Alive but unlisted: the owner reports the suspension itself.
@@ -1594,6 +1604,9 @@ fn completion(state: &mut TilingState, result: CompletionResult) {
         // frame only, through the echo guard. It never decides a minimum size,
         // a flag, an exclusion, a tab or a slot.
         CompletionResult::Geometry(token, frame) => {
+            if state.windows.contains_key(&token) {
+                drag::observe(state, token, Some(frame), fx);
+            }
             if let Some(window) = state.windows.get(&token)
                 && !window.suspended
                 && !frames::absorb_echo(state, token, Some(frame))
@@ -1609,7 +1622,7 @@ fn completion(state: &mut TilingState, result: CompletionResult) {
             revision,
             outcome,
         } => {
-            frames::complete(state, window, plan_sequence, revision, &outcome);
+            frames::complete(state, window, (plan_sequence, revision), &outcome, fx);
         }
         // The result lives in the shared visibility control; the actor shell
         // folds it. The completion only wakes the turn.
@@ -1705,6 +1718,7 @@ fn apply_displays(state: &mut TilingState, layout: &DisplayLayout) {
         return;
     }
     state.no_screens = false;
+    let changed = state.screens_known && state.layout != *layout;
     state.layout = layout.clone();
     let previous: std::collections::BTreeMap<DisplayId, u64> =
         state.screens.iter().map(|screen| (screen.id, screen.presence)).collect();
@@ -1752,6 +1766,9 @@ fn apply_displays(state: &mut TilingState, layout: &DisplayLayout) {
     }
     normalize(state);
     assign_unassigned(state);
+    if changed {
+        frames::note_display_change(state);
+    }
 }
 
 /// Defaults for empty displays, one visible workspace per display, one focus.

@@ -167,6 +167,21 @@ fn master_left_on_landscape_with_gaps() {
 }
 
 #[test]
+fn master_stack_weights_divide_the_stack() {
+    // Cumulative stack boundaries 0.25 and 0.5 over three stack windows.
+    let p = plan(LayoutType::Master, 4, LANDSCAPE, Gaps::ZERO, &[0.25, 0.5]);
+    assert_rect(frame(&p.frames, 1), 0.0, 0.0, 1152.0, 1080.0);
+    assert_rect(frame(&p.frames, 2), 1152.0, 0.0, 768.0, 270.0);
+    assert_rect(frame(&p.frames, 3), 1152.0, 270.0, 768.0, 270.0);
+    assert_rect(frame(&p.frames, 4), 1152.0, 540.0, 768.0, 540.0);
+    // Top master: the weights divide the width; invalid weights are equal.
+    let p = plan(LayoutType::Master, 3, PORTRAIT, Gaps::ZERO, &[0.25]);
+    assert_rect(frame(&p.frames, 2), 0.0, 1152.0, 270.0, 768.0);
+    let p = plan(LayoutType::Master, 3, PORTRAIT, Gaps::ZERO, &[1.5]);
+    assert_rect(frame(&p.frames, 2), 0.0, 1152.0, 540.0, 768.0);
+}
+
+#[test]
 fn master_auto_is_top_on_portrait() {
     let p = plan(LayoutType::Master, 3, PORTRAIT, Gaps::ZERO, &[]);
     assert_rect(frame(&p.frames, 1), 0.0, 0.0, 1080.0, 1152.0);

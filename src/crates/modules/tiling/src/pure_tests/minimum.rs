@@ -412,6 +412,7 @@ fn ratio_state_layout_change_and_balance_semantics() {
     let mut state = RatioState {
         split_ratios: vec![0.4],
         master_ratio: Some(0.7),
+        tiles: 2,
     };
     assert_eq!(
         state.set_layout(LayoutType::Dwindle, LayoutType::Dwindle),
@@ -438,6 +439,7 @@ fn ratio_state_layout_change_and_balance_semantics() {
     let mut state = RatioState {
         split_ratios: vec![0.4],
         master_ratio: None,
+        tiles: 2,
     };
     assert_eq!(state.balance(false), Change::Changed);
     assert!(state.split_ratios.is_empty());
@@ -448,6 +450,7 @@ fn stale_split_boundaries_are_ignored_after_membership_changes() {
     let state = RatioState {
         split_ratios: vec![0.33, 0.66],
         master_ratio: None,
+        tiles: 3,
     };
     assert_eq!(state.effective_split_ratios(LayoutType::SplitHorizontal, 3), &[
         0.33, 0.66
@@ -460,6 +463,13 @@ fn stale_split_boundaries_are_ignored_after_membership_changes() {
         0.33, 0.66
     ]);
     assert_eq!(state.split_ratios.len(), 2, "stored value is not mutated");
+    // Grid and Master ratios belong to the tile count they were written for.
+    assert_eq!(state.effective_split_ratios(LayoutType::Grid, 3), &[0.33, 0.66]);
+    assert!(state.effective_split_ratios(LayoutType::Grid, 4).is_empty());
+    assert_eq!(state.effective_split_ratios(LayoutType::Master, 3), &[
+        0.33, 0.66
+    ]);
+    assert!(state.effective_split_ratios(LayoutType::Master, 2).is_empty());
 }
 
 #[test]

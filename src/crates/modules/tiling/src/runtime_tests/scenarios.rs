@@ -1149,7 +1149,7 @@ fn agents_tiny_utility_windows_and_popups_are_never_tracked() {
         terminal.order
     );
     // A small dialog and the Finder info window are excluded with a reason.
-    let status = crate::ipc::status(&snap);
+    let status = crate::ipc::status(&snap, None, None);
     let reasons: Vec<&str> = status.excluded_windows.iter().map(|w| w.reason.as_str()).collect();
     assert!(reasons.contains(&"window below 200x150"), "{reasons:?}");
     assert!(reasons.contains(&"finder info window"), "{reasons:?}");
@@ -1177,7 +1177,7 @@ fn agents_tiny_utility_windows_and_popups_are_never_tracked() {
     );
     assert!(desk.snap().window(preferences).is_some(), "a large dialog is");
     // The status answer lists every tracked window with its facts.
-    let status = crate::ipc::status(&desk.snap());
+    let status = crate::ipc::status(&desk.snap(), None, None);
     assert!(status.tracked_windows.iter().all(|w| w.subrole.is_some() && w.frame.is_some()));
     assert!(
         status
@@ -1190,7 +1190,7 @@ fn agents_tiny_utility_windows_and_popups_are_never_tracked() {
 #[test]
 fn the_status_answer_explains_a_failed_app_and_the_phase() {
     let desk = Desktop::boot(Delivery::Immediate, GHOSTTY);
-    let status = crate::ipc::status(&desk.snap());
+    let status = crate::ipc::status(&desk.snap(), None, None);
     assert_eq!(status.phase, "complete");
     assert!(status.faults.is_empty());
     assert!(status.layout_active);
@@ -3848,4 +3848,65 @@ fn a_window_on_another_display_makes_an_empty_workspace_reachable() {
     assert_eq!(desk.refused(), Some(("tasks".to_owned(), 1)));
     assert!(desk.requests_since(requests).is_empty());
     assert_eq!(desk.visible_set(), ["terminal", "browser"]);
+}
+
+// ------------------------------------------------ display-change relayout
+
+#[test]
+fn a_display_change_writes_hidden_workspaces_without_showing_their_applications() {
+    let mut desk = Desktop::boot(Delivery::Immediate, GHOSTTY);
+    assert!(
+        !desk.shown[CODE] && !desk.shown[SPOTIFY],
+        "Stache holds them hidden"
+    );
+    let code = desk.token(CODE, 2);
+    let spotify = desk.token(SPOTIFY, 3);
+    assert!(
+        !desk.written(code) && !desk.written(spotify),
+        "hidden: never written yet"
+    );
+    let mark = desk.mark();
+    let requests = desk.native.backend.visibility_requests().len();
+    let activations = desk.native.backend.exact_activation_requests().len();
+    let focuses = desk.focus_mark();
+
+    // A second display connects: `browser` goes home to it.
+    desk.two_displays();
+    assert_eq!(desk.visible_set(), ["terminal", "browser"]);
+
+    let writes = desk.writes_since(mark);
+    for window in [code, spotify] {
+        let write = writes.iter().find(|w| w.window == window).expect("written while hidden");
+        assert!(!write.animate, "hidden-workspace writes are direct");
+        assert_eq!(desk.actual_of(window), write.target);
+    }
+    assert!(!desk.shown[CODE] && !desk.shown[SPOTIFY], "still hidden");
+    let unhides: Vec<_> = desk
+        .requests_since(requests)
+        .into_iter()
+        .filter(|(app, operation)| {
+            *operation == VisibilityOperation::Unhide && *app != "Google Chrome"
+        })
+        .collect();
+    assert!(
+        unhides.is_empty(),
+        "only Chrome (now visible) is shown: {unhides:?}"
+    );
+    let hidden = [desk.keys[CODE], desk.keys[SPOTIFY]];
+    assert!(
+        desk.native.backend.exact_activation_requests()[activations..]
+            .iter()
+            .all(|key| !hidden.contains(key)),
+        "nothing hidden activated"
+    );
+    assert!(desk.focuses_since(focuses).is_empty(), "nothing focused");
+
+    // Revealing `coding` later writes nothing for its window at target.
+    let mark = desk.mark();
+    desk.focus_workspace("coding");
+    assert_eq!(desk.visible_set(), ["coding", "browser"]);
+    assert!(
+        desk.writes_since(mark).iter().all(|w| w.window != code),
+        "no jump on reveal"
+    );
 }

@@ -38,9 +38,9 @@ use crate::config::LayoutType;
 use crate::dto::{
     ActionEvidence, ActionStatus, AppDto, FrameDto, OperationEvidence, OperationKind,
     OperationResponse, QueryKind, QueryParams, ReasonEvidence, RequestEvidence, ResizeArg,
-    ScreenDto, StatusAnimationFallbackDto, StatusAppDto, StatusDto, StatusExcludedDto,
-    StatusHiddenDto, StatusNoFrameDto, StatusWindowDto, WindowDto, WindowParams, WorkspaceDto,
-    WorkspaceParams, method,
+    ScreenDto, StatusAnimationFallbackDto, StatusAppDto, StatusDragDto, StatusDragLastDto,
+    StatusDto, StatusExcludedDto, StatusHiddenDto, StatusNoFrameDto, StatusWindowDto, WindowDto,
+    WindowParams, WorkspaceDto, WorkspaceParams, method,
 };
 use crate::events::IntentSubmitError;
 use crate::intent::{
@@ -506,7 +506,11 @@ impl TilingIpc {
             QueryKind::Workspaces => encode_response(&workspaces(&snapshot, &params)),
             QueryKind::Windows => encode_response(&windows(&snapshot, &params)),
             QueryKind::Apps => encode_response(&apps(&snapshot)),
-            QueryKind::Status => encode_response(&status(&snapshot)),
+            QueryKind::Status => encode_response(&status(
+                &snapshot,
+                self.status.drag_unavailable(),
+                self.status.drag_tap(),
+            )),
         }
     }
 
@@ -1532,7 +1536,11 @@ const STATUS_ROWS: usize = 200;
     clippy::too_many_lines,
     reason = "one linear mapping of the snapshot into the status rows"
 )]
-pub(crate) fn status(snapshot: &TilingSnapshot) -> StatusDto {
+pub(crate) fn status(
+    snapshot: &TilingSnapshot,
+    drag_unavailable: Option<String>,
+    drag_tap: Option<(bool, String)>,
+) -> StatusDto {
     let catalog =
         |application| snapshot.apps.iter().find(|app| app.info.application == application);
     let row = |failed: &FailedApp| {
@@ -1649,5 +1657,84 @@ pub(crate) fn status(snapshot: &TilingSnapshot) -> StatusDto {
             .collect(),
         frame_attempts: snapshot.diagnostics.frame_attempts,
         enumeration_failures: snapshot.diagnostics.enumeration_failures,
+        drag: drag_status(snapshot, drag_unavailable, drag_tap),
+    }
+}
+
+/// The passive drag section of the status answer.
+///
+/// `tap` is the live listen-only tap state of the running observer. A tap that
+/// delivers nothing makes drag unavailable through the tap; gestures still
+/// start from window geometry while a button is held.
+fn drag_status(
+    snapshot: &TilingSnapshot,
+    unavailable: Option<String>,
+    tap: Option<(bool, String)>,
+) -> StatusDragDto {
+    use crate::drag::LostCause;
+    use crate::state::DragOutcome;
+    let counters = &snapshot.diagnostics;
+    let unavailable = unavailable
+        .or_else(|| {
+            snapshot.drag.degraded.then(|| {
+                "drag is unavailable: the listen-only mouse observer is not running".to_owned()
+            })
+        })
+        .or_else(|| {
+            tap.as_ref().filter(|(delivering, _)| !delivering).map(|(_, state)| {
+                format!(
+                    "the listen-only mouse tap delivers nothing ({state}); gestures start from \
+                     window geometry only"
+                )
+            })
+        });
+    StatusDragDto {
+        available: unavailable.is_none(),
+        unavailable_reason: unavailable,
+        tap: tap.map(|(_, state)| state),
+        active: snapshot.drag.active,
+        gestures: counters.drag_gestures,
+        from_geometry: counters.drag_from_geometry,
+        from_down: counters.drag_gestures.saturating_sub(counters.drag_from_geometry),
+        downs: counters.drag_downs,
+        ups: counters.drag_ups,
+        released_by_state: counters.drag_released_by_state,
+        lost: counters.drag_lost_observations,
+        swaps: counters.drag_swaps,
+        resizes: counters.drag_resizes,
+        snap_backs: counters.drag_snap_backs,
+        stale: counters.drag_stale,
+        cancelled: counters.drag_cancelled,
+        ignored: counters.drag_ignored,
+        last: snapshot.drag.last.as_ref().map(|last| {
+            let (outcome, cause) = match &last.outcome {
+                DragOutcome::Swapped { .. } => ("swapped", None),
+                DragOutcome::Resized { .. } => ("resized", None),
+                DragOutcome::SnappedBack => ("snappedBack", None),
+                DragOutcome::Stale => ("stale", None),
+                DragOutcome::Cancelled(cause) => (
+                    "cancelled",
+                    Some(match cause {
+                        LostCause::Overflow => "overflow",
+                        LostCause::Discontinuity => "discontinuity",
+                        LostCause::Malformed => "malformed",
+                        LostCause::PermissionLost => "permissionLost",
+                        LostCause::Timeout => "timeout",
+                        LostCause::Stopped => "stopped",
+                    }),
+                ),
+            };
+            StatusDragLastDto {
+                outcome: outcome.to_owned(),
+                cause: cause.map(str::to_owned),
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    reason = "a finite, non-negative distance in points"
+                )]
+                travel: last.travel.max(0.0).round() as u64,
+                held_ms: u64::try_from(last.held_for.as_millis()).unwrap_or(u64::MAX),
+            }
+        }),
     }
 }

@@ -194,6 +194,8 @@ pub(crate) struct ObserverEntry {
     pub(crate) filter: InputFilter,
     pub(crate) observer: Arc<dyn InputObserver>,
     pub(crate) health: Health,
+    /// Consecutive callbacks over the soft target.
+    pub(crate) slow_streak: std::sync::atomic::AtomicU32,
 }
 
 /// An immutable, ordered subscriber snapshot rebuilt off the tap path.

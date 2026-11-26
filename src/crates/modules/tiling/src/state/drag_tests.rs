@@ -254,7 +254,7 @@ fn a_down_captures_the_tiled_windows_in_order_with_their_exact_frames() {
         assert_eq!(window.original, rig.frame(index));
     }
     assert_eq!(gesture.workspace, rig.f.state.workspaces[0].id);
-    assert_eq!(gesture.epoch, EPOCH);
+    assert_eq!(gesture.epoch, Some(EPOCH));
     assert_eq!(rig.diagnostics().drag_gestures, 1);
     assert!(rig.f.state.snapshot().drag.active);
 }
@@ -646,55 +646,103 @@ fn split_resize_moves_the_cumulative_boundary_by_the_share_of_the_area() {
     assert!(rig.f.state.frames.plan_sequence > 1);
 }
 
+/// A gesture that moves tile `index`'s left and top edges by `(dx, dy)`.
+fn resize_leading(rig: &mut Rig, index: usize, dx: f64, dy: f64) {
+    let frame = rig.frame(index);
+    let grown = Rect::new(frame.x + dx, frame.y + dy, frame.width - dx, frame.height - dy);
+    rig.drag(&[(index, grown)]);
+}
+
 #[test]
-fn split_resize_of_the_last_window_moves_the_previous_boundary_the_other_way() {
+fn split_resize_of_the_last_window_moves_its_left_boundary_and_ignores_the_outer_edge() {
     let mut rig = Rig::new("split", 3);
-    resize_first(&mut rig, 2, 192.0, 0.0);
+    resize_leading(&mut rig, 2, -192.0, 0.0);
     let ratios = rig.ratios();
     assert!(
         close(ratios[0], 1.0 / 3.0) && close(ratios[1], 2.0 / 3.0 - 0.1),
         "{ratios:?}"
     );
+
+    // Its right edge lies on the usable area's border: no boundary, replan.
+    let mut outer = Rig::new("split", 3);
+    let window = outer.token(2);
+    resize_first(&mut outer, 2, 192.0, 0.0);
+    assert_eq!(outer.outcome(), DragOutcome::Resized { window, changed: false });
+    assert!(outer.ratios().is_empty());
 }
 
 #[test]
-fn dwindle_resize_moves_the_window_before_its_own_ratio() {
+fn dwindle_resize_moves_the_split_whose_boundary_is_the_dragged_edge() {
     let mut first = Rig::new("dwindle", 3);
     resize_first(&mut first, 0, 96.0, 0.0);
     assert!(close(first.ratios()[0], 0.55), "{:?}", first.ratios());
     assert!(close(first.ratios()[1], 0.5));
 
+    // The last tile's top edge is split 1; its left edge is split 0.
     let mut last = Rig::new("dwindle", 3);
-    resize_first(&mut last, 2, 96.0, 0.0);
+    resize_leading(&mut last, 2, 0.0, -100.0);
     assert!(close(last.ratios()[0], 0.5), "{:?}", last.ratios());
-    assert!(close(last.ratios()[1], 0.55));
+    assert!(last.ratios()[1] < 0.5 - 0.05, "{:?}", last.ratios());
+    let mut left = Rig::new("dwindle", 3);
+    resize_leading(&mut left, 2, -96.0, 0.0);
+    assert!(close(left.ratios()[0], 0.45), "{:?}", left.ratios());
+    assert!(close(left.ratios()[1], 0.5));
 }
 
 #[test]
-fn grid_resize_follows_the_width_and_replans_for_a_height_change() {
+fn grid_resize_moves_the_column_or_row_boundary_of_the_dragged_edge() {
     let mut wide = Rig::new("grid", 4);
-    resize_first(&mut wide, 1, 96.0, 0.0);
+    resize_first(&mut wide, 0, 96.0, 0.0);
     assert!(close(wide.ratios()[0], 0.55), "{:?}", wide.ratios());
+    assert!(close(wide.ratios()[1], 0.5), "{:?}", wide.ratios());
 
     let mut tall = Rig::new("grid", 4);
     let window = tall.token(1);
     resize_first(&mut tall, 1, 0.0, 100.0);
-    assert!(tall.ratios().is_empty());
-    assert_eq!(tall.outcome(), DragOutcome::Resized { window, changed: false });
+    assert_eq!(tall.outcome(), DragOutcome::Resized { window, changed: true });
+    assert!(close(tall.ratios()[0], 0.5), "{:?}", tall.ratios());
+    assert!(tall.ratios()[1] > 0.5 + 0.05, "{:?}", tall.ratios());
+
+    // The top-right tile's right edge is the area's border.
+    let mut outer = Rig::new("grid", 4);
+    let window = outer.token(1);
+    resize_first(&mut outer, 1, 96.0, 0.0);
+    assert_eq!(outer.outcome(), DragOutcome::Resized { window, changed: false });
+    assert!(outer.ratios().is_empty());
 }
 
 #[test]
-fn master_resize_moves_the_master_share_and_flips_for_a_stack_window() {
+fn master_resize_moves_the_share_on_its_boundary_and_stack_weights_between_stack_windows() {
     let configured = f64::from(TilingConfig::default().master.ratio) / 100.0;
     let mut master = Rig::new("master", 3);
     resize_first(&mut master, 0, 192.0, 0.0);
     let grown = master.f.state.workspaces[0].ratios.master_ratio.expect("override");
     assert!(close(grown, configured + 0.1), "{grown}");
 
+    // A stack window's left edge is the same boundary.
     let mut stack = Rig::new("master", 3);
-    resize_first(&mut stack, 1, 192.0, 0.0);
+    resize_leading(&mut stack, 1, -192.0, 0.0);
     let shrunk = stack.f.state.workspaces[0].ratios.master_ratio.expect("override");
     assert!(close(shrunk, configured - 0.1), "{shrunk}");
+
+    // Between the two stack windows: their weights, not the share.
+    let mut weights = Rig::new("master", 3);
+    resize_first(&mut weights, 1, 0.0, 100.0);
+    assert!(weights.f.state.workspaces[0].ratios.master_ratio.is_none());
+    assert!(weights.ratios()[0] > 0.5 + 0.05, "{:?}", weights.ratios());
+}
+
+#[test]
+fn a_tile_count_change_resets_mouse_resized_grid_and_master_ratios() {
+    let mut rig = Rig::new("grid", 4);
+    resize_first(&mut rig, 0, 96.0, 0.0);
+    assert!(!rig.ratios().is_empty());
+    let ratios = rig.f.state.workspaces[0].ratios.clone();
+    assert_eq!(
+        ratios.effective_split_ratios(crate::config::LayoutType::Grid, 4).len(),
+        2
+    );
+    assert!(ratios.effective_split_ratios(crate::config::LayoutType::Grid, 3).is_empty());
 }
 
 #[test]
@@ -926,4 +974,344 @@ fn losing_an_observation_with_no_gesture_changes_nothing() {
     assert!(rig.f.state.drag.last.is_none());
     assert_eq!(rig.f.state.frames.plan_sequence, plan);
     assert_eq!(rig.diagnostics().drag_lost_observations, 1);
+}
+
+// ------------------------------------------------ late reads (spec 2026-11-26)
+
+#[test]
+fn a_late_read_of_the_users_growth_after_the_commit_infers_no_minimum() {
+    let mut rig = Rig::new("split", 2);
+    let first = rig.token(0);
+    let grown = Rect::new(0.0, 25.0, rig.frame(0).width + 200.0, rig.frame(0).height);
+    let effects = rig.drag(&[(0, grown)]);
+    assert!(matches!(rig.outcome(), DragOutcome::Resized { .. }));
+    for write in writes(&effects) {
+        rig.ack(write);
+    }
+    // A notification posted during the resize is answered after the commit.
+    rig.observe(first, grown);
+    assert_eq!(rig.f.state.frames.records[&first].minimum.inferred, None);
+}
+
+/// The user's span covers the commit's own plan and its late echoes, but a
+/// later target change ends it: a refusal inside the old span is learned.
+#[test]
+fn a_refusal_inside_the_old_span_after_a_later_target_change_is_inferred() {
+    use crate::intent::ResizeDimension;
+    let mut rig = Rig::new("split", 2);
+    let first = rig.token(0);
+    let cell = rig.frame(0);
+    let grown = Rect::new(cell.x, cell.y, cell.width + 200.0, cell.height);
+    let effects = rig.drag(&[(0, grown)]);
+    for write in writes(&effects) {
+        rig.ack(write);
+    }
+    rig.observe(first, grown);
+    assert_eq!(rig.f.state.frames.records[&first].minimum.inferred, None);
+    // A keyboard resize narrows the window past its old width; the application
+    // refuses and stays inside the span the gesture covered.
+    let input = rig.f.feed.change(first, WindowChange::Focused);
+    rig.f.apply(input);
+    let effects = rig.f.apply(Input::Intent(Intent::Resize {
+        dimension: ResizeDimension::Width,
+        amount: -400,
+    }));
+    let narrowed: Vec<Write> = writes(&effects).into_iter().filter(|w| w.window == first).collect();
+    assert!(!narrowed.is_empty(), "the new target is written");
+    assert!(narrowed[0].target.width < cell.width, "{:?}", narrowed[0].target);
+    let refused = Rect::new(cell.x, cell.y, cell.width + 50.0, cell.height);
+    for write in writes(&effects) {
+        rig.ack(write);
+    }
+    rig.observe(first, refused);
+    assert!(
+        rig.f.state.frames.records[&first].minimum.inferred.is_some(),
+        "{:?}",
+        rig.f.state.frames.records[&first]
+    );
+}
+
+#[test]
+fn a_read_running_at_the_up_answers_early_and_the_final_read_still_relays_out() {
+    let mut rig = Rig::new("split", 2);
+    let first = rig.token(0);
+    let cell = rig.frame(0);
+    rig.down(0);
+    let up = rig.up(0);
+    // A read queued by a notification during the hold was already running: it
+    // answers the drag first with a frame from before the drop.
+    let early = moved_by(cell, 10.0, 0.0);
+    let committed = rig.answer(&up, &[(0, early)]);
+    assert!(!rig.f.state.drag.suppresses(), "the gesture committed");
+    for write in writes(&committed) {
+        rig.ack(write);
+    }
+    // The drag's own read then shows where the user really dropped it.
+    let dropped = moved_by(cell, 30.0, 40.0);
+    let effects = rig.observe(first, dropped);
+    let back: Vec<Write> = writes(&effects).into_iter().filter(|w| w.window == first).collect();
+    assert_eq!(back.len(), 1, "{effects:?}");
+    assert_eq!(back[0].target, cell);
+}
+
+#[test]
+fn a_rejected_drag_read_still_commits_the_gesture() {
+    let mut rig = Rig::new("split", 2);
+    rig.down(0);
+    let up = rig.up(0);
+    let stamp = rig.f.feed.stamp;
+    for window in reads(&up) {
+        rig.f.apply(Input::Completion {
+            stamp,
+            result: CompletionResult::Rejected(Effect::Snapshot { stamp, window }),
+        });
+    }
+    assert!(!rig.f.state.drag.suppresses());
+    assert!(rig.f.state.drag.last.is_some());
+}
+
+/// After a mouse resize stores the full Grid lattice, keyboard `--resize`
+/// moves the first boundary only inside its run: every lane keeps at least 5%
+/// of its axis and no tile ever jumps.
+#[test]
+fn grid_keyboard_resize_after_a_mouse_resize_stays_inside_the_lattice() {
+    use crate::intent::ResizeDimension;
+    for count in [3, 5, 6, 7, 8, 9, 10] {
+        let mut rig = Rig::new("grid", count);
+        resize_first(&mut rig, 0, 96.0, 0.0);
+        assert!(rig.ratios().len() > 1, "{count}: the lattice is stored");
+        let focused = rig.token(0);
+        let input = rig.f.feed.change(focused, WindowChange::Focused);
+        rig.f.apply(input);
+        let desired = |rig: &Rig| -> Vec<Rect> {
+            (0..count as usize).map(|i| rig.f.state.frames.desired[&rig.token(i)]).collect()
+        };
+        let mut before = desired(&rig);
+        let left = before.iter().map(|r| r.x).fold(f64::INFINITY, f64::min);
+        let top = before.iter().map(|r| r.y).fold(f64::INFINITY, f64::min);
+        let width = before.iter().map(|r| r.x + r.width).fold(0.0, f64::max) - left;
+        let height = before.iter().map(|r| r.y + r.height).fold(0.0, f64::max) - top;
+        for amount in [200; 8].into_iter().chain([-200; 16]) {
+            rig.f.apply(Input::Intent(Intent::Resize {
+                dimension: ResizeDimension::Width,
+                amount,
+            }));
+            let after = desired(&rig);
+            for (a, b) in before.iter().zip(&after) {
+                assert!(
+                    b.width >= 0.05 * width - 1.0 && b.height >= 0.05 * height - 1.0,
+                    "{count}: a lane collapsed: {after:?}"
+                );
+                assert!(
+                    (a.x - b.x).abs() <= 200.5
+                        && (a.y - b.y).abs() < 0.5
+                        && (a.width - b.width).abs() <= 200.5
+                        && (a.height - b.height).abs() < 0.5,
+                    "{count}: a tile jumped: {before:?} -> {after:?}"
+                );
+            }
+            before = after;
+        }
+    }
+}
+
+// ------------------------------------------------- gestures from geometry
+
+impl Rig {
+    /// A geometry-started gesture: the button is held while `index` reads
+    /// `to`, then the button state shows the release and the reads answer.
+    fn held_resize(&mut self, index: usize, to: Rect) -> Vec<Effect> {
+        let window = self.token(index);
+        self.f.state.drag.button_held = Some(true);
+        let held = self.observe(window, to);
+        assert!(writes(&held).is_empty(), "no write while held");
+        assert!(self.f.state.drag.suppresses(), "the read started the gesture");
+        self.f.state.drag.button_held = None;
+        let released = self.f.apply(Input::Drag(DragSignal::Released));
+        self.answer(&released, &[(index, to)])
+    }
+}
+
+/// The live race: the last write's readback never came (an unconfirmed
+/// outcome), so the attempt only knows where that write *began*. That frame is
+/// not where the planner put the window; the baseline is the write's target.
+#[test]
+fn a_geometry_gesture_after_an_unconfirmed_write_takes_the_target_as_baseline() {
+    let mut rig = Rig::new("split", 2);
+    let cell = rig.frame(0);
+    for index in 0..2 {
+        let token = rig.token(index);
+        let attempt = rig.f.state.frames.records.get_mut(&token).and_then(|r| r.attempt.as_mut());
+        let attempt = attempt.expect("attempt");
+        attempt.from = Rect::new(10.0, 20.0, 300.0, 200.0);
+        attempt.status =
+            frames::AttemptStatus::Settled(crate::outcome::OperationOutcome::Uncertain {
+                targets: Vec::new(),
+            });
+    }
+    let ratios = rig.ratios();
+    let to = Rect::new(cell.x, cell.y, cell.width + 250.0, cell.height);
+    rig.held_resize(0, to);
+    assert_eq!(rig.outcome(), DragOutcome::Resized {
+        window: rig.token(0),
+        changed: true
+    });
+    assert_ne!(rig.ratios(), ratios);
+    let gesture_baseline =
+        rig.f.state.frames.records[&rig.token(0)].user_span.map(|(from, _)| from);
+    assert_eq!(gesture_baseline, Some(cell));
+}
+
+// ------------------------------------------- own writes and held buttons
+
+impl Rig {
+    /// Puts an in-flight write of `index` from `from` to `target` and returns
+    /// it, so a test can acknowledge it with any readback.
+    fn in_flight(&mut self, index: usize, from: Rect, target: Rect, animated: bool) -> Write {
+        let token = self.token(index);
+        let revision = self.f.state.config_revision;
+        let record = self.f.state.frames.records.get_mut(&token).expect("record");
+        let plan = record.attempt.as_ref().map_or(1, |a| a.plan_sequence) + 100;
+        record.attempt = Some(frames::FrameAttempt {
+            plan_sequence: plan,
+            revision,
+            target,
+            wanted: crate::outcome::FrameComponents { position: true, size: true },
+            from,
+            animated,
+            corrective: false,
+            status: frames::AttemptStatus::InFlight,
+        });
+        self.place(index, from);
+        Write { window: token, plan, target }
+    }
+
+    fn down_at(&mut self, at: DragPoint) -> Vec<Effect> {
+        self.f.apply(Input::Drag(DragSignal::Down {
+            button: 0,
+            at,
+            epoch: EPOCH,
+            time: Duration::from_millis(10),
+        }))
+    }
+}
+
+/// A button held for a text selection while our relayout lands on a window
+/// that snaps the size (a terminal grid) or refuses it (a minimum): the
+/// readback sits on the write's path, only its size differs. Not the user.
+#[test]
+fn a_held_button_and_a_size_snapped_readback_of_our_write_start_no_gesture() {
+    for snapped in [(-7.0, -5.0), (120.0, 0.0)] {
+        let mut rig = Rig::new("split", 2);
+        let cell = rig.frame(0);
+        let ratios = rig.ratios();
+        let write = rig.in_flight(0, moved_by(cell, 40.0, 0.0), cell, false);
+        rig.f.state.drag.button_held = Some(true);
+        let readback = Rect::new(cell.x, cell.y, cell.width + snapped.0, cell.height + snapped.1);
+        rig.ack(Write { target: readback, ..write });
+        assert!(rig.f.state.drag.gesture.is_none(), "{snapped:?}: no gesture");
+        rig.f.state.drag.button_held = Some(false);
+        rig.f.apply(Input::Drag(DragSignal::Released));
+        assert_eq!(rig.ratios(), ratios, "{snapped:?}: no ratio change");
+        assert_eq!(rig.diagnostics().drag_gestures, 0);
+    }
+}
+
+/// The same held button, but the readback's position is off the write's path:
+/// the user grabbed the window.
+#[test]
+fn a_held_button_and_a_readback_moved_off_the_path_start_a_gesture() {
+    let mut rig = Rig::new("split", 2);
+    let cell = rig.frame(0);
+    let write = rig.in_flight(0, moved_by(cell, 40.0, 0.0), cell, false);
+    rig.f.state.drag.button_held = Some(true);
+    rig.ack(Write {
+        target: moved_by(cell, 0.0, 200.0),
+        ..write
+    });
+    assert!(rig.f.state.drag.gesture.is_some());
+}
+
+/// A readback off the path of a window the gesture did not capture still
+/// teaches its minimum: the suppression is for the gesture's windows only.
+#[test]
+fn a_gesture_does_not_suppress_minimum_inference_of_uncaptured_windows() {
+    let mut rig = Rig::new("split", 2);
+    let cell = rig.frame(1);
+    rig.down(0);
+    // Window 1 leaves the gesture (another display, say).
+    let token = rig.token(1);
+    rig.f
+        .state
+        .drag
+        .gesture
+        .as_mut()
+        .expect("gesture")
+        .windows
+        .retain(|w| w.token != token);
+    let mut write = rig.in_flight(
+        1,
+        cell,
+        Rect::new(cell.x, cell.y, cell.width - 300.0, cell.height),
+        false,
+    );
+    rig.f
+        .state
+        .frames
+        .records
+        .get_mut(&token)
+        .expect("record")
+        .attempt
+        .as_mut()
+        .expect("a")
+        .wanted = crate::outcome::FrameComponents { position: false, size: true };
+    // The window refuses the narrower size and reads back wider than the path.
+    write.target = Rect::new(cell.x, cell.y, cell.width + 50.0, cell.height);
+    rig.ack(write);
+    let record = &rig.f.state.frames.records[&token];
+    assert!(
+        record.minimum.inferred.is_some() || record.size_check,
+        "the refusal is learnt: {record:?}"
+    );
+}
+
+/// Our animation is moving window 0 (its observed frame lags behind) when the
+/// user grabs it where it really is: it is the user's window, never settling.
+#[test]
+fn a_window_grabbed_mid_animation_outside_its_lagging_frame_is_the_users() {
+    // Swap: the observed frame lags to the right of the press.
+    let mut rig = Rig::new("split", 2);
+    let (cell, other) = (rig.frame(0), rig.frame(1));
+    let lagging = moved_by(cell, cell.width / 2.0, 0.0);
+    rig.in_flight(0, lagging, cell, true);
+    let at = point(cell.x + 10.0, cell.y + 10.0);
+    assert!(!crate::drag::contains_inclusive(&lagging, at));
+    rig.down_at(at);
+    let up = rig.up(0);
+    rig.answer(&up, &[(0, other)]);
+    assert_eq!(rig.outcome(), DragOutcome::Swapped {
+        dragged: rig.token(0),
+        target: rig.token(1),
+    });
+
+    // Resize: the observed frame is still narrower than the animation's end;
+    // the user pulls the right edge they see.
+    let mut rig = Rig::new("split", 2);
+    let cell = rig.frame(0);
+    let ratios = rig.ratios();
+    let lagging = Rect::new(cell.x, cell.y, cell.width / 2.0, cell.height);
+    rig.in_flight(0, lagging, cell, true);
+    let at = point(cell.max_x() - 10.0, cell.y + 10.0);
+    assert!(!crate::drag::contains_inclusive(&lagging, at));
+    rig.down_at(at);
+    let up = rig.up(0);
+    rig.answer(&up, &[(
+        0,
+        Rect::new(cell.x, cell.y, cell.width - 100.0, cell.height),
+    )]);
+    assert_eq!(rig.outcome(), DragOutcome::Resized {
+        window: rig.token(0),
+        changed: true
+    });
+    assert_ne!(rig.ratios(), ratios);
 }

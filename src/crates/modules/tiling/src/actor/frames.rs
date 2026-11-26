@@ -74,6 +74,9 @@ pub struct FrameJob {
 #[derive(Default)]
 struct Ledger {
     latest: BTreeMap<WindowInstance, (u64, Instant)>,
+    /// The issuance of each direct write handed to its shard and not yet
+    /// finished, so a cancel reaches a write already waiting there.
+    issued: BTreeMap<WindowInstance, WindowIssuance>,
     outstanding: usize,
 }
 
@@ -170,8 +173,16 @@ impl FrameControl {
         self.shared.idle.notify_all();
     }
 
-    /// The queued write for `window` is no longer wanted.
-    pub fn cancel(&self, window: WindowInstance) { self.ledger().latest.remove(&window); }
+    /// The queued write for `window` is no longer wanted: inert before it is
+    /// issued, also when it already waits in its application's shard.
+    pub fn cancel(&self, window: WindowInstance) {
+        let mut ledger = self.ledger();
+        ledger.latest.remove(&window);
+        if let Some(issuance) = ledger.issued.remove(&window) {
+            // A write already sent cannot be undone; nothing else to do.
+            let _ = issuance.cancel();
+        }
+    }
 
     /// Whether `plan_sequence` is the latest plan of `window`.
     #[must_use]
@@ -196,6 +207,9 @@ impl FrameControl {
         ledger.outstanding = ledger.outstanding.saturating_sub(1);
         if ledger.latest.get(&window).is_some_and(|(plan, _)| *plan == plan_sequence) {
             ledger.latest.remove(&window);
+        }
+        if ledger.issued.get(&window).is_some_and(|i| i.plan_sequence() == plan_sequence) {
+            ledger.issued.remove(&window);
         }
         drop(ledger);
         self.shared.idle.notify_all();
@@ -277,6 +291,19 @@ impl FrameControl {
             Ok(request) => request,
             Err(outcome) => return reply(outcome),
         };
+        let mut ledger = self.ledger();
+        let current = ledger
+            .latest
+            .get(&job.window)
+            .is_some_and(|(plan, _)| *plan == job.plan_sequence);
+        if current {
+            ledger.issued.insert(job.window, request.issuance.clone());
+        }
+        drop(ledger);
+        if !current {
+            // Cancelled since the request was gated.
+            let _ = request.issuance.cancel();
+        }
         // The border moves when the write answers (the frame read back, else
         // the target of an applied write), never at dispatch: it lands with the
         // window, not before it. A write that is inert reports nothing.

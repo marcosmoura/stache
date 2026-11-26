@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 
 use super::context_snapshot::{ContextSnapshot, SnapshotCell};
-use super::control::{CALLBACK_SOFT_TARGET, InputClock};
+use super::control::{CALLBACK_SOFT_TARGET, InputClock, OBSERVER_SLOW_STREAK};
 use super::deferral::RemovalSignal;
 use super::diagnostics::{Diagnostics, InputCounters, InputDiagnostic};
 use super::event::{Disposition, Epoch, InputEvent, InputEventKind, PressId, RawInput};
@@ -329,12 +329,15 @@ impl Router {
             }
         } else if elapsed > CALLBACK_SOFT_TARGET {
             bump(&self.counters.slow_callbacks);
-            if entry.health.mark(InertReason::Slow) {
+            let streak = entry.slow_streak.fetch_add(1, Ordering::Relaxed) + 1;
+            if streak >= OBSERVER_SLOW_STREAK && entry.health.mark(InertReason::Slow) {
                 self.diagnostics.try_record(InputDiagnostic::CallbackSlow {
                     subscription: entry.id,
                     elapsed,
                 });
             }
+        } else {
+            entry.slow_streak.store(0, Ordering::Relaxed);
         }
     }
 

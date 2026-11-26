@@ -37,7 +37,7 @@ pub use lanes::{READ_THREAD_PREFIX, READ_WORKERS};
 
 use crate::animation::{AnimationControl, AnimationJob, AnimationSettings};
 use crate::backend::WindowBackend;
-use crate::drag::{DragSignal, GESTURE_TIMEOUT, LostCause};
+use crate::drag::{ButtonState, DragSignal, GESTURE_TIMEOUT, LostCause, RELEASE_POLL};
 use crate::events::{Ingress, RETIME_EPSILON, Wake, flush_period};
 use crate::state::{
     AppInfo, Cause, CompletionResult, Effect, Health, HealthFault, Input, Phase, Scope, Stamp,
@@ -663,6 +663,9 @@ pub struct Engine {
     last_admission: crate::events::AdmissionStats,
     /// The drag gesture being timed and when it is abandoned.
     gesture_watch: Option<(u64, Instant)>,
+    /// Whether a mouse button is physically held; `None` reads nothing and
+    /// gestures start only at the tap's down.
+    buttons: Option<Arc<dyn ButtonState>>,
     /// Applications that were ours to unhide and still read hidden.
     released_hidden: BTreeSet<ApplicationId>,
     /// Native tab group settle listings: when each application is listed and
@@ -690,6 +693,27 @@ struct TrackRetry {
 struct SettleEntry {
     due: Option<Instant>,
     attempts: u8,
+}
+
+/// A move or resize notification, a window snapshot event, a read answering
+/// one, or the readback of our own frame write.
+const fn observes_geometry(input: &Input) -> bool {
+    match input {
+        Input::Window(event) => matches!(
+            event.kind,
+            WindowEventKind::Window {
+                change: WindowChange::Moved | WindowChange::Resized,
+                ..
+            } | WindowEventKind::Snapshot { .. }
+        ),
+        Input::Completion { result, .. } => matches!(
+            result,
+            CompletionResult::Snapshot(..)
+                | CompletionResult::Geometry(..)
+                | CompletionResult::Frame { .. }
+        ),
+        _ => false,
+    }
 }
 
 const fn effect_stamp(effect: &Effect) -> Option<Stamp> {
@@ -738,6 +762,7 @@ impl Engine {
             published: None,
             last_admission: crate::events::AdmissionStats::default(),
             gesture_watch: None,
+            buttons: None,
             released_hidden: BTreeSet::new(),
             settle: BTreeMap::new(),
             track_retry: BTreeMap::new(),
@@ -763,6 +788,13 @@ impl Engine {
     /// problems and terminations to it.
     pub fn set_animation_control(&mut self, animation: Arc<AnimationControl>) {
         self.animation = Some(animation);
+    }
+
+    /// Sets the button state source: a move or resize of a tiled window while a
+    /// button is held starts a gesture, and a held gesture whose up never
+    /// arrives ends when the source shows the release.
+    pub fn set_button_state(&mut self, buttons: Arc<dyn ButtonState>) {
+        self.buttons = Some(buttons);
     }
 
     /// Shares the frame issuance control with the runner's environment.
@@ -996,15 +1028,39 @@ impl Engine {
     /// [`GESTURE_TIMEOUT`] is abandoned as a lost observation (no up is
     /// invented), so a missed up cannot hold the planner back forever. Returns
     /// when the actor must wake for it.
+    ///
+    /// While the gesture waits for its up and a button state source exists, the
+    /// actor also wakes every [`RELEASE_POLL`] and ends the gesture when no
+    /// button is held (the tap missed the up). Nothing wakes without a gesture.
     fn watch_gesture(&mut self, now: Instant) -> Option<Instant> {
         let current = self.state.as_ref().and_then(TilingState::drag_gesture);
         let Some(id) = current else {
             self.gesture_watch = None;
             return None;
         };
+        let held = self.state.as_ref().is_some_and(|state| state.drag.awaits_release());
         let due = match self.gesture_watch {
             Some((watched, due)) if watched == id => due,
             _ => now + GESTURE_TIMEOUT,
+        };
+        // A gesture the tap's down started gives the tap's own up one poll
+        // period first: a quick click's up is usually just behind its down.
+        let tap_started = self
+            .state
+            .as_ref()
+            .and_then(|state| state.drag.gesture.as_ref())
+            .is_some_and(|gesture| gesture.epoch.is_some());
+        let grace = tap_started && now + GESTURE_TIMEOUT < due + RELEASE_POLL;
+        let poll = match (&self.buttons, held) {
+            (Some(buttons), true) => {
+                if grace || buttons.held() {
+                    Some(now + RELEASE_POLL)
+                } else {
+                    let _ = self.ingress.submit(Input::Drag(DragSignal::Released));
+                    None
+                }
+            }
+            _ => None,
         };
         self.gesture_watch = Some((id, due));
         if now >= due {
@@ -1013,7 +1069,7 @@ impl Engine {
             self.gesture_watch = None;
             return None;
         }
-        Some(due)
+        Some(poll.map_or(due, |poll| poll.min(due)))
     }
 
     /// Applies one input; `false` when the actor halted.
@@ -1076,6 +1132,13 @@ impl Engine {
             } => Some(info.application),
             _ => None,
         };
+        // The button state is read only for a geometry observation, the one
+        // input that can start or end a gesture by it.
+        state.drag.button_held = self
+            .buttons
+            .as_ref()
+            .filter(|_| observes_geometry(&input))
+            .map(|buttons| buttons.held());
         let Ok((mut state, effects)) = catch_unwind(AssertUnwindSafe(|| transition(state, input)))
         else {
             self.fail_panicked();

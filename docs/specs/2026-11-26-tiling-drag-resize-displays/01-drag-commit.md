@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 ---
 
 # 01 — Drag health and the gesture commit
@@ -20,16 +20,23 @@ Files: `src/crates/modules/tiling/src/drag.rs`, `state/drag.rs`, `state/frames.r
 
 ## Acceptance criteria
 
-- [ ] Status shows drag availability, counters and last outcome in table and JSON; `cli_tests`/`ipc_tests` cover both.
-- [ ] Scenario: Grid workspace with three windows, user drags one window to an empty area and releases (moves streamed during the gesture, late echoes after) → it returns to its cell; counters show one snap-back.
-- [ ] Scenario: user drags a window onto another tile → they swap, both written to each other's cells.
-- [ ] Scenario reproducing the live capture: user resizes a Grid tile's width, then late growth echoes arrive → no inferred minimum, all three tiles end in a valid non-overlapping layout (exact geometry from part 02 once it lands; here, at least back in the planned frames).
-- [ ] Scenario: a gesture whose read is rejected or coalesced still commits within the same turn sequence.
-- [ ] These scenarios fail on `main` before the fix (worker states which failed and why).
-- [ ] `docs/features/tiling.md` Passive drag and Status describe the new status fields and the fixed behaviour.
+- [x] Status shows drag availability, counters and last outcome in table and JSON; `cli_tests`/`ipc_tests` cover both.
+- [x] Scenario: Grid workspace with three windows, user drags one window to an empty area and releases (moves streamed during the gesture, late echoes after) → it returns to its cell; counters show one snap-back.
+- [x] Scenario: user drags a window onto another tile → they swap, both written to each other's cells.
+- [x] Scenario reproducing the live capture: user resizes a Grid tile's width, then late growth echoes arrive → no inferred minimum, all three tiles end in a valid non-overlapping layout (exact geometry from part 02 once it lands; here, at least back in the planned frames).
+- [x] Scenario: a gesture whose read is rejected or coalesced still commits within the same turn sequence.
+- [x] These scenarios fail on `main` before the fix (worker states which failed and why).
+- [x] `docs/features/tiling.md` Passive drag and Status describe the new status fields and the fixed behaviour.
 
 ## Tests
 
 End-to-end scenarios over the real sharded adapter with the fake AX arena (as in `runtime_tests/scenarios.rs`): user gestures are modeled as drag signals plus arena-side frame changes and the notifications/snapshot replies macOS sends, in realistic order and timing (moves during the hold, a final notification racing the up, one or two late echoes). Unit tests for the status rendering.
 
 ## Notes
+
+Root cause (2026-11-26, reproduced in `runtime_tests/animation/gestures.rs` over the real sharded adapter and the fake AX arena; candidates (c) and (d) were not the cause, the gesture always committed in every scenario):
+
+1. **A late read of the user's own resize inferred a minimum (candidate a).** After the commit the gesture is gone, so `frames::observe_growth` judges the next read of the resized window against the window's last settled attempt, whose target is the cell from before the gesture. The user's wider frame looks like the window re-asserting a size it refused and becomes `minimum.inferred`; from then on `frames::decide` skips every target smaller than it. Scenario `a_grid_tile_grown_by_the_user_never_leaves_an_inferred_minimum_or_an_overlap` failed on unmodified code with `minimum: Some(Size { width: 1160.0, height: 0.0 })` on a Grid tile widened by 200 points.
+2. **The user's frames were swallowed as animation echoes (candidate b).** An animated plan leaves `settle_echoes = 2` on each window until its next write. With animations on (the user's setup), the first two reads of a gesture's window, typically the application's one end-of-move notification and the drag's own read, were absorbed by `frames::absorb_echo`, so the commit saw the pre-gesture frame: a resize was decided as a snap-back with nothing to write, and `force_deviating` forced nothing. Scenario `a_resize_right_after_an_animated_layout_change_relays_out` failed on unmodified code with outcome `SnappedBack` instead of `Resized`. The same absorption hides a drop; a drag recovered only when a third, late read spent the one external attempt.
+
+Fix: a down clears the captured windows' settle-echo budget (`frames::clear_settle_echoes`); the commit (and a cancel) records each window's user span, baseline to final frame (`FrameRecord::user_span`), and `observe_growth` never learns from a frame inside it; the commit also resets the external budget of every captured window, so a final read that arrives after the commit (a read already running at the up answered first) still brings the window back once.

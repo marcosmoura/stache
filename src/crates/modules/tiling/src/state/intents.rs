@@ -665,14 +665,26 @@ fn apply_ratio(
     let layout = state.workspaces[index].layout;
     let landscape = area.width >= area.height;
     let defaults = default_ratios(layout, ids.len());
-    let stored = &state.workspaces[index].ratios.split_ratios;
-    let ratios = if stored.len() == defaults.len() {
-        stored.clone()
-    } else {
-        defaults
-    };
+    let stored = state.workspaces[index].ratios.effective_split_ratios(layout, ids.len());
+    let ratios =
+        if stored.len() == defaults.len() || (layout == LayoutType::Grid && !stored.is_empty()) {
+            stored.to_vec()
+        } else {
+            defaults
+        };
     let minimum_of = |token: &WindowInstance| -> Option<Size> {
         state.frames.records.get(token).and_then(|r| r.minimum.effective())
+    };
+    // A Grid boundary moves only inside its run, as a mouse resize does: it
+    // stays 5% short of the next boundary on the same axis, so no lane collapses
+    // and the lattice never falls back to equal lanes.
+    let signed = match crate::layout::grid_ratio_axes(ids.len(), landscape).first() {
+        Some((len, _, _)) if layout == LayoutType::Grid && *len > ratio_index + 1 => {
+            ratios.get(ratio_index + 1).map_or(signed, |next| {
+                (ratios[ratio_index] + signed).min(next - 0.05) - ratios[ratio_index]
+            })
+        }
+        _ => signed,
     };
     let next = if matches!(layout, LayoutType::Dwindle | LayoutType::Grid) {
         guarded_ratio_change(
@@ -712,7 +724,7 @@ fn apply_ratio(
     };
     match next {
         Some(next) => {
-            state.workspaces[index].ratios.split_ratios = next;
+            state.workspaces[index].ratios.set_split(next, ids.len());
             IntentOutcome::Applied
         }
         None => noop(IntentNoOp::Unchanged),
@@ -731,8 +743,9 @@ pub(super) enum UserResize {
     NoRatio,
 }
 
-/// Moves the ratio a user's drag-resize of `token` implies (legacy
-/// `on_user_resize_completed`). `ids` are the workspace's tiles in order.
+/// Moves the boundaries a user's drag-resize of `token` implies: each edge
+/// the user dragged moves the boundary on that side (see
+/// [`crate::drag::edge_resize`]). `ids` are the workspace's tiles in order.
 pub(super) fn apply_user_resize(
     state: &mut TilingState,
     index: usize,
@@ -740,8 +753,7 @@ pub(super) fn apply_user_resize(
     token: WindowInstance,
     (old, new): (&Rect, &Rect),
 ) -> UserResize {
-    use crate::config::MasterPosition;
-    use crate::drag::{RatioMove, ResizeContext, ratio_move};
+    use crate::drag::{EdgeResize, ResizeRequest, edge_resize};
     let layout = state.workspaces[index].layout;
     let Some(position) = ids.iter().position(|id| *id == token) else {
         return UserResize::NoRatio;
@@ -750,34 +762,39 @@ pub(super) fn apply_user_resize(
     let Ok((area, gaps)) = frames::display_area(state, screen) else {
         return UserResize::NoRatio;
     };
-    let landscape = area.width >= area.height;
-    let master = state.config.as_deref().map_or_default(|c| c.master.position);
-    let resolved = match master {
-        MasterPosition::Auto if landscape => MasterPosition::Left,
-        MasterPosition::Auto => MasterPosition::Top,
-        other => other,
-    };
-    let context = ResizeContext {
+    let master = state.config.as_deref().map_or_default(|c| c.master.clone());
+    let minimums: Vec<Option<Size>> = ids
+        .iter()
+        .map(|t| state.frames.records.get(t).and_then(|r| r.minimum.effective()))
+        .collect();
+    let ratios = &state.workspaces[index].ratios;
+    let master_ratio =
+        clamp_master_ratio(crate::layout::master_ratio(&master, ratios.master_ratio));
+    let request = ResizeRequest {
         layout,
-        position,
         count: ids.len(),
-        width: area.width,
-        height: area.height,
-        master_uses_width: matches!(resolved, MasterPosition::Left | MasterPosition::Right),
+        position,
+        usable: area,
+        gaps,
+        master_position: master.position,
+        master_ratio,
+        ratios: ratios.effective_split_ratios(layout, ids.len()),
+        minimums: &minimums,
     };
-    let outcome = match ratio_move(&context, old, new) {
-        RatioMove::Master { dimension, delta } => {
-            resize_master(state, index, dimension, position, delta, landscape)
+    match edge_resize(&request, old, new) {
+        EdgeResize::Moved {
+            ratios: next,
+            master_ratio: share,
+        } => {
+            let ratios = &mut state.workspaces[index].ratios;
+            if (share - master_ratio).abs() > f64::EPSILON {
+                ratios.master_ratio = Some(share);
+            }
+            ratios.set_split(next, ids.len());
+            UserResize::Changed
         }
-        RatioMove::Split { index: ratio_index, delta } => {
-            apply_ratio(state, index, ids, (area, gaps), (ratio_index, delta))
-        }
-        RatioMove::Relayout | RatioMove::Nothing => return UserResize::NoRatio,
-    };
-    if outcome == IntentOutcome::Applied {
-        UserResize::Changed
-    } else {
-        UserResize::Unchanged
+        EdgeResize::Unchanged => UserResize::Unchanged,
+        EdgeResize::NoBoundary => UserResize::NoRatio,
     }
 }
 

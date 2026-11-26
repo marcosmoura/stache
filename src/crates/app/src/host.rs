@@ -807,6 +807,9 @@ impl TilingFactory {
         );
         parts.applications = Some(Arc::new(applications));
         parts.displays = Some(stache_macos::DisplayControl::system(main_thread));
+        // Gestures start from window geometry while a button is held, so drag
+        // and mouse resize work even when the listen-only tap delivers nothing.
+        parts.buttons = Some(Arc::new(stache_tiling::SystemButtons));
         // Borders are drawn by Stache's own overlay control over the main-thread
         // executor. Nothing native exists yet: the control creates panels on
         // first show.

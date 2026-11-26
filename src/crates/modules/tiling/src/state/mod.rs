@@ -802,6 +802,15 @@ pub struct Diagnostics {
     pub drag_cancelled: u64,
     /// Lost observations reported (with or without a gesture).
     pub drag_lost_observations: u64,
+    /// Gestures started by a window's move or resize while a button was held
+    /// (the rest started at a mouse down).
+    pub drag_from_geometry: u64,
+    /// Mouse downs the passive observer delivered.
+    pub drag_downs: u64,
+    /// Mouse ups the passive observer delivered.
+    pub drag_ups: u64,
+    /// Gestures ended by the button state because the up never arrived.
+    pub drag_released_by_state: u64,
     /// Tab groups whose representing window was swapped for another one that
     /// carries the same tab bar (a new tab, a switch or a close).
     pub tab_handovers: u64,
