@@ -22,11 +22,11 @@
 //! slow sample delays only its own next one, and a long stall (sleep, a hung
 //! read) produces one late sample, never a burst of catch-up samples.
 //!
-//! | Provider | Period                                              |
-//! | -------- | --------------------------------------------------- |
-//! | CPU      | 2 s, first sample after a 250 ms warm-up            |
-//! | Battery  | 30 s while charging, 120 s otherwise                |
-//! | Wi-Fi    | 60 s with change signals, earlier on a signal; 5 s without |
+//! | Provider | Period                                                                                  |
+//! | -------- | --------------------------------------------------------------------------------------- |
+//! | CPU      | 2 s, first sample after a 250 ms warm-up                                                |
+//! | Battery  | 120 s with change signals, at once on a signal; without: 30 s charging, 120 s otherwise |
+//! | Wi-Fi    | 60 s with change signals, earlier on a signal; 5 s without                              |
 //!
 //! A Wi-Fi change signal ([`WifiSignals`]) only sets one pending flag per kind
 //! ([`Wakeup`]); a storm is one extra sample. An identity signal samples at
@@ -34,6 +34,10 @@
 //! signal at least [`ProviderTiming::wifi`] after it. A quality-only sample
 //! does not move the periodic (safety) sample. When the signal source cannot
 //! be installed, Wi-Fi samples every [`ProviderTiming::wifi`] as without one.
+//!
+//! A battery change signal ([`BatterySignals`]) wakes the battery schedule the
+//! same way (as an identity signal): it samples at once, at least
+//! [`ProviderTiming::battery_min_gap`] after the previous start.
 //!
 //! # Publication
 //!
@@ -57,7 +61,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-pub use battery::BatteryChargeState;
+pub use battery::{BatteryChargeState, BatterySignals, IoKitBatterySignals};
 pub use media::{
     ArtworkLookup, ArtworkStore, MediaParts, MediaPaths, MediaReading, MediaResolver,
     MediaRunState, MediaStatus, MediaTiming, MediaUpdate, PublishMedia,
@@ -88,6 +92,8 @@ pub const CPU_WARMUP: Duration = Duration::from_millis(250);
 pub const BATTERY_CHARGING_PERIOD: Duration = Duration::from_secs(30);
 /// The battery sample period otherwise.
 pub const BATTERY_IDLE_PERIOD: Duration = Duration::from_secs(120);
+/// The least time between two battery samples, however many signals arrive.
+pub const BATTERY_MIN_GAP: Duration = Duration::from_millis(250);
 /// The longest Wi-Fi sample period.
 pub const WIFI_PERIOD: Duration = Duration::from_secs(5);
 /// The least time between two Wi-Fi samples, however many signals arrive.
@@ -289,6 +295,8 @@ pub struct ProviderTiming {
     pub battery_charging: Duration,
     /// Battery period otherwise.
     pub battery_idle: Duration,
+    /// Least time between signalled battery samples.
+    pub battery_min_gap: Duration,
     /// Longest Wi-Fi period.
     pub wifi: Duration,
     /// Least time between Wi-Fi samples.
@@ -306,6 +314,7 @@ impl Default for ProviderTiming {
             cpu_warmup: CPU_WARMUP,
             battery_charging: BATTERY_CHARGING_PERIOD,
             battery_idle: BATTERY_IDLE_PERIOD,
+            battery_min_gap: BATTERY_MIN_GAP,
             wifi: WIFI_PERIOD,
             wifi_min_gap: WIFI_MIN_GAP,
             tool_deadline: TOOL_DEADLINE,
@@ -336,6 +345,8 @@ pub struct ProviderParts {
     pub ssid: SsidGate,
     /// Native Wi-Fi change signals, if any.
     pub signals: Option<Arc<dyn WifiSignals>>,
+    /// Native power-source change signals, if any.
+    pub battery_signals: Option<Arc<dyn BatterySignals>>,
     /// Time bounds.
     pub timing: ProviderTiming,
     /// The media adapter. `None` (the default) runs no media worker.
@@ -344,7 +355,8 @@ pub struct ProviderParts {
 
 impl ProviderParts {
     /// The production parts: real readers, a real executor and clock, the SSID
-    /// gate from the environment, and the `CoreWLAN` Wi-Fi change signal.
+    /// gate from the environment, the `CoreWLAN` Wi-Fi change signal and the
+    /// `IOKit` power-source change signal.
     #[must_use]
     pub fn system() -> Self {
         let clock: Arc<dyn Clock> = Arc::new(SystemClock::default());
@@ -363,6 +375,7 @@ impl ProviderParts {
             ipconfig: std::path::PathBuf::from(IPCONFIG_PATH),
             ssid: SsidGate::from_environment(),
             signals: Some(Arc::new(CoreWlanSignals)),
+            battery_signals: Some(Arc::new(IoKitBatterySignals)),
             timing: ProviderTiming::default(),
             media: None,
         }
@@ -576,6 +589,36 @@ pub fn run_wifi_worker(
     drop(subscription);
 }
 
+/// Runs the battery worker: subscribes `signals` on this thread, runs the
+/// schedule, and ends the subscription when the schedule stops.
+pub fn run_battery_worker(
+    mut sampler: battery::BatterySampler,
+    signals: Option<&Arc<dyn BatterySignals>>,
+    env: &WorkerEnv,
+) {
+    let subscription = match (signals, env.wakeup.as_ref()) {
+        (Some(signals), Some(wakeup)) => {
+            let wake = Arc::clone(wakeup);
+            if let Ok(guard) =
+                signals.watch(Arc::new(move || wake.notify(WifiSignalKind::Identity)))
+            {
+                sampler.set_signals(wifi::SignalState::Installed);
+                Some(guard)
+            } else {
+                sampler.set_signals(wifi::SignalState::Unavailable);
+                None
+            }
+        }
+        (Some(_), None) => {
+            sampler.set_signals(wifi::SignalState::Unavailable);
+            None
+        }
+        (None, _) => None,
+    };
+    run_provider(Box::new(sampler), env);
+    drop(subscription);
+}
+
 /// One provider worker's body.
 type Worker = Box<dyn FnOnce(&WorkerEnv) + Send>;
 
@@ -608,6 +651,7 @@ impl ProviderMonitor {
         let battery = battery::BatterySampler::new(parts);
         let wifi = wifi::WifiSampler::new(parts);
         let signals = parts.signals.clone();
+        let battery_signals = parts.battery_signals.clone();
         let workers: [(ProviderKind, Worker); 3] = [
             (
                 ProviderKind::Cpu,
@@ -615,7 +659,7 @@ impl ProviderMonitor {
             ),
             (
                 ProviderKind::Battery,
-                Box::new(move |env| run_provider(Box::new(battery), env)),
+                Box::new(move |env| run_battery_worker(battery, battery_signals.as_ref(), env)),
             ),
             // Native signals are subscribed on the worker, off the caller's
             // thread, and dropped when it exits.
@@ -625,12 +669,17 @@ impl ProviderMonitor {
             ),
         ];
         for (kind, run) in workers {
+            let (min_gap, quality_gap) = if kind == ProviderKind::Battery {
+                (parts.timing.battery_min_gap, parts.timing.battery_min_gap)
+            } else {
+                (parts.timing.wifi_min_gap, parts.timing.wifi)
+            };
             let env = WorkerEnv {
                 clock: Arc::clone(&parts.clock),
                 stop: monitor.stop.clone(),
-                wakeup: (kind == ProviderKind::Wifi).then(|| Arc::new(Wakeup::default())),
-                min_gap: parts.timing.wifi_min_gap,
-                quality_gap: parts.timing.wifi,
+                wakeup: (kind != ProviderKind::Cpu).then(|| Arc::new(Wakeup::default())),
+                min_gap,
+                quality_gap,
                 publish: Arc::clone(publish),
             };
             let spawned = std::thread::Builder::new()

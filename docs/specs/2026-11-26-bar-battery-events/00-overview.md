@@ -32,7 +32,7 @@ macOS posts power-source changes through IOKit: `IOPSNotificationCreateRunLoopSo
 
 | Part                       | Summary                                                                 | Status |
 | -------------------------- | ----------------------------------------------------------------------- | ------ |
-| [01](01-battery-events.md) | Power-source change notifications wake the battery provider immediately | draft  |
+| [01](01-battery-events.md) | Power-source change notifications wake the battery provider immediately | done   |
 
 ## Affected docs
 

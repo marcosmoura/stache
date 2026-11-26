@@ -443,11 +443,13 @@ fn fake_providers() -> (ProviderParts, ProviderFakes) {
         ipconfig: std::path::PathBuf::from("/usr/sbin/ipconfig"),
         ssid: SsidGate::Off,
         signals: None,
+        battery_signals: None,
         timing: ProviderTiming {
             cpu: tick,
             cpu_warmup: Duration::from_millis(1),
             battery_charging: tick,
             battery_idle: tick,
+            battery_min_gap: Duration::from_millis(1),
             wifi: tick,
             wifi_min_gap: Duration::from_millis(1),
             tool_deadline: Duration::from_secs(30),

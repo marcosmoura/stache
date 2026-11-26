@@ -1693,6 +1693,7 @@ mod provider_runtime {
             cpu_warmup: Duration::from_millis(1),
             battery_charging: tick,
             battery_idle: tick,
+            battery_min_gap: Duration::from_millis(1),
             wifi: tick,
             wifi_min_gap: Duration::from_millis(1),
             tool_deadline: Duration::from_millis(200),
@@ -1729,6 +1730,7 @@ mod provider_runtime {
             ipconfig: std::path::PathBuf::from("/usr/sbin/ipconfig"),
             ssid: SsidGate::Off,
             signals: None,
+            battery_signals: None,
             timing: fast(),
             media: None,
         };

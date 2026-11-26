@@ -12,15 +12,15 @@ use std::time::Duration;
 
 use stache_macos::system::testing::{FakeBattery, FakeCpuUsage, FakeSmc, FakeWifi, Script};
 use stache_macos::system::{
-    BatteryPowerState, BatteryReadout, InterfaceName, SystemReadError, WifiInterfaceReading,
-    WifiPower, WifiSignalSink,
+    BatteryPowerState, BatteryReadout, BatterySignalSink, InterfaceName, SystemReadError,
+    WifiInterfaceReading, WifiPower, WifiSignalSink,
 };
 use stache_sdk::CancellationToken;
 use stache_sdk::commands::{
     ChildProcess, Clock, CommandEnvironment, CommandExecutor, ProcessFactory, SpawnSpec,
 };
 
-use super::battery::{BatterySampler, percentage};
+use super::battery::{BATTERY_SIGNALS_UNAVAILABLE, BatterySampler, percentage};
 use super::cpu::CpuSampler;
 use super::wifi::{
     SIGNALS_UNAVAILABLE, SignalState, WifiSampler, native_reading, parse_summary, sanitize_ssid,
@@ -230,6 +230,7 @@ fn rig() -> Rig {
         ipconfig: PathBuf::from("/usr/sbin/ipconfig"),
         ssid: SsidGate::Off,
         signals: None,
+        battery_signals: None,
         timing: ProviderTiming::default(),
         media: None,
     };
@@ -1187,3 +1188,245 @@ fn a_lost_source_samples_at_once_then_polls_every_five_seconds_with_the_conditio
 
 #[allow(dead_code)]
 fn unused(_: VecDeque<()>) {}
+
+// ----------------------------------------------------- battery signals
+
+/// A scripted power-source signal source, as [`FakeSignals`] for Wi-Fi.
+#[derive(Default)]
+struct FakeBatterySignals {
+    fail: bool,
+    sink: Mutex<Option<BatterySignalSink>>,
+    watches: AtomicUsize,
+    dropped: Arc<AtomicBool>,
+}
+
+impl BatterySignals for FakeBatterySignals {
+    fn watch(&self, notify: BatterySignalSink) -> Result<Box<dyn Send>, String> {
+        self.watches.fetch_add(1, Ordering::SeqCst);
+        if self.fail {
+            return Err("registration refused".to_owned());
+        }
+        *lock(&self.sink) = Some(notify);
+        Ok(Box::new(FakeGuard(Arc::clone(&self.dropped))))
+    }
+}
+
+impl FakeBatterySignals {
+    /// Fires `count` signals at `when`, after `change` updates the fake battery.
+    fn at(
+        self: &Arc<Self>,
+        rig: &Rig,
+        when: Duration,
+        count: usize,
+        change: Option<Result<Option<BatteryReadout>, SystemReadError>>,
+    ) {
+        let signals = Arc::clone(self);
+        let battery = Arc::clone(&rig.battery);
+        rig.clock.at(when, move || {
+            if let Some(change) = change.clone() {
+                battery.set(change);
+            }
+            let sink = lock(&signals.sink).clone();
+            for _ in 0..count {
+                if let Some(sink) = &sink {
+                    sink();
+                }
+            }
+        });
+    }
+}
+
+/// Runs the battery worker (subscription included) on the fake clock until
+/// `window`, as `ProviderMonitor` runs it. Returns each publication's time,
+/// reading and diagnostic.
+fn battery_run(
+    rig: &Rig,
+    signals: Option<&Arc<FakeBatterySignals>>,
+    window: Duration,
+) -> Vec<(Duration, Option<BatteryReading>, Option<String>)> {
+    let published = Arc::new(Mutex::new(Vec::new()));
+    let stop = CancellationToken::new();
+    {
+        let stop = stop.clone();
+        rig.clock.at(window, move || stop.cancel());
+    }
+    let env = WorkerEnv {
+        clock: Arc::clone(&rig.parts.clock),
+        stop,
+        wakeup: Some(Arc::new(Wakeup::default())),
+        min_gap: BATTERY_MIN_GAP,
+        quality_gap: BATTERY_MIN_GAP,
+        publish: {
+            let published = Arc::clone(&published);
+            let clock = Arc::clone(&rig.clock);
+            Arc::new(move |_, update, diagnostic| {
+                let reading = match update {
+                    Some(ProviderUpdate::Battery(reading)) => reading,
+                    other => panic!("expected a battery reading, got {other:?}"),
+                };
+                lock(&published).push((clock.now(), reading, diagnostic));
+            })
+        },
+    };
+    let signals = signals.map(|signals| Arc::clone(signals) as Arc<dyn BatterySignals>);
+    run_battery_worker(BatterySampler::new(&rig.parts), signals.as_ref(), &env);
+    std::mem::take(&mut *lock(&published))
+}
+
+#[allow(clippy::unnecessary_wraps)] // compared against published `Option` readings
+const fn battery(percentage: u8, state: BatteryChargeState) -> Option<BatteryReading> {
+    Some(BatteryReading { percentage, state })
+}
+
+/// The monitor wires `parts.battery_signals` to the battery worker: a signal
+/// publishes at once, with every period an hour away.
+#[test]
+fn the_monitor_publishes_a_battery_signal_without_waiting_for_the_period() {
+    let mut rig = rig();
+    rig.battery.set(readout(50.0, BatteryPowerState::Discharging));
+    let clock: Arc<dyn Clock> = Arc::new(stache_sdk::commands::SystemClock::default());
+    rig.parts.clock = Arc::clone(&clock);
+    rig.parts.executor = Arc::new(CommandExecutor::with_parts(
+        Arc::clone(&rig.factory) as Arc<dyn ProcessFactory>,
+        clock,
+        CommandEnvironment::default(),
+    ));
+    let hour = Duration::from_secs(3600);
+    rig.parts.timing = ProviderTiming {
+        cpu: hour,
+        battery_charging: hour,
+        battery_idle: hour,
+        battery_min_gap: Duration::from_millis(1),
+        wifi: hour,
+        join: Duration::from_secs(2),
+        ..ProviderTiming::default()
+    };
+    let signals = Arc::new(FakeBatterySignals::default());
+    rig.parts.battery_signals = Some(Arc::clone(&signals) as Arc<dyn BatterySignals>);
+    let (sender, received) = std::sync::mpsc::channel();
+    let sender = Mutex::new(sender);
+    let publish: PublishSample = Arc::new(move |kind, update, _| {
+        if let (ProviderKind::Battery, Some(ProviderUpdate::Battery(reading))) = (kind, update) {
+            let _ = lock(&sender).send(reading);
+        }
+    });
+    let publish_media: PublishMedia = Arc::new(|_| {});
+    let monitor = ProviderMonitor::start(&rig.parts, &publish, &publish_media).expect("starts");
+    let wait = Duration::from_secs(5);
+    assert_eq!(
+        received.recv_timeout(wait).expect("the first sample"),
+        battery(50, BatteryChargeState::Discharging)
+    );
+    let sink = lock(&signals.sink).clone().expect("the worker subscribed");
+    rig.battery.set(readout(50.0, BatteryPowerState::Charging));
+    sink();
+    assert_eq!(
+        received.recv_timeout(wait).expect("a signalled sample"),
+        battery(50, BatteryChargeState::Charging)
+    );
+    assert!(monitor.end(Duration::from_secs(2)));
+    assert!(signals.dropped.load(Ordering::SeqCst), "the subscription ended");
+}
+
+#[test]
+fn a_plug_in_signal_publishes_charging_at_once() {
+    let rig = rig();
+    rig.battery.set(readout(50.0, BatteryPowerState::Discharging));
+    let signals = Arc::new(FakeBatterySignals::default());
+    signals.at(
+        &rig,
+        secs(10.0),
+        1,
+        Some(readout(50.0, BatteryPowerState::Charging)),
+    );
+    let published = battery_run(&rig, Some(&signals), secs(60.0));
+    let charging = published
+        .iter()
+        .find(|(_, reading, _)| *reading == battery(50, BatteryChargeState::Charging))
+        .expect("a charging reading");
+    assert!(
+        charging.0 >= secs(10.0) && charging.0 <= secs(10.3),
+        "{published:?}"
+    );
+    assert!(published.iter().all(|(_, _, diagnostic)| diagnostic.is_none()));
+}
+
+#[test]
+fn a_percentage_signal_publishes_the_new_percentage_at_once() {
+    let rig = rig();
+    rig.battery.set(readout(50.0, BatteryPowerState::Discharging));
+    let signals = Arc::new(FakeBatterySignals::default());
+    signals.at(
+        &rig,
+        secs(10.0),
+        1,
+        Some(readout(49.0, BatteryPowerState::Discharging)),
+    );
+    let published = battery_run(&rig, Some(&signals), secs(60.0));
+    assert_eq!(
+        published.iter().map(|entry| (entry.0, entry.1)).collect::<Vec<_>>(),
+        [
+            (secs(0.0), battery(50, BatteryChargeState::Discharging)),
+            (secs(10.0), battery(49, BatteryChargeState::Discharging)),
+        ]
+    );
+}
+
+#[test]
+fn a_burst_of_twenty_battery_signals_samples_at_most_twice() {
+    let rig = rig();
+    rig.battery.set(readout(50.0, BatteryPowerState::Discharging));
+    let signals = Arc::new(FakeBatterySignals::default());
+    signals.at(&rig, secs(10.0), 10, None);
+    signals.at(&rig, secs(10.1), 10, None);
+    let published = battery_run(&rig, Some(&signals), secs(60.0));
+    let at: Vec<Duration> = published.iter().map(|entry| entry.0).collect();
+    assert_eq!(at, [0.0, 10.0, 10.25].map(secs));
+}
+
+#[test]
+fn with_battery_signals_the_safety_sample_is_120_seconds_even_while_charging() {
+    let rig = rig();
+    rig.battery.set(readout(50.0, BatteryPowerState::Charging));
+    let signals = Arc::new(FakeBatterySignals::default());
+    let published = battery_run(&rig, Some(&signals), secs(240.0));
+    let at: Vec<Duration> = published.iter().map(|entry| entry.0).collect();
+    assert_eq!(at, [secs(0.0), secs(120.0)]);
+}
+
+#[test]
+fn without_battery_signals_the_old_cadences_apply_with_a_diagnostic() {
+    let rig = rig();
+    rig.battery.set(readout(50.0, BatteryPowerState::Charging));
+    let signals = Arc::new(FakeBatterySignals {
+        fail: true,
+        ..FakeBatterySignals::default()
+    });
+    let published = battery_run(&rig, Some(&signals), secs(120.0));
+    let at: Vec<Duration> = published.iter().map(|entry| entry.0).collect();
+    assert_eq!(at, [0.0, 30.0, 60.0, 90.0].map(secs));
+    assert!(published.iter().all(|(_, reading, diagnostic)| {
+        *reading == battery(50, BatteryChargeState::Charging)
+            && diagnostic.as_deref() == Some(BATTERY_SIGNALS_UNAVAILABLE)
+    }));
+
+    let rig = self::rig();
+    rig.battery.set(readout(50.0, BatteryPowerState::Discharging));
+    let published = battery_run(&rig, Some(&signals), secs(240.0));
+    let at: Vec<Duration> = published.iter().map(|entry| entry.0).collect();
+    assert_eq!(at, [secs(0.0), secs(120.0)]);
+}
+
+#[test]
+fn stopping_the_battery_worker_ends_the_signal_source() {
+    let rig = rig();
+    rig.battery.set(readout(50.0, BatteryPowerState::Discharging));
+    let signals = Arc::new(FakeBatterySignals::default());
+    let published = battery_run(&rig, Some(&signals), secs(5.0));
+    assert_eq!(published.len(), 1);
+    assert_eq!(signals.watches.load(Ordering::SeqCst), 1);
+    assert!(
+        signals.dropped.load(Ordering::SeqCst),
+        "the subscription was dropped"
+    );
+}

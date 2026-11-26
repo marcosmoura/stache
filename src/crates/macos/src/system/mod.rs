@@ -11,6 +11,8 @@
 //! * [`SmcBackend`]: the CPU temperature from the SMC, `smctemp` style, through
 //!   a small own adapter over public `IOKit` (see [`smc`]). No subprocess.
 //! * [`BatteryBackend`]: `starship-battery` (legacy source).
+//! * [`BatteryEventMonitor`]: `IOKit` power-source `notify(3)` keys as a
+//!   change signal for the battery provider; see [`battery_events`].
 //! * [`WifiBackend`]: `CoreWLAN` interface names, power and RSSI only. See
 //!   [`wifi`] for the Location Services evidence.
 //! * [`WifiEventMonitor`]: `CoreWLAN` event monitoring as a change signal for
@@ -19,6 +21,7 @@
 use std::fmt;
 
 pub mod battery;
+pub mod battery_events;
 pub mod cpu;
 pub mod smc;
 mod smc_io;
@@ -29,6 +32,7 @@ pub mod wifi_events;
 pub mod testing;
 
 pub use battery::{BatteryBackend, BatteryPowerState, BatteryReadout, SystemBattery};
+pub use battery_events::{BatteryEventMonitor, BatterySignalSink};
 pub use cpu::{CpuUsageBackend, SystemCpuUsage};
 pub use smc::{
     ChipFamily, KeyPlan, SmcBackend, SmcConnection, SmcCpuTemperature, SmcKey, SmcOpener,
