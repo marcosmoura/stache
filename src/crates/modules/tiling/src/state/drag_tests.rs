@@ -12,7 +12,7 @@ use stache_macos::windows::{
 
 use super::frame_tests::{Fixture, one_screen};
 use super::*;
-use crate::config::TilingConfig;
+use crate::config::{MasterConfig, TilingConfig};
 use crate::drag::{DragPoint, DragSignal, LostCause};
 use crate::geometry::Rect;
 use crate::intent::Intent;
@@ -713,7 +713,7 @@ fn grid_resize_moves_the_column_or_row_boundary_of_the_dragged_edge() {
 
 #[test]
 fn master_resize_moves_the_share_on_its_boundary_and_stack_weights_between_stack_windows() {
-    let configured = f64::from(TilingConfig::default().master.ratio) / 100.0;
+    let configured = f64::from(MasterConfig::default().ratio) / 100.0;
     let mut master = Rig::new("master", 3);
     resize_first(&mut master, 0, 192.0, 0.0);
     let grown = master.f.state.workspaces[0].ratios.master_ratio.expect("override");

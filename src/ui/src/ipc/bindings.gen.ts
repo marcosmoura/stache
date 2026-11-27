@@ -2743,6 +2743,23 @@ export type LoggingConfig_Serialize = {
 /**  Master layout configuration. */
 export type MasterConfig = MasterConfig_Serialize | MasterConfig_Deserialize;
 
+/**  Master layout settings that apply globally or per display. */
+export type MasterConfigValue = MasterConfigValue_Serialize | MasterConfigValue_Deserialize;
+
+/**  Master layout settings that apply globally or per display. */
+export type MasterConfigValue_Deserialize =
+/**  Same settings for every display. */
+MasterConfig_Deserialize |
+/**  Per-display settings. */
+ScreenMasterConfig_Deserialize[];
+
+/**  Master layout settings that apply globally or per display. */
+export type MasterConfigValue_Serialize =
+/**  Same settings for every display. */
+MasterConfig_Serialize |
+/**  Per-display settings. */
+ScreenMasterConfig_Serialize[];
+
 /**  Master layout configuration. */
 export type MasterConfig_Deserialize = {
 	/**  Master window size as a percentage, 0 to 100. */
@@ -3317,6 +3334,29 @@ export type ScreenGapsConfig_Serialize = {
 	outer: GapValue,
 };
 
+/**  Master layout settings for one named display. */
+export type ScreenMasterConfig = ScreenMasterConfig_Serialize | ScreenMasterConfig_Deserialize;
+
+/**  Master layout settings for one named display. */
+export type ScreenMasterConfig_Deserialize = {
+	/**  Display: `main`/`primary`, `secondary` or a display name. */
+	screen: string,
+	/**  Master window size as a percentage, 0 to 100. */
+	ratio?: number,
+	/**  Position of the master window. */
+	position?: MasterPosition,
+};
+
+/**  Master layout settings for one named display. */
+export type ScreenMasterConfig_Serialize = {
+	/**  Display: `main`/`primary`, `secondary` or a display name. */
+	screen: string,
+	/**  Master window size as a percentage, 0 to 100. */
+	ratio: number,
+	/**  Position of the master window. */
+	position: MasterPosition,
+};
+
 /**  A session action. Closed: anything else cannot even deserialize. */
 export type SessionAction =
 /**  Pauses a module that is not paused. */
@@ -3477,8 +3517,8 @@ export type TilingConfig_Deserialize = {
 	gaps?: GapsConfigValue_Deserialize,
 	/**  Floating window defaults and presets. */
 	floating?: FloatingConfig_Deserialize,
-	/**  Master layout settings. */
-	master?: MasterConfig_Deserialize,
+	/**  Master layout settings, global or per display. */
+	master?: MasterConfigValue_Deserialize,
 	/**  Window borders. */
 	borders?: BordersConfig_Deserialize,
 };
@@ -3505,8 +3545,8 @@ export type TilingConfig_Serialize = {
 	gaps: GapsConfigValue_Serialize,
 	/**  Floating window defaults and presets. */
 	floating: FloatingConfig_Serialize,
-	/**  Master layout settings. */
-	master: MasterConfig_Serialize,
+	/**  Master layout settings, global or per display. */
+	master: MasterConfigValue_Serialize,
 	/**  Window borders. */
 	borders: BordersConfig_Serialize,
 };

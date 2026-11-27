@@ -21,7 +21,7 @@ use stache_macos::windows::{WindowActionOutcome, WindowInstance};
 use stache_macos::{DisplayId, DisplayLayout};
 
 use super::{Effect, ScreenState, TilingState, WorkspaceId};
-use crate::config::TilingConfig;
+use crate::config::{MasterConfig, MasterConfigValue, TilingConfig};
 use crate::geometry::{GeometryError, Insets, Rect, usable_area};
 use crate::layout::{
     GapDisplay, Gaps, LayoutRequest, PlanStatus, WindowEntry, master_ratio, plan_layout,
@@ -382,13 +382,14 @@ fn desired_frames(state: &mut TilingState) -> BTreeMap<WindowInstance, Rect> {
             .map(|window| WindowEntry::with_flags(window.token, state.flags_of(window)))
             .collect();
         let tiled = tiled_count(workspace.layout, &entries);
+        let master = master_for(inputs.layout, &config.master, workspace.screen);
         let request = LayoutRequest {
             layout: workspace.layout,
             windows: &entries,
             usable: area,
             gaps,
-            master_ratio: master_ratio(&config.master, workspace.ratios.master_ratio),
-            master_position: config.master.position,
+            master_ratio: master_ratio(&master, workspace.ratios.master_ratio),
+            master_position: master.position,
             ratios: workspace.ratios.effective_split_ratios(workspace.layout, tiled),
         };
         let plan = plan_layout(&request);
@@ -467,6 +468,20 @@ fn tiled_count(
 
 /// The usable area and gaps of a display, or why there is none. Shared by
 /// layout, presets, centering and resize so they all see one geometry.
+/// The master layout settings for a display. An unknown display resolves like
+/// a display no per-display entry names.
+pub(super) fn master_for(
+    layout: &DisplayLayout,
+    config: &MasterConfigValue,
+    id: DisplayId,
+) -> MasterConfig {
+    let info = layout.get(id);
+    config.for_display(
+        info.and_then(|info| info.name.as_deref()).unwrap_or(""),
+        info.is_some_and(|info| info.is_main),
+    )
+}
+
 pub(super) fn display_area(
     state: &mut TilingState,
     id: DisplayId,

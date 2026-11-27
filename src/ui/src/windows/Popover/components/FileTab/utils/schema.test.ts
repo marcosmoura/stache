@@ -66,7 +66,16 @@ describe('schemaTree', () => {
       value: 'dwindle',
       description: 'Binary space partitioning.',
     });
-    expect(property(property(tiling, 'master'), 'ratio')).toMatchObject({
+    const master = property(tiling, 'master');
+    const global =
+      master.kind === 'union' &&
+      master.variants.find((variant) => variant.id === 'position+ratio')?.node;
+
+    expect(master.kind === 'union' && master.variants.map((variant) => variant.id)).toEqual([
+      'position+ratio',
+      'array',
+    ]);
+    expect(global && property(global, 'ratio')).toMatchObject({
       kind: 'number',
       integer: true,
       minimum: 0,

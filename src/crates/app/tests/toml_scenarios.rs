@@ -219,7 +219,7 @@ fn init_edit_reload_tray_enable_and_status_work_together() {
         )
         .expect("tiling decodes");
     assert!(warnings.is_empty());
-    assert_eq!(tiling.master.ratio, 55);
+    assert_eq!(tiling.master.for_display("", true).ratio, 55);
     assert_eq!(tiling.default_layout, stache_tiling::LayoutType::SplitVertical);
 }
 
@@ -792,4 +792,36 @@ animation = { style = "loop", duration = 4000, easing = "linear" }
     catalog
         .decode_typed::<TilingConfig>(TilingConfig::ID, path, &bad_order)
         .expect_err("unknown order");
+}
+
+/// `master` is either one table for every display or a per-display array.
+#[test]
+fn tiling_master_decodes_globally_and_per_display_from_toml() {
+    let per_display: TilingConfig = decode(
+        r#"
+master = [
+  { position = "left", ratio = 60, screen = "main" },
+  { position = "right", ratio = 70, screen = "secondary" },
+]
+"#,
+    );
+    let main = per_display.master.for_display("Built-in", true);
+    let other = per_display.master.for_display("LG", false);
+    assert_eq!(
+        (main.ratio, main.position),
+        (60, stache_tiling::MasterPosition::Left)
+    );
+    assert_eq!(
+        (other.ratio, other.position),
+        (70, stache_tiling::MasterPosition::Right)
+    );
+
+    let global: TilingConfig = decode("[master]\nposition = \"left\"\nratio = 73\n");
+    for is_main in [true, false] {
+        let master = global.master.for_display("any", is_main);
+        assert_eq!(
+            (master.ratio, master.position),
+            (73, stache_tiling::MasterPosition::Left)
+        );
+    }
 }

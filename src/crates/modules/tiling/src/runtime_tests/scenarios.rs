@@ -3910,3 +3910,97 @@ fn a_display_change_writes_hidden_workspaces_without_showing_their_applications(
         "no jump on reveal"
     );
 }
+
+// ------------------------------------------------ per-display master layout
+
+#[test]
+fn each_display_uses_its_own_master_position_and_ratio() {
+    let mut desk = Desktop::boot_with(Delivery::Immediate, GHOSTTY, true, false);
+    desk.release_late();
+    desk.two_displays();
+    desk.reload(
+        2,
+        json!({
+            "enabled": true,
+            "master": [
+                { "screen": "main", "position": "left", "ratio": 60 },
+                { "screen": "secondary", "position": "right", "ratio": 70 },
+            ],
+            "workspaces": [
+                { "name": "terminal", "layout": "master", "screen": "main",
+                  "rules": [{ "app_id": "com.mitchellh.ghostty" },
+                            { "app_id": "com.example.DeviceHub" }] },
+                { "name": "web", "layout": "master", "screen": "secondary",
+                  "rules": [{ "app_id": "com.microsoft.VSCode" },
+                            { "app_id": "com.google.Chrome" }] },
+            ],
+        }),
+    );
+    assert_eq!(desk.visible_set(), ["terminal", "web"]);
+
+    // Main display (x 0..1920): master on the left, 60 % of the width.
+    let ghostty = desk.desired_of(desk.token(GHOSTTY, 1));
+    let hub = desk.desired_of(desk.token(DEVICE_HUB, HUB_SERIAL));
+    let (master, stack) = if ghostty.width > hub.width {
+        (ghostty, hub)
+    } else {
+        (hub, ghostty)
+    };
+    assert!(
+        master.x < stack.x,
+        "main: master on the left {master:?} {stack:?}"
+    );
+    assert!(
+        (master.width - 1152.0).abs() < 1.0,
+        "main: 60 % master {master:?}"
+    );
+    assert!((stack.width - 768.0).abs() < 1.0, "main: 40 % stack {stack:?}");
+
+    // Secondary display (x 1920..3840): master on the right, 70 % of the width.
+    let code = desk.desired_of(desk.token(CODE, 2));
+    let chrome = desk.desired_of(desk.token(CHROME, 5));
+    let (master, stack) = if code.width > chrome.width {
+        (code, chrome)
+    } else {
+        (chrome, code)
+    };
+    assert!(stack.x >= 1920.0, "secondary: on its display {stack:?}");
+    assert!(
+        master.x > stack.x,
+        "secondary: master on the right {master:?} {stack:?}"
+    );
+    assert!(
+        (master.width - 1344.0).abs() < 1.0,
+        "secondary: 70 % master {master:?}"
+    );
+    assert!(
+        (stack.width - 576.0).abs() < 1.0,
+        "secondary: 30 % stack {stack:?}"
+    );
+
+    // Back to one global table: both displays follow it.
+    desk.reload(
+        3,
+        json!({
+            "enabled": true,
+            "master": { "position": "left", "ratio": 50 },
+            "workspaces": [
+                { "name": "terminal", "layout": "master", "screen": "main",
+                  "rules": [{ "app_id": "com.mitchellh.ghostty" },
+                            { "app_id": "com.example.DeviceHub" }] },
+                { "name": "web", "layout": "master", "screen": "secondary",
+                  "rules": [{ "app_id": "com.microsoft.VSCode" },
+                            { "app_id": "com.google.Chrome" }] },
+            ],
+        }),
+    );
+    for window in [
+        desk.token(GHOSTTY, 1),
+        desk.token(DEVICE_HUB, HUB_SERIAL),
+        desk.token(CODE, 2),
+        desk.token(CHROME, 5),
+    ] {
+        let frame = desk.desired_of(window);
+        assert!((frame.width - 960.0).abs() < 1.0, "global 50 %: {frame:?}");
+    }
+}

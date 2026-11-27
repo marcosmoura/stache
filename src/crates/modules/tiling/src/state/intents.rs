@@ -762,7 +762,10 @@ pub(super) fn apply_user_resize(
     let Ok((area, gaps)) = frames::display_area(state, screen) else {
         return UserResize::NoRatio;
     };
-    let master = state.config.as_deref().map_or_default(|c| c.master.clone());
+    let master = state
+        .config
+        .as_deref()
+        .map_or_default(|c| frames::master_for(&state.layout, &c.master, screen));
     let minimums: Vec<Option<Size>> = ids
         .iter()
         .map(|t| state.frames.records.get(t).and_then(|r| r.minimum.effective()))
@@ -807,7 +810,11 @@ fn resize_master(
     landscape: bool,
 ) -> IntentOutcome {
     use crate::config::MasterPosition;
-    let master = state.config.as_deref().map_or_default(|c| c.master.clone());
+    let screen = state.workspaces[index].screen;
+    let master = state
+        .config
+        .as_deref()
+        .map_or_default(|c| frames::master_for(&state.layout, &c.master, screen));
     let resolved = match master.position {
         MasterPosition::Auto if landscape => MasterPosition::Left,
         MasterPosition::Auto => MasterPosition::Top,

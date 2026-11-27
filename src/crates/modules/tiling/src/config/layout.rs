@@ -121,20 +121,78 @@ pub struct MasterConfig {
 impl Default for MasterConfig {
     fn default() -> Self {
         Self {
-            ratio: 60,
+            ratio: default_master_ratio(),
             position: MasterPosition::Auto,
         }
     }
 }
 
-impl MasterConfig {
+fn validate_ratio(field: &str, ratio: u32) -> Result<(), String> {
+    if ratio > 100 {
+        return Err(format!("{field} must be between 0 and 100, got {ratio}"));
+    }
+    Ok(())
+}
+
+const fn default_master_ratio() -> u32 { 60 }
+
+/// Master layout settings for one named display.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Type)]
+#[serde(rename_all = "snake_case")]
+pub struct ScreenMasterConfig {
+    /// Display: `main`/`primary`, `secondary` or a display name.
+    pub screen: String,
+    /// Master window size as a percentage, 0 to 100.
+    #[serde(default = "default_master_ratio")]
+    pub ratio: u32,
+    /// Position of the master window.
+    #[serde(default)]
+    pub position: MasterPosition,
+}
+
+/// Master layout settings that apply globally or per display.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Type)]
+#[serde(untagged)]
+pub enum MasterConfigValue {
+    /// Same settings for every display.
+    Global(MasterConfig),
+    /// Per-display settings.
+    PerScreen(Vec<ScreenMasterConfig>),
+}
+
+impl Default for MasterConfigValue {
+    fn default() -> Self { Self::Global(MasterConfig::default()) }
+}
+
+impl MasterConfigValue {
     pub(super) fn validate(&self) -> Result<(), String> {
-        if self.ratio > 100 {
-            return Err(format!(
-                "master.ratio must be between 0 and 100, got {}",
-                self.ratio
-            ));
+        match self {
+            Self::Global(master) => validate_ratio("master.ratio", master.ratio),
+            Self::PerScreen(screens) => {
+                for (index, screen) in screens.iter().enumerate() {
+                    validate_ratio(&format!("master[{index}].ratio"), screen.ratio)?;
+                }
+                Ok(())
+            }
         }
-        Ok(())
+    }
+
+    /// Resolves the settings that apply to a display, with the same rules as
+    /// per-display gaps: the first entry whose `screen` matches the display
+    /// name or an applicable alias wins, else the first entry; an empty list
+    /// yields the defaults.
+    #[must_use]
+    pub fn for_display(&self, name: &str, is_main: bool) -> MasterConfig {
+        match self {
+            Self::Global(master) => master.clone(),
+            Self::PerScreen(screens) => screens
+                .iter()
+                .find(|entry| super::screen_matches(&entry.screen, name, is_main))
+                .or_else(|| screens.first())
+                .map_or_default(|entry| MasterConfig {
+                    ratio: entry.ratio,
+                    position: entry.position,
+                }),
+        }
     }
 }

@@ -80,6 +80,24 @@ const gaps: FileCopy = {
   ...under('outer', gap('Screen edges', 'Space between windows and the screen edges.')),
 };
 
+const master: FileCopy = {
+  position: {
+    label: 'Master position',
+    options: {
+      left: { label: 'Left' },
+      right: { label: 'Right' },
+      top: { label: 'Top' },
+      bottom: { label: 'Bottom' },
+      auto: { label: 'Automatic', hint: 'Left on wide displays, top on tall ones' },
+    },
+  },
+  ratio: {
+    label: 'Master size',
+    unit: '%',
+    hint: 'Share of the screen for the main window.',
+  },
+};
+
 const SIZE_VARIANTS: Record<string, OptionCopy> = {
   number: { label: 'Pixels' },
   string: { label: 'Percentage', hint: 'Of the screen, such as 50%' },
@@ -133,22 +151,19 @@ export const tiling: FileCopy = {
   ...under('workspaces.*.rules.*', windowRule),
   ignore: { label: 'Ignored windows', hint: 'Windows Tiling never arranges.', noun: 'Rule' },
   ...under('ignore.*', windowRule),
-  master: { label: 'Master and stack', order: ['position', 'ratio'] },
-  'master.position': {
-    label: 'Master position',
-    options: {
-      left: { label: 'Left' },
-      right: { label: 'Right' },
-      top: { label: 'Top' },
-      bottom: { label: 'Bottom' },
-      auto: { label: 'Automatic', hint: 'Left on wide displays, top on tall ones' },
+  master: {
+    label: 'Master and stack',
+    order: ['position', 'ratio'],
+    variants: {
+      'position+ratio': { label: 'All displays' },
+      array: { label: 'Per display' },
     },
+    noun: 'Display',
   },
-  'master.ratio': {
-    label: 'Master size',
-    unit: '%',
-    hint: 'Share of the screen for the main window.',
-  },
+  ...under('master', master),
+  ...under('master.*', master),
+  'master.*': { label: 'Display', order: ['screen', 'position', 'ratio'] },
+  'master.*.screen': DISPLAY,
   gaps: {
     label: 'Gaps',
     order: ['inner', 'outer'],

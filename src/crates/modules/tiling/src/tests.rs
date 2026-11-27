@@ -40,10 +40,13 @@ fn defaults_match_the_contract() {
     });
     assert_eq!(config.floating.default_position, FloatingPosition::Center);
     assert!(config.floating.presets.is_empty());
-    assert_eq!(config.master, MasterConfig {
-        ratio: 60,
-        position: MasterPosition::Auto
-    });
+    assert_eq!(
+        config.master,
+        MasterConfigValue::Global(MasterConfig {
+            ratio: 60,
+            position: MasterPosition::Auto
+        })
+    );
     assert_eq!(config.gaps, GapsConfigValue::Global(GapsConfig::default()));
     assert_eq!(GapValue::default(), GapValue::Uniform(0));
     assert!(!config.borders.enabled);
@@ -229,6 +232,57 @@ fn master_ratio_is_bounded_and_positions_parse() {
     rejected(&json!({ "master": { "ratio": 101 } }));
     rejected(&json!({ "master": { "ratio": -1 } }));
     rejected(&json!({ "master": { "ratio": 60.5 } }));
+}
+
+#[test]
+fn master_accepts_a_per_display_list() {
+    let config = accepted(&json!({ "master": [
+        { "screen": "main", "position": "left", "ratio": 60 },
+        { "screen": "secondary", "position": "right", "ratio": 70 },
+        { "screen": "Studio Display" },
+    ] }));
+    let MasterConfigValue::PerScreen(screens) = &config.master else {
+        panic!("per screen")
+    };
+    assert_eq!(screens[2].ratio, 60, "ratio defaults like the global table");
+    assert_eq!(screens[2].position, MasterPosition::Auto);
+    let again = serde_json::to_value(&config).unwrap();
+    let reparsed: TilingConfig = serde_json::from_value(again).unwrap();
+    assert_eq!(reparsed, config);
+
+    let error =
+        rejected(&json!({ "master": [{ "screen": "main" }, { "screen": "x", "ratio": 101 }] }));
+    assert!(error.contains("master[1].ratio"), "{error}");
+    rejected(&json!({ "master": [{ "ratio": 50 }] }));
+}
+
+#[test]
+fn per_display_master_resolves_like_per_display_gaps() {
+    let entry = |screen: &str, ratio: u32, position: MasterPosition| ScreenMasterConfig {
+        screen: screen.to_owned(),
+        ratio,
+        position,
+    };
+    let value = MasterConfigValue::PerScreen(vec![
+        entry("main", 60, MasterPosition::Left),
+        entry("STUDIO display", 80, MasterPosition::Top),
+        entry("secondary", 70, MasterPosition::Right),
+    ]);
+    let main = value.for_display("Built-in", true);
+    assert_eq!((main.ratio, main.position), (60, MasterPosition::Left));
+    let named = value.for_display("Studio Display", false);
+    assert_eq!((named.ratio, named.position), (80, MasterPosition::Top));
+    let other = value.for_display("LG", false);
+    assert_eq!((other.ratio, other.position), (70, MasterPosition::Right));
+    // No match: the first entry; an empty list: the defaults.
+    let only_named = MasterConfigValue::PerScreen(vec![entry("LG", 30, MasterPosition::Bottom)]);
+    assert_eq!(only_named.for_display("Built-in", true).ratio, 30);
+    assert_eq!(
+        MasterConfigValue::PerScreen(Vec::new()).for_display("x", true),
+        MasterConfig::default()
+    );
+    let global = MasterConfigValue::default();
+    assert_eq!(global.for_display("x", false), MasterConfig::default());
 }
 
 #[test]

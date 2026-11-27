@@ -15,7 +15,10 @@ pub use borders::{
 pub use dimension::DimensionValue;
 pub use floating::{FloatingConfig, FloatingPosition, FloatingPreset};
 pub use gaps::{GapValue, GapsConfig, GapsConfigValue, ScreenGapsConfig};
-pub use layout::{AnimationConfig, EasingType, LayoutType, MasterConfig, MasterPosition};
+pub use layout::{
+    AnimationConfig, EasingType, LayoutType, MasterConfig, MasterConfigValue, MasterPosition,
+    ScreenMasterConfig,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -45,10 +48,20 @@ pub struct TilingConfig {
     pub gaps: GapsConfigValue,
     /// Floating window defaults and presets.
     pub floating: FloatingConfig,
-    /// Master layout settings.
-    pub master: MasterConfig,
+    /// Master layout settings, global or per display.
+    pub master: MasterConfigValue,
     /// Window borders.
     pub borders: BordersConfig,
+}
+
+/// Whether a per-display entry's `screen` applies to a display: its name
+/// (ASCII case-insensitively), `main`/`primary` on the main display or
+/// `secondary` on any other.
+pub const fn screen_matches(screen: &str, name: &str, is_main: bool) -> bool {
+    screen.eq_ignore_ascii_case(name)
+        || ((screen.eq_ignore_ascii_case("main") || screen.eq_ignore_ascii_case("primary"))
+            && is_main)
+        || (screen.eq_ignore_ascii_case("secondary") && !is_main)
 }
 
 impl TilingConfig {

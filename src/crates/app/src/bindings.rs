@@ -28,8 +28,9 @@ use stache_sdk::{GlobalConfig, IDENTITY, ModuleSnapshot, ModuleStatus, Unavailab
 use stache_tiling::{
     AnimationConfig, BorderAnimationConfig, BorderStateConfig, BordersConfig, DimensionValue,
     EasingType, FloatingConfig, FloatingPosition, FloatingPreset, GapValue, GapsConfig,
-    GapsConfigValue, GradientConfig, LayoutType, MasterConfig, MasterPosition, ScreenGapsConfig,
-    TilingConfig, TilingRuntimeState, TilingRuntimeStatus, WindowRule, WorkspaceConfig,
+    GapsConfigValue, GradientConfig, LayoutType, MasterConfig, MasterConfigValue, MasterPosition,
+    ScreenGapsConfig, ScreenMasterConfig, TilingConfig, TilingRuntimeState, TilingRuntimeStatus,
+    WindowRule, WorkspaceConfig,
 };
 use stache_wallpapers::{
     WallpaperMode, WallpaperScreen, WallpaperSelection, WallpapersConfig, WallpapersOutcomeCause,
@@ -437,7 +438,9 @@ pub fn builder() -> Builder<tauri::Wry> {
         .typ::<LayoutType>()
         .typ::<EasingType>()
         .typ::<AnimationConfig>()
+        .typ::<MasterConfigValue>()
         .typ::<MasterConfig>()
+        .typ::<ScreenMasterConfig>()
         .typ::<MasterPosition>()
         .typ::<WorkspaceConfig>()
         .typ::<WindowRule>()

@@ -73,8 +73,8 @@
       }
     },
     "master": {
-      "description": "Master layout settings.",
-      "$ref": "#/$defs/MasterConfig",
+      "description": "Master layout settings, global or per display.",
+      "$ref": "#/$defs/MasterConfigValue",
       "default": {
         "position": "auto",
         "ratio": 60
@@ -747,6 +747,22 @@
         }
       }
     },
+    "MasterConfigValue": {
+      "description": "Master layout settings that apply globally or per display.",
+      "anyOf": [
+        {
+          "description": "Same settings for every display.",
+          "$ref": "#/$defs/MasterConfig"
+        },
+        {
+          "description": "Per-display settings.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ScreenMasterConfig"
+          }
+        }
+      ]
+    },
     "MasterPosition": {
       "description": "Position of the master window in the master layout.",
       "oneOf": [
@@ -790,6 +806,31 @@
           "description": "Gaps from display edges.",
           "$ref": "#/$defs/GapValue",
           "default": 0
+        },
+        "screen": {
+          "description": "Display: `main`/`primary`, `secondary` or a display name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "screen"
+      ]
+    },
+    "ScreenMasterConfig": {
+      "description": "Master layout settings for one named display.",
+      "type": "object",
+      "properties": {
+        "position": {
+          "description": "Position of the master window.",
+          "$ref": "#/$defs/MasterPosition",
+          "default": "auto"
+        },
+        "ratio": {
+          "description": "Master window size as a percentage, 0 to 100.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 60,
+          "minimum": 0
         },
         "screen": {
           "description": "Display: `main`/`primary`, `secondary` or a display name.",

@@ -85,8 +85,8 @@ pub use config::{
     AnimationConfig, BorderAnimationConfig, BorderAnimationStyle, BorderOrder, BorderStateConfig,
     BorderTransitionConfig, BordersConfig, DimensionValue, EasingType, FloatingConfig,
     FloatingPosition, FloatingPreset, GapValue, GapsConfig, GapsConfigValue, GradientConfig,
-    LayoutType, MasterConfig, MasterPosition, ScreenGapsConfig, TilingConfig, WindowRule,
-    WorkspaceConfig,
+    LayoutType, MasterConfig, MasterConfigValue, MasterPosition, ScreenGapsConfig,
+    ScreenMasterConfig, TilingConfig, WindowRule, WorkspaceConfig,
 };
 pub use displays::{DISPLAY_THREAD_NAME, DisplayFeed};
 pub use drag::{

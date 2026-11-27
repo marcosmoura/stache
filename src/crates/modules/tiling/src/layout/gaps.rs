@@ -76,11 +76,7 @@ impl Gaps {
             GapsConfigValue::Global(gaps) => Self::from_pair(&gaps.inner, &gaps.outer),
             GapsConfigValue::PerScreen(screens) => {
                 let matched = screens.iter().find(|entry| {
-                    entry.screen.eq_ignore_ascii_case(display.name)
-                        || ((entry.screen.eq_ignore_ascii_case("main")
-                            || entry.screen.eq_ignore_ascii_case("primary"))
-                            && display.is_main)
-                        || (entry.screen.eq_ignore_ascii_case("secondary") && !display.is_main)
+                    crate::config::screen_matches(&entry.screen, display.name, display.is_main)
                 });
                 matched
                     .or_else(|| screens.first())
